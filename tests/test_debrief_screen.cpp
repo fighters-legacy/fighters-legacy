@@ -81,6 +81,41 @@ TEST_CASE("DebriefScreen: buildElements not empty") {
     CHECK(!s.buildElements().empty());
 }
 
+TEST_CASE("DebriefScreen: setMatchResult shows winner banner and team scores (#647)") {
+    DebriefScreen s;
+    s.setStats(4, 2, true);
+    s.setMatchResult("RED WINS", {{"Red", 50}, {"Blue", 41}});
+    s.update(g_inp, g_win);
+    auto elems = s.buildElements();
+    bool foundWinner = false, foundRed = false, foundBlue = false;
+    for (const auto& e : elems) {
+        if (e.type != HudElement::Type::Text)
+            continue;
+        if (e.text.find("RED WINS") != std::string_view::npos)
+            foundWinner = true;
+        if (e.text.find("Red") != std::string_view::npos && e.text.find("50") != std::string_view::npos)
+            foundRed = true;
+        if (e.text.find("Blue") != std::string_view::npos && e.text.find("41") != std::string_view::npos)
+            foundBlue = true;
+    }
+    CHECK(foundWinner);
+    CHECK(foundRed);
+    CHECK(foundBlue);
+}
+
+TEST_CASE("DebriefScreen: empty setMatchResult clears the match section (#647)") {
+    DebriefScreen s;
+    s.setMatchResult("X WINS", {{"X", 10}});
+    s.setMatchResult("", {}); // clear
+    s.update(g_inp, g_win);
+    auto elems = s.buildElements();
+    int textCount = 0;
+    for (const auto& e : elems)
+        if (e.type == HudElement::Type::Text)
+            ++textCount;
+    CHECK(textCount == 4); // back to outcome/kills/losses/continue
+}
+
 TEST_CASE("DebriefScreen: all text elements are center-aligned at x=0.5") {
     DebriefScreen s;
     s.setStats(3, 1, true);

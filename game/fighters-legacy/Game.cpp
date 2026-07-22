@@ -17,6 +17,7 @@
 #include "HapticController.h"
 #include "HeadlessHal.h"
 #include "IWindowEventHandler.h"
+#include "KillFeed.h"
 #include "LocalServer.h"
 #include "MainMenuScreen.h"
 #include "MissionBriefScreen.h"
@@ -25,6 +26,7 @@
 #include "Platform.h"
 #include "PrecipitationController.h"
 #include "RecordScheduler.h"
+#include "ScoreboardOverlay.h"
 #include "ScreenManager.h"
 #include "ServerNotice.h"
 #include "SessionStatus.h"
@@ -219,6 +221,44 @@ static const fl::EntityRenderEntry* findPlayerEntry(const fl::SimRenderBridge& b
     return nullptr;
 }
 
+// Assemble the per-frame scoreboard snapshot (#647) from the client handler's match state, scoreboard
+// rows and roster. Kept out of the overlay so ScoreboardOverlay renders a plain POD and stays testable.
+static fl::ScoreboardData buildScoreboardData(const ClientNetEventHandler& h) {
+    fl::ScoreboardData sb;
+    const auto& ms = h.matchState();
+    sb.hasMatch = ms.valid;
+    sb.modeName = ms.modeName;
+    sb.phaseLabel = std::string(fl::matchPhaseLabel(ms.phase));
+    sb.scoreLimit = ms.scoreLimit;
+    if (ms.phaseEndTick > 0) {
+        const uint64_t now = h.currentTick();
+        const uint64_t remTicks = ms.phaseEndTick > now ? ms.phaseEndTick - now : 0u;
+        sb.secondsRemaining = static_cast<std::int64_t>(remTicks / 60u); // 60 Hz sim tick
+    }
+    for (const auto& t : ms.teamScores) {
+        fl::ScoreboardTeam team;
+        team.factionIndex = t.factionIndex;
+        team.name = h.factionName(t.factionIndex);
+        if (team.name.empty())
+            team.name = "Team " + std::to_string(t.factionIndex);
+        team.score = t.score;
+        sb.teams.push_back(std::move(team));
+    }
+    for (const auto& [pid, e] : h.scoreboard()) {
+        fl::ScoreboardPlayer p;
+        p.callsign = h.displayName(pid);
+        p.factionIndex = e.factionIndex;
+        p.score = e.score;
+        p.kills = e.kills;
+        p.deaths = e.deaths;
+        p.pingMs = e.pingMs;
+        p.isBot = fl::isBotParticipant(pid);
+        p.isSelf = h.gotConnectAck() && pid == h.selfPeerId();
+        sb.players.push_back(std::move(p));
+    }
+    return sb;
+}
+
 static void updateAudioListener(IAudio& audio, const CameraView& cam, const glm::vec3& vel) {
     const glm::vec3 fwd = -glm::vec3(cam.view[2][0], cam.view[2][1], cam.view[2][2]);
     const glm::vec3 up = glm::vec3(cam.view[1][0], cam.view[1][1], cam.view[1][2]);
@@ -384,13 +424,15 @@ struct GameServices {
     fl::IHud* activeHud{nullptr};
     fl::WindshieldRain windshieldRain;
     ServerNotice serverNotice;
-    WingmanMenu wingmanMenu;           // the radio menu for ordering your flight (#610)
-    CommsMenu commsMenu;               // the ATC comms menu (#704)
-    VoiceCalloutManager voiceCallouts; // resolved-text radio callouts -> subtitle + optional voice (#704)
-    SubtitleOverlay subtitleOverlay;   // renders the subtitle queue as a HUD overlay layer (#704)
-    ManualOverlay manual;              // the in-flight aircraft manual, generated from the flight model (#821)
-    WeaponRegistry weapons;            // the client's copy of the pack's stores, for the manual's loadout section
-    ContentIndex contentIndex;         // id -> asset name, so the client can resolve def cross-references (#810)
+    WingmanMenu wingmanMenu;             // the radio menu for ordering your flight (#610)
+    CommsMenu commsMenu;                 // the ATC comms menu (#704)
+    VoiceCalloutManager voiceCallouts;   // resolved-text radio callouts -> subtitle + optional voice (#704)
+    SubtitleOverlay subtitleOverlay;     // renders the subtitle queue as a HUD overlay layer (#704)
+    KillFeed killFeed;                   // multiplayer kill feed, fed from the CombatEvent Kill branch (#647)
+    ScoreboardOverlay scoreboardOverlay; // multiplayer scoreboard IGui table (#647)
+    ManualOverlay manual;                // the in-flight aircraft manual, generated from the flight model (#821)
+    WeaponRegistry weapons;              // the client's copy of the pack's stores, for the manual's loadout section
+    ContentIndex contentIndex;           // id -> asset name, so the client can resolve def cross-references (#810)
 
     // Debug console
     CommandRegistry cmdRegistry;
@@ -1257,6 +1299,8 @@ void Game::startGame(const std::string& mission) {
             std::make_unique<ClientNetEventHandler>(d.services.renderBridge, d.services.entityRegistry,
                                                     *d.services.rawLogger, *d.session.clientNet, d.services.env);
         d.session.clientHandler->notice = &d.services.serverNotice;
+        d.session.clientHandler->killFeed = &d.services.killFeed;   // multiplayer kill feed (#647)
+        d.services.killFeed.clear();                                // no stale lines across sessions
         d.session.clientHandler->wingman = &d.services.wingmanMenu; // check-ins, order acks, relayed calls
         d.session.clientHandler->console = &*d.services.gameConsole;
         d.session.clientHandler->effects = &d.services.effectRouter; // weapon cosmetics (#625)
@@ -1523,6 +1567,35 @@ void Game::handleTransition(Screen next) {
         const bool missionSuccess =
             !d.session.clientHandler || d.session.clientHandler->missionOutcome() != fl::MissionResultCode::Failure;
         d.services.screenMgr->debrief().setStats(static_cast<int>(kills), static_cast<int>(losses), missionSuccess);
+
+        // Match result (#647): if this was a multiplayer match, show the winning team + final scores above
+        // the personal tallies. Absent match state (single-player / free-flight) clears the section.
+        {
+            std::vector<std::pair<std::string, int>> teamScores;
+            std::string winner;
+            if (d.session.clientHandler) {
+                const auto& ms = d.session.clientHandler->matchState();
+                if (ms.valid && !ms.teamScores.empty()) {
+                    int best = ms.teamScores.front().score;
+                    for (const auto& t : ms.teamScores)
+                        best = std::max(best, static_cast<int>(t.score));
+                    int leaders = 0;
+                    std::string bestName;
+                    for (const auto& t : ms.teamScores) {
+                        std::string name = d.session.clientHandler->factionName(t.factionIndex);
+                        if (name.empty())
+                            name = "Team " + std::to_string(t.factionIndex);
+                        teamScores.emplace_back(name, static_cast<int>(t.score));
+                        if (static_cast<int>(t.score) == best) {
+                            ++leaders;
+                            bestName = name;
+                        }
+                    }
+                    winner = leaders > 1 ? std::string("DRAW") : bestName + " WINS";
+                }
+            }
+            d.services.screenMgr->debrief().setMatchResult(std::move(winner), std::move(teamScores));
+        }
         // The pilot's career log accumulates per session, exactly once, on the way into debrief:
         // kills/losses from the server's tallies plus this session's flight time (#634).
         if (d.services.userConfig) {
@@ -1948,12 +2021,25 @@ void Game::run() {
         // the F3 performance overlay.
         d.services.gameConsole->buildHud(playerEntry ? &playerEntry->position : nullptr);
 
-        // Overlay layers: screen content + server notice + radio subtitles + console.
+        // Overlay layers: screen content + server notice + radio subtitles + kill feed + console.
         d.services.p.renderer->submitOverlayElements(d.services.screenMgr->active().buildElements());
         d.services.p.renderer->submitOverlayElements(d.services.serverNotice.buildElements());
         d.services.p.renderer->submitOverlayElements(
-            d.services.subtitleOverlay.build(d.services.subtitleQueue)); // radio/ATC callouts (#704)
+            d.services.subtitleOverlay.build(d.services.subtitleQueue));                   // radio/ATC callouts (#704)
+        d.services.p.renderer->submitOverlayElements(d.services.killFeed.buildElements()); // #647
         d.services.p.renderer->setConsoleElements(d.services.gameConsole->elements());
+
+        // Scoreboard (#647): an IGui table shown in Flight while the Scoreboard key is held, and auto-shown
+        // in the match end phase. Emitted between the GUI newFrame/render bracket.
+        if (cur == Screen::Flight && d.session.clientHandler && d.services.p.gui) {
+            const auto& ms = d.session.clientHandler->matchState();
+            const fl::Binding sbBind = d.services.inputBindings.get(fl::InputAction::Scoreboard);
+            const bool keyHeld = sbBind.source == fl::BindingSource::Keyboard &&
+                                 d.services.p.input->isKeyDown(static_cast<fl::Key>(sbBind.id));
+            if (keyHeld || (ms.valid && fl::scoreboardAutoShows(ms.phase)))
+                d.services.scoreboardOverlay.render(d.services.p.gui.get(),
+                                                    buildScoreboardData(*d.session.clientHandler));
+        }
 
         {
             auto* h = d.session.clientHandler.get();

@@ -4,6 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "ClientNetEventHandler.h"
+#include "KillFeed.h"
 #include "ServerNotice.h"
 
 #include "ILogger.h"
@@ -173,6 +174,144 @@ TEST_CASE("ClientNetEventHandler: MsgPlayerRoster upserts and leaves resolve dis
     handler.onReceive(0u, lpkt.data(), lpkt.size());
     CHECK(handler.roster().count(3u) == 0u);
     CHECK(handler.displayName(3u) == "Peer 3"); // gone -> fallback
+}
+
+TEST_CASE("ClientNetEventHandler: MsgMatchState decodes phase + team scores (#647)", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    CHECK_FALSE(handler.matchState().valid); // nothing decoded yet
+
+    fl::MsgMatchState ms{};
+    ms.phase = 2; // Active
+    ms.scoreLimit = 50;
+    ms.teamCount = 2;
+    ms.phaseEndTick = 1000;
+    std::snprintf(ms.modeId, sizeof(ms.modeId), "%s", "builtin:tdm");
+    std::snprintf(ms.modeName, sizeof(ms.modeName), "%s", "Team Deathmatch");
+    std::vector<uint8_t> pkt;
+    fl::appendMsg(pkt, ms);
+    fl::MatchTeamScore t1{};
+    t1.factionIndex = 1;
+    t1.score = 12;
+    fl::MatchTeamScore t2{};
+    t2.factionIndex = 2;
+    t2.score = 7;
+    fl::appendMsg(pkt, t1);
+    fl::appendMsg(pkt, t2);
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    const auto& v = handler.matchState();
+    CHECK(v.valid);
+    CHECK(v.phase == 2);
+    CHECK(v.scoreLimit == 50);
+    CHECK(v.phaseEndTick == 1000u);
+    CHECK(v.modeName == "Team Deathmatch");
+    REQUIRE(v.teamScores.size() == 2u);
+    CHECK(v.teamScores[0].factionIndex == 1);
+    CHECK(v.teamScores[0].score == 12);
+    CHECK(v.teamScores[1].score == 7);
+}
+
+TEST_CASE("ClientNetEventHandler: MsgScoreboard upserts rows; roster leave prunes (#647)",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    fl::MsgScoreboardHeader hdr{};
+    hdr.count = 1;
+    fl::ScoreboardRow r{};
+    r.participantId = 3;
+    r.score = 10;
+    r.kills = 5;
+    r.deaths = 2;
+    r.pingMs = 33;
+    r.factionIndex = 1;
+    std::vector<uint8_t> pkt;
+    fl::appendMsg(pkt, hdr);
+    fl::appendMsg(pkt, r);
+    handler.onReceive(0u, pkt.data(), pkt.size());
+    REQUIRE(handler.scoreboard().count(3u) == 1u);
+    CHECK(handler.scoreboard().at(3u).kills == 5);
+    CHECK(handler.scoreboard().at(3u).pingMs == 33);
+
+    // A second chunk updates the same participant in place.
+    fl::ScoreboardRow r2 = r;
+    r2.kills = 6;
+    r2.score = 12;
+    std::vector<uint8_t> pkt2;
+    fl::appendMsg(pkt2, hdr);
+    fl::appendMsg(pkt2, r2);
+    handler.onReceive(0u, pkt2.data(), pkt2.size());
+    CHECK(handler.scoreboard().size() == 1u);
+    CHECK(handler.scoreboard().at(3u).kills == 6);
+    CHECK(handler.scoreboard().at(3u).score == 12);
+
+    // A roster leave prunes the stale scoreboard row.
+    fl::MsgPlayerRosterHeader lhdr{};
+    lhdr.count = 1;
+    fl::PlayerRosterEntry leave{};
+    leave.participantId = 3;
+    leave.flags = fl::kRosterLeave;
+    std::vector<uint8_t> lpkt;
+    fl::appendMsg(lpkt, lhdr);
+    fl::appendMsg(lpkt, leave);
+    handler.onReceive(0u, lpkt.data(), lpkt.size());
+    CHECK(handler.scoreboard().count(3u) == 0u);
+}
+
+TEST_CASE("ClientNetEventHandler: kill feed resolves participant callsigns (#647)", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    KillFeed feed;
+    handler.killFeed = &feed;
+
+    // Roster: peer 3 = Maverick, peer 7 = Iceman.
+    fl::MsgPlayerRosterHeader rhdr{};
+    rhdr.count = 2;
+    fl::PlayerRosterEntry a{};
+    a.participantId = 3;
+    std::snprintf(a.callsign, sizeof(a.callsign), "%s", "Maverick");
+    fl::PlayerRosterEntry b{};
+    b.participantId = 7;
+    std::snprintf(b.callsign, sizeof(b.callsign), "%s", "Iceman");
+    std::vector<uint8_t> rpkt;
+    fl::appendMsg(rpkt, rhdr);
+    fl::appendMsg(rpkt, a);
+    fl::appendMsg(rpkt, b);
+    handler.onReceive(0u, rpkt.data(), rpkt.size());
+
+    // A kill: instigator peer 3 destroyed subject peer 7 (neither is us).
+    fl::MsgCombatEventHeader ch{};
+    ch.count = 1;
+    fl::CombatEventRecord rec{};
+    rec.type = static_cast<uint8_t>(fl::CombatEventType::Kill);
+    rec.instigatorIdx = 100;
+    rec.instigatorGen = 1;
+    rec.subjectIdx = 200;
+    rec.subjectGen = 1;
+    rec.a = 3; // instigator owning peer
+    rec.b = 7; // subject owning peer
+    std::vector<uint8_t> cpkt;
+    fl::appendMsg(cpkt, ch);
+    fl::appendMsg(cpkt, rec);
+    handler.onReceive(0u, cpkt.data(), cpkt.size());
+
+    auto els = feed.buildElements();
+    REQUIRE(els.size() == 1u);
+    CHECK(std::string(els[0].text) == "Maverick destroyed Iceman");
 }
 
 TEST_CASE("ClientNetEventHandler: MsgConnectAck captures own peer id (#996)", "[client_net_event_handler]") {

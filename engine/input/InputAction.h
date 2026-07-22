@@ -50,6 +50,9 @@ enum class InputAction : uint32_t {
     // Respawn after death in a multiplayer match (#648)
     Respawn,
 
+    // Hold to show the multiplayer scoreboard overlay (#647)
+    Scoreboard,
+
     Count
 };
 

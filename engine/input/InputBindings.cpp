@@ -13,7 +13,7 @@ static constexpr const char* kActionNames[] = {
     "PitchAxis",  "RollAxis",   "YawAxis",     "ThrottleAxis", "PitchUp",  "PitchDown",   "RollLeft",    "RollRight",
     "YawLeft",    "YawRight",   "ThrottleUp",  "ThrottleDown", "Airbrake", "Afterburner", "FireWeapon",  "FireMissile",
     "NextWeapon", "PrevWeapon", "ViewUp",      "ViewDown",     "ViewLeft", "ViewRight",   "LandingGear", "Flaps",
-    "Pause",      "Menu",       "WingmanMenu", "Eject",        "Respawn",
+    "Pause",      "Menu",       "WingmanMenu", "Eject",        "Respawn",  "Scoreboard",
 };
 static_assert(std::size(kActionNames) == static_cast<size_t>(InputAction::Count),
               "kActionNames must have one entry per InputAction");
@@ -594,6 +594,11 @@ void InputBindings::applyDefaults() {
     // it (a held key is one request), and it only does anything while the player is dead in a match.
     m_primary[static_cast<int>(InputAction::Respawn)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::Backspace),
                                                          false};
+
+    // Scoreboard (#647). Held to show the match scoreboard overlay. I is free and off the flight cluster;
+    // no gamepad default (Back is the radio Menu) — the overlay auto-shows in the match end phase anyway.
+    m_primary[static_cast<int>(InputAction::Scoreboard)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::I),
+                                                            false};
 
     // Gamepad alt defaults
     m_alt[static_cast<int>(InputAction::PitchAxis)] = {BindingSource::GamepadAxis,

@@ -21,6 +21,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **game**: multiplayer kill feed and scoreboard (#647, Epic E #497). The client now decodes the
+  server's `MsgMatchState` (0x1D, match phase + limits + per-team scores) and `MsgScoreboard` (0x1E,
+  per-participant kills/deaths/score/ping, upserted across the unreliable chunked stream and pruned when a
+  participant leaves the roster). A top-right `KillFeed` HudElement overlay renders recent "X destroyed Y"
+  lines — names resolved from the match roster, tinted green/red when you score/take the kill — replacing
+  the anonymous "peer N" kill line. A `ScoreboardOverlay` IGui table (held on the Scoreboard key, default
+  `I`, and auto-shown in the match end phase) groups players by team with the authoritative match score,
+  a phase/countdown header, and a highlighted self row. The debrief adds a winner/draw banner and per-team
+  final scores above the personal tallies. New `InputAction::Scoreboard`. Unit-tested against the scripted
+  NullGui and a deterministic clock (`tests/test_kill_feed.cpp`, `tests/test_scoreboard_overlay.cpp`, plus
+  `MsgMatchState`/`MsgScoreboard` decode + kill-feed name cases in `tests/test_client_net_event_handler.cpp`).
+
 - **game**: multiplayer join-server screen (#322, Epic E #497). The first IGui consumer — a direct-connect
   form with real text fields for the server address (`host[:port]`), an optional join password (#998,
   masked) and a callsign (pre-filled from the pilot profile). Connect (button or Enter) parses the address,

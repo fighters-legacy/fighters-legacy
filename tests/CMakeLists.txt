@@ -762,6 +762,19 @@ target_link_libraries(test_join_server_screen PRIVATE Catch2::Catch2WithMain pla
 target_include_directories(test_join_server_screen PRIVATE ${CMAKE_SOURCE_DIR}/game/fighters-legacy)
 catch_discover_tests(test_join_server_screen)
 
+# ScoreboardOverlay (#647) — the IGui scoreboard table, driven against NullGui.
+add_executable(test_scoreboard_overlay test_scoreboard_overlay.cpp
+    ${CMAKE_SOURCE_DIR}/game/fighters-legacy/ScoreboardOverlay.cpp)
+target_link_libraries(test_scoreboard_overlay PRIVATE Catch2::Catch2WithMain platform-hal)
+target_include_directories(test_scoreboard_overlay PRIVATE ${CMAKE_SOURCE_DIR}/game/fighters-legacy)
+catch_discover_tests(test_scoreboard_overlay)
+
+# KillFeed (#647) — the HudElement kill-feed ring; header-only, deterministic clock.
+add_executable(test_kill_feed test_kill_feed.cpp)
+target_link_libraries(test_kill_feed PRIVATE Catch2::Catch2WithMain platform-hal)
+target_include_directories(test_kill_feed PRIVATE ${CMAKE_SOURCE_DIR}/game/fighters-legacy)
+catch_discover_tests(test_kill_feed)
+
 # Frame-capture swizzle helper (#912): the pure GPU-independent core of the capture readback.
 add_executable(test_capture_frame test_capture_frame.cpp)
 target_link_libraries(test_capture_frame PRIVATE Catch2::Catch2WithMain platform-hal)

@@ -27,6 +27,7 @@ class ClientEffectRouter;
 class GameConsole;
 class ILogger;
 class ServerNotice;
+class KillFeed;
 struct RenderSnapshot;
 struct MsgClientInput;
 struct MsgHeartbeat;
@@ -62,6 +63,7 @@ struct ClientNetEventHandler : INetworkEventHandler {
     ServerNotice* notice{nullptr};        // optional: server notices shown as screen banner
     WingmanMenu* wingman{nullptr};        // optional: flight check-in / order acks / relayed radio calls (#610)
     ClientEffectRouter* effects{nullptr}; // optional: cosmetic weapon effects (#625) — particles now, audio #631
+    KillFeed* killFeed{nullptr};          // optional: multiplayer kill feed overlay, fed from the Kill branch (#647)
     uint32_t motdDisplaySeconds{15};      // user-configurable; 0 = persistent
 
     uint32_t assignedEntityIdx{0};
@@ -117,6 +119,45 @@ struct ClientNetEventHandler : INetworkEventHandler {
     // that need to distinguish "self unknown" should check gotConnectAck().
     uint32_t selfPeerId() const noexcept {
         return m_selfPeerId;
+    }
+
+    // ── match state + scoreboard (#647/#523) ─────────────────────────────────
+    // Decoded MsgMatchState: phase + limits + per-team scores. `valid` is false until the first
+    // MsgMatchState arrives. Read on the main thread by the scoreboard overlay and the debrief.
+    struct MatchTeam {
+        uint16_t factionIndex{0};
+        int32_t score{0};
+    };
+    struct MatchStateView {
+        bool valid{false};
+        uint8_t phase{0};         // MatchPhase ordinal; gate with fl::isMatchPhaseOrdinal before casting
+        uint16_t scoreLimit{0};   // team score that ends the match; 0 = none
+        uint64_t phaseEndTick{0}; // tick the current phase ends; 0 = untimed
+        std::string modeId;
+        std::string modeName;
+        std::vector<MatchTeam> teamScores;
+    };
+    const MatchStateView& matchState() const noexcept {
+        return m_matchState;
+    }
+
+    // Decoded MsgScoreboard rows, upserted by participantId across the unreliable chunked stream. Rows
+    // are pruned when the matching participant leaves the roster.
+    struct ScoreboardEntry {
+        int32_t score{0};
+        uint16_t kills{0};
+        uint16_t deaths{0};
+        uint16_t pingMs{0};
+        uint16_t factionIndex{0};
+    };
+    const std::unordered_map<uint32_t, ScoreboardEntry>& scoreboard() const noexcept {
+        return m_scoreboard;
+    }
+
+    // Highest processed WorldSnapshot tick — the clock the scoreboard overlay renders the match phase
+    // countdown against (phaseEndTick - currentTick). 0 until the first snapshot.
+    uint64_t currentTick() const noexcept {
+        return m_lastSnapshotTick;
     }
 
     // Resolve a mission object id (e.g. "bandit1") to its network entity idx/gen from the MsgMissionRoster
@@ -320,6 +361,8 @@ struct ClientNetEventHandler : INetworkEventHandler {
     bool m_gotConnectAck{false};                        // true once a MsgConnectAck arrives; "was I admitted?" (#853)
     uint32_t m_selfPeerId{0};                           // this client's own participant id, from MsgConnectAck (#996)
     std::unordered_map<uint32_t, RosterEntry> m_roster; // participant id -> display record (#996)
+    MatchStateView m_matchState;                        // #647/#523 — from MsgMatchState
+    std::unordered_map<uint32_t, ScoreboardEntry> m_scoreboard; // #647/#523 — from MsgScoreboard (upsert)
     float m_planetRadiusKm{6371.f};
     SessionCombatStats m_sessionStats{}; // #626 — fed by CombatEvent Stats records
     fl::MissionResultCode m_missionOutcome{fl::MissionResultCode::Incomplete}; // #584 — from MsgMissionOutcome

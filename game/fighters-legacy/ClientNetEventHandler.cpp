@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ClientNetEventHandler.h"
 #include "ClientEffectRouter.h"
+#include "KillFeed.h"
 #include "ServerNotice.h"
 
 #include "ILogger.h"
@@ -606,36 +607,41 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
                     ++m_sessionStats.killsByClass[cls];
             }
 
-            // Names arrive with chat/scoreboard (Epic E); until then the feed speaks in entities.
-            char who[32];
-            char whom[32];
+            // Names now come from the match roster (#647): a participant id resolves to a callsign, an
+            // absent instigator to the environment, and anything else to its entity index.
+            std::string who;
+            std::string whom;
             if (youKilled)
-                std::snprintf(who, sizeof(who), "you");
+                who = "you";
             else if (rec.a != fl::kNoOwningPeer)
-                std::snprintf(who, sizeof(who), "peer %u", rec.a);
+                who = displayName(rec.a);
             else if (rec.instigatorIdx == 0xFFFFFFFFu)
-                std::snprintf(who, sizeof(who), "the environment");
+                who = "the environment";
             else
-                std::snprintf(who, sizeof(who), "entity %u", rec.instigatorIdx);
+                who = "entity " + std::to_string(rec.instigatorIdx);
             if (youDied)
-                std::snprintf(whom, sizeof(whom), "you");
+                whom = "you";
             else if (rec.b != fl::kNoOwningPeer)
-                std::snprintf(whom, sizeof(whom), "peer %u", rec.b);
+                whom = displayName(rec.b);
             else
-                std::snprintf(whom, sizeof(whom), "entity %u", rec.subjectIdx);
+                whom = "entity " + std::to_string(rec.subjectIdx);
 
-            if (console) {
-                char line[96];
-                std::snprintf(line, sizeof(line), "[kill] %s destroyed %s", who, whom);
-                console->print(line);
+            const std::string feedLine = who + " destroyed " + whom;
+            if (console)
+                console->print("[kill] " + feedLine);
+            if (killFeed) {
+                // Tint the line green when you scored the kill, red when you died, amber otherwise.
+                if (youKilled)
+                    killFeed->push(feedLine, 0.4f, 1.0f, 0.4f);
+                else if (youDied)
+                    killFeed->push(feedLine, 1.0f, 0.4f, 0.4f);
+                else
+                    killFeed->push(feedLine);
             }
             if (notice && youDied)
                 notice->setNotice("YOU WERE DESTROYED", 0, 5);
-            else if (notice && youKilled) {
-                char banner[64];
-                std::snprintf(banner, sizeof(banner), "DESTROYED %s", whom);
-                notice->setNotice(banner, 0, 5);
-            }
+            else if (notice && youKilled)
+                notice->setNotice("DESTROYED " + whom, 0, 5);
         }
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::FactionDef)) {
         // Faction index -> name table (#860), one reliable packet of concatenated records. Store the
@@ -664,6 +670,7 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             off += sizeof(e);
             if (e.flags & fl::kRosterLeave) {
                 m_roster.erase(e.participantId);
+                m_scoreboard.erase(e.participantId); // keep the scoreboard in step with live presence (#647)
                 continue;
             }
             e.callsign[sizeof(e.callsign) - 1] = '\0'; // untrusted char[]: force-terminate
@@ -673,6 +680,45 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             re.role = e.role;
             re.isBot = (e.flags & fl::kRosterBot) != 0;
             m_roster[e.participantId] = std::move(re);
+        }
+    } else if (msgId == static_cast<uint8_t>(fl::MsgId::MatchState)) {
+        // Match phase + limits + per-team scores (#647/#523). Reliable; broadcast on change and unicast
+        // to a late joiner after ConnectAck. Header then teamCount trailing MatchTeamScore records.
+        fl::MsgMatchState ms;
+        if (!fl::readMsg(data, size, ms))
+            return;
+        ms.modeId[sizeof(ms.modeId) - 1] = '\0';
+        ms.modeName[sizeof(ms.modeName) - 1] = '\0';
+        m_matchState.valid = true;
+        m_matchState.phase = ms.phase;
+        m_matchState.scoreLimit = ms.scoreLimit;
+        m_matchState.phaseEndTick = ms.phaseEndTick;
+        m_matchState.modeId = ms.modeId;
+        m_matchState.modeName = ms.modeName;
+        m_matchState.teamScores.clear();
+        for (uint8_t i = 0; i < ms.teamCount; ++i) {
+            fl::MatchTeamScore rec;
+            if (!fl::readRecordAt(data, size, sizeof(ms) + std::size_t(i) * sizeof(rec), rec))
+                break; // truncated: keep the teams decoded so far
+            m_matchState.teamScores.push_back({rec.factionIndex, rec.score});
+        }
+    } else if (msgId == static_cast<uint8_t>(fl::MsgId::Scoreboard)) {
+        // Per-participant kills/deaths/score/ping (#647/#523). Unreliable and chunked, so upsert by
+        // participantId rather than replacing wholesale — a full refresh may span several packets and a
+        // dropped one just leaves a stale row until the next refresh.
+        fl::MsgScoreboardHeader hdr;
+        if (!fl::readMsg(data, size, hdr))
+            return;
+        for (uint8_t i = 0; i < hdr.count; ++i) {
+            fl::ScoreboardRow row;
+            if (!fl::readRecordAt(data, size, sizeof(hdr) + std::size_t(i) * sizeof(row), row))
+                break;
+            ScoreboardEntry& e = m_scoreboard[row.participantId];
+            e.score = row.score;
+            e.kills = row.kills;
+            e.deaths = row.deaths;
+            e.pingMs = row.pingMs;
+            e.factionIndex = row.factionIndex;
         }
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::MissionRoster)) {
         // Mission object id -> entity idx/gen (#914), one reliable packet of concatenated records (sent
