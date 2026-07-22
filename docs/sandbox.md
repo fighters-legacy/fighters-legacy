@@ -26,7 +26,7 @@ The camera-mode keys are now rebindable `InputAction`s (`CameraCockpit`/`CameraC
 | F1 | Cockpit — camera locked to player entity | `CameraCockpit` |
 | F2 | Chase — orbit behind player entity | `CameraChase` |
 | F4 | Free (default) — freely movable pivot camera | `CameraFree` |
-| F5 | Padlock — slew to keep the designated target centered (#697) | `PadlockToggle` (gamepad: RightStick click) |
+| F5 | Padlock — slew to keep the designated target centered; auto-picks best-in-cone if nothing is designated, breaks lock with a `PADLOCK — BREAK` cue when terrain or the airframe masks the target, and reverts to Cockpit after a 4 s reacquire window (#697) | `PadlockToggle` (gamepad: RightStick click) |
 | F6 | Toggle the target-slaved inset view (#698) | `TargetInsetToggle` |
 | N / P | Cycle to the next / previous target (#696) | `NextTarget` / `PrevTarget` (gamepad: DpadUp = next) |
 | PageUp / PageDown / ← / → | Pan the cockpit view (keyboard alternative to RMB drag; Cockpit/Padlock only) | `ViewUp` / `ViewDown` / `ViewLeft` / `ViewRight` |

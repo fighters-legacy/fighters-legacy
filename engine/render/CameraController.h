@@ -12,6 +12,7 @@ enum class CameraMode : uint8_t {
     Cockpit, // F1: locked inside the entity, looking out (the entity model is hidden in this view)
     Chase,   // F2: locked behind the entity, following its heading
     Free,    // F4: free-fly camera; moves anywhere in the world (only constraint: above the ground)
+    Padlock, // F5: eye at the cockpit, slewed to keep the designated target centred (#697)
 };
 
 // Produces a CameraView each frame for use with IRenderer::setScene.

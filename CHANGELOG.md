@@ -21,6 +21,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **game**: padlock camera mode with LOS lock-break and re-acquisition (#697, Epic #587). New
+  `CameraMode::Padlock` (F5): the camera stays at the cockpit eye and slews to keep the designated
+  target centred. All the math is a pure `fl::PadlockTracker` — a continuous world-space aim slewed
+  toward the extrapolated target with a damped, rate-limited (240°/s) approach and an elevation clamp
+  (overhead crossings resolve smoothly, never a 2π jump), a cockpit visibility envelope, and a
+  Locked → Breaking (0.4 s grace) → Reacquire (4 s) → Off state machine. `CameraInput` drives it,
+  latching terrain LOS (#687) at ~15 Hz; `FlightScreen` toggles it (auto-designating best-in-cone via
+  #696 when nothing is designated), shows the `PADLOCK`/`PADLOCK — BREAK`/`REACQ` cue, and treats
+  Padlock like Cockpit for ownship-hiding + HUD gating. Frame-rate-independent by construction; covered
+  by `tests/test_padlock_tracker.cpp` (overhead-pass continuity, 60-vs-240-fps equivalence, grace
+  hysteresis, reacquire expiry, break-slew return, envelope masking).
+
 - **renderer**: secondary-camera inset viewport via `FrameScene` (#695, Epic #587). `FrameScene` gains
   POD `insetEnabled`/`insetCamera`/`insetRect` fields (no new `IRenderer` pure virtuals — mocks and every
   `setScene` consumer compile unchanged), and `VkRenderer` renders the same scene a second time from the

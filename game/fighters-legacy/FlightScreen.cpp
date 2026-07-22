@@ -276,9 +276,8 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     // context from the snapshot + the client's category/IFF seams (#688) and cycle on the action edge.
     const bool designateAllowed = d.targetDesignation && d.inputBindings && !uiFocused && !d.gameConsole->isOpen();
     if (designateAllowed && viewEntry && d.renderBridge->hasSnapshot()) {
-        const bool next = bindingJustPressed(input, d.inputBindings->get(fl::InputAction::NextTarget));
-        const bool prev = bindingJustPressed(input, d.inputBindings->get(fl::InputAction::PrevTarget));
-        if (next || prev) {
+        // Shared candidate context: category via the type registry, IFF via the #688 client helper.
+        auto makeCtx = [&]() {
             fl::DesignationContext dctx;
             dctx.snap = &d.renderBridge->current();
             dctx.ownIdx = viewEntry->entityIdx;
@@ -298,9 +297,39 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
                     return h->identForEntity(e.entityIdx, e.entityGen, e.factionIndex);
                 };
             }
-            d.targetDesignation->cycle(next ? +1 : -1, dctx);
+            return dctx;
+        };
+
+        const bool next = bindingJustPressed(input, d.inputBindings->get(fl::InputAction::NextTarget));
+        const bool prev = bindingJustPressed(input, d.inputBindings->get(fl::InputAction::PrevTarget));
+        if (next || prev)
+            d.targetDesignation->cycle(next ? +1 : -1, makeCtx());
+
+        // Padlock toggle (#697): F5 enters padlock (auto-designating best-in-cone when nothing is
+        // designated) and exits back to Cockpit; the tracker is seeded from the current view so it
+        // never pops. All the slew/lock math lives in CameraInput's Padlock case.
+        if (bindingJustPressed(input, d.inputBindings->get(fl::InputAction::PadlockToggle))) {
+            if (d.cameraController->mode() == fl::CameraMode::Padlock) {
+                d.cameraController->setMode(fl::CameraMode::Cockpit);
+            } else {
+                constexpr float kDesignateHalfAngleRad = 0.2618f; // 15 deg
+                if (!d.targetDesignation->resolve(d.renderBridge->current()))
+                    d.targetDesignation->designateBest(makeCtx(), kDesignateHalfAngleRad);
+                if (d.targetDesignation->designated() && d.camInput) {
+                    d.camInput->enterPadlock();
+                    d.cameraController->setMode(fl::CameraMode::Padlock);
+                }
+            }
         }
     }
+
+    // Feed the padlock view its target each frame (resolve auto-clears on despawn/death). Stored for
+    // the HUD box + PADLOCK cue below; also drives CameraInput's Padlock slew next frame.
+    m_designatedTarget = (d.targetDesignation && d.renderBridge->hasSnapshot())
+                             ? d.targetDesignation->resolve(d.renderBridge->current())
+                             : nullptr;
+    if (d.camInput)
+        d.camInput->setPadlockTarget(m_designatedTarget);
 
     if (auto msg = d.flightInput->poll(*d.renderBridge, *d.camInput, *d.gameConsole, input, d.joystick, cs, uiFocused,
                                        /*textEntry=*/chatOpen)) {
@@ -341,7 +370,9 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     // Terrain elevation above the datum along the radial through the entity (heightAt(dvec3));
     // the HUD/haptics derive radial AGL from it against the geodetic altitude (#477).
     const float terrainElev = viewEntry ? static_cast<float>(d.terrainStreamer->heightAt(viewEntry->position)) : 0.f;
-    const bool cockpit = (d.cameraController->mode() == fl::CameraMode::Cockpit);
+    // Padlock (#697) is a cockpit-eye view: the HUD shows and the ownship is hidden, exactly like Cockpit.
+    const fl::CameraMode camMode = d.cameraController->mode();
+    const bool cockpit = (camMode == fl::CameraMode::Cockpit || camMode == fl::CameraMode::Padlock);
 
     // Observer picker label (#860): name + faction of the entity being viewed, shown top-centre. Built
     // here where the registry (type name) and the net handler (faction name) are both reachable.
@@ -433,12 +464,8 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     hin.apTargetAltM = m_autopilot.targetAltM();
     hin.apTargetHeadingDeg = glm::degrees(m_autopilot.targetHeadingRad());
     hin.apTargetSpeedMps = m_autopilot.targetSpeedMps();
-    // Designated target (#696): resolve auto-clears on despawn/death/gen-mismatch. The combat HUD
-    // (#641) draws the box; here it also drives the FlightScreen designator cue (buildElements).
-    m_designatedTarget = (cockpit && d.targetDesignation && d.renderBridge->hasSnapshot())
-                             ? d.targetDesignation->resolve(d.renderBridge->current())
-                             : nullptr;
-    hin.designatedTarget = m_designatedTarget;
+    // Designated target (#696): resolved above (auto-clears on despawn/death). Only shown in cockpit.
+    hin.designatedTarget = cockpit ? m_designatedTarget : nullptr;
     (*d.activeHud)->update(hin);
     d.windshieldRain->update(cockpit ? (1.f / 60.f) : 0.f, cockpit ? *d.env : EnvironmentState{},
                              cockpit ? rollAngleRad(viewEntry, radiusM) : 0.f);
@@ -518,6 +545,39 @@ std::span<const HudElement> FlightScreen::buildElements() {
             el.a = 1.0f;
             el.scale = 1.f;
             el.text = m_tgtLabel;
+        }
+    }
+
+    // Padlock lock-state cue (#697): PADLOCK / PADLOCK — BREAK / REACQ, top-centre under the lubber.
+    if (m_deps.camInput && m_deps.cameraController && m_deps.cameraController->mode() == fl::CameraMode::Padlock &&
+        m_elementCount < kMaxElements) {
+        const char* cue = nullptr;
+        switch (m_deps.camInput->padlockState()) {
+        case fl::PadlockState::Locked:
+            cue = "PADLOCK";
+            break;
+        case fl::PadlockState::Breaking:
+            cue = "PADLOCK -- BREAK";
+            break;
+        case fl::PadlockState::Reacquire:
+            cue = "REACQ";
+            break;
+        case fl::PadlockState::Off:
+            break;
+        }
+        if (cue) {
+            HudElement& el = m_elements[static_cast<std::size_t>(m_elementCount++)];
+            el = {};
+            el.type = HudElement::Type::Text;
+            el.x = 0.5f;
+            el.y = 0.13f;
+            el.align = HudAlign::Center;
+            el.r = 0.9f;
+            el.g = 0.9f;
+            el.b = 0.2f;
+            el.a = 1.0f;
+            el.scale = 1.f;
+            el.text = cue;
         }
     }
 

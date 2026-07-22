@@ -75,6 +75,14 @@ target_include_directories(test_target_designation PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy" ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_target_designation)
 
+# Padlock tracker (#697): pure aim + lock state machine, scripted trajectories.
+add_executable(test_padlock_tracker test_padlock_tracker.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/PadlockTracker.cpp")
+target_link_libraries(test_padlock_tracker PRIVATE Catch2::Catch2WithMain engine-spatial platform-hal)
+target_include_directories(test_padlock_tracker PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_padlock_tracker)
+
 # Ejection / pilot survival model (#672): pure envelope + territory -> outcome logic (header-only).
 add_executable(test_ejection test_ejection.cpp)
 target_link_libraries(test_ejection PRIVATE Catch2::Catch2WithMain engine-entity)
@@ -1069,11 +1077,12 @@ add_executable(test_screen_manager test_screen_manager.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientPrediction.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/Autopilot.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/TargetDesignation.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/PadlockTracker.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/CameraInput.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightInputCollector.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp")
 target_link_libraries(test_screen_manager PRIVATE
-    Catch2::Catch2WithMain engine-config engine-render engine-sandbox engine-content engine-console engine-input engine-net engine-entity engine-weather engine-flight engine-manual engine-audio engine-i18n engine-ai platform-sdl3 platform-hal SDL3::SDL3)
+    Catch2::Catch2WithMain engine-config engine-render engine-sandbox engine-content engine-console engine-input engine-net engine-entity engine-weather engine-flight engine-manual engine-audio engine-i18n engine-ai engine-spatial platform-sdl3 platform-hal SDL3::SDL3)
 target_include_directories(test_screen_manager PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_screen_manager)

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "PadlockTracker.h"  // padlock aim + lock state machine (#697)
 #include "flight/Geodetic.h" // kEarthRadiusM (default planet radius)
 
 #include <chrono>
@@ -45,6 +46,22 @@ class CameraInput {
     // set once on entering Flight. Null = mode switching / pan disabled (defensive).
     void setBindings(const InputBindings* bindings) noexcept {
         m_bindings = bindings;
+    }
+
+    // Padlock (#697): the designated target the padlock view slews to keep centred, set each frame by
+    // FlightScreen (null = no target; the padlock view falls back to the airframe forward and exits).
+    void setPadlockTarget(const EntityRenderEntry* target) noexcept {
+        m_padlockTarget = target;
+    }
+    // Seed the padlock tracker from the current view so entering padlock never pops, and report its
+    // lock state for the HUD cue. Called by FlightScreen on the PadlockToggle edge.
+    void enterPadlock() noexcept {
+        m_padlock.enter(m_lastForward, m_lastUp);
+        m_losAccumS = 0.f;
+        m_latchedLos = LosResult::Clear;
+    }
+    [[nodiscard]] PadlockState padlockState() const noexcept {
+        return m_padlock.state();
     }
 
     // Persistent throttle [0,1] shared between camera and flight input.
@@ -141,6 +158,16 @@ class CameraInput {
 
     // Binding table for camera-mode + cockpit-pan actions (#689); not owned, set via setBindings().
     const InputBindings* m_bindings{nullptr};
+
+    // Padlock view state (#697): the tracker, the designated target (not owned, set each frame), the
+    // last applied forward/up (to seed the tracker on entry without a pop), and the ~15 Hz terrain-LOS
+    // latch (a full march every query would be wasteful at 60 Hz).
+    PadlockTracker m_padlock;
+    const EntityRenderEntry* m_padlockTarget{nullptr};
+    glm::vec3 m_lastForward{1.f, 0.f, 0.f};
+    glm::vec3 m_lastUp{0.f, 1.f, 0.f};
+    float m_losAccumS{0.f};
+    LosResult m_latchedLos{LosResult::Clear};
 
     // Console-toggle edge detection (the grave key is not a bound action, so it stays raw).
     bool m_gravePrev{false};

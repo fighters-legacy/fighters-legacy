@@ -305,9 +305,10 @@ static void updatePerfOverlay(GameConsole& console, IRenderer& renderer, Perform
 
     // Append live camera + entity readouts (so the underground/aim issues are visible in real time).
     if (overlay.mode() != OverlayMode::Off) {
-        const char* modeStr = camMode == fl::CameraMode::Cockpit ? "COCKPIT"
-                              : camMode == fl::CameraMode::Chase ? "CHASE"
-                                                                 : "FREE";
+        const char* modeStr = camMode == fl::CameraMode::Cockpit   ? "COCKPIT"
+                              : camMode == fl::CameraMode::Chase   ? "CHASE"
+                              : camMode == fl::CameraMode::Padlock ? "PADLOCK"
+                                                                   : "FREE";
         const double planetR = terrain ? terrain->planetRadiusM() : fl::kEarthRadiusM;
         const double terrCam = terrain ? terrain->heightAt(cam.worldOrigin) : 0.0;
         const double terrEnt = (terrain && playerEntry) ? terrain->heightAt(playerEntry->position) : 0.0;
@@ -2124,7 +2125,8 @@ void Game::run() {
             // In cockpit view the camera sits at the player entity, so render that entity
             // shadow-only — you should not see your own aircraft from inside it, but its shadow
             // on the ground should remain. External views (Chase/Free) show it normally.
-            const bool cockpit = d.services.cameraController.mode() == fl::CameraMode::Cockpit;
+            const fl::CameraMode cm = d.services.cameraController.mode();
+            const bool cockpit = (cm == fl::CameraMode::Cockpit || cm == fl::CameraMode::Padlock); // #697
             if (cockpit && playerEntry) {
                 d.services.sceneRenderer->setHiddenEntity(d.session.clientHandler->assignedEntityIdx,
                                                           d.session.clientHandler->assignedEntityGen);

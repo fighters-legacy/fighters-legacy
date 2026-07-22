@@ -250,6 +250,59 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
             const glm::vec3 forward = player->orientation * lookRot * glm::vec3{1.f, 0.f, 0.f};
             const glm::vec3 up = player->orientation * glm::vec3{0.f, 1.f, 0.f};
             ctrl.setPose(eye, forward, up);
+            m_lastForward = forward; // seed for a subsequent padlock entry (#697)
+            m_lastUp = up;
+        }
+        break;
+    case CameraMode::Padlock:
+        if (player) {
+            // Eye identical to Cockpit; forward/up come from the padlock tracker slewing to the target.
+            const glm::dvec3 eye =
+                player->position + glm::dvec3(player->velocity * (m_renderAlpha * kTickDt)) +
+                glm::dvec3(player->orientation * glm::vec3{0.f, static_cast<float>(kEntityCentreHeightM), 0.f});
+            const glm::vec3 worldUp = radialUp(eye, m_planetRadiusM);
+            if (!m_padlockTarget) {
+                // No target: hold the airframe forward; FlightScreen reverts to Cockpit.
+                const glm::vec3 fwd = player->orientation * glm::vec3{1.f, 0.f, 0.f};
+                ctrl.setPose(eye, fwd, worldUp);
+                m_lastForward = fwd;
+                m_lastUp = worldUp;
+                m_lastEye = eye;
+                break;
+            }
+            const glm::dvec3 tgt =
+                m_padlockTarget->position + glm::dvec3(m_padlockTarget->velocity * (m_renderAlpha * kTickDt));
+
+            // Terrain LOS latched at ~15 Hz — a full segment march every 60 Hz frame is wasteful.
+            m_losAccumS += dt;
+            if (m_losAccumS >= 1.0f / 15.0f) {
+                m_losAccumS = 0.f;
+                auto hfn = [&](double x, double y, double z) {
+                    return static_cast<double>(terrain.heightAt(glm::dvec3{x, y, z}));
+                };
+                auto rfn = [&](double x, double y, double z) { return terrain.heightReadyAt(glm::dvec3{x, y, z}); };
+                const double a[3] = {eye.x, eye.y, eye.z};
+                const double b[3] = {tgt.x, tgt.y, tgt.z};
+                m_latchedLos = terrainLos(a, b, hfn, rfn, m_planetRadiusM);
+            }
+
+            PadlockInputs pin;
+            pin.dt = dt;
+            pin.ownPos = eye;
+            pin.ownOrient = player->orientation;
+            pin.targetPos = tgt;
+            pin.terrainLos = m_latchedLos; // Unknown treated as Clear inside the tracker
+            pin.worldUp = worldUp;
+            const PadlockPose pose = m_padlock.update(pin);
+            if (pose.exitToCockpit) {
+                ctrl.setMode(fl::CameraMode::Cockpit);
+                onModeSwitch(fl::CameraMode::Cockpit, player);
+            } else {
+                ctrl.setPose(eye, pose.forward, pose.up);
+            }
+            m_lastForward = pose.forward;
+            m_lastUp = pose.up;
+            m_lastEye = eye;
         }
         break;
     }
