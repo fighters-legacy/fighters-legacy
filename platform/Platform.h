@@ -9,6 +9,7 @@
 #include "IDisplay.h"
 #include "IFilesystem.h"
 #include "IFilesystemWatcher.h"
+#include "IGui.h"
 #include "IHttpClient.h"
 #include "IInput.h"
 #include "IJoystick.h"
@@ -55,6 +56,10 @@ struct Platform {
     std::unique_ptr<IDisplay> display; // null until assigned; usable after window->init()
     std::unique_ptr<ICursor> cursor;   // null until assigned; usable after window->init()
     std::unique_ptr<IRenderer> renderer;
+    // #156: the IGui backend (Dear ImGui). Declared AFTER renderer so it is destroyed BEFORE it — its
+    // shutdown tears down the ImGui Vulkan backend via IRenderer::shutdownGuiRenderBackend() while the
+    // renderer/device is still alive. Null on the headless path and when no GUI backend is available.
+    std::unique_ptr<IGui> gui;
     std::unique_ptr<IAudio> audio;
     std::unique_ptr<IInput> input;
     std::unique_ptr<IJoystick> joystick; // null in headless/test mode; flush() each frame

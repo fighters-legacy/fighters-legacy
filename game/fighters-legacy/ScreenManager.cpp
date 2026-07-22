@@ -38,6 +38,10 @@ void ScreenManager::reinitFlight(FlightScreenDeps deps) {
     m_flight = std::make_unique<FlightScreen>(std::move(deps));
 }
 
+void ScreenManager::reinitJoinServer(JoinServerScreen::Deps deps) {
+    m_joinServer = std::make_unique<JoinServerScreen>(std::move(deps));
+}
+
 void ScreenManager::reinitLoading(std::atomic<bool>& serverReady, std::function<bool()> isConnected,
                                   std::function<void()> onConnect, bool isSinglePlayer,
                                   std::atomic<SessionFailure>* sessionFailure) {
@@ -49,6 +53,9 @@ IScreen& ScreenManager::active() {
     switch (m_current) {
     case Screen::MainMenu:
         return *m_mainMenu;
+    case Screen::JoinServer:
+        // Constructed by reinitJoinServer() before the menu can navigate here; fall back defensively.
+        return m_joinServer ? static_cast<IScreen&>(*m_joinServer) : static_cast<IScreen&>(*m_mainMenu);
     case Screen::Loading:
         return *m_loading;
     case Screen::MissionSelect:
@@ -105,6 +112,10 @@ void ScreenManager::setServerCmd(std::function<void(std::string_view)> fn) {
 void ScreenManager::setSettingsReturnTarget(Screen target) {
     if (m_settings)
         m_settings->setReturnTarget(target);
+}
+
+JoinServerScreen& ScreenManager::joinServer() {
+    return *m_joinServer;
 }
 
 MainMenuScreen& ScreenManager::mainMenu() {

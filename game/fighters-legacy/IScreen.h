@@ -15,6 +15,7 @@ class IWindow;
 // chooses to exit the application. The run loop handles it before any transition.
 enum class Screen {
     MainMenu,
+    JoinServer, // #322: multiplayer direct-connect form (host / password / callsign)
     Loading,
     MissionSelect,
     MissionBrief,

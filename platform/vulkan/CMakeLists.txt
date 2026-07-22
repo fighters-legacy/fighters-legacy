@@ -99,6 +99,7 @@ target_link_libraries(platform-vulkan
             VulkanMemoryAllocator
             ${_ktx_target}
             tinygltf
+            imgui # #156: records ImGui draw data into the swapchain pass (backends/imgui_impl_vulkan)
 )
 
 target_compile_definitions(platform-vulkan PRIVATE

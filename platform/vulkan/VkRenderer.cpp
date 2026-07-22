@@ -9,6 +9,8 @@
 #include "UnifontBitmap.h"
 #include "Utf8Decode.h"
 #include "VkWindow.h"
+#include "backends/imgui_impl_vulkan.h" // #156
+#include "imgui.h"                      // #156: Dear ImGui backend bridge (draw-data recording)
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
@@ -4361,6 +4363,32 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
             recordOverlayPass(cmd);
     }
 
+    // ── Dear ImGui pass (#156 — after the HudElement overlay, before PRESENT transition) ─
+    // The IGui backend called ImGui::Render() this frame; record its draw data into the swapchain image
+    // (still COLOR_ATTACHMENT_OPTIMAL) in its own dynamic-rendering block, loadOp=LOAD to preserve the
+    // scene + overlay beneath it. Guarded by m_guiEnabled so it is inert until an IGui backend attaches.
+    if (m_guiEnabled) {
+        if (ImDrawData* drawData = ImGui::GetDrawData()) {
+            VkRenderingAttachmentInfo guiAtt{};
+            guiAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            guiAtt.imageView = m_swapchainImageViews[imageIndex];
+            guiAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            guiAtt.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+            guiAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+            VkRenderingInfo guiRi{};
+            guiRi.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+            guiRi.renderArea = {{0, 0}, m_swapchainExtent};
+            guiRi.layerCount = 1;
+            guiRi.colorAttachmentCount = 1;
+            guiRi.pColorAttachments = &guiAtt;
+
+            vkCmdBeginRendering(cmd, &guiRi);
+            ImGui_ImplVulkan_RenderDrawData(drawData, cmd);
+            vkCmdEndRendering(cmd);
+        }
+    }
+
     // ── present image → PRESENT_SRC_KHR (windowed) or TRANSFER_SRC (headless readback, #913) ──
     imageBarrier(cmd, m_swapchainImages[imageIndex], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                  m_headless ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
@@ -5031,6 +5059,66 @@ void VkRenderer::recordOverlayPass(VkCommandBuffer cmd) {
     vkCmdBindVertexBuffers(cmd, 0, 1, &m_overlayVB, &offset);
     vkCmdDraw(cmd, vertCount, 1, 0, 0);
     vkCmdEndRendering(cmd);
+}
+
+bool VkRenderer::initGuiRenderBackend() {
+    // #156: bring up ImGui's Vulkan renderer backend against this renderer's device/swapchain. The IGui
+    // backend has already created the ImGui context; here we only wire the GPU side. Skipped headlessly
+    // (no swapchain to composite into) and idempotent.
+    if (m_headless || m_device == VK_NULL_HANDLE)
+        return false;
+    if (m_guiEnabled)
+        return true;
+
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 64};
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    poolInfo.maxSets = 64;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_imguiPool) != VK_SUCCESS) {
+        m_imguiPool = VK_NULL_HANDLE;
+        return false;
+    }
+
+    const auto imageCount = static_cast<uint32_t>(m_swapchainImages.size());
+    ImGui_ImplVulkan_InitInfo info{};
+    info.Instance = m_instance;
+    info.PhysicalDevice = m_physicalDevice;
+    info.Device = m_device;
+    info.QueueFamily = m_graphicsFamily;
+    info.Queue = m_graphicsQueue;
+    info.DescriptorPool = m_imguiPool;
+    info.MinImageCount = imageCount;
+    info.ImageCount = imageCount;
+    info.MSAASamples = VK_SAMPLE_COUNT_1_BIT; // the whole pipeline is single-sample
+    info.PipelineCache = m_pipelineCache;
+    info.UseDynamicRendering = true; // Vulkan 1.3 dynamic rendering — no VkRenderPass anywhere
+    info.PipelineRenderingCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    info.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
+    info.PipelineRenderingCreateInfo.pColorAttachmentFormats = &m_swapchainFormat; // stable member
+
+    if (!ImGui_ImplVulkan_Init(&info)) {
+        vkDestroyDescriptorPool(m_device, m_imguiPool, nullptr);
+        m_imguiPool = VK_NULL_HANDLE;
+        return false;
+    }
+    m_guiEnabled = true; // font texture is created lazily on the first ImGui_ImplVulkan_NewFrame()
+    return true;
+}
+
+void VkRenderer::shutdownGuiRenderBackend() {
+    if (!m_guiEnabled)
+        return;
+    if (m_device != VK_NULL_HANDLE)
+        vkDeviceWaitIdle(m_device); // no in-flight frame may still reference the ImGui pipeline/pool
+    ImGui_ImplVulkan_Shutdown();
+    if (m_imguiPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(m_device, m_imguiPool, nullptr);
+        m_imguiPool = VK_NULL_HANDLE;
+    }
+    m_guiEnabled = false;
 }
 
 void VkRenderer::destroyOverlayResources() {

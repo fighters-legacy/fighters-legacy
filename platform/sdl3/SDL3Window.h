@@ -42,11 +42,17 @@ class SDL3Window : public IWindow {
         m_joystickSink = sink;
     }
 
+    // #156: forward each raw SDL_Event to the IGui backend at the top of the pump.
+    void setGuiEventForwarder(std::function<void(const void*)> fn) override {
+        m_guiEventForwarder = std::move(fn);
+    }
+
   private:
     SDL_Window* m_window{nullptr};
     IWindowEventHandler* m_handler{nullptr};
     ISDL3EventSink* m_inputSink{nullptr};
     ISDL3EventSink* m_joystickSink{nullptr};
+    std::function<void(const void*)> m_guiEventForwarder;
     int m_width{0};
     int m_height{0};
     int m_logicalWidth{0};
