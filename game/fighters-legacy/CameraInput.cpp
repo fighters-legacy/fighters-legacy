@@ -222,7 +222,7 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
         if (player) {
             // Locked inside the entity, looking along its forward axis (+ RMB look offset). The
             // origin is the ground-contact point, so raise the eye to the body centre.
-            const glm::dvec3 eye =
+            glm::dvec3 eye =
                 player->position + glm::dvec3(player->velocity * (m_renderAlpha * kTickDt)) +
                 glm::dvec3(player->orientation * glm::vec3{0.f, static_cast<float>(kEntityCentreHeightM), 0.f});
             if (!m_firstFrame && (mb & SDL_BUTTON_RMASK)) {
@@ -230,6 +230,14 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
                 m_cockpitPitch += (my - m_lastMy) * 0.25f;
                 m_cockpitPitch = std::clamp(m_cockpitPitch, -80.0f, 80.0f);
             }
+            // Head tracking (#927): compose the head pose additively with the RMB look. Head roll tilts
+            // the camera up (about the body forward); a body-frame eye offset lets the pilot lean.
+            const bool headFresh = m_headPose && m_headPose->fresh;
+            const float hYaw = headFresh ? glm::degrees(m_headPose->yawRad) : 0.f;
+            const float hPitch = headFresh ? glm::degrees(m_headPose->pitchRad) : 0.f;
+            const float hRoll = headFresh ? m_headPose->rollRad : 0.f;
+            if (headFresh)
+                eye += glm::dvec3(player->orientation * m_headPose->offsetM);
             // Keyboard / d-pad look pan (#689) — composes additively with the RMB drag above. Gated on
             // the console being closed, matching the free-fly movement cluster.
             if (!consoleOpen && m_bindings) {
@@ -245,10 +253,13 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
                     m_cockpitPitch -= panStep;
                 m_cockpitPitch = std::clamp(m_cockpitPitch, -80.0f, 80.0f);
             }
-            const glm::quat lookRot = glm::angleAxis(glm::radians(m_cockpitYaw), glm::vec3{0.f, 1.f, 0.f}) *
-                                      glm::angleAxis(glm::radians(m_cockpitPitch), glm::vec3{0.f, 0.f, 1.f});
+            const float lookPitch = std::clamp(m_cockpitPitch + hPitch, -80.0f, 80.0f);
+            const glm::quat lookRot = glm::angleAxis(glm::radians(m_cockpitYaw + hYaw), glm::vec3{0.f, 1.f, 0.f}) *
+                                      glm::angleAxis(glm::radians(lookPitch), glm::vec3{0.f, 0.f, 1.f});
             const glm::vec3 forward = player->orientation * lookRot * glm::vec3{1.f, 0.f, 0.f};
-            const glm::vec3 up = player->orientation * glm::vec3{0.f, 1.f, 0.f};
+            // Head roll tilts the view up about the body forward axis (0 = the unchanged body-up).
+            const glm::vec3 up =
+                player->orientation * glm::angleAxis(hRoll, glm::vec3{1.f, 0.f, 0.f}) * glm::vec3{0.f, 1.f, 0.f};
             ctrl.setPose(eye, forward, up);
             m_lastForward = forward; // seed for a subsequent padlock entry (#697)
             m_lastUp = up;

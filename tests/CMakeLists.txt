@@ -90,6 +90,14 @@ target_include_directories(test_inset_view PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy" ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_inset_view)
 
+# Head tracking (#927): pure opentrack parse + EMA/freshness filter (socketless).
+add_executable(test_head_tracker test_head_tracker.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HeadTracker.cpp")
+target_link_libraries(test_head_tracker PRIVATE Catch2::Catch2WithMain engine-config platform-hal)
+target_include_directories(test_head_tracker PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_head_tracker)
+
 # Ejection / pilot survival model (#672): pure envelope + territory -> outcome logic (header-only).
 add_executable(test_ejection test_ejection.cpp)
 target_link_libraries(test_ejection PRIVATE Catch2::Catch2WithMain engine-entity)
@@ -1087,6 +1095,7 @@ add_executable(test_screen_manager test_screen_manager.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/Autopilot.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/TargetDesignation.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/PadlockTracker.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HeadTracker.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/CameraInput.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightInputCollector.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp")

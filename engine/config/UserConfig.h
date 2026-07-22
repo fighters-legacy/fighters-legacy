@@ -9,6 +9,7 @@
 #include "config/DebugSettings.h"
 #include "config/DifficultySettings.h"
 #include "config/GraphicsSettings.h"
+#include "config/HeadTrackingSettings.h"
 #include "config/HudSettings.h"
 #include "config/PilotSettings.h"
 #include "config/PredictionSettings.h"
@@ -67,6 +68,8 @@ class UserConfig {
 
     PredictionSettings prediction() const;
     void setPrediction(const PredictionSettings& ps);
+    HeadTrackingSettings headTracking() const;
+    void setHeadTracking(const HeadTrackingSettings& hts);
 
   private:
     static constexpr const char* kPath = "config/user.toml";
@@ -86,6 +89,7 @@ class UserConfig {
     DebugSettings m_debug{};
     PilotSettings m_pilot{};
     PredictionSettings m_prediction{};
+    HeadTrackingSettings m_headTracking{};
 };
 
 } // namespace fl

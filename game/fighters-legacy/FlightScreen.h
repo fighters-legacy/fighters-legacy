@@ -44,6 +44,7 @@ class IGui;
 struct EnvironmentState;
 class InputBindings;
 class TargetDesignation;
+class HeadTracker;
 
 // All dependencies FlightScreen needs; set by Game before transitioning to Flight.
 struct FlightScreenDeps {
@@ -68,6 +69,7 @@ struct FlightScreenDeps {
     TargetDesignation* targetDesignation{nullptr}; // client-side designated target (#696); null = disabled
     SceneRenderer* sceneRenderer{nullptr};         // for the target-slaved inset view (#698); null = disabled
     float* nvgIntensity{nullptr};                  // NVG gain sink read by Game.cpp -> setNightVision (#210)
+    HeadTracker* headTracker{nullptr};             // opentrack head tracking (#927); null = disabled
     WingmanMenu* wingmanMenu{nullptr};             // null = no radio menu (#610)
     CommsMenu* commsMenu{nullptr};                 // null = no ATC comms menu (#704)
     ManualOverlay* manual{nullptr};                // null = no in-flight aircraft manual (#821)

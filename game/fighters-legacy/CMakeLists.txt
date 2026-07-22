@@ -10,6 +10,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         Autopilot.cpp
         TargetDesignation.cpp
         PadlockTracker.cpp
+        HeadTracker.cpp
         CameraInput.cpp
         FlightInputCollector.cpp
         HapticController.cpp

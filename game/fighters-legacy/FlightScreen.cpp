@@ -130,6 +130,13 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
             d.cameraController->setMode(fl::CameraMode::Free);
     }
 
+    // Head tracking (#927): drain the opentrack UDP stream and feed the smoothed pose to the cockpit
+    // look before the camera pose is computed.
+    if (d.headTracker && d.userConfig) {
+        d.headTracker->poll(1.0f / 60.0f, d.userConfig->headTracking());
+        d.camInput->setHeadPose(&d.headTracker->pose());
+    }
+
     d.camInput->pollModeKeys(*d.cameraController, *d.gameConsole, input, viewEntry);
     d.camInput->update(*d.cameraController, viewEntry, *d.gameConsole, *d.terrainStreamer, input);
 

@@ -21,6 +21,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **game**: head tracking via the opentrack UDP protocol (#927, Epic #587). A new `fl::HeadTracker`
+  (game layer) opens a non-blocking localhost UDP socket and reads the opentrack 6-double datagram
+  (x/y/z cm + yaw/pitch/roll deg); the parse and an EMA + freshness `HeadPoseFilter` are pure functions
+  in the header (unit-tested socketless). `CameraInput::setHeadPose` composes the smoothed pose
+  additively with the RMB cockpit look — head roll tilts the horizon, a body-frame eye offset lets the
+  pilot lean (clamped ±0.5 m). New `[headtracking]` `UserConfig` section (enabled/port/scales/inverts/
+  smoothing); the tracker starts per session when enabled and closes on teardown. Covered by
+  `tests/test_head_tracker.cpp` (datagram size validation, deg→rad/cm→m mapping, scale/invert/clamp,
+  EMA convergence, freshness timeout).
+
 - **renderer/game**: NVG cockpit overlay (#210, Epic #587). Night-vision goggles as a tonemap-stage
   green photocathode gain rather than a flat overlay: `TonemapPush` gains an `nvgIntensity` field
   (consuming a pad slot, size unchanged) and `tonemap.frag` a soft-knee luminance amplification painted

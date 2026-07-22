@@ -460,6 +460,7 @@ struct GameServices {
 
     // Per-frame state
     CameraInput camInput;
+    HeadTracker headTracker; // #927 opentrack UDP head tracking (started per session when enabled)
     PerformanceOverlay perfOverlay;
     bool showPing{false}; // toggled by the show_ping console command
     FlightInputCollector flightInput;
@@ -1320,6 +1321,9 @@ void Game::startGame(const std::string& mission) {
     d.services.renderBridge.reset();
     d.services.entityRegistry.clear();
     d.services.camInput.startSession();
+    // Head tracking (#927): open the opentrack UDP listener for this session when enabled.
+    if (d.services.userConfig && d.services.userConfig->headTracking().enabled)
+        d.services.headTracker.start(static_cast<uint16_t>(d.services.userConfig->headTracking().port));
     d.services.env = EnvironmentState{};
     d.session.serverReady.store(false, std::memory_order_relaxed);
     d.session.sessionFailure.store(SessionFailure::None, std::memory_order_relaxed);
@@ -1521,6 +1525,7 @@ void Game::startGame(const std::string& mission) {
         fsd.targetDesignation = &d.services.targetDesignation; // designated target (#696)
         fsd.sceneRenderer = d.services.sceneRenderer.get();    // target-slaved inset (#698)
         fsd.nvgIntensity = &d.services.nvgIntensity;           // night-vision goggles (#210)
+        fsd.headTracker = &d.services.headTracker;             // opentrack head tracking (#927)
         fsd.wingmanMenu = &d.services.wingmanMenu;
         fsd.commsMenu = &d.services.commsMenu;
         fsd.manual = &d.services.manual;
@@ -1584,6 +1589,8 @@ void Game::stopGame() {
     // Join background server thread before touching any session objects.
     if (d.session.serverThread.joinable())
         d.session.serverThread.join();
+
+    d.services.headTracker.stop(); // #927 close the head-tracking socket
 
     if (d.session.hapticController)
         d.session.hapticController->onPause(0);

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "HeadTracker.h"     // HeadPose (#927 head tracking)
 #include "PadlockTracker.h"  // padlock aim + lock state machine (#697)
 #include "flight/Geodetic.h" // kEarthRadiusM (default planet radius)
 
@@ -62,6 +63,12 @@ class CameraInput {
     }
     [[nodiscard]] PadlockState padlockState() const noexcept {
         return m_padlock.state();
+    }
+
+    // Head tracking (#927): the smoothed head pose composed into the cockpit look each frame. Not owned;
+    // set each frame by FlightScreen. Null / !fresh = ignored (mouse look still works).
+    void setHeadPose(const HeadPose* pose) noexcept {
+        m_headPose = pose;
     }
 
     // Persistent throttle [0,1] shared between camera and flight input.
@@ -163,6 +170,7 @@ class CameraInput {
     // last applied forward/up (to seed the tracker on entry without a pop), and the ~15 Hz terrain-LOS
     // latch (a full march every query would be wasteful at 60 Hz).
     PadlockTracker m_padlock;
+    const HeadPose* m_headPose{nullptr}; // #927 head tracking; not owned
     const EntityRenderEntry* m_padlockTarget{nullptr};
     glm::vec3 m_lastForward{1.f, 0.f, 0.f};
     glm::vec3 m_lastUp{0.f, 1.f, 0.f};
