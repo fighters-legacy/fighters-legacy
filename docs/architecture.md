@@ -218,6 +218,17 @@ revised by a dated decision record instead of a full RFC, provided the change is
 with its rationale. This keeps the velocity of pre-1.0 architecture work without leaving the
 locked table silently stale.
 
+**2026-07-22 — client-side IFF stays client-side; the faction relationship matrix never crosses
+the wire (#688, Epic #587).** The client already receives an entity's `factionIndex` (#860) and a
+datalink track's server-computed `ident` (#528), but had no way to answer friend/foe for an
+*arbitrary* snapshot entity (needed for the #641 combat-HUD target box and #696 target cycling).
+Rather than send the `FactionRegistry` relationship matrix — it is Lua-mutable at runtime, so any
+wire snapshot goes stale, and `RadarView`'s doctrine already says the display-safe fact is `ident`,
+not raw faction — the client derives IFF locally: `ClientNetEventHandler::identForEntity` compares
+the entity's faction to `ownFactionIndex()` (same → Friend), else uses a live datalink track's
+`ident` (authoritative, catches coalitions), else the affiliation-rule fallback
+`areFactionsHostile` (`engine/world/FactionDef.h`). No wire change; `kProtocolVersion` stays 1.
+
 **2026-07-22 — terrain line-of-sight is a shared `engine/spatial` utility, decoupled from the
 collision phase (#687, Epic #587 padlock family).** Nothing ray- or LOS-shaped existed in the
 engine; the padlock lock-break (#697, client) and server-side AI sensing terrain gates (#670) both

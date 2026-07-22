@@ -21,6 +21,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **game**: client-side IFF for arbitrary snapshot entities (#688, Epic #587). `ClientNetEventHandler`
+  gains `ownFactionIndex()` (derived from the assigned aircraft's cached faction, roster fallback) and
+  `identForEntity(idx, gen, factionIndex)` — a three-step friend/foe resolution (same faction → Friend;
+  a live datalink track's server-computed `ident`; else the `areFactionsHostile` affiliation rule).
+  Serves the #641 combat-HUD target box and #696 target cycling. No wire change: the faction
+  relationship matrix is Lua-mutable and stays server-side, per the `RadarView` `ident` doctrine.
+  Covered by new cases in `tests/test_client_net_event_handler.cpp`.
+
 - **engine**: terrain line-of-sight segment query (#687, Epic #587 padlock family). New header-only
   `engine/spatial/LineOfSight.h` — `terrainLos(a, b, heightFn, readyFn, planetRadiusM, stepM,
   clearanceM)` returns `LosResult::{Clear, Blocked, Unknown}` by marching the segment with an
