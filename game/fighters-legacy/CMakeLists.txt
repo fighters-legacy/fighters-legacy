@@ -31,6 +31,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
     target_link_libraries(fighters-legacy PRIVATE
         engine-crash
         engine-config
+        engine-i18n
         engine-flight
         engine-difficulty
         engine-firstrun

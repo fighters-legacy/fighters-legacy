@@ -3,6 +3,7 @@
 
 #include "IInput.h"
 #include "IWindow.h"
+#include "Localize.h" // tr() session-failure localization (#358)
 
 #include <chrono>
 
@@ -23,7 +24,7 @@ bool LoadingScreen::checkSessionFailure() {
     SessionFailure f = m_sessionFailure->load(std::memory_order_acquire);
     if (f == SessionFailure::None)
         return false;
-    addLine(sessionFailureMessage(f));
+    addLine(tr(m_i18n, sessionFailureKey(f), sessionFailureMessage(f)));
     m_failedAt = m_clock->now();
     m_phase = Phase::Failed;
     return true;
@@ -73,7 +74,8 @@ Screen LoadingScreen::update(IInput& /*input*/, IWindow& /*window*/) {
                 break;
             // Fallback: generic message if start() never returned (hung process).
             if (m_clock->now() > m_startDeadline) {
-                addLine(sessionFailureMessage(SessionFailure::ServerStartHang));
+                addLine(tr(m_i18n, sessionFailureKey(SessionFailure::ServerStartHang),
+                           sessionFailureMessage(SessionFailure::ServerStartHang)));
                 m_failedAt = m_clock->now();
                 m_phase = Phase::Failed;
             }
@@ -88,7 +90,8 @@ Screen LoadingScreen::update(IInput& /*input*/, IWindow& /*window*/) {
             addLine("Ready.");
             m_phase = Phase::Ready;
         } else if (m_clock->now() > m_connectDeadline && m_connectDeadline != std::chrono::steady_clock::time_point{}) {
-            addLine(sessionFailureMessage(SessionFailure::ConnectTimeout));
+            addLine(tr(m_i18n, sessionFailureKey(SessionFailure::ConnectTimeout),
+                       sessionFailureMessage(SessionFailure::ConnectTimeout)));
             m_failedAt = m_clock->now();
             m_phase = Phase::Failed;
         }

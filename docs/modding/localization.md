@@ -98,6 +98,23 @@ Fallback behaviour:
 
 ---
 
+## UI strings and built-in fallbacks (#358)
+
+The game client loads the locale named by `[client] language` in `user.toml` (default `en`)
+at startup and routes its user-visible strings through a `tr(loc, key, builtin)` helper: it
+looks `key` up in the active locale and falls back to a built-in English string when the key
+is missing or no locale is loaded. So a partial translation degrades gracefully — untranslated
+strings show in English rather than showing the raw key.
+
+`locale/en/ui.toml` is the base table; a translator copies it to `locale/<lang>/ui.toml` and
+translates the values. Its sections cover the multiplayer surfaces: `[session]` (connection /
+session-failure messages), `[chat]`, `[scoreboard]`, `[join]`, `[spectate]`, `[debrief]`, and
+`[browser]`. The `[session]` keys are kept one-per-`SessionFailure`-enumerator and guarded by
+`tests/test_session_i18n.cpp`, which fails if an enumerator lacks a key or a key is missing from
+`ui.toml`.
+
+---
+
 ## 6. Interpolation
 
 Use `{placeholder}` syntax in strings. Named placeholders are replaced at runtime.

@@ -14,6 +14,8 @@
 
 namespace fl {
 
+class Localization;
+
 // Async loading screen shown while the local server starts and ENet connects.
 // Constructor takes callables injected by Game::startGame():
 //   serverReady    — atomic set by the background server thread on success
@@ -39,6 +41,11 @@ class LoadingScreen : public IScreen {
 
     void setClock(const fl::IClock& clock);
 
+    // Localize session-failure text (#358); null = English built-ins only. Call after construction.
+    void setLocalization(const fl::Localization* loc) {
+        m_i18n = loc;
+    }
+
   private:
     enum class Phase { StartingServer, Connecting, Ready, Failed };
 
@@ -47,6 +54,7 @@ class LoadingScreen : public IScreen {
     std::function<void()> m_onServerReady;
     std::atomic<SessionFailure>* m_sessionFailure;
     bool m_isSinglePlayer;
+    const fl::Localization* m_i18n{nullptr}; // #358: session-failure localization; null = English
 
     Phase m_phase{Phase::StartingServer};
     bool m_onServerReadyCalled{false};

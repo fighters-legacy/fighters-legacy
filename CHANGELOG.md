@@ -21,6 +21,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **i18n**: localize connection and session-failure strings (#358, Epic E #497). The game client now
+  constructs `Localization` at startup from `[client] language` (default `en`) and routes the loading
+  screen's session-failure text through a new `tr(loc, key, builtin)` helper that falls back to the
+  built-in English string when a key is missing or no locale is loaded — a partial translation degrades
+  to English rather than showing raw keys. Each `SessionFailure` enumerator gains a stable
+  `sessionFailureKey()`, and `locale/en/ui.toml` is populated with the `[session]`, `[chat]`,
+  `[scoreboard]`, `[join]`, `[spectate]`, `[debrief]`, and `[browser]` sections. `tests/test_session_i18n.cpp`
+  guards against enum/TOML drift (every failure key present + non-empty in the repo locale, tr fallback).
+  Documented in `docs/modding/localization.md`.
+
 - **match**: objective scoring channel from missions to the match controller (#1000, Epic E #497).
   `MatchController::recordObjective(faction, count)` awards `count × points_per_objective` to a team
   during the Active phase (frozen otherwise, inert when the mode declares no objective points). A mission

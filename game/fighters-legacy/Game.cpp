@@ -19,6 +19,7 @@
 #include "HeadlessHal.h"
 #include "IWindowEventHandler.h"
 #include "KillFeed.h"
+#include "LoadingScreen.h"
 #include "LocalServer.h"
 #include "MainMenuScreen.h"
 #include "MissionBriefScreen.h"
@@ -59,6 +60,7 @@
 #include "flight/Geodetic.h"
 #include "gui/ImGuiGui.h"               // #156: Dear ImGui backend behind the IGui HAL
 #include "http/CurlHttpClientFactory.h" // createHttpClient (#490)
+#include "i18n/Localization.h"
 #include "input/AxisConfig.h"
 #include "input/InputBindings.h"
 #include "mission/MissionParser.h"
@@ -338,8 +340,9 @@ struct GameServices {
 
     // Config + renderer settings
     std::optional<UserConfig> userConfig;
-    fl::InputBindings inputBindings;     // loaded from config/bindings.toml; stored for Phase 4
-    fl::AxisConfigTable axisConfigTable; // loaded from config/bindings.toml [axis_config]
+    std::unique_ptr<fl::Localization> localization; // UI locale (#358); null before initContent
+    fl::InputBindings inputBindings;                // loaded from config/bindings.toml; stored for Phase 4
+    fl::AxisConfigTable axisConfigTable;            // loaded from config/bindings.toml [axis_config]
     RendererSettings rendererSettings;
     ResizeHandler resizeHandler;
 
@@ -798,6 +801,11 @@ bool Game::initPlatform(int argc, char** argv) {
     }
     if (d.services.operatorPassword.empty())
         d.services.operatorPassword = d.services.userConfig->client().operatorPassword;
+
+    // UI localization (#358): load the configured locale ([client] language, default "en") from the base
+    // locale/ tree. Missing keys fall back to the built-in English strings at each call site via tr().
+    d.services.localization = std::make_unique<fl::Localization>(*d.services.p.filesystem, *d.services.rawLogger);
+    d.services.localization->load(d.services.userConfig->client().language.c_str(), /*rootDirs=*/{});
 
     auto oalAudio = std::make_unique<OALAudio>();
     if (!oalAudio->init()) {
@@ -1471,6 +1479,8 @@ void Game::startGame(const std::string& mission) {
             return false;
         },
         std::move(onConnect), !isMultiplayer, &d.session.sessionFailure);
+    // Localize the loading screen's session-failure text (#358); null = English built-ins.
+    d.services.screenMgr->loading().setLocalization(d.services.localization.get());
 
     // Lazy SandboxInspector init (no-pack path).
     if (d.services.outcome == FirstRunOutcome::LaunchSandboxInspector)

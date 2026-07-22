@@ -1,2 +1,66 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# UI strings — populated in Phase 2 (renderer + HUD workstream).
+# UI strings for the English (en) base locale. Keys are dot-namespaced by surface. A translator copies
+# this file into locale/<lang>/ui.toml and translates the values; a missing key falls back to the
+# built-in English string at the call site (see game/fighters-legacy/SessionStatus.h and the tr() helper).
+
+# Session / connection failures (#358). One key per SessionFailure enumerator — kept in sync with
+# game/fighters-legacy/SessionStatus.h by tests/test_localization.cpp.
+"session.server_spawn_failed" = "Server binary not found."
+"session.server_bind_failed" = "Port already in use."
+"session.server_start_timeout" = "Server startup timed out."
+"session.server_start_hang" = "Local server failed to start."
+"session.version_mismatch" = "Server version mismatch."
+"session.banned" = "You are banned from this server."
+"session.access_denied" = "Access denied."
+"session.rate_limited" = "Connection rate limit exceeded. Try again later."
+"session.too_many_connections" = "Too many connections from your address."
+"session.connection_refused" = "Connection refused by server."
+"session.connect_timeout" = "Connection timed out."
+"session.role_denied" = "The server denied the requested role."
+"session.missing_required_pack" = "You are missing a content pack this server requires."
+"session.entitlement_required" = "This server requires premium content you do not own."
+"session.match_full" = "All teams are full."
+"session.bad_password" = "Incorrect server password."
+
+# In-match text chat (#646).
+"chat.all_prompt" = "All message:"
+"chat.team_prompt" = "Team message:"
+"chat.send" = "Send"
+
+# Scoreboard (#647).
+"scoreboard.title" = "Scoreboard"
+"scoreboard.col_player" = "Player"
+"scoreboard.col_kills" = "K"
+"scoreboard.col_deaths" = "D"
+"scoreboard.col_score" = "Score"
+"scoreboard.col_ping" = "Ping"
+
+# Join-server screen (#322).
+"join.title" = "Join Server"
+"join.address" = "Server address (host or host:port)"
+"join.password" = "Join password (leave blank if none)"
+"join.callsign" = "Callsign"
+"join.connect" = "Connect"
+"join.cancel" = "Cancel"
+
+# Spectate / dead-pilot hints (#403).
+"spectate.hint_respawn" = "Press the respawn key to respawn."
+"spectate.hint_cycle" = "Num1 / Num2 to cycle entities."
+
+# Debrief (#647).
+"debrief.mission_complete" = "MISSION COMPLETE"
+"debrief.mission_failed" = "MISSION FAILED"
+"debrief.kills" = "Kills"
+"debrief.losses" = "Losses"
+"debrief.continue" = "[ Continue ]"
+"debrief.draw" = "DRAW"
+
+# Server browser (#143).
+"browser.title" = "Server Browser"
+"browser.col_name" = "Name"
+"browser.col_mode" = "Mode"
+"browser.col_players" = "Players"
+"browser.col_ping" = "Ping"
+"browser.refresh" = "Refresh"
+"browser.direct_connect" = "Direct Connect"
+"browser.no_servers" = "No servers found."
