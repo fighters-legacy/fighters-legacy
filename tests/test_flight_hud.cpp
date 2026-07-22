@@ -325,8 +325,8 @@ TEST_CASE("FlightHud: G reads ~1 in wings-level flight with no rotation (#438)",
     bool found = false;
     for (const auto& el : hud.elements()) {
         if (el.type == HudElement::Type::Text && el.text.rfind("G ", 0) == 0) {
-            const float g = std::atof(el.text.data() + 2);
-            CHECK(g == Catch::Approx(1.0f).margin(0.05f));
+            const double g = std::atof(el.text.data() + 2);
+            CHECK(g == Catch::Approx(1.0).margin(0.05));
             found = true;
         }
     }
@@ -343,8 +343,8 @@ TEST_CASE("FlightHud: AoA is positive when the relative wind comes from below th
     bool found = false;
     for (const auto& el : hud.elements()) {
         if (el.type == HudElement::Type::Text && el.text.rfind("a ", 0) == 0) {
-            const float aoa = std::atof(el.text.data() + 2);
-            CHECK(aoa > 0.f);
+            const double aoa = std::atof(el.text.data() + 2);
+            CHECK(aoa > 0.0);
             found = true;
         }
     }
