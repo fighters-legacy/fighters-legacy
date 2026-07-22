@@ -123,6 +123,13 @@ struct ClientNetEventHandler : INetworkEventHandler {
         return m_selfPeerId;
     }
 
+    // True after this client's own aircraft was destroyed and before it respawns (#403). Set from the
+    // CombatEvent Kill branch when the victim is our entity; cleared by the next MsgConnectAck (a respawn
+    // hands out a fresh entity). Drives the client's dead-pilot spectator camera.
+    [[nodiscard]] bool awaitingRespawn() const noexcept {
+        return m_awaitingRespawn;
+    }
+
     // ── match state + scoreboard (#647/#523) ─────────────────────────────────
     // Decoded MsgMatchState: phase + limits + per-team scores. `valid` is false until the first
     // MsgMatchState arrives. Read on the main thread by the scoreboard overlay and the debrief.
@@ -366,6 +373,7 @@ struct ClientNetEventHandler : INetworkEventHandler {
     PeerRole m_grantedRole{PeerRole::Pilot};            // role granted by MsgConnectAck (#857)
     bool m_gotConnectAck{false};                        // true once a MsgConnectAck arrives; "was I admitted?" (#853)
     uint32_t m_selfPeerId{0};                           // this client's own participant id, from MsgConnectAck (#996)
+    bool m_awaitingRespawn{false};                      // #403: own aircraft dead, awaiting respawn ack
     std::unordered_map<uint32_t, RosterEntry> m_roster; // participant id -> display record (#996)
     MatchStateView m_matchState;                        // #647/#523 — from MsgMatchState
     std::unordered_map<uint32_t, ScoreboardEntry> m_scoreboard; // #647/#523 — from MsgScoreboard (upsert)

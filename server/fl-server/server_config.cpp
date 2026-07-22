@@ -526,6 +526,13 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 cfg.drawDistanceKm = *v;
             }
         }
+        if (auto v = tomlInt(tbl["world"]["spectate_delay_s"])) {
+            if (*v >= 0 && *v <= 300)
+                cfg.spectateDelayS = static_cast<int>(*v);
+            else
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "world.spectate_delay_s out of range [0, 300]; using default 0");
+        }
         if (auto v = tbl["world"]["sensor_check_hz"].value<double>()) {
             if (*v < 1.0 || *v > 60.0) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,

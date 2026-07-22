@@ -21,6 +21,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network**: spectator interest position for dead/observer peers (#403, Epic E #497). A dead pilot
+  awaiting respawn no longer gets a blacked-out header-only snapshot — the server seeds its interest
+  center from the wreck on death and thereafter follows its camera-eye stream (#858), so it spectates
+  the world around it. A new admin `spectate <peer> <entityIdx|off>` command (and
+  `WorldBroadcaster::setSpectateTarget`) locks a spectator's view onto a chosen entity (auto-clearing
+  when that entity dies). An optional `[world] spectate_delay_s` (0 = off) buffers a spectator's
+  positional snapshots by N seconds as anti-ghosting — reliable channels (chat/kill feed/match state)
+  stay live — capped at 4 MB/peer and cleared on respawn/role change/disconnect. Client-side, a downed
+  pilot drops into a free ghost camera at the wreck and can cycle live entities with the observer picker
+  (Num1/Num2), returning to the cockpit on the respawn ack. Covered by new
+  `tests/test_world_broadcaster.cpp` and `tests/test_admin_console.cpp` cases.
+
 - **network**: in-match text chat (#646, Epic E #497). New `MsgChat` (0x20, client→server) and
   `MsgChatEvent` (0x21, server→client) wire messages plus a `ChatChannel` (All/Team) enum. The server
   sanitizes each line (BMP UTF-8, control characters stripped, codepoint-boundary truncation at 240

@@ -116,6 +116,7 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             return;
         assignedEntityIdx = ack.assignedEntityIdx;
         assignedEntityGen = ack.assignedEntityGen;
+        m_awaitingRespawn = false; // a fresh ack means we (re)spawned — clear the dead-spectate flag (#403)
         m_selfPeerId = ack.peerId; // our own participant id, for roster "you" + chat self-echo (#996)
         m_planetRadiusKm = ack.planetRadiusKm;
         m_grantedRole =
@@ -640,6 +641,8 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
                 else
                     killFeed->push(feedLine);
             }
+            if (youDied)
+                m_awaitingRespawn = true; // enter the dead-pilot spectator camera until the respawn ack (#403)
             if (notice && youDied)
                 notice->setNotice("YOU WERE DESTROYED", 0, 5);
             else if (notice && youKilled)

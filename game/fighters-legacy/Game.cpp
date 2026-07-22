@@ -1872,9 +1872,12 @@ void Game::run() {
                 // fovY matches CameraController's 60 deg default).
                 d.services.terrainStreamer->setViewParams(static_cast<float>(d.services.p.window->height()),
                                                           glm::radians(60.0f));
-                // Stream terrain around the ownship (pilot) or the ghost camera eye (observer, #859).
+                // Stream terrain around the ownship (pilot), or the ghost camera eye for an observer (#859)
+                // or a dead pilot awaiting respawn (#403).
+                const bool ghostCam =
+                    observer || (d.session.clientHandler && d.session.clientHandler->awaitingRespawn());
                 const glm::dvec3 terrainPos =
-                    playerEntry ? playerEntry->position : (observer ? d.services.camInput.eyeWorld() : glm::dvec3{});
+                    playerEntry ? playerEntry->position : (ghostCam ? d.services.camInput.eyeWorld() : glm::dvec3{});
                 d.services.terrainStreamer->update(terrainPos);
             }
         }

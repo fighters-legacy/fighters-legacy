@@ -877,6 +877,9 @@ int main(int argc, char** argv) {
         return true; // allow
     });
 
+    // Spectator snapshot delay (#403): anti-ghosting for dead/observer peers (0 = off).
+    broadcaster.setSpectateDelay(cfg.spectateDelayS);
+
     if (cfg.flight.size > 0 && cfg.playerFaction == 0) {
         // A flight whose threat logic can never fire is a silently broken feature, not a
         // configuration: areFactionsHostile gives a faction-0 entity no enemies at all.

@@ -1444,14 +1444,30 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         const auto sit = m_peerSeat.find(peerId);
         w.peerEid = (sit != m_peerSeat.end()) ? sit->second.entity : EntityId{};
         w.peerState = w.peerEid.valid() ? m_entityManager.get(w.peerEid) : nullptr;
-        if (w.peerState) {
+        // A LIVE-seated peer centers interest on its airframe. A spectator — an observer (no entity), or a
+        // dead pilot awaiting respawn (#403) — centers on an admin spectate target if one is set + alive
+        // (auto-clearing it otherwise), else on its stored interest point (the #858 cameraEye / the wreck
+        // seed from the Died handler).
+        const bool spectating = (w.peerState == nullptr) || w.peerState->dead;
+        w.spectator = spectating;
+        if (!spectating) {
             w.center[0] = w.peerState->transform.pos[0];
             w.center[1] = w.peerState->transform.pos[1];
             w.center[2] = w.peerState->transform.pos[2];
         } else {
-            w.center[0] = pin.interestCenter.x;
-            w.center[1] = pin.interestCenter.y;
-            w.center[2] = pin.interestCenter.z;
+            const EntityState* tgt = (pin.spectateTargetIdx != PeerInputState::kNoSpectateTarget)
+                                         ? m_entityManager.getByIndex(pin.spectateTargetIdx)
+                                         : nullptr;
+            if (tgt && !tgt->dead) {
+                w.center[0] = tgt->transform.pos[0];
+                w.center[1] = tgt->transform.pos[1];
+                w.center[2] = tgt->transform.pos[2];
+            } else {
+                pin.spectateTargetIdx = PeerInputState::kNoSpectateTarget; // target gone: auto-clear
+                w.center[0] = pin.interestCenter.x;
+                w.center[1] = pin.interestCenter.y;
+                w.center[2] = pin.interestCenter.z;
+            }
         }
         w.pin = &pin;
         w.knownGens = &m_peerKnownGens[peerId];
@@ -1515,12 +1531,13 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             // Collect visible entity indices via the spatial index (conservative XZ cells), then apply
             // an exact 3D (XYZ) distance gate (#402) and sort ascending so the bitstream's idx deltas
             // stay small. Both bounds use the governor-scaled interest radius (#726 — frozen before
-            // this parallel region). Interest is centered on w.center — the pilot's aircraft, or the
-            // observer's stored point (#857). A dead pilot → empty list → header-only empty snapshot; an
-            // observer (peerState null) still queries around its center.
+            // this parallel region). Interest is centered on w.center — a live pilot's aircraft, or a
+            // spectator's point (an observer's, or a dead pilot's spectate/camera/wreck center, #403).
+            // The dead-pilot header-only blackout was lifted by #403 so a dead peer spectates the world
+            // around its center instead of going black between death and respawn.
             const double* const center = w.center;
             std::vector<uint32_t> visible;
-            if ((peerState == nullptr || !peerState->dead) && govInterestRadiusM > 0.0) {
+            if (govInterestRadiusM > 0.0) {
                 const double r2 = govInterestRadiusM * govInterestRadiusM;
                 const double px = center[0], py = center[1], pz = center[2];
                 m_spatialIndex.queryRadius(center, govInterestRadiusM, [&](uint32_t entityIdx, const double* pos) {
@@ -1824,10 +1841,32 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     // Serial flush (sim thread): send each built buffer over the sim-thread-owned ENetHost and record
     // the send-cadence bookkeeping the decimation gate reads next tick (#518). Empty work entries are
     // peers that were decimated this tick (excluded in the gather) and are simply not present.
+    //
+    // Spectate delay (#403): a spectator (observer / dead pilot) with m_spectateDelayTicks > 0 has its
+    // POSITIONAL snapshot buffered for that many ticks before delivery (anti-ghosting) — the reliable
+    // channels (chat / kill feed / match state) are unaffected. 0 = off = immediate send (byte-identical
+    // to before). The send-cadence bookkeeping still advances at build time so the decimation gate is
+    // unchanged; only the wire delivery is deferred.
     for (PeerSnapWork& w : m_peerWork) {
-        m_net.send(w.peerId, w.buf.data(), w.buf.size(), /*reliable=*/false);
         w.pin->lastSnapshotSentTick = tickIndex;
         w.pin->sentSnapshot = true;
+        if (m_spectateDelayTicks > 0 && w.spectator) {
+            enqueueDelayedSnapshot(*w.pin, tickIndex + m_spectateDelayTicks, w.buf);
+        } else {
+            m_net.send(w.peerId, w.buf.data(), w.buf.size(), /*reliable=*/false);
+        }
+    }
+    // Drain due delayed snapshots for every peer with a queue (including peers decimated this tick, so a
+    // buffered payload is never stranded). Cleared on respawn / role change / disconnect.
+    if (m_spectateDelayTicks > 0) {
+        for (auto& [pid, pin] : m_peerInputs) {
+            while (!pin.snapshotDelayQueue.empty() && pin.snapshotDelayQueue.front().first <= tickIndex) {
+                auto& payload = pin.snapshotDelayQueue.front().second;
+                m_net.send(pid, payload.data(), payload.size(), /*reliable=*/false);
+                pin.snapshotDelayBytes -= payload.size();
+                pin.snapshotDelayQueue.pop_front();
+            }
+        }
     }
 
     // Datalink / shared team track picture (#528), per-peer unreliable at ~6 Hz — its own lower
@@ -2005,6 +2044,16 @@ EntityId WorldBroadcaster::spawnPilotEntity(uint32_t peerId, const std::string& 
     EntityId id = m_entityManager.spawn(entityType.c_str(), t, peerId);
     if (id.valid()) {
         m_peerEntities[peerId] = id;
+
+        // Becoming a live pilot ends any spectate (#403): clear the admin spectate target and drop any
+        // buffered delayed snapshots (stale wreck-view frames from the dead window). Covers respawn,
+        // observer→pilot role change, and the first spawn (a no-op there).
+        if (const auto pit = m_peerInputs.find(peerId); pit != m_peerInputs.end()) {
+            pit->second.spectateTargetIdx = PeerInputState::kNoSpectateTarget;
+            pit->second.snapshotDelayQueue.clear();
+            pit->second.snapshotDelayBytes = 0;
+            pit->second.snapshotDelayEvicted = false;
+        }
 
         // Stamp the player's faction. Without a non-zero faction the player is NEUTRAL, and
         // fl::areFactionsHostile gives a neutral entity no enemies at all — so nothing would be
@@ -3548,6 +3597,18 @@ void WorldBroadcaster::onEntityEvent(const EntityEvent& event) {
                 m_respawn[victimPeer] = rec;
                 m_pendingDeathCleanup.push_back(victimPeer);
             }
+
+            // Spectate seam (#403): seed the dead peer's interest center from the wreck so its first dead
+            // tick shows the crash site even before its camera-eye stream arrives. Thereafter the
+            // cameraEye (#858) drives it. Only for a human peer with an input slot (bots have none).
+            const uint32_t deadHumanPeer = peerIdForEntity(event.subject);
+            if (deadHumanPeer != kNoOwningPeer) {
+                if (const auto pit = m_peerInputs.find(deadHumanPeer); pit != m_peerInputs.end()) {
+                    if (const EntityState* wreck = m_entityManager.get(event.subject))
+                        pit->second.interestCenter =
+                            glm::dvec3(wreck->transform.pos[0], wreck->transform.pos[1], wreck->transform.pos[2]);
+                }
+            }
         }
 
         // Feed the match controller (#523): killer + victim participants, and whether it was a team
@@ -4667,6 +4728,30 @@ std::vector<uint32_t> WorldBroadcaster::mutedPeers() const {
             out.push_back(pid);
     std::sort(out.begin(), out.end());
     return out;
+}
+
+bool WorldBroadcaster::setSpectateTarget(uint32_t peerId, uint32_t entityIdx) {
+    const auto it = m_peerInputs.find(peerId);
+    if (it == m_peerInputs.end())
+        return false;
+    it->second.spectateTargetIdx = entityIdx;
+    return true;
+}
+
+void WorldBroadcaster::enqueueDelayedSnapshot(PeerInputState& pin, uint64_t dueTick,
+                                              const std::vector<uint8_t>& payload) {
+    constexpr std::size_t kMaxDelayBytes = 4u * 1024u * 1024u; // 4 MB/peer
+    while (!pin.snapshotDelayQueue.empty() && pin.snapshotDelayBytes + payload.size() > kMaxDelayBytes) {
+        pin.snapshotDelayBytes -= pin.snapshotDelayQueue.front().second.size();
+        pin.snapshotDelayQueue.pop_front();
+        if (!pin.snapshotDelayEvicted) {
+            pin.snapshotDelayEvicted = true;
+            m_logger.log(LogLevel::Warn, __FILE__, __LINE__,
+                         "spectate delay buffer full (4 MB); dropping oldest snapshot for a peer");
+        }
+    }
+    pin.snapshotDelayQueue.emplace_back(dueTick, payload);
+    pin.snapshotDelayBytes += payload.size();
 }
 
 void WorldBroadcaster::handleWingmanCommand(uint32_t peerId, const void* data, std::size_t size) {

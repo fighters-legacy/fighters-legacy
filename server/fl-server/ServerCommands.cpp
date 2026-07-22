@@ -490,6 +490,46 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                                  return std::string(buf);
                              });
 
+    // spectate <peerId> <entityIdx|off>  -- point a dead/observer peer's interest at an entity (#403)
+    registry.registerCommand(
+        "spectate", "spectate <peerId> <entityIdx|off>  -- lock a dead/observer peer's view onto an entity",
+        [ctx](std::span<std::string_view> args) -> std::string {
+            if (args.size() < 2)
+                return "usage: spectate <peerId> <entityIdx|off>";
+            if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
+                return "spectate: not available";
+            std::string idArg(args[0]);
+            if (!isNumeric(idArg))
+                return "spectate: invalid peer ID";
+            uint32_t peerId = 0;
+            if (auto [p, ec] = std::from_chars(idArg.data(), idArg.data() + idArg.size(), peerId); ec != std::errc{})
+                return "spectate: invalid peer ID";
+            uint32_t target = 0xFFFFFFFFu; // off
+            if (args[1] != "off") {
+                std::string tArg(args[1]);
+                if (!isNumeric(tArg))
+                    return "spectate: entity index must be a number or 'off'";
+                if (auto [p, ec] = std::from_chars(tArg.data(), tArg.data() + tArg.size(), target); ec != std::errc{})
+                    return "spectate: invalid entity index";
+            }
+            ctx.sim.gameLoop->enqueueSimCallback([ctx, peerId, target]() {
+                const bool ok = ctx.sim.broadcaster->setSpectateTarget(peerId, target);
+                char m[80];
+                if (target == 0xFFFFFFFFu)
+                    std::snprintf(m, sizeof(m), "[admin] spectate off for peer %u%s", peerId, ok ? "" : " (unknown)");
+                else
+                    std::snprintf(m, sizeof(m), "[admin] peer %u spectating entity %u%s", peerId, target,
+                                  ok ? "" : " (unknown)");
+                std::printf("%s\n", m);
+                if (ctx.rcon.shell)
+                    ctx.rcon.shell->print(m);
+                std::fflush(stdout);
+            });
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "spectate: queued peer %u", peerId);
+            return std::string(buf);
+        });
+
     // seats <entityIdx>  -- inspect a crewed aircraft's seat roster/occupancy (#974)
     registry.registerCommand("seats", "seats <entityIdx>  -- show a crewed aircraft's seat roster and occupancy",
                              [ctx](std::span<std::string_view> args) -> std::string {

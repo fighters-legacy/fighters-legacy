@@ -571,6 +571,14 @@ switchable mid-session with the `set_role <peerId> <pilot|observer>` admin comma
 
 Per-peer interest management radius in kilometres. Only entities within this XZ-plane radius of a peer's own entity are included in that peer's `MsgWorldSnapshot`. The default of 200 km covers any current Phase 2 theater. Out-of-range values are rejected with a Warn and the default is used. **Hot-reloadable** via `reload_config`.
 
+### `spectate_delay_s`
+
+| Type | Default | Range |
+|---|---|---|
+| int | `0` | `[0, 300]` |
+
+Anti-ghosting delay (seconds) for a **spectator** — a role-observer, or a dead pilot awaiting respawn (#403). Their positional `MsgWorldSnapshot` is buffered this many seconds before delivery, so a dead player cannot relay live enemy positions to teammates faster than a living pilot could see them. `0` (the default) is off — snapshots deliver immediately, byte-identical to before. The reliable channels (chat, kill feed, match state) are unaffected; only positional intel is delayed. A live pilot is never delayed. The per-peer buffer is capped at 4 MB (oldest snapshots dropped, warned once) and is cleared on respawn / role change / disconnect.
+
 > **Delta-baseline recovery is automatic (client-acked, #517).** There is no baseline-interval knob.
 > The server keys full-vs-delta off the last snapshot tick each client echoes in
 > `MsgClientInput`/`MsgHeartbeat`: an entity is re-sent as a full record every tick until that client

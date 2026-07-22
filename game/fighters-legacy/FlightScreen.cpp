@@ -78,12 +78,26 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
     uint32_t gen = d.assignedEntityGen ? *d.assignedEntityGen : 0;
     m_playerEntry = findEntry(*d.renderBridge, idx, gen);
 
+    // Remember the last known own position so the dead-pilot ghost camera starts at the wreck (#403).
+    if (m_playerEntry)
+        m_lastOwnPos = m_playerEntry->position;
+
     // Observer entity picker (#860): a spectator has no ownship, so the camera views a SELECTED live
     // entity. Num1/Num2 cycle the selection; the first pick jumps the free ghost camera into Chase so
-    // the choice is immediately visible. A pilot always views its own aircraft.
+    // the choice is immediately visible. A live pilot always views its own aircraft. #403 extends the
+    // spectator state to a DEAD pilot awaiting respawn, not just a role-observer.
     const bool observer = d.clientNetHandler && d.clientNetHandler->grantedRole() == fl::PeerRole::Observer;
+    const bool deadSpectator = d.clientNetHandler && d.clientNetHandler->awaitingRespawn();
+    const bool spectating = observer || deadSpectator;
+    // On the rising edge into a dead-pilot spectate, drop into the free ghost camera at the wreck (the
+    // role-observer path is seeded by Game.cpp's #859 flow instead).
+    if (spectating && !m_wasSpectating && deadSpectator && !observer) {
+        d.camInput->setFlyEye(m_lastOwnPos);
+        d.cameraController->setMode(fl::CameraMode::Free);
+    }
+    m_wasSpectating = spectating;
     const fl::EntityRenderEntry* viewEntry = m_playerEntry;
-    if (observer) {
+    if (spectating) {
         const std::span<const fl::EntityRenderEntry> entries =
             d.renderBridge->hasSnapshot() ? std::span<const fl::EntityRenderEntry>(d.renderBridge->current().entries)
                                           : std::span<const fl::EntityRenderEntry>{};
@@ -255,7 +269,7 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
     // Observer picker label (#860): name + faction of the entity being viewed, shown top-centre. Built
     // here where the registry (type name) and the net handler (faction name) are both reachable.
     m_pickerLabel[0] = '\0';
-    if (observer && viewEntry) {
+    if (spectating && viewEntry) {
         const char* typeName = "entity";
         if (d.entityRegistry) {
             if (const fl::EntityDef* def = d.entityRegistry->byIndex(viewEntry->typeIndex))

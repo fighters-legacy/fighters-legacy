@@ -1904,6 +1904,81 @@ TEST_CASE("WorldBroadcaster: chat routing, mute, sanitize, rate limit, hook (#64
     }
 }
 
+TEST_CASE("WorldBroadcaster: setSpectateTarget rejects unknown peers (#403)", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    connectPilotPeer(broadcaster, net, 0u);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    CHECK_FALSE(broadcaster.setSpectateTarget(99u, 0u));                             // unknown peer
+    CHECK(broadcaster.setSpectateTarget(0u, 5u));                                    // known peer, set
+    CHECK(broadcaster.setSpectateTarget(0u, fl::PeerInputState::kNoSpectateTarget)); // off
+}
+
+TEST_CASE("WorldBroadcaster: a dead pilot still sees the world instead of going black (#403)", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    connectPilotPeer(broadcaster, net, 0u);
+    connectPilotPeer(broadcaster, net, 1u);
+    broadcaster.onTick(1.0 / 60.0, 1u); // spawn both (co-located at the fallback spawn)
+
+    fl::EntityId e0{};
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) {
+        if (pi.peerId == 0u)
+            e0 = pi.eid;
+    });
+    REQUIRE(e0.valid());
+
+    // Before death, peer 0 already sees peer 1.
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 2u);
+    {
+        const auto snaps = snapshotsFor(net, 0u);
+        REQUIRE(!snaps.empty());
+        CHECK(parseSnapshotHeader(snaps.back()).recordCount > 0);
+    }
+
+    // Kill peer 0's aircraft (no respawn policy set). Its snapshot must NOT collapse to a header-only
+    // blackout — the dead pilot spectates the world around its wreck/camera center (#403).
+    em.kill(e0);
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 3u);
+    {
+        const auto snaps = snapshotsFor(net, 0u);
+        REQUIRE(!snaps.empty());
+        CHECK(parseSnapshotHeader(snaps.back()).recordCount > 0);
+    }
+}
+
+TEST_CASE("WorldBroadcaster: spectate delay defers a spectator's snapshot (#403)", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setSpectateDelay(1); // 1 s = 60 ticks
+    connectObserverPeer(broadcaster, net, 5u);
+
+    // With the delay on, the observer's snapshot for tick 1 is buffered, not delivered.
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    CHECK(snapshotsFor(net, 5u).empty());
+
+    // It surfaces once its due tick (1 + 60) arrives.
+    for (uint64_t t = 2; t <= 61; ++t)
+        broadcaster.onTick(1.0 / 60.0, t);
+    CHECK_FALSE(snapshotsFor(net, 5u).empty());
+}
+
 TEST_CASE("WorldBroadcaster: ConnectAck type defs carry category and projectileKind ordinals (#886)",
           "[world_broadcaster]") {
     MockLogger logger;

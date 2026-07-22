@@ -422,6 +422,21 @@ TEST_CASE("AdminConsole async ack: mute/unmute/mutes return a sync ack (#646)", 
     CHECK(reg.dispatch("mutes") == "mutes: queued");
 }
 
+TEST_CASE("AdminConsole: spectate usage / not-available (#403)", "[admin_console]") {
+    auto reg = makeRegistry();
+    CHECK(reg.dispatch("spectate").find("usage") != std::string::npos);
+    CHECK(reg.dispatch("spectate 3").find("usage") != std::string::npos);
+    CHECK(reg.dispatch("spectate 3 5").find("not available") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole async ack: spectate parses target + off (#403)", "[admin_console][async_ack]") {
+    AsyncAckFixture f;
+    auto reg = makeRegistry(f.ctx);
+    CHECK(reg.dispatch("spectate 3 5").find("queued peer 3") != std::string::npos);
+    CHECK(reg.dispatch("spectate 3 off").find("queued peer 3") != std::string::npos);
+    CHECK(reg.dispatch("spectate 3 notanumber").find("number or 'off'") != std::string::npos);
+}
+
 TEST_CASE("AdminConsole async ack: kick IP returns non-empty ack with address", "[admin_console][async_ack]") {
     AsyncAckFixture f;
     auto reg = makeRegistry(f.ctx);
