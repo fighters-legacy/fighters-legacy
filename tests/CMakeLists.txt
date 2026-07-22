@@ -59,6 +59,14 @@ target_link_libraries(test_hud_projection PRIVATE Catch2::Catch2WithMain engine-
 target_include_directories(test_hud_projection PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_hud_projection)
 
+# Player autopilot (#640): pure hold-controller + closed-loop convergence through the integrator.
+add_executable(test_autopilot test_autopilot.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/Autopilot.cpp")
+target_link_libraries(test_autopilot PRIVATE Catch2::Catch2WithMain engine-flight engine-ai)
+target_include_directories(test_autopilot PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_autopilot)
+
 # Ejection / pilot survival model (#672): pure envelope + territory -> outcome logic (header-only).
 add_executable(test_ejection test_ejection.cpp)
 target_link_libraries(test_ejection PRIVATE Catch2::Catch2WithMain engine-entity)
@@ -1051,11 +1059,12 @@ add_executable(test_screen_manager test_screen_manager.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/CommsMenu.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ManualOverlay.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientPrediction.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/Autopilot.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/CameraInput.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightInputCollector.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp")
 target_link_libraries(test_screen_manager PRIVATE
-    Catch2::Catch2WithMain engine-config engine-render engine-sandbox engine-content engine-console engine-input engine-net engine-entity engine-weather engine-flight engine-manual engine-audio engine-i18n platform-sdl3 platform-hal SDL3::SDL3)
+    Catch2::Catch2WithMain engine-config engine-render engine-sandbox engine-content engine-console engine-input engine-net engine-entity engine-weather engine-flight engine-manual engine-audio engine-i18n engine-ai platform-sdl3 platform-hal SDL3::SDL3)
 target_include_directories(test_screen_manager PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_screen_manager)

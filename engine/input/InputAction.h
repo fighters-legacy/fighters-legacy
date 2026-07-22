@@ -68,6 +68,11 @@ enum class InputAction : uint32_t {
     PrevTarget,
     TargetInsetToggle,
 
+    // Player autopilot holds (#640) — altitude / heading / speed hold toggles
+    AutopilotAltHold,
+    AutopilotHdgHold,
+    AutopilotSpdHold,
+
     Count
 };
 

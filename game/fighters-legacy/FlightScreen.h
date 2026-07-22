@@ -4,6 +4,7 @@
 #include "IScreen.h"
 #include "RenderTypes.h"
 
+#include "Autopilot.h"      // player autopilot holds (#640)
 #include "CrewSeatMenu.h"   // crew seat picker (#975)
 #include "EntitySelector.h" // observer entity picker (#860)
 #include "render/RenderSnapshot.h"
@@ -39,6 +40,7 @@ class ChatOverlay;
 class IGui;
 
 struct EnvironmentState;
+class InputBindings;
 
 // All dependencies FlightScreen needs; set by Game before transitioning to Flight.
 struct FlightScreenDeps {
@@ -57,13 +59,14 @@ struct FlightScreenDeps {
     EntityTypeRegistry* entityRegistry{nullptr};      // for the observer picker's type-name label (#860)
     IJoystick* joystick{nullptr};
     UserConfig* userConfig{nullptr};
-    SandboxInspector* inspector{nullptr};  // null = no inspector
-    ClientPrediction* prediction{nullptr}; // null = no prediction
-    WingmanMenu* wingmanMenu{nullptr};     // null = no radio menu (#610)
-    CommsMenu* commsMenu{nullptr};         // null = no ATC comms menu (#704)
-    ManualOverlay* manual{nullptr};        // null = no in-flight aircraft manual (#821)
-    ChatOverlay* chat{nullptr};            // null = no in-match chat (#646)
-    IGui* gui{nullptr};                    // null = no GUI backend (chat input box degrades off)
+    SandboxInspector* inspector{nullptr};        // null = no inspector
+    ClientPrediction* prediction{nullptr};       // null = no prediction
+    const InputBindings* inputBindings{nullptr}; // for edge-detecting autopilot/target actions (#640/#696)
+    WingmanMenu* wingmanMenu{nullptr};           // null = no radio menu (#610)
+    CommsMenu* commsMenu{nullptr};               // null = no ATC comms menu (#704)
+    ManualOverlay* manual{nullptr};              // null = no in-flight aircraft manual (#821)
+    ChatOverlay* chat{nullptr};                  // null = no in-match chat (#646)
+    IGui* gui{nullptr};                          // null = no GUI backend (chat input box degrades off)
     uint32_t* assignedEntityIdx{nullptr};
     uint32_t* assignedEntityGen{nullptr};
 };
@@ -88,6 +91,11 @@ class FlightScreen : public IScreen {
     // pose, cached so buildElements()-time world->screen cues (#696/#698) project against the same
     // matrix the HUD used.
     CameraView m_frameCam{};
+
+    // Player autopilot (#640): altitude / heading / speed hold shaped over the client input before it
+    // is sent. Reset at session start; disengaged when there is no predicted ownship state.
+    Autopilot m_autopilot;
+    float m_lastRawThrottle{0.0f}; // to detect a throttle touch (disengages speed hold)
 
     // Ground-crew scene (#55): landed-and-stopped detection on the OWN aircraft. The airborne→landed
     // edge records a landing score into the logbook (the #674 sink that had no producer); holding

@@ -35,6 +35,16 @@ The camera-mode keys are now rebindable `InputAction`s (`CameraCockpit`/`CameraC
 
 > Note (#689): the default `ViewLeft`/`ViewRight` keys (← / →) also drive the legacy raw aileron in `FlightInputCollector`, so in Cockpit view an arrow both rolls the aircraft and pans the view. RMB drag is the primary look control; rebind `ViewLeft`/`ViewRight` in `config/bindings.toml` if the double duty is unwanted.
 
+### Autopilot (#640)
+
+Client-side hold modes, shaped over your input before it is sent (the server stays authoritative). Toggle in Cockpit/Padlock view with no menu or console open; any stick input past a small threshold disengages the attitude holds, and moving the throttle disengages speed hold. The engaged holds and their captured targets are annunciated on the HUD (`AP ALT… HDG… SPD…`).
+
+| Key | Action | Binding |
+|---|---|---|
+| F9 | Altitude hold (captures current altitude) | `AutopilotAltHold` |
+| F10 | Heading hold (captures current heading) | `AutopilotHdgHold` |
+| F11 | Speed hold (captures current airspeed) | `AutopilotSpdHold` |
+
 ### Free camera (F4)
 
 When switching to Free camera while a player entity exists, the pivot snaps to the entity's position so it is immediately in view.

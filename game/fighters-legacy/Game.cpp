@@ -1507,6 +1507,7 @@ void Game::startGame(const std::string& mission) {
         fsd.userConfig = &*d.services.userConfig;
         fsd.inspector = d.session.inspector ? &*d.session.inspector : nullptr;
         fsd.prediction = &d.services.prediction;
+        fsd.inputBindings = &d.services.inputBindings; // autopilot/target-cycle edge detection (#640/#696)
         fsd.wingmanMenu = &d.services.wingmanMenu;
         fsd.commsMenu = &d.services.commsMenu;
         fsd.manual = &d.services.manual;

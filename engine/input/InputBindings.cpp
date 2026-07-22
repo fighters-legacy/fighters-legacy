@@ -10,13 +10,48 @@ namespace fl {
 // ---------------------------------------------------------------------------
 
 static constexpr const char* kActionNames[] = {
-    "PitchAxis",  "RollAxis",    "YawAxis",           "ThrottleAxis", "PitchUp",     "PitchDown",
-    "RollLeft",   "RollRight",   "YawLeft",           "YawRight",     "ThrottleUp",  "ThrottleDown",
-    "Airbrake",   "Afterburner", "FireWeapon",        "FireMissile",  "NextWeapon",  "PrevWeapon",
-    "ViewUp",     "ViewDown",    "ViewLeft",          "ViewRight",    "LandingGear", "Flaps",
-    "Pause",      "Menu",        "WingmanMenu",       "Eject",        "Respawn",     "Scoreboard",
-    "ChatAll",    "ChatTeam",    "CameraCockpit",     "CameraChase",  "CameraFree",  "PadlockToggle",
-    "NextTarget", "PrevTarget",  "TargetInsetToggle",
+    "PitchAxis",
+    "RollAxis",
+    "YawAxis",
+    "ThrottleAxis",
+    "PitchUp",
+    "PitchDown",
+    "RollLeft",
+    "RollRight",
+    "YawLeft",
+    "YawRight",
+    "ThrottleUp",
+    "ThrottleDown",
+    "Airbrake",
+    "Afterburner",
+    "FireWeapon",
+    "FireMissile",
+    "NextWeapon",
+    "PrevWeapon",
+    "ViewUp",
+    "ViewDown",
+    "ViewLeft",
+    "ViewRight",
+    "LandingGear",
+    "Flaps",
+    "Pause",
+    "Menu",
+    "WingmanMenu",
+    "Eject",
+    "Respawn",
+    "Scoreboard",
+    "ChatAll",
+    "ChatTeam",
+    "CameraCockpit",
+    "CameraChase",
+    "CameraFree",
+    "PadlockToggle",
+    "NextTarget",
+    "PrevTarget",
+    "TargetInsetToggle",
+    "AutopilotAltHold",
+    "AutopilotHdgHold",
+    "AutopilotSpdHold",
 };
 static_assert(std::size(kActionNames) == static_cast<size_t>(InputAction::Count),
               "kActionNames must have one entry per InputAction");
@@ -686,6 +721,15 @@ void InputBindings::applyDefaults() {
                                                            static_cast<uint32_t>(GamepadButton::RightStick), false};
     m_alt[static_cast<int>(InputAction::NextTarget)] = {BindingSource::GamepadButton,
                                                         static_cast<uint32_t>(GamepadButton::DpadUp), false};
+
+    // Autopilot holds (#640) on F9/F10/F11. A/D/S were rejected: they are the primary roll/pitch flight
+    // bindings, active in the same cockpit context, so a shared key would both fly and toggle a hold.
+    m_primary[static_cast<int>(InputAction::AutopilotAltHold)] = {BindingSource::Keyboard,
+                                                                  static_cast<uint32_t>(Key::F9), false};
+    m_primary[static_cast<int>(InputAction::AutopilotHdgHold)] = {BindingSource::Keyboard,
+                                                                  static_cast<uint32_t>(Key::F10), false};
+    m_primary[static_cast<int>(InputAction::AutopilotSpdHold)] = {BindingSource::Keyboard,
+                                                                  static_cast<uint32_t>(Key::F11), false};
 }
 
 // ---------------------------------------------------------------------------

@@ -18,8 +18,11 @@
 #include "console/GameConsole.h"
 #include "entity/EntityDef.h"          // EntityDef::name/id for the observer picker label (#860)
 #include "entity/EntityTypeRegistry.h" // byIndex
+#include "flight/FlightIntegrator.h"   // FlightState (autopilot input, #640)
 #include "flight/Geodetic.h"           // kEarthRadiusM
 #include "flight/LocalFrame.h"         // bankOf on the local-level frame
+#include "input/BindingQuery.h"        // bindingJustPressed (autopilot toggles, #640)
+#include "input/InputBindings.h"
 #include "render/CameraController.h"
 #include "render/FlightHud.h"
 #include "render/IHud.h"
@@ -247,8 +250,50 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     const ControlsSettings cs = d.userConfig->controls();
     const bool uiFocused =
         (d.wingmanMenu && d.wingmanMenu->isOpen()) || (d.commsMenu && d.commsMenu->isOpen()) || chatOpen;
+
+    // Planet radius (m) from the server's MsgConnectAck; drives the autopilot's local-level altitude/
+    // heading as well as the HUD attitude/horizon below. Earth default until the ack arrives.
+    const double radiusM =
+        d.clientNetHandler ? static_cast<double>(d.clientNetHandler->planetRadiusKm()) * 1000.0 : fl::kEarthRadiusM;
+
+    // Player autopilot (#640): edge-detect the hold toggles (Cockpit/Padlock, no overlay/console
+    // focus) and disengage everything when there is no predicted ownship state (observer / dead peer).
+    const fl::FlightState* fs = d.prediction ? d.prediction->predictedState() : nullptr;
+    if (fs && d.inputBindings && !uiFocused && !d.gameConsole->isOpen()) {
+        if (bindingJustPressed(input, d.inputBindings->get(fl::InputAction::AutopilotAltHold)))
+            m_autopilot.toggleAltHold(*fs, radiusM);
+        if (bindingJustPressed(input, d.inputBindings->get(fl::InputAction::AutopilotHdgHold)))
+            m_autopilot.toggleHdgHold(*fs, radiusM);
+        if (bindingJustPressed(input, d.inputBindings->get(fl::InputAction::AutopilotSpdHold)))
+            m_autopilot.toggleSpdHold(*fs);
+    } else if (!fs) {
+        m_autopilot.disengageAll();
+    }
+
     if (auto msg = d.flightInput->poll(*d.renderBridge, *d.camInput, *d.gameConsole, input, d.joystick, cs, uiFocused,
                                        /*textEntry=*/chatOpen)) {
+        // Shape the input with the autopilot BEFORE prediction+send, so the client predicts exactly what
+        // the server receives. A player stick/throttle input past threshold disengages the relevant holds.
+        if (fs && m_autopilot.modes() != 0) {
+            const float rawThrottle = msg->throttle;
+            const bool throttleTouched = std::abs(rawThrottle - m_lastRawThrottle) > 0.02f;
+            m_autopilot.notePlayerInput(msg->elevator, msg->aileron, msg->rudder, throttleTouched);
+            const fl::AutopilotCommand ap = m_autopilot.compute(*fs, 1.0f / 60.0f, radiusM);
+            if (ap.hasPitch)
+                msg->elevator = ap.elevator;
+            if (ap.hasRoll) {
+                msg->aileron = ap.aileron;
+                msg->rudder = ap.rudder;
+            }
+            if (ap.hasThrottle) {
+                msg->throttle = ap.throttle;
+                d.camInput->setThrottle(ap.throttle); // keep the persistent throttle in sync (no snap-back)
+            }
+            m_lastRawThrottle = msg->throttle;
+        } else {
+            m_lastRawThrottle = msg->throttle;
+        }
+
         // Stamp the snapshot ack (tickIndex + selective-ack mask, #566) from the net handler — the single
         // ack authority — before prediction and send, so the outgoing input carries a consistent ack.
         if (d.clientNetHandler)
@@ -288,10 +333,7 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     const bool showLat = d.userConfig->hud().showLatency && d.clientNetHandler &&
                          d.clientNetHandler->hasSnapshotLatency() && latencyMs >= kMinLatencyDisplayMs;
 
-    // Planet radius (m) from the server's MsgConnectAck; drives the local-level HUD attitude/horizon
-    // and windshield lean. Earth default until the ack arrives.
-    const double radiusM =
-        d.clientNetHandler ? static_cast<double>(d.clientNetHandler->planetRadiusKm()) * 1000.0 : fl::kEarthRadiusM;
+    // radiusM (planet radius, from MsgConnectAck) was computed above the poll block for the autopilot.
 
     // Ground-crew scene + landing detection (#55), own aircraft only. The airborne→landed edge
     // scores the touchdown from last frame's sink rate into the logbook (PilotLogbook::recordLanding
@@ -354,6 +396,11 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     hin.showLatency = showLat;
     hin.planetRadiusM = radiusM;
     hin.radar = radar;
+    // Autopilot annunciation (#640).
+    hin.apModes = m_autopilot.modes();
+    hin.apTargetAltM = m_autopilot.targetAltM();
+    hin.apTargetHeadingDeg = glm::degrees(m_autopilot.targetHeadingRad());
+    hin.apTargetSpeedMps = m_autopilot.targetSpeedMps();
     (*d.activeHud)->update(hin);
     d.windshieldRain->update(cockpit ? (1.f / 60.f) : 0.f, cockpit ? *d.env : EnvironmentState{},
                              cockpit ? rollAngleRad(viewEntry, radiusM) : 0.f);

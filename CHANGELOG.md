@@ -21,6 +21,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **game**: player autopilot modes — altitude / heading / speed hold (#640, Epic #587). A new pure
+  `fl::Autopilot` (game layer) shapes the client's input before it is sent, so the server stays
+  authoritative and dumb: each hold captures its target on engage, `compute()` drives elevator/aileron/
+  rudder/throttle via the engine's P-controller primitives (`Guidance.h`/`LocalFrame.h`, the same laws
+  the AI flies), and any stick input past a threshold disengages the attitude holds while a throttle
+  touch drops speed hold. Wired into `FlightScreen::update` after `poll()` and before prediction+send
+  (so the client predicts exactly what the server receives), toggled by new `AutopilotAltHold/HdgHold/
+  SpdHold` actions (F9/F10/F11 — A/D/S collide with the active roll/pitch bindings), and annunciated on
+  the HUD via the `HudFrameInput` autopilot fields. Covered by `tests/test_autopilot.cpp` (sign checks,
+  disengage matrix, and a closed-loop run through the real `FlightIntegrator`).
+
 - **renderer**: redesigned FlightHud to a tactical fighter HUD layout (#438, Epic #587). The minimal
   text HUD is replaced by an F-14/F-16/F-18-style layout built entirely from `HudElement`: a velocity
   ladder (knots) on the left, an altitude tape (feet) + radar-altitude on the right, dual heading
