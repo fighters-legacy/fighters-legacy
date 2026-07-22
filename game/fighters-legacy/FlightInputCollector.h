@@ -33,9 +33,12 @@ class FlightInputCollector {
     // frame. The AXES keep working — the menu is non-modal on purpose, because suppressing flight
     // input would leave throttle at 0, which is what opening the console already does and is exactly
     // what a combat radio menu must not do. Only the buttons the overlay consumes are gated.
+    // textEntry: a text field owns the keyboard this frame (the chat input box, #646). The whole
+    // KEYBOARD control block is suppressed (Space would otherwise fire the gun while you type), but the
+    // gamepad and HOTAS axes stay live and the throttle holds — a partner can keep flying while chatting.
     std::optional<MsgClientInput> poll(const SimRenderBridge& bridge, CameraInput& camInput, const GameConsole& console,
                                        IInput& input, IJoystick* joystick, const ControlsSettings& cs,
-                                       bool uiFocused = false);
+                                       bool uiFocused = false, bool textEntry = false);
 
     // True if the most recent poll() that returned a message had the weapon
     // trigger bit set. Resets to false on each poll() call.

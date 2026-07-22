@@ -13,7 +13,7 @@ static constexpr const char* kActionNames[] = {
     "PitchAxis",  "RollAxis",   "YawAxis",     "ThrottleAxis", "PitchUp",  "PitchDown",   "RollLeft",    "RollRight",
     "YawLeft",    "YawRight",   "ThrottleUp",  "ThrottleDown", "Airbrake", "Afterburner", "FireWeapon",  "FireMissile",
     "NextWeapon", "PrevWeapon", "ViewUp",      "ViewDown",     "ViewLeft", "ViewRight",   "LandingGear", "Flaps",
-    "Pause",      "Menu",       "WingmanMenu", "Eject",        "Respawn",  "Scoreboard",
+    "Pause",      "Menu",       "WingmanMenu", "Eject",        "Respawn",  "Scoreboard",  "ChatAll",     "ChatTeam",
 };
 static_assert(std::size(kActionNames) == static_cast<size_t>(InputAction::Count),
               "kActionNames must have one entry per InputAction");
@@ -599,6 +599,12 @@ void InputBindings::applyDefaults() {
     // no gamepad default (Back is the radio Menu) — the overlay auto-shows in the match end phase anyway.
     m_primary[static_cast<int>(InputAction::Scoreboard)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::I),
                                                             false};
+
+    // Chat (#646). Y opens the all-channel input box, H the team channel — off the flight cluster; the
+    // box grabs the keyboard while open so these never collide with flight keys.
+    m_primary[static_cast<int>(InputAction::ChatAll)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::Y), false};
+    m_primary[static_cast<int>(InputAction::ChatTeam)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::H),
+                                                          false};
 
     // Gamepad alt defaults
     m_alt[static_cast<int>(InputAction::PitchAxis)] = {BindingSource::GamepadAxis,

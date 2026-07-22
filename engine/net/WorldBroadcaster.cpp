@@ -9,6 +9,7 @@
 // engine-net still does not link engine-ai (cmake/layering.cmake), and must not: building a
 // controller is engine-ai's job and reaches this file only through the FlightOrderHandler hook.
 // Including it here rather than hardcoding ordinals keeps one source of truth for the vocabulary.
+#include "Utf8Decode.h" // chat text sanitization (#646)
 #include "ai/WingmanCommand.h"
 #include "atc/AtcService.h" // the deterministic ATC FSM ticked at 1 Hz (#702)
 #include "entity/EntityManager.h"
@@ -4061,6 +4062,8 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
             handleSeatRequest(peerId, req);
     } else if (msgId == static_cast<uint8_t>(MsgId::RadioCommand)) {
         handleRadioCommand(peerId, data, size);
+    } else if (msgId == static_cast<uint8_t>(MsgId::Chat)) {
+        handleChat(peerId, data, size);
     } else if (msgId == static_cast<uint8_t>(MsgId::TeamRequest)) {
         // Mid-match team switch request (#522). Guard it against unbalancing, then despawn+respawn on
         // the new team. An unadmitted peer or a guard denial is answered with a MsgServerNotice.
@@ -4536,6 +4539,134 @@ void WorldBroadcaster::handleRadioCommand(uint32_t peerId, const void* data, std
     } else {
         reply(fl::atc::AtcPhrase::Unable, "say again");
     }
+}
+
+namespace {
+// Sanitize a chat line: keep only printable BMP codepoints (drop control chars, DEL, and any invalid /
+// non-BMP sequence which nextUtf8Codepoint reports as U+FFFD), copying the ORIGINAL bytes of each kept
+// codepoint so valid multi-byte sequences survive intact, truncate on a codepoint boundary, and trim
+// surrounding whitespace.
+std::string sanitizeChat(std::string_view in) {
+    std::string out;
+    const char* p = in.data();
+    const char* const end = p + in.size();
+    while (p < end && out.size() < fl::kMaxChatBytes) {
+        const char* prev = p;
+        const uint32_t cp = fl::nextUtf8Codepoint(p, end);
+        if (cp < 0x20u || cp == 0x7Fu || cp == 0xFFFDu)
+            continue; // control / DEL / invalid
+        const std::size_t n = static_cast<std::size_t>(p - prev);
+        if (out.size() + n > fl::kMaxChatBytes)
+            break;
+        out.append(prev, n);
+    }
+    const auto notSpace = [](char c) { return c != ' ' && c != '\t'; };
+    out.erase(out.begin(), std::find_if(out.begin(), out.end(), notSpace));
+    out.erase(std::find_if(out.rbegin(), out.rend(), notSpace).base(), out.end());
+    return out;
+}
+} // namespace
+
+void WorldBroadcaster::sendChatEvent(uint32_t peerId, uint8_t channel, uint32_t senderPeerId, std::string_view text) {
+    MsgChatEventHeader hdr;
+    hdr.channel = channel;
+    hdr.senderPeerId = senderPeerId;
+    std::vector<uint8_t> pkt;
+    pkt.reserve(sizeof(hdr) + text.size() + 1);
+    appendMsg(pkt, hdr);
+    pkt.insert(pkt.end(), text.begin(), text.end());
+    pkt.push_back('\0');
+    m_net.send(peerId, pkt.data(), pkt.size(), /*reliable=*/true);
+}
+
+void WorldBroadcaster::handleChat(uint32_t peerId, const void* data, std::size_t size) {
+    if (!m_chatEnabled)
+        return;
+    MsgChatHeader hdr;
+    if (!readMsg(data, size, hdr))
+        return; // truncated
+    if (!isChatChannelOrdinal(hdr.channel))
+        return;
+
+    const auto pit = m_peerInputs.find(peerId);
+    if (pit == m_peerInputs.end() || !pit->second.handshakeComplete)
+        return; // not admitted
+    auto& ps = pit->second;
+    if (ps.chatMuted)
+        return; // muted: drop silently, no rate-limit warning
+
+    // Extract + sanitize the NUL-terminated text at offset 4.
+    const char* bytes = static_cast<const char*>(data);
+    std::string_view raw(bytes + sizeof(hdr), size > sizeof(hdr) ? size - sizeof(hdr) : 0u);
+    if (const auto z = raw.find('\0'); z != std::string_view::npos)
+        raw = raw.substr(0, z);
+    const std::string text = sanitizeChat(raw);
+    if (text.empty())
+        return;
+
+    // Per-peer rate limit (warn once per window; never one reply per rejected packet — a flood must not
+    // be amplified back at the sender).
+    {
+        const auto now = m_clock->now();
+        if (now - ps.chatWindowStart >= std::chrono::seconds(1)) {
+            ps.chatWindowStart = now;
+            ps.chatCount = 0;
+            ps.chatRateLimitWarned = false;
+        }
+        ++ps.chatCount;
+        if (ps.chatCount > static_cast<uint32_t>(m_chatRateLimit)) {
+            if (!ps.chatRateLimitWarned) {
+                ps.chatRateLimitWarned = true;
+                MsgServerNotice notice;
+                std::snprintf(notice.text, sizeof(notice.text), "You are sending chat too fast.");
+                m_net.send(peerId, &notice, sizeof(notice), /*reliable=*/true);
+            }
+            return;
+        }
+    }
+
+    // Moderation hook: false = suppress (fl-server default logs an audit line and allows).
+    if (m_chatModerationHook && !m_chatModerationHook(peerId, hdr.channel, text))
+        return;
+
+    const auto channel = static_cast<ChatChannel>(hdr.channel);
+    const uint16_t senderFaction = (channel == ChatChannel::Team) ? factionForPeer(peerId) : kNoFaction;
+    for (const auto& [pid, pin] : m_peerInputs) {
+        if (!pin.handshakeComplete)
+            continue;
+        if (channel == ChatChannel::Team) {
+            // Team channel: same faction only. A teamless sender (observer) sees only its own echo.
+            if (senderFaction == kNoFaction) {
+                if (pid != peerId)
+                    continue;
+            } else if (factionForPeer(pid) != senderFaction) {
+                continue;
+            }
+        }
+        sendChatEvent(pid, hdr.channel, peerId, text);
+    }
+}
+
+bool WorldBroadcaster::setPeerMuted(uint32_t peerId, bool muted) {
+    const auto it = m_peerInputs.find(peerId);
+    if (it == m_peerInputs.end())
+        return false;
+    it->second.chatMuted = muted;
+    return true;
+}
+
+bool WorldBroadcaster::isPeerMuted(uint32_t peerId) const {
+    const auto it = m_peerInputs.find(peerId);
+    return it != m_peerInputs.end() && it->second.chatMuted;
+}
+
+std::vector<uint32_t> WorldBroadcaster::mutedPeers() const {
+    std::vector<uint32_t> out;
+    for (const auto& [pid, ps] : m_peerInputs)
+        if (ps.chatMuted)
+            out.push_back(pid);
+    std::sort(out.begin(), out.end());
+    return out;
 }
 
 void WorldBroadcaster::handleWingmanCommand(uint32_t peerId, const void* data, std::size_t size) {

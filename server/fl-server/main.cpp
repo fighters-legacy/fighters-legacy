@@ -865,6 +865,18 @@ int main(int argc, char** argv) {
     broadcaster.setPlayerFaction(cfg.playerFaction);
     broadcaster.setFlightCommandRateLimit(cfg.flight.commandRateLimitPerS);
 
+    // In-match text chat (#646). The moderation hook default logs an audit line and allows every message;
+    // an operator replaces it with a filter. Rate limit + enable come from [chat].
+    broadcaster.setChatEnabled(cfg.chat.enabled);
+    broadcaster.setChatRateLimit(cfg.chat.rateLimitPerS);
+    broadcaster.setChatModerationHook([log](uint32_t peerId, uint8_t channel, std::string_view text) {
+        char buf[320];
+        std::snprintf(buf, sizeof(buf), "[chat] peer %u ch%u: %.*s", peerId, static_cast<unsigned>(channel),
+                      static_cast<int>(text.size()), text.data());
+        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+        return true; // allow
+    });
+
     if (cfg.flight.size > 0 && cfg.playerFaction == 0) {
         // A flight whose threat logic can never fire is a silently broken feature, not a
         // configuration: areFactionsHostile gives a faction-0 entity no enemies at all.

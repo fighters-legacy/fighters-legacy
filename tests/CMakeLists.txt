@@ -775,6 +775,13 @@ target_link_libraries(test_kill_feed PRIVATE Catch2::Catch2WithMain platform-hal
 target_include_directories(test_kill_feed PRIVATE ${CMAKE_SOURCE_DIR}/game/fighters-legacy)
 catch_discover_tests(test_kill_feed)
 
+# ChatOverlay (#646) — the chat display ring + IGui input box, driven against NullGui + a manual clock.
+add_executable(test_chat_overlay test_chat_overlay.cpp
+    ${CMAKE_SOURCE_DIR}/game/fighters-legacy/ChatOverlay.cpp)
+target_link_libraries(test_chat_overlay PRIVATE Catch2::Catch2WithMain engine-net platform-hal)
+target_include_directories(test_chat_overlay PRIVATE ${CMAKE_SOURCE_DIR}/game/fighters-legacy)
+catch_discover_tests(test_chat_overlay)
+
 # Frame-capture swizzle helper (#912): the pure GPU-independent core of the capture readback.
 add_executable(test_capture_frame test_capture_frame.cpp)
 target_link_libraries(test_capture_frame PRIVATE Catch2::Catch2WithMain platform-hal)
@@ -935,6 +942,7 @@ add_executable(test_client_net_event_handler test_client_net_event_handler.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp"
     # ClientNetEventHandler dispatches MsgWingmanAck into the radio menu (#610).
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/WingmanMenu.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ChatOverlay.cpp" # ChatEvent -> chat overlay (#646)
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ManualOverlay.cpp")
 target_link_libraries(test_client_net_event_handler PRIVATE
     Catch2::Catch2WithMain engine-net engine-render engine-entity engine-console engine-weather engine-audio
@@ -1009,6 +1017,7 @@ add_executable(test_screen_manager test_screen_manager.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/PauseMenuScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/DebriefScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightScreen.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ChatOverlay.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientEffectRouter.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/WingmanMenu.cpp"

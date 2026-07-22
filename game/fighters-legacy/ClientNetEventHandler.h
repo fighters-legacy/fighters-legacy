@@ -28,6 +28,7 @@ class GameConsole;
 class ILogger;
 class ServerNotice;
 class KillFeed;
+class ChatOverlay;
 struct RenderSnapshot;
 struct MsgClientInput;
 struct MsgHeartbeat;
@@ -64,6 +65,7 @@ struct ClientNetEventHandler : INetworkEventHandler {
     WingmanMenu* wingman{nullptr};        // optional: flight check-in / order acks / relayed radio calls (#610)
     ClientEffectRouter* effects{nullptr}; // optional: cosmetic weapon effects (#625) — particles now, audio #631
     KillFeed* killFeed{nullptr};          // optional: multiplayer kill feed overlay, fed from the Kill branch (#647)
+    ChatOverlay* chat{nullptr};           // optional: in-match chat overlay, fed from MsgChatEvent (#646)
     uint32_t motdDisplaySeconds{15};      // user-configurable; 0 = persistent
 
     uint32_t assignedEntityIdx{0};
@@ -197,6 +199,10 @@ struct ClientNetEventHandler : INetworkEventHandler {
     // the current seat. Reliable. The outcome arrives as MsgSeatResult (see takeSeatResult()).
     void sendSeatRequest(uint32_t entityIdx, uint32_t entityGen, uint8_t seat);
     void sendSeatLeave();
+
+    // Send a chat line (#646). Reliable; the server sanitizes/rate-limits/routes it. Text is truncated to
+    // kMaxChatBytes on a UTF-8 codepoint boundary. Empty text is dropped.
+    void sendChat(fl::ChatChannel channel, std::string_view text);
 
     // The outcome of the last MsgSeatRequest (#975), for the seat-picker UI to surface. `valid` is
     // false until the first result arrives; `fresh` marks a result not yet consumed by the UI.

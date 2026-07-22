@@ -1765,6 +1765,145 @@ TEST_CASE("WorldBroadcaster: MsgTeamRequest honors the switch guard (#522)", "[w
     }
 }
 
+namespace {
+// Build a MsgChat packet (header + NUL-terminated text).
+std::vector<uint8_t> makeChatPkt(fl::ChatChannel ch, std::string_view text) {
+    fl::MsgChatHeader hdr{};
+    hdr.channel = static_cast<uint8_t>(ch);
+    std::vector<uint8_t> pkt;
+    fl::appendMsg(pkt, hdr);
+    pkt.insert(pkt.end(), text.begin(), text.end());
+    pkt.push_back('\0');
+    return pkt;
+}
+// Return the decoded text of the last MsgChatEvent sent to `peerId`, or empty if none.
+std::string lastChatEventText(const MockNetwork& net, uint32_t peerId) {
+    for (auto it = net.perPeerSends.rbegin(); it != net.perPeerSends.rend(); ++it) {
+        const auto& [pid, pkt] = *it;
+        if (pid == peerId && !pkt.empty() && pkt[0] == static_cast<uint8_t>(fl::MsgId::ChatEvent) &&
+            pkt.size() >= sizeof(fl::MsgChatEventHeader)) {
+            std::string t(reinterpret_cast<const char*>(pkt.data()) + sizeof(fl::MsgChatEventHeader),
+                          pkt.size() - sizeof(fl::MsgChatEventHeader));
+            if (const auto z = t.find('\0'); z != std::string::npos)
+                t.resize(z);
+            return t;
+        }
+    }
+    return {};
+}
+int countChatEvents(const MockNetwork& net) {
+    int n = 0;
+    for (const auto& p : net.sends)
+        if (!p.empty() && p[0] == static_cast<uint8_t>(fl::MsgId::ChatEvent))
+            ++n;
+    return n;
+}
+} // namespace
+
+TEST_CASE("WorldBroadcaster: chat routing, mute, sanitize, rate limit, hook (#646)", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::ManualClock clock;
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setClock(clock);
+    // Peer 0 -> faction 1, peer 1 -> faction 2, peer 2 -> faction 1 (peer 0's teammate).
+    broadcaster.setTeamAssigner(
+        [](uint32_t p) -> std::optional<uint16_t> { return static_cast<uint16_t>(p == 1u ? 2 : 1); });
+    connectPilotPeer(broadcaster, net, 0u);
+    connectPilotPeer(broadcaster, net, 1u);
+    connectPilotPeer(broadcaster, net, 2u);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    REQUIRE(broadcaster.factionForPeer(0u) == 1u);
+    REQUIRE(broadcaster.factionForPeer(1u) == 2u);
+    REQUIRE(broadcaster.factionForPeer(2u) == 1u);
+
+    SECTION("All channel reaches every peer including the sender") {
+        net.sends.clear();
+        net.perPeerSends.clear();
+        const auto pkt = makeChatPkt(fl::ChatChannel::All, "hello world");
+        broadcaster.onReceive(0u, pkt.data(), pkt.size());
+        CHECK(countChatEvents(net) == 3);
+        CHECK(lastChatEventText(net, 0u) == "hello world"); // self-echo
+        CHECK(lastChatEventText(net, 1u) == "hello world");
+        CHECK(lastChatEventText(net, 2u) == "hello world");
+    }
+
+    SECTION("Team channel reaches only the sender's faction") {
+        net.sends.clear();
+        net.perPeerSends.clear();
+        const auto pkt = makeChatPkt(fl::ChatChannel::Team, "on me");
+        broadcaster.onReceive(0u, pkt.data(), pkt.size());
+        CHECK(countChatEvents(net) == 2); // peer 0 + peer 2 (faction 1); peer 1 excluded
+        CHECK(lastChatEventText(net, 0u) == "on me");
+        CHECK(lastChatEventText(net, 2u) == "on me");
+        CHECK(lastChatEventText(net, 1u).empty());
+    }
+
+    SECTION("a muted peer's chat is dropped silently") {
+        REQUIRE(broadcaster.setPeerMuted(0u, true));
+        CHECK(broadcaster.isPeerMuted(0u));
+        net.sends.clear();
+        const auto pkt = makeChatPkt(fl::ChatChannel::All, "spam");
+        broadcaster.onReceive(0u, pkt.data(), pkt.size());
+        CHECK(countChatEvents(net) == 0);
+        const auto muted = broadcaster.mutedPeers();
+        CHECK(std::find(muted.begin(), muted.end(), 0u) != muted.end());
+    }
+
+    SECTION("control chars are stripped from the routed text") {
+        net.sends.clear();
+        net.perPeerSends.clear();
+        const auto pkt = makeChatPkt(fl::ChatChannel::All, "hi\x07\x01 there");
+        broadcaster.onReceive(0u, pkt.data(), pkt.size());
+        CHECK(lastChatEventText(net, 1u) == "hi there");
+    }
+
+    SECTION("an all-whitespace / empty line is dropped") {
+        net.sends.clear();
+        const auto pkt = makeChatPkt(fl::ChatChannel::All, "   ");
+        broadcaster.onReceive(0u, pkt.data(), pkt.size());
+        CHECK(countChatEvents(net) == 0);
+    }
+
+    SECTION("rate limit warns once per window then drops") {
+        broadcaster.setChatRateLimit(2);
+        net.sends.clear();
+        const auto pkt = makeChatPkt(fl::ChatChannel::All, "flood");
+        for (int i = 0; i < 5; ++i)
+            broadcaster.onReceive(0u, pkt.data(), pkt.size());
+        // First 2 routed (3 recipients each = 6), then dropped; exactly one ServerNotice warning.
+        CHECK(countChatEvents(net) == 6);
+        int notices = 0;
+        for (const auto& p : net.sends)
+            if (!p.empty() && p[0] == static_cast<uint8_t>(fl::MsgId::ServerNotice))
+                ++notices;
+        CHECK(notices == 1);
+    }
+
+    SECTION("the moderation hook can suppress a line") {
+        broadcaster.setChatModerationHook(
+            [](uint32_t, uint8_t, std::string_view text) { return text.find("badword") == std::string_view::npos; });
+        net.sends.clear();
+        const auto blocked = makeChatPkt(fl::ChatChannel::All, "a badword here");
+        broadcaster.onReceive(0u, blocked.data(), blocked.size());
+        CHECK(countChatEvents(net) == 0);
+        const auto ok = makeChatPkt(fl::ChatChannel::All, "clean line");
+        broadcaster.onReceive(0u, ok.data(), ok.size());
+        CHECK(countChatEvents(net) == 3);
+    }
+
+    SECTION("chat disabled drops everything") {
+        broadcaster.setChatEnabled(false);
+        net.sends.clear();
+        const auto pkt = makeChatPkt(fl::ChatChannel::All, "hi");
+        broadcaster.onReceive(0u, pkt.data(), pkt.size());
+        CHECK(countChatEvents(net) == 0);
+    }
+}
+
 TEST_CASE("WorldBroadcaster: ConnectAck type defs carry category and projectileKind ordinals (#886)",
           "[world_broadcaster]") {
     MockLogger logger;

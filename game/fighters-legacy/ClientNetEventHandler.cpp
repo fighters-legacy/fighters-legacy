@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ClientNetEventHandler.h"
+#include "ChatOverlay.h"
 #include "ClientEffectRouter.h"
 #include "KillFeed.h"
 #include "ServerNotice.h"
+#include "Utf8Decode.h"
 
 #include "ILogger.h"
 #include "INetwork.h"
@@ -720,6 +722,34 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             e.pingMs = row.pingMs;
             e.factionIndex = row.factionIndex;
         }
+    } else if (msgId == static_cast<uint8_t>(fl::MsgId::ChatEvent)) {
+        // A routed chat line (#646): header + NUL-terminated UTF-8 text at offset 8. Resolve the sender
+        // callsign from the roster; senderPeerId == kNoOwningPeer is a system line (no name).
+        fl::MsgChatEventHeader hdr;
+        if (!fl::readMsg(data, size, hdr))
+            return;
+        if (!fl::isChatChannelOrdinal(hdr.channel))
+            return;
+        const char* bytes = static_cast<const char*>(data);
+        std::string text(bytes + sizeof(hdr), size > sizeof(hdr) ? size - sizeof(hdr) : 0u);
+        if (const auto z = text.find('\0'); z != std::string::npos)
+            text.resize(z);
+        if (text.empty())
+            return;
+        const bool system = hdr.senderPeerId == fl::kNoOwningPeer;
+        const std::string sender = system ? std::string{} : displayName(hdr.senderPeerId);
+        const auto channel = static_cast<fl::ChatChannel>(hdr.channel);
+        if (chat)
+            chat->pushLine(sender, text, channel, system);
+        if (console) {
+            std::string line = "[chat] ";
+            if (channel == fl::ChatChannel::Team)
+                line += "[Team] ";
+            if (!system)
+                line += sender + ": ";
+            line += text;
+            console->print(line);
+        }
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::MissionRoster)) {
         // Mission object id -> entity idx/gen (#914), one reliable packet of concatenated records (sent
         // after ConnectAck, plus single-record deltas as player slots bind). Lets the cinematic recorder
@@ -909,6 +939,35 @@ void ClientNetEventHandler::sendSeatLeave() {
     fl::MsgSeatRequest req;
     req.flags = fl::kSeatRequestFlagLeave;
     net.send(0, &req, sizeof(req), /*reliable=*/true);
+}
+
+void ClientNetEventHandler::sendChat(fl::ChatChannel channel, std::string_view text) {
+    // Truncate to kMaxChatBytes on a UTF-8 codepoint boundary (the server enforces the same cap, but a
+    // split multi-byte sequence at the boundary must never reach the wire).
+    const char* const base = text.data();
+    const char* p = base;
+    const char* const end = base + text.size();
+    std::size_t bytes = 0;
+    while (p < end) {
+        const char* prev = p;
+        fl::nextUtf8Codepoint(p, end);
+        if (static_cast<std::size_t>(p - base) > fl::kMaxChatBytes) {
+            p = prev;
+            break;
+        }
+        bytes = static_cast<std::size_t>(p - base);
+    }
+    if (bytes == 0)
+        return; // empty (or all-truncated) line: drop
+
+    fl::MsgChatHeader hdr;
+    hdr.channel = static_cast<uint8_t>(channel);
+    std::vector<uint8_t> pkt;
+    pkt.reserve(sizeof(hdr) + bytes + 1);
+    fl::appendMsg(pkt, hdr);
+    pkt.insert(pkt.end(), base, base + bytes);
+    pkt.push_back('\0');
+    net.send(0, pkt.data(), pkt.size(), /*reliable=*/true);
 }
 
 void ClientNetEventHandler::stampAck(fl::MsgClientInput& in) const noexcept {

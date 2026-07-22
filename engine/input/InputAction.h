@@ -53,6 +53,10 @@ enum class InputAction : uint32_t {
     // Hold to show the multiplayer scoreboard overlay (#647)
     Scoreboard,
 
+    // Open the in-match chat input box — all channel / team channel (#646)
+    ChatAll,
+    ChatTeam,
+
     Count
 };
 

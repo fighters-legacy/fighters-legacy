@@ -242,6 +242,13 @@ struct ServerConfig {
     };
     AtcConfig atc;
 
+    // [chat]  — in-match text chat (#646)
+    struct ChatConfig {
+        bool enabled = true;   // route player chat lines; false = drop all chat
+        int rateLimitPerS = 2; // chat lines per second per peer; [1, 60]
+    };
+    ChatConfig chat;
+
     // [network]  — transport backend selection (#507)
     struct NetworkConfig {
         std::string transport = "gns"; // "gns" (GameNetworkingSockets, default) or "enet" (enet6)

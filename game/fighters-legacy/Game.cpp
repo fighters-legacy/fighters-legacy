@@ -6,6 +6,7 @@
 #include "Game.h"
 
 #include "CameraInput.h"
+#include "ChatOverlay.h"
 #include "ClientEffectRouter.h"
 #include "ClientNetEventHandler.h"
 #include "CommsMenu.h"
@@ -430,6 +431,7 @@ struct GameServices {
     SubtitleOverlay subtitleOverlay;     // renders the subtitle queue as a HUD overlay layer (#704)
     KillFeed killFeed;                   // multiplayer kill feed, fed from the CombatEvent Kill branch (#647)
     ScoreboardOverlay scoreboardOverlay; // multiplayer scoreboard IGui table (#647)
+    ChatOverlay chatOverlay;             // in-match chat display + input (#646)
     ManualOverlay manual;                // the in-flight aircraft manual, generated from the flight model (#821)
     WeaponRegistry weapons;              // the client's copy of the pack's stores, for the manual's loadout section
     ContentIndex contentIndex;           // id -> asset name, so the client can resolve def cross-references (#810)
@@ -1301,6 +1303,8 @@ void Game::startGame(const std::string& mission) {
         d.session.clientHandler->notice = &d.services.serverNotice;
         d.session.clientHandler->killFeed = &d.services.killFeed;   // multiplayer kill feed (#647)
         d.services.killFeed.clear();                                // no stale lines across sessions
+        d.session.clientHandler->chat = &d.services.chatOverlay;    // in-match chat (#646)
+        d.services.chatOverlay.clear();                             // no stale lines across sessions
         d.session.clientHandler->wingman = &d.services.wingmanMenu; // check-ins, order acks, relayed calls
         d.session.clientHandler->console = &*d.services.gameConsole;
         d.session.clientHandler->effects = &d.services.effectRouter; // weapon cosmetics (#625)
@@ -1421,6 +1425,8 @@ void Game::startGame(const std::string& mission) {
         fsd.wingmanMenu = &d.services.wingmanMenu;
         fsd.commsMenu = &d.services.commsMenu;
         fsd.manual = &d.services.manual;
+        fsd.chat = &d.services.chatOverlay; // in-match chat (#646)
+        fsd.gui = d.services.p.gui.get();   // chat input box (null-safe)
         fsd.assignedEntityIdx = &d.session.clientHandler->assignedEntityIdx;
         fsd.assignedEntityGen = &d.session.clientHandler->assignedEntityGen;
 
@@ -2027,6 +2033,7 @@ void Game::run() {
         d.services.p.renderer->submitOverlayElements(
             d.services.subtitleOverlay.build(d.services.subtitleQueue));                   // radio/ATC callouts (#704)
         d.services.p.renderer->submitOverlayElements(d.services.killFeed.buildElements()); // #647
+        d.services.p.renderer->submitOverlayElements(d.services.chatOverlay.buildElements()); // #646
         d.services.p.renderer->setConsoleElements(d.services.gameConsole->elements());
 
         // Scoreboard (#647): an IGui table shown in Flight while the Scoreboard key is held, and auto-shown

@@ -996,6 +996,22 @@ Default `"builtin:debug-entity"`. The entity type spawned by `atc_scramble` / `a
 caller does not name one. Scrambled aircraft spawn hold-short of the runway, are sequenced onto it by
 the tower, take off in order, and hand off to a loiter over the field.
 
+## [chat] — In-match text chat (#646)
+
+Player-to-player text chat over the reliable channel, with `all` and `team` (same-faction) channels.
+The server sanitizes each line (BMP UTF-8 only, control characters stripped, truncated on a codepoint
+boundary at 240 bytes), rate-limits per peer, honours a per-session mute (the `mute` / `unmute` / `mutes`
+admin commands), and logs every routed line as an audit line via the moderation hook.
+
+### `enabled`
+
+Default `true`. When `false`, every incoming chat line is dropped (no `ChatEvent` is routed).
+
+### `rate_limit_per_s`
+
+Default `2`, range `[1, 60]`. Chat lines accepted per second per peer. Over the limit, the peer gets one
+"sending chat too fast" notice per one-second window and the excess lines are dropped silently.
+
 ## [network] — Transport backend
 
 Selects the network transport. See [transport-selection.md](transport-selection.md) and

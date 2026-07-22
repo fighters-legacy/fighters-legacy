@@ -35,6 +35,8 @@ class WindshieldRain;
 class WingmanMenu;
 class CommsMenu;
 class ManualOverlay;
+class ChatOverlay;
+class IGui;
 
 struct EnvironmentState;
 
@@ -60,6 +62,8 @@ struct FlightScreenDeps {
     WingmanMenu* wingmanMenu{nullptr};     // null = no radio menu (#610)
     CommsMenu* commsMenu{nullptr};         // null = no ATC comms menu (#704)
     ManualOverlay* manual{nullptr};        // null = no in-flight aircraft manual (#821)
+    ChatOverlay* chat{nullptr};            // null = no in-match chat (#646)
+    IGui* gui{nullptr};                    // null = no GUI backend (chat input box degrades off)
     uint32_t* assignedEntityIdx{nullptr};
     uint32_t* assignedEntityGen{nullptr};
 };

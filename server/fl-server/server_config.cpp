@@ -279,7 +279,12 @@ static const char* kDefaultToml =
     "# Air-traffic control (#673): runway sequencing, clearances, and a player comms menu.\n"
     "# Disable to boot with no facilities — radio commands then answer \"no ATC available\".\n"
     "enabled = true\n"
-    "# scramble_entity_type = \"builtin:debug-entity\"  # default type for atc_scramble / atc.scramble\n";
+    "# scramble_entity_type = \"builtin:debug-entity\"  # default type for atc_scramble / atc.scramble\n"
+    "\n"
+    "[chat]\n"
+    "# In-match text chat (#646): all/team channels, per-peer rate limit, admin mute.\n"
+    "enabled = true\n"
+    "# rate_limit_per_s = 2     # chat lines per second per player; [1, 60]\n";
 
 std::string_view defaultServerConfigToml() {
     return kDefaultToml;
@@ -1013,6 +1018,17 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
             cfg.atc.enabled = *v;
         if (auto v = tbl["atc"]["scramble_entity_type"].value<std::string>())
             cfg.atc.scrambleEntityType = *v;
+
+        // [chat]  — in-match text chat (#646)
+        if (auto v = tbl["chat"]["enabled"].value<bool>())
+            cfg.chat.enabled = *v;
+        if (auto v = tomlInt(tbl["chat"]["rate_limit_per_s"])) {
+            if (*v >= 1 && *v <= 60)
+                cfg.chat.rateLimitPerS = static_cast<int>(*v);
+            else
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "chat.rate_limit_per_s out of range [1, 60]; using default 2");
+        }
 
     } catch (const toml::parse_error& e) {
         char buf[256];

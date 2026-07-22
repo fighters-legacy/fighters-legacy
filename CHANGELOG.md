@@ -21,6 +21,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network**: in-match text chat (#646, Epic E #497). New `MsgChat` (0x20, client→server) and
+  `MsgChatEvent` (0x21, server→client) wire messages plus a `ChatChannel` (All/Team) enum. The server
+  sanitizes each line (BMP UTF-8, control characters stripped, codepoint-boundary truncation at 240
+  bytes), rate-limits per peer (`[chat] rate_limit_per_s`, warn-once-per-window), applies a per-session
+  admin mute (`mute` / `unmute` / `mutes` commands) and a moderation hook (fl-server default logs an
+  audit line and allows), then routes the line — All to every handshake-complete peer including the
+  sender's echo, Team to the sender's faction only. The client sends via a chat input box (`Y` = all,
+  `H` = team) that captures the keyboard while open (a new `textEntry` gate on `FlightInputCollector::poll`
+  suppresses flight keys but keeps the gamepad/HOTAS axes live), and displays a bottom-left fading ring of
+  recent lines with local per-callsign muting. `[chat] enabled` toggles the whole channel. New
+  `ChatOverlay`, `InputAction::ChatAll`/`ChatTeam`, and `[chat]` config section. Unit-tested end to end
+  (`tests/test_chat_overlay.cpp`, server routing/mute/sanitize/rate-limit/hook cases in
+  `tests/test_world_broadcaster.cpp`, send/receive in `tests/test_client_net_event_handler.cpp`, admin
+  commands in `tests/test_admin_console.cpp`).
+
 - **game**: multiplayer kill feed and scoreboard (#647, Epic E #497). The client now decodes the
   server's `MsgMatchState` (0x1D, match phase + limits + per-team scores) and `MsgScoreboard` (0x1E,
   per-participant kills/deaths/score/ping, upserted across the unreliable chunked stream and pruned when a

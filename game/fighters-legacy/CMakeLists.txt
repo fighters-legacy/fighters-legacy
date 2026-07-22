@@ -26,6 +26,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         PauseMenuScreen.cpp
         DebriefScreen.cpp
         ScoreboardOverlay.cpp
+        ChatOverlay.cpp
     )
     target_link_libraries(fighters-legacy PRIVATE
         engine-crash
