@@ -52,6 +52,8 @@ void SDL3Window::shutdown() {
 void SDL3Window::pollEvents() {
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
+        if (m_guiEventForwarder)
+            m_guiEventForwarder(&ev); // #156: feed ImGui first, before the game's input sinks
         if (m_inputSink)
             m_inputSink->onSDLEvent(ev);
         if (m_joystickSink)

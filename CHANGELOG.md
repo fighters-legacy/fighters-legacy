@@ -21,6 +21,20 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **ui**: IGui HAL with a Dear ImGui reference backend (#156, from epic #593; the foundation for Epic E
+  #497's input-heavy multiplayer screens). A narrow immediate-mode GUI interface (`platform/IGui.h` —
+  windows, labels, buttons, masked text input, selectable rows, read-only tables, input-capture flags)
+  that screens speak instead of coupling to a GUI toolkit, so they stay backend-agnostic and unit-testable
+  against the scripted `NullGui` (`tests/mock_gui.h`). The reference backend (`platform-gui`, `ImGuiGui`)
+  implements it over Dear ImGui + the SDL3/Vulkan backends: the ImGui context + SDL3 platform backend live
+  in `platform-gui`, while the ImGui Vulkan renderer backend runs inside `VkRenderer` (the only holder of
+  the Vulkan handles) via two `IRenderer` hooks, recording draw data into the swapchain pass after the
+  HudElement overlay. Dear ImGui is FetchContent-pinned (v1.91.5, MIT) and Vulkan-gated; the module-layering
+  guard forbids `engine-*`/`fl-server` from reaching `platform-gui`/`imgui`. Wired into the game's frame
+  loop (SDL events forwarded to the GUI first via `IWindow::setGuiEventForwarder`; `newFrame()`/`render()`
+  bracket each frame). The real backend needs a GPU (visual-check verified); the HAL contract is CI-tested
+  through `NullGui`.
+
 - **network**: server info query protocol (#997, Epic E #497). An A2S-style request/response over raw
   UDP on a dedicated query port (`[discovery] query_port`, default game port + 1) gives the server
   browser a ping measurement + live details for a server. `MsgServerQuery` (0x41, padded ≥ response for

@@ -51,6 +51,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         platform-stdfs
         platform-sdl3
         platform-vulkan
+        platform-gui # #156: Dear ImGui backend behind the IGui HAL
         platform-openal
         platform-net
         platform-http
@@ -62,6 +63,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         ${CMAKE_BINARY_DIR}/engine
         "${CMAKE_SOURCE_DIR}/platform/vulkan"
         "${CMAKE_SOURCE_DIR}/platform/sdl3"
+        "${CMAKE_SOURCE_DIR}/platform/gui"
         "${CMAKE_SOURCE_DIR}/platform/net"
         "${enet6_SOURCE_DIR}/include"
         "${CMAKE_CURRENT_SOURCE_DIR}")

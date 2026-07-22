@@ -54,6 +54,7 @@
 #include "firstrun/FirstRun.h"
 #include "flight/Atmosphere.h"
 #include "flight/Geodetic.h"
+#include "gui/ImGuiGui.h"               // #156: Dear ImGui backend behind the IGui HAL
 #include "http/CurlHttpClientFactory.h" // createHttpClient (#490)
 #include "input/AxisConfig.h"
 #include "input/InputBindings.h"
@@ -466,6 +467,11 @@ Game::~Game() {
     d.services.warningTones.shutdown();
     d.services.engineAudio.shutdown();
     d.services.p.cursor.reset();
+    // #156: tear the IGui backend down while the renderer + window are still alive (its shutdown calls
+    // back into both). Clear the event forwarder first so the dangling capture is never invoked.
+    if (d.services.p.window)
+        d.services.p.window->setGuiEventForwarder(nullptr);
+    d.services.p.gui.reset();
     if (d.services.p.audio)
         d.services.p.audio->shutdown();
     if (d.services.p.renderer)
@@ -846,6 +852,15 @@ bool Game::initWindowAndRenderer() {
 
     d.services.rendererSettings = buildRendererSettings(d.services.userConfig->graphics());
     d.services.p.renderer->applySettings(d.services.rendererSettings);
+
+    // #156: bring up the IGui backend (Dear ImGui) now the window + renderer exist. A null result (init
+    // failure) leaves p.gui null and the game runs with the HudElement-only UI. When it succeeds, forward
+    // SDL events to it at the top of the window pump so it can capture keyboard/mouse for text entry.
+    d.services.p.gui = fl::createImGuiGui(*d.services.p.window, *d.services.p.renderer);
+    if (d.services.p.gui) {
+        fl::IGui* gui = d.services.p.gui.get();
+        d.services.p.window->setGuiEventForwarder([gui](const void* ev) { gui->processEvent(ev); });
+    }
 
     return true;
 }
@@ -1550,6 +1565,11 @@ void Game::run() {
 
         d.services.p.renderer->beginFrame();
 
+        // #156: open the IGui frame; screens emit their widgets during update() below, and the frame is
+        // closed by render() just before endFrame(). Harmless (empty) when no screen draws any GUI.
+        if (d.services.p.gui)
+            d.services.p.gui->newFrame();
+
         const Screen cur = d.services.screenMgr->current();
         const bool inSession =
             (cur == Screen::Flight || cur == Screen::Pause || cur == Screen::Debrief || cur == Screen::Loading);
@@ -1930,6 +1950,10 @@ void Game::run() {
             else if (flightFrames >= d.services.screenshotFrames + 2)
                 running = false; // the PNG was written in endFrame; exit cleanly
         }
+
+        // #156: close the IGui frame — records ImGui draw data for the renderer to composite in endFrame().
+        if (d.services.p.gui)
+            d.services.p.gui->render();
 
         d.services.p.renderer->endFrame();
 

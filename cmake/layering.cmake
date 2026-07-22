@@ -179,7 +179,7 @@ function(fl_assert_layering)
 
     # Rule 1 — engine isolation: no engine-* target reaches a client/transport backend.
     set(_client_transport_deny
-        "^(platform-sdl3|platform-vulkan|platform-openal|platform-enet|platform-gns|platform-net|platform-http)$|^SDL3::|^Vulkan::|^OpenAL::|^enet6$|^GameNetworkingSockets::|^CURL::")
+        "^(platform-sdl3|platform-vulkan|platform-gui|platform-openal|platform-enet|platform-gns|platform-net|platform-http)$|^SDL3::|^Vulkan::|^OpenAL::|^enet6$|^GameNetworkingSockets::|^CURL::|^imgui$")
     _fl_all_targets(_all "${CMAKE_SOURCE_DIR}")
     list(REMOVE_DUPLICATES _all)
     list(SORT _all)
@@ -204,7 +204,7 @@ function(fl_assert_layering)
 
     # Rule 3 — headless server: fl-server reaches no client backend.
     set(_client_deny
-        "^(platform-sdl3|platform-vulkan|platform-openal)$|^SDL3::|^Vulkan::|^OpenAL::")
+        "^(platform-sdl3|platform-vulkan|platform-gui|platform-openal)$|^SDL3::|^Vulkan::|^OpenAL::|^imgui$")
     if(TARGET fl-server)
         _fl_assert_reaches_none(fl-server "${_client_deny}" 0 _chain)
         if(_chain)
