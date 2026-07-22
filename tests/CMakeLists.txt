@@ -96,6 +96,9 @@ add_executable(test_head_tracker test_head_tracker.cpp
 target_link_libraries(test_head_tracker PRIVATE Catch2::Catch2WithMain engine-config platform-hal)
 target_include_directories(test_head_tracker PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy" ${CMAKE_CURRENT_SOURCE_DIR})
+if(WIN32)
+    target_link_libraries(test_head_tracker PRIVATE ws2_32)
+endif()
 catch_discover_tests(test_head_tracker)
 
 # Ejection / pilot survival model (#672): pure envelope + territory -> outcome logic (header-only).
@@ -1103,6 +1106,10 @@ target_link_libraries(test_screen_manager PRIVATE
     Catch2::Catch2WithMain engine-config engine-render engine-sandbox engine-content engine-console engine-input engine-net engine-entity engine-weather engine-flight engine-manual engine-audio engine-i18n engine-ai engine-spatial platform-sdl3 platform-hal SDL3::SDL3)
 target_include_directories(test_screen_manager PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
+if(WIN32)
+    # HeadTracker.cpp uses Winsock; engine-net does not pull a transport backend (layering rule).
+    target_link_libraries(test_screen_manager PRIVATE ws2_32)
+endif()
 catch_discover_tests(test_screen_manager)
 
 add_executable(test_connect_args test_connect_args.cpp)
