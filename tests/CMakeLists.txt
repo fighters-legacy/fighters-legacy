@@ -53,6 +53,12 @@ target_link_libraries(test_los PRIVATE Catch2::Catch2WithMain engine-spatial)
 target_include_directories(test_los PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_los)
 
+# World-to-HUD projection helper (#692): pure math, checked against CameraController::view().
+add_executable(test_hud_projection test_hud_projection.cpp)
+target_link_libraries(test_hud_projection PRIVATE Catch2::Catch2WithMain engine-render)
+target_include_directories(test_hud_projection PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_hud_projection)
+
 # Ejection / pilot survival model (#672): pure envelope + territory -> outcome logic (header-only).
 add_executable(test_ejection test_ejection.cpp)
 target_link_libraries(test_ejection PRIVATE Catch2::Catch2WithMain engine-entity)

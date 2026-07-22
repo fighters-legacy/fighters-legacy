@@ -104,6 +104,7 @@ add_library(engine-render STATIC
     render/TerrainStreamer.cpp
     render/AirportRenderer.cpp
     render/FlightHud.cpp
+    render/HudProjection.cpp
     render/WindshieldRain.cpp
 )
 

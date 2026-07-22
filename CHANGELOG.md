@@ -21,6 +21,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **engine**: world-to-HUD projection helper (#692, Epic #587). New `engine/render/HudProjection.h/.cpp`
+  — `worldToHud(CameraView, dvec3)` rebases in double, transforms through the live projection, rejects
+  behind-camera points via `clip.w <= 0` (the correct test for the infinite reverse-Z projection), and
+  maps to normalized top-left-origin HUD coordinates with the Vulkan Y-flip already baked in; plus
+  `hudBox` (four `Line`s — the #641 designator) and `hudAspect` (recovers the viewport aspect, retiring
+  hard-coded 16/9). Serves padlock cues, the combat-HUD symbology, and target labels. Covered by
+  `tests/test_hud_projection.cpp` with golden values built from `CameraController::view()`.
+
 - **engine/game**: padlock/target-cycle input actions and camera-key unification (#689, Epic #587).
   New `InputAction`s `CameraCockpit`/`CameraChase`/`CameraFree` (default F1/F2/F4), `PadlockToggle`
   (F5, gamepad RightStick), `TargetInsetToggle` (F6), `NextTarget`/`PrevTarget` (N/P, gamepad DpadUp),
