@@ -10,10 +10,13 @@ namespace fl {
 // ---------------------------------------------------------------------------
 
 static constexpr const char* kActionNames[] = {
-    "PitchAxis",  "RollAxis",   "YawAxis",     "ThrottleAxis", "PitchUp",  "PitchDown",   "RollLeft",    "RollRight",
-    "YawLeft",    "YawRight",   "ThrottleUp",  "ThrottleDown", "Airbrake", "Afterburner", "FireWeapon",  "FireMissile",
-    "NextWeapon", "PrevWeapon", "ViewUp",      "ViewDown",     "ViewLeft", "ViewRight",   "LandingGear", "Flaps",
-    "Pause",      "Menu",       "WingmanMenu", "Eject",        "Respawn",  "Scoreboard",  "ChatAll",     "ChatTeam",
+    "PitchAxis",  "RollAxis",    "YawAxis",           "ThrottleAxis", "PitchUp",     "PitchDown",
+    "RollLeft",   "RollRight",   "YawLeft",           "YawRight",     "ThrottleUp",  "ThrottleDown",
+    "Airbrake",   "Afterburner", "FireWeapon",        "FireMissile",  "NextWeapon",  "PrevWeapon",
+    "ViewUp",     "ViewDown",    "ViewLeft",          "ViewRight",    "LandingGear", "Flaps",
+    "Pause",      "Menu",        "WingmanMenu",       "Eject",        "Respawn",     "Scoreboard",
+    "ChatAll",    "ChatTeam",    "CameraCockpit",     "CameraChase",  "CameraFree",  "PadlockToggle",
+    "NextTarget", "PrevTarget",  "TargetInsetToggle",
 };
 static_assert(std::size(kActionNames) == static_cast<size_t>(InputAction::Count),
               "kActionNames must have one entry per InputAction");
@@ -153,6 +156,10 @@ static const char* keyName(Key k) {
         return "PageDown";
     case Key::Insert:
         return "Insert";
+    case Key::Minus:
+        return "Minus";
+    case Key::Equals:
+        return "Equals";
     case Key::F1:
         return "F1";
     case Key::F2:
@@ -297,6 +304,10 @@ static Key keyFromName(const std::string& n) {
         return Key::PageDown;
     if (n == "Insert")
         return Key::Insert;
+    if (n == "Minus")
+        return Key::Minus;
+    if (n == "Equals")
+        return Key::Equals;
     if (n == "F1")
         return Key::F1;
     if (n == "F2")
@@ -606,6 +617,38 @@ void InputBindings::applyDefaults() {
     m_primary[static_cast<int>(InputAction::ChatTeam)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::H),
                                                           false};
 
+    // Camera modes (#689). F1/F2/F4 preserve the old raw-scancode behavior, now rebindable + gamepad-
+    // capable. F3 is the perf overlay and F5 the padlock, so Chase stays on F2 and Free on F4.
+    m_primary[static_cast<int>(InputAction::CameraCockpit)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::F1),
+                                                               false};
+    m_primary[static_cast<int>(InputAction::CameraChase)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::F2),
+                                                             false};
+    m_primary[static_cast<int>(InputAction::CameraFree)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::F4),
+                                                            false};
+
+    // Padlock + target designation (#671/#689). F5 padlock (F3 = perf overlay), F6 target inset. N/P
+    // cycle targets — T is the comms menu and Y is ChatAll, so those were rejected; N/P are free and
+    // mnemonic (next / prev). The cockpit-view pan (View*) fills PageUp/PageDown/Arrow{Left,Right}.
+    m_primary[static_cast<int>(InputAction::PadlockToggle)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::F5),
+                                                               false};
+    m_primary[static_cast<int>(InputAction::TargetInsetToggle)] = {BindingSource::Keyboard,
+                                                                   static_cast<uint32_t>(Key::F6), false};
+    m_primary[static_cast<int>(InputAction::NextTarget)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::N),
+                                                            false};
+    m_primary[static_cast<int>(InputAction::PrevTarget)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::P),
+                                                            false};
+
+    // Cockpit look pan (#689) — a keyboard/d-pad alternative to RMB drag. Arrow keys still drive the
+    // legacy raw elevator/aileron path in FlightInputCollector; View* only pans in Cockpit/Padlock mode.
+    m_primary[static_cast<int>(InputAction::ViewUp)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::PageUp),
+                                                        false};
+    m_primary[static_cast<int>(InputAction::ViewDown)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::PageDown),
+                                                          false};
+    m_primary[static_cast<int>(InputAction::ViewLeft)] = {BindingSource::Keyboard,
+                                                          static_cast<uint32_t>(Key::ArrowLeft), false};
+    m_primary[static_cast<int>(InputAction::ViewRight)] = {BindingSource::Keyboard,
+                                                           static_cast<uint32_t>(Key::ArrowRight), false};
+
     // Gamepad alt defaults
     m_alt[static_cast<int>(InputAction::PitchAxis)] = {BindingSource::GamepadAxis,
                                                        static_cast<uint32_t>(GamepadAxis::RightY), false};
@@ -635,6 +678,14 @@ void InputBindings::applyDefaults() {
                                                    static_cast<uint32_t>(GamepadButton::Start), false};
     m_alt[static_cast<int>(InputAction::Menu)] = {BindingSource::GamepadButton,
                                                   static_cast<uint32_t>(GamepadButton::Back), false};
+
+    // Padlock + target cycle on the gamepad (#689). RightStick click toggles padlock; DpadUp cycles the
+    // next target (DpadLeft/Right/Down are already weapon-cycle / gear, #625). PrevTarget/inset have no
+    // gamepad default — they are rebindable and the pad user cycles forward with DpadUp.
+    m_alt[static_cast<int>(InputAction::PadlockToggle)] = {BindingSource::GamepadButton,
+                                                           static_cast<uint32_t>(GamepadButton::RightStick), false};
+    m_alt[static_cast<int>(InputAction::NextTarget)] = {BindingSource::GamepadButton,
+                                                        static_cast<uint32_t>(GamepadButton::DpadUp), false};
 }
 
 // ---------------------------------------------------------------------------

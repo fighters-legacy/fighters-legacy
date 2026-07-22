@@ -124,7 +124,7 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
     }
 
     d.camInput->pollModeKeys(*d.cameraController, *d.gameConsole, input, viewEntry);
-    d.camInput->update(*d.cameraController, viewEntry, *d.gameConsole, *d.terrainStreamer);
+    d.camInput->update(*d.cameraController, viewEntry, *d.gameConsole, *d.terrainStreamer, input);
 
     // Radio menu (#610). Non-modal: the aircraft keeps flying while it is open (see WingmanMenu.h),
     // so only the discrete keys it consumes are suppressed, via FlightInputCollector's uiFocused.

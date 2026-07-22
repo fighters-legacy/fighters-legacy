@@ -21,6 +21,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **engine/game**: padlock/target-cycle input actions and camera-key unification (#689, Epic #587).
+  New `InputAction`s `CameraCockpit`/`CameraChase`/`CameraFree` (default F1/F2/F4), `PadlockToggle`
+  (F5, gamepad RightStick), `TargetInsetToggle` (F6), `NextTarget`/`PrevTarget` (N/P, gamepad DpadUp),
+  and defaults for the previously-unbound `View*` cockpit-pan actions (PageUp/PageDown/←/→). A new
+  header-only `engine/input/BindingQuery.h` (`bindingDown`/`bindingJustPressed`) resolves any `Binding`
+  source against `IInput`. `CameraInput` now switches camera modes through `InputBindings` (rebindable,
+  gamepad-capable) instead of raw SDL scancodes and pans the cockpit view from the `View*` actions;
+  the console-toggle and F3 overlay stay raw. `keyName`/`keyFromName` gained the missing `Minus`/`Equals`
+  entries. Keymap documented in `docs/sandbox.md`; covered by new cases in `tests/test_input.cpp`.
+
 - **game**: client-side IFF for arbitrary snapshot entities (#688, Epic #587). `ClientNetEventHandler`
   gains `ownFactionIndex()` (derived from the assigned aircraft's cached faction, roster fallback) and
   `identForEntity(idx, gen, factionIndex)` — a three-step friend/foe resolution (same faction → Friend;

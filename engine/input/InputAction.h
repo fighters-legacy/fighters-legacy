@@ -57,6 +57,17 @@ enum class InputAction : uint32_t {
     ChatAll,
     ChatTeam,
 
+    // Camera modes (#689) — rebindable, gamepad-capable replacements for the old raw F1/F2/F4 reads.
+    CameraCockpit,
+    CameraChase,
+    CameraFree,
+
+    // Target designation + padlock/inset view family (#671/#689)
+    PadlockToggle,
+    NextTarget,
+    PrevTarget,
+    TargetInsetToggle,
+
     Count
 };
 

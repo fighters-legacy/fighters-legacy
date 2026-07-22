@@ -19,13 +19,21 @@ The game opens to the main menu. Select **Sandbox (Instant Action)** to start a 
 
 ## Camera modes
 
-| Key | Action |
-|---|---|
-| F1 | Cockpit — camera locked to player entity |
-| F2 | Chase — orbit behind player entity |
-| F4 | Free (default) — freely movable pivot camera |
-| F3 | Cycle performance overlay (Off → Compact → Full) |
-| `` ` `` | Toggle game console |
+The camera-mode keys are now rebindable `InputAction`s (`CameraCockpit`/`CameraChase`/`CameraFree`, #689) resolved through `config/bindings.toml`, and work from a gamepad; the defaults below preserve the old behaviour. The console toggle (`` ` ``) and the performance overlay (F3) stay raw — they are not bound actions.
+
+| Key | Action | Binding |
+|---|---|---|
+| F1 | Cockpit — camera locked to player entity | `CameraCockpit` |
+| F2 | Chase — orbit behind player entity | `CameraChase` |
+| F4 | Free (default) — freely movable pivot camera | `CameraFree` |
+| F5 | Padlock — slew to keep the designated target centered (#697) | `PadlockToggle` (gamepad: RightStick click) |
+| F6 | Toggle the target-slaved inset view (#698) | `TargetInsetToggle` |
+| N / P | Cycle to the next / previous target (#696) | `NextTarget` / `PrevTarget` (gamepad: DpadUp = next) |
+| PageUp / PageDown / ← / → | Pan the cockpit view (keyboard alternative to RMB drag; Cockpit/Padlock only) | `ViewUp` / `ViewDown` / `ViewLeft` / `ViewRight` |
+| F3 | Cycle performance overlay (Off → Compact → Full) | raw |
+| `` ` `` | Toggle game console | raw |
+
+> Note (#689): the default `ViewLeft`/`ViewRight` keys (← / →) also drive the legacy raw aileron in `FlightInputCollector`, so in Cockpit view an arrow both rolls the aircraft and pans the view. RMB drag is the primary look control; rebind `ViewLeft`/`ViewRight` in `config/bindings.toml` if the double duty is unwanted.
 
 ### Free camera (F4)
 

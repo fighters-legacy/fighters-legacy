@@ -749,6 +749,8 @@ bool Game::initPlatform(int argc, char** argv) {
         d.services.axisConfigTable.deserialize(content);
         d.services.flightInput.setBindings(d.services.inputBindings);
         d.services.flightInput.setAxisConfig(d.services.axisConfigTable);
+        // Camera-mode + cockpit-pan actions resolve through the same table (#689).
+        d.services.camInput.setBindings(&d.services.inputBindings);
     }
 
     for (int i = 1; i < argc - 1; ++i) {

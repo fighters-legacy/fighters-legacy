@@ -3,7 +3,9 @@
 
 #include "IInput.h"
 #include "console/GameConsole.h"
-#include "flight/LocalFrame.h" // radialUp: camera "up" = radial direction on a spherical planet
+#include "flight/LocalFrame.h"   // radialUp: camera "up" = radial direction on a spherical planet
+#include "input/BindingQuery.h"  // bindingJustPressed / bindingDown (#689)
+#include "input/InputBindings.h" // camera-mode + View* pan bindings (#689)
 #include "render/CameraController.h"
 #include "render/RenderSnapshot.h"
 #include "render/TerrainStreamer.h"
@@ -56,23 +58,22 @@ void CameraInput::pollModeKeys(fl::CameraController& ctrl, GameConsole& console,
     }
     m_gravePrev = graveNow;
 
-    if (!console.isOpen()) {
-        if (keys[SDL_SCANCODE_F1] && !m_f1Prev) {
+    if (!console.isOpen() && m_bindings) {
+        // Camera-mode switches route through InputBindings (#689): rebindable and gamepad-capable, with
+        // the edge detection provided by IInput::isKeyJustPressed via bindingJustPressed.
+        if (bindingJustPressed(input, m_bindings->get(fl::InputAction::CameraCockpit))) {
             ctrl.setMode(fl::CameraMode::Cockpit);
             onModeSwitch(fl::CameraMode::Cockpit, player);
         }
-        if (keys[SDL_SCANCODE_F2] && !m_f2Prev) {
+        if (bindingJustPressed(input, m_bindings->get(fl::InputAction::CameraChase))) {
             ctrl.setMode(fl::CameraMode::Chase);
             onModeSwitch(fl::CameraMode::Chase, player);
         }
-        if (keys[SDL_SCANCODE_F4] && !m_f4Prev) {
+        if (bindingJustPressed(input, m_bindings->get(fl::InputAction::CameraFree))) {
             ctrl.setMode(fl::CameraMode::Free);
             onModeSwitch(fl::CameraMode::Free, player);
         }
     }
-    m_f1Prev = keys[SDL_SCANCODE_F1] != 0;
-    m_f2Prev = keys[SDL_SCANCODE_F2] != 0;
-    m_f4Prev = keys[SDL_SCANCODE_F4] != 0;
 }
 
 void CameraInput::startSession() noexcept {
@@ -120,7 +121,7 @@ void CameraInput::onModeSwitch(fl::CameraMode newMode, const fl::EntityRenderEnt
 }
 
 void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry* player, const GameConsole& console,
-                         fl::TerrainStreamer& terrain) {
+                         fl::TerrainStreamer& terrain, IInput& input) {
     float mx = 0.f, my = 0.f;
     const SDL_MouseButtonFlags mb = SDL_GetMouseState(&mx, &my);
     const bool* keys = SDL_GetKeyboardState(nullptr);
@@ -227,6 +228,21 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
             if (!m_firstFrame && (mb & SDL_BUTTON_RMASK)) {
                 m_cockpitYaw -= (mx - m_lastMx) * 0.35f;
                 m_cockpitPitch += (my - m_lastMy) * 0.25f;
+                m_cockpitPitch = std::clamp(m_cockpitPitch, -80.0f, 80.0f);
+            }
+            // Keyboard / d-pad look pan (#689) — composes additively with the RMB drag above. Gated on
+            // the console being closed, matching the free-fly movement cluster.
+            if (!consoleOpen && m_bindings) {
+                constexpr float kPanDegPerS = 90.f;
+                const float panStep = kPanDegPerS * dt;
+                if (bindingDown(input, m_bindings->get(fl::InputAction::ViewLeft)))
+                    m_cockpitYaw += panStep;
+                if (bindingDown(input, m_bindings->get(fl::InputAction::ViewRight)))
+                    m_cockpitYaw -= panStep;
+                if (bindingDown(input, m_bindings->get(fl::InputAction::ViewUp)))
+                    m_cockpitPitch += panStep;
+                if (bindingDown(input, m_bindings->get(fl::InputAction::ViewDown)))
+                    m_cockpitPitch -= panStep;
                 m_cockpitPitch = std::clamp(m_cockpitPitch, -80.0f, 80.0f);
             }
             const glm::quat lookRot = glm::angleAxis(glm::radians(m_cockpitYaw), glm::vec3{0.f, 1.f, 0.f}) *
