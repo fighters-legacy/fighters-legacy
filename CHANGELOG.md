@@ -21,6 +21,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **engine**: terrain line-of-sight segment query (#687, Epic #587 padlock family). New header-only
+  `engine/spatial/LineOfSight.h` — `terrainLos(a, b, heightFn, readyFn, planetRadiusM, stepM,
+  clearanceM)` returns `LosResult::{Clear, Blocked, Unknown}` by marching the segment with an
+  adaptive, clearance-margin-bounded step (densifies at grazing tangents, stretches over valleys, no
+  heap). The heightfield is an injected callable so both the client (`TerrainStreamer::heightAt`) and
+  the server share one utility; `Unknown` surfaces when a tile is unloaded mid-segment and is left to
+  caller policy (padlock treats it as Clear). `engine-spatial` stays glm-free/pure-stdlib. Covered by
+  `tests/test_los.cpp` (ridge/valley/bowl, grazing tangents, step-size independence, Unknown
+  propagation, endpoints/zero-length/vertical).
+
 - **network**: fl-lobby registration client and in-game server browser (#143, Epic E #497). The HTTP HAL
   gains a `request()` primitive with POST/PUT/DELETE methods + body/content-type (`get()` forwards to it);
   `LobbyRegistration` heartbeats a dedicated server to an `fl-lobby` service (`POST /v1/servers` on an

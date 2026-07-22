@@ -47,6 +47,12 @@ target_link_libraries(test_entity PRIVATE Catch2::Catch2WithMain engine-entity e
 target_include_directories(test_entity PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_entity)
 
+# Terrain line-of-sight segment query (#687): header-only, pure engine-spatial (no glm).
+add_executable(test_los test_los.cpp)
+target_link_libraries(test_los PRIVATE Catch2::Catch2WithMain engine-spatial)
+target_include_directories(test_los PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_los)
+
 # Ejection / pilot survival model (#672): pure envelope + territory -> outcome logic (header-only).
 add_executable(test_ejection test_ejection.cpp)
 target_link_libraries(test_ejection PRIVATE Catch2::Catch2WithMain engine-entity)

@@ -218,6 +218,20 @@ revised by a dated decision record instead of a full RFC, provided the change is
 with its rationale. This keeps the velocity of pre-1.0 architecture work without leaving the
 locked table silently stale.
 
+**2026-07-22 — terrain line-of-sight is a shared `engine/spatial` utility, decoupled from the
+collision phase (#687, Epic #587 padlock family).** Nothing ray- or LOS-shaped existed in the
+engine; the padlock lock-break (#697, client) and server-side AI sensing terrain gates (#670) both
+need the same "can A see B over the terrain?" answer. Rather than fold it into the #630 collision
+broadphase (whose scope is SpatialIndex range queries for ramming damage — no ray path), LOS lands
+as a standalone header-only `engine/spatial/LineOfSight.h`: `terrainLos(a, b, heightFn, readyFn,
+R, stepM, clearanceM) -> {Clear, Blocked, Unknown}`. The heightfield is an **injected callable**
+(template, not `std::function`), so the client passes `TerrainStreamer::heightAt` and the server its
+own heightfield — `engine-spatial` keeps its pure-stdlib, glm-free, dependency-free discipline
+(endpoints are `double[3]` like SpatialIndex's positions; glm callers bridge with `glm::value_ptr`).
+An adaptive, margin-bounded march densifies at grazing tangents and stretches over valleys without
+tunnelling thin ridges; `Unknown` (returned when a tile is unloaded mid-segment) is caller policy —
+padlock treats it as Clear so unloaded terrain never false-breaks a lock.
+
 **2026-07-19 — ATC as a deterministic `engine-atc` library + a shared radio channel (Epic #673).**
 Airports build *geometry* (#486/#487); ATC adds *behaviour*: runway sequencing, clearances, and a
 player comms menu. The core decisions: **(1)** ATC is a new **`engine-atc`** static library
