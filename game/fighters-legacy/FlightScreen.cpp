@@ -13,6 +13,7 @@
 #include "INetwork.h"
 #include "IWindow.h"
 #include "ManualOverlay.h"
+#include "TargetDesignation.h" // designated-target cycling (#696)
 #include "config/ControlsSettings.h"
 #include "config/UserConfig.h"
 #include "console/GameConsole.h"
@@ -25,6 +26,7 @@
 #include "input/InputBindings.h"
 #include "render/CameraController.h"
 #include "render/FlightHud.h"
+#include "render/HudProjection.h" // designator box projection (#696)
 #include "render/IHud.h"
 #include "render/SimRenderBridge.h"
 #include "render/TerrainStreamer.h"
@@ -270,6 +272,36 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
         m_autopilot.disengageAll();
     }
 
+    // Target designation cycling (#696): Cockpit/Padlock, no overlay/console focus. Build the candidate
+    // context from the snapshot + the client's category/IFF seams (#688) and cycle on the action edge.
+    const bool designateAllowed = d.targetDesignation && d.inputBindings && !uiFocused && !d.gameConsole->isOpen();
+    if (designateAllowed && viewEntry && d.renderBridge->hasSnapshot()) {
+        const bool next = bindingJustPressed(input, d.inputBindings->get(fl::InputAction::NextTarget));
+        const bool prev = bindingJustPressed(input, d.inputBindings->get(fl::InputAction::PrevTarget));
+        if (next || prev) {
+            fl::DesignationContext dctx;
+            dctx.snap = &d.renderBridge->current();
+            dctx.ownIdx = viewEntry->entityIdx;
+            dctx.ownGen = viewEntry->entityGen;
+            dctx.ownPos = viewEntry->position;
+            dctx.ownForward = viewEntry->orientation * glm::vec3{1.f, 0.f, 0.f};
+            if (d.entityRegistry) {
+                fl::EntityTypeRegistry* reg = d.entityRegistry;
+                dctx.categoryOf = [reg](uint32_t ti) -> uint8_t {
+                    const fl::EntityDef* def = reg->byIndex(ti);
+                    return def ? static_cast<uint8_t>(def->category) : 0u;
+                };
+            }
+            if (d.clientNetHandler) {
+                fl::ClientNetEventHandler* h = d.clientNetHandler;
+                dctx.identOf = [h](const fl::EntityRenderEntry& e) -> uint8_t {
+                    return h->identForEntity(e.entityIdx, e.entityGen, e.factionIndex);
+                };
+            }
+            d.targetDesignation->cycle(next ? +1 : -1, dctx);
+        }
+    }
+
     if (auto msg = d.flightInput->poll(*d.renderBridge, *d.camInput, *d.gameConsole, input, d.joystick, cs, uiFocused,
                                        /*textEntry=*/chatOpen)) {
         // Shape the input with the autopilot BEFORE prediction+send, so the client predicts exactly what
@@ -401,6 +433,12 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     hin.apTargetAltM = m_autopilot.targetAltM();
     hin.apTargetHeadingDeg = glm::degrees(m_autopilot.targetHeadingRad());
     hin.apTargetSpeedMps = m_autopilot.targetSpeedMps();
+    // Designated target (#696): resolve auto-clears on despawn/death/gen-mismatch. The combat HUD
+    // (#641) draws the box; here it also drives the FlightScreen designator cue (buildElements).
+    m_designatedTarget = (cockpit && d.targetDesignation && d.renderBridge->hasSnapshot())
+                             ? d.targetDesignation->resolve(d.renderBridge->current())
+                             : nullptr;
+    hin.designatedTarget = m_designatedTarget;
     (*d.activeHud)->update(hin);
     d.windshieldRain->update(cockpit ? (1.f / 60.f) : 0.f, cockpit ? *d.env : EnvironmentState{},
                              cockpit ? rollAngleRad(viewEntry, radiusM) : 0.f);
@@ -450,6 +488,39 @@ std::span<const HudElement> FlightScreen::buildElements() {
             break;
         m_elements[static_cast<std::size_t>(m_elementCount++)] = e;
     }
+
+    // Designated-target box + TGT line (#696). Projected against the frame's camera; tracks the target
+    // at 60 Hz using its extrapolated position, and disappears when off-screen or the designation clears
+    // (the combat HUD #641 enriches this with IFF colour + closure). Minimal cue here.
+    if (m_designatedTarget && m_playerEntry) {
+        const glm::dvec3 tpos = m_designatedTarget->position + glm::dvec3(m_designatedTarget->velocity * (1.f / 60.f));
+        if (auto p = fl::worldToHud(m_frameCam, tpos);
+            p && p->x > 0.02f && p->x < 0.98f && p->y > 0.02f && p->y < 0.98f && m_elementCount + 5 <= kMaxElements) {
+            const auto box = fl::hudBox(*p, glm::vec2{0.03f, 0.03f}, 0.9f, 0.9f, 0.2f, 1.0f, 1.5f);
+            for (const auto& e : box)
+                m_elements[static_cast<std::size_t>(m_elementCount++)] = e;
+            const double rngKm = glm::length(m_designatedTarget->position - m_playerEntry->position) / 1000.0;
+            const char* typeName = "TGT";
+            if (m_deps.entityRegistry) {
+                if (const fl::EntityDef* def = m_deps.entityRegistry->byIndex(m_designatedTarget->typeIndex))
+                    typeName = def->name.empty() ? def->id.c_str() : def->name.c_str();
+            }
+            std::snprintf(m_tgtLabel, sizeof(m_tgtLabel), "TGT %s  %.1f km", typeName, rngKm);
+            HudElement& el = m_elements[static_cast<std::size_t>(m_elementCount++)];
+            el = {};
+            el.type = HudElement::Type::Text;
+            el.x = std::clamp(p->x, 0.05f, 0.95f);
+            el.y = std::clamp(p->y + 0.05f, 0.05f, 0.95f);
+            el.align = HudAlign::Center;
+            el.r = 0.9f;
+            el.g = 0.9f;
+            el.b = 0.2f;
+            el.a = 1.0f;
+            el.scale = 1.f;
+            el.text = m_tgtLabel;
+        }
+    }
+
     if (m_deps.wingmanMenu) {
         for (const auto& e : m_deps.wingmanMenu->buildElements()) {
             if (m_elementCount >= kMaxElements)

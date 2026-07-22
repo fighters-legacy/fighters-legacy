@@ -8,6 +8,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         ManualOverlay.cpp
         ClientPrediction.cpp
         Autopilot.cpp
+        TargetDesignation.cpp
         CameraInput.cpp
         FlightInputCollector.cpp
         HapticController.cpp

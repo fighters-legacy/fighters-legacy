@@ -67,6 +67,14 @@ target_include_directories(test_autopilot PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy" ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_autopilot)
 
+# Client-side target designation (#696): pure snapshot cycling / filtering / best-in-cone.
+add_executable(test_target_designation test_target_designation.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/TargetDesignation.cpp")
+target_link_libraries(test_target_designation PRIVATE Catch2::Catch2WithMain engine-render engine-entity)
+target_include_directories(test_target_designation PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_target_designation)
+
 # Ejection / pilot survival model (#672): pure envelope + territory -> outcome logic (header-only).
 add_executable(test_ejection test_ejection.cpp)
 target_link_libraries(test_ejection PRIVATE Catch2::Catch2WithMain engine-entity)
@@ -1060,6 +1068,7 @@ add_executable(test_screen_manager test_screen_manager.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ManualOverlay.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientPrediction.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/Autopilot.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/TargetDesignation.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/CameraInput.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightInputCollector.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp")

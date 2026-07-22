@@ -98,6 +98,7 @@
 #include "ClientPrediction.h"
 #include "ConnectArgs.h"
 #include "ManualOverlay.h"
+#include "TargetDesignation.h" // client-side target designation (#696)
 #include "console/ConsoleCommands.h"
 #include "content/ContentBootstrap.h"
 #include "content/ContentIndex.h"
@@ -470,6 +471,10 @@ struct GameServices {
 
     // Client-side prediction — persists across sessions; reset() on stopGame().
     ClientPrediction prediction;
+
+    // Client-side target designation (#696) — the single source of truth for the designated target,
+    // consumed by the padlock camera (#697), the target inset (#698), and the combat HUD (#641).
+    TargetDesignation targetDesignation;
 };
 
 // Per-session objects — created in startGame(), torn down in stopGame(). Hold pointers/refs into
@@ -1507,7 +1512,8 @@ void Game::startGame(const std::string& mission) {
         fsd.userConfig = &*d.services.userConfig;
         fsd.inspector = d.session.inspector ? &*d.session.inspector : nullptr;
         fsd.prediction = &d.services.prediction;
-        fsd.inputBindings = &d.services.inputBindings; // autopilot/target-cycle edge detection (#640/#696)
+        fsd.inputBindings = &d.services.inputBindings;         // autopilot/target-cycle edge detection (#640/#696)
+        fsd.targetDesignation = &d.services.targetDesignation; // designated target (#696)
         fsd.wingmanMenu = &d.services.wingmanMenu;
         fsd.commsMenu = &d.services.commsMenu;
         fsd.manual = &d.services.manual;

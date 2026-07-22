@@ -21,6 +21,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **game**: client-side target designation with next/prev cycling (#696, Epic #587). A new
+  `fl::TargetDesignation` (game layer) is the single client-side source of truth for the designated
+  target: cycle with the `NextTarget`/`PrevTarget` actions (N/P), resolve auto-clears on despawn /
+  generation mismatch / death, and a pluggable candidate provider (the #526 sensor-track upgrade seam)
+  defaults to a snapshot scan that filters out projectiles/effects/self/destroyed and orders hostile-
+  first then by range, plus `designateBest` (best-in-forward-cone with nearest fallback) for padlock's
+  toggle-on. Wired into `FlightScreen` with a minimal designator box + `TGT <type> <range>` cue
+  projected via `HudProjection`; operates purely on `RenderSnapshot`, so replay inherits it. Also
+  raises `FlightScreen`'s element cap to match the redesigned HUD. Covered by
+  `tests/test_target_designation.cpp`.
+
 - **game**: player autopilot modes — altitude / heading / speed hold (#640, Epic #587). A new pure
   `fl::Autopilot` (game layer) shapes the client's input before it is sent, so the server stays
   authoritative and dumb: each hold captures its target on engage, `compute()` drives elevator/aileron/
