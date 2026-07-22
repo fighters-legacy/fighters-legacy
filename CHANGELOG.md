@@ -21,6 +21,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **game**: multiplayer join-server screen (#322, Epic E #497). The first IGui consumer — a direct-connect
+  form with real text fields for the server address (`host[:port]`), an optional join password (#998,
+  masked) and a callsign (pre-filled from the pilot profile). Connect (button or Enter) parses the address,
+  writes the session's connect parameters into the game's Services state (the same fields `--connect` sets)
+  + records an edited callsign, then transitions to Loading so the existing session machinery connects over
+  GNS with the password; Cancel/Escape returns to the main menu. The multiplayer main menu's "Join Server"
+  item now opens this form instead of connecting blind. Fully unit-tested against the scripted NullGui
+  (`tests/test_join_server_screen.cpp`).
+
 - **ui**: IGui HAL with a Dear ImGui reference backend (#156, from epic #593; the foundation for Epic E
   #497's input-heavy multiplayer screens). A narrow immediate-mode GUI interface (`platform/IGui.h` —
   windows, labels, buttons, masked text input, selectable rows, read-only tables, input-capture flags)

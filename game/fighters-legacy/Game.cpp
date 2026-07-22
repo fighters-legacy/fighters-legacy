@@ -1145,6 +1145,29 @@ void Game::initScreenManager() {
     d.services.screenMgr = std::make_unique<ScreenManager>(*d.services.p.input);
     d.services.screenMgr->init(*d.services.userConfig, *d.services.p.renderer, *d.services.p.window,
                                *d.services.p.display, *d.services.assets, !d.services.connectHost.empty());
+
+    // #322: the multiplayer join-server screen. Prefilled with the last-connected host (from --connect,
+    // if any) and the pilot callsign; on Connect it writes the session's connect parameters into Services
+    // (the same fields --connect sets) + records an edited callsign, then the menu transitions to Loading
+    // and the existing startGame() machinery connects over GNS with the join password.
+    {
+        JoinServerScreen::Deps jd;
+        jd.gui = d.services.p.gui.get();
+        jd.initialHost = d.services.connectHost;
+        jd.initialCallsign = d.services.userConfig->pilot().profile.callsign;
+        GameImpl* dp = &d;
+        jd.onConnect = [dp](const JoinServerScreen::Result& r) {
+            dp->services.connectHost = r.host;
+            dp->services.connectPort = r.port;
+            dp->services.joinPassword = r.joinPassword;
+            if (!r.callsign.empty()) {
+                fl::PilotSettings ps = dp->services.userConfig->pilot();
+                ps.profile.callsign = r.callsign;
+                dp->services.userConfig->setPilot(ps);
+            }
+        };
+        d.services.screenMgr->reinitJoinServer(std::move(jd));
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -107,7 +107,8 @@ TEST_CASE("MainMenuScreen: multiplayer mode labels first item Join Server") {
     s.update(inp, win);
     // First item still navigates to Screen::Loading.
     CHECK(s.selectedIdx() == 0);
-    CHECK(s.confirm() == Screen::Loading);
+    // "Join Server" now opens the direct-connect form (#322), not straight to Loading.
+    CHECK(s.confirm() == Screen::JoinServer);
     // The label visible in elements must contain "Join Server".
     auto elems = s.buildElements();
     bool found = false;

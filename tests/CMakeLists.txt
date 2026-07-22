@@ -755,6 +755,13 @@ add_executable(test_gui test_gui.cpp)
 target_link_libraries(test_gui PRIVATE Catch2::Catch2WithMain platform-hal)
 catch_discover_tests(test_gui)
 
+# JoinServerScreen (#322) — the first IGui screen, driven against NullGui + the HAL mocks.
+add_executable(test_join_server_screen test_join_server_screen.cpp
+    ${CMAKE_SOURCE_DIR}/game/fighters-legacy/JoinServerScreen.cpp)
+target_link_libraries(test_join_server_screen PRIVATE Catch2::Catch2WithMain platform-hal)
+target_include_directories(test_join_server_screen PRIVATE ${CMAKE_SOURCE_DIR}/game/fighters-legacy)
+catch_discover_tests(test_join_server_screen)
+
 # Frame-capture swizzle helper (#912): the pure GPU-independent core of the capture readback.
 add_executable(test_capture_frame test_capture_frame.cpp)
 target_link_libraries(test_capture_frame PRIVATE Catch2::Catch2WithMain platform-hal)
@@ -981,6 +988,7 @@ catch_discover_tests(test_debrief_screen)
 add_executable(test_screen_manager test_screen_manager.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ScreenManager.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/MainMenuScreen.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/JoinServerScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/LoadingScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/MissionSelectScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/MissionBriefScreen.cpp"

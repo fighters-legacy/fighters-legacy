@@ -198,8 +198,8 @@ TEST_CASE("ScreenManager: init isMultiplayer=true propagates Join Server label")
         if (el.type == HudElement::Type::Text && el.text.find("Join Server") != std::string_view::npos)
             found = true;
     CHECK(found);
-    // Confirming index 0 still returns Screen::Loading.
-    CHECK(f.mgr.mainMenu().confirm() == Screen::Loading);
+    // Confirming "Join Server" now routes to the direct-connect form (#322), not straight to Loading.
+    CHECK(f.mgr.mainMenu().confirm() == Screen::JoinServer);
 }
 
 // ---------------------------------------------------------------------------
