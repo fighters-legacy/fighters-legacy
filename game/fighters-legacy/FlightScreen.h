@@ -28,6 +28,7 @@ class SandboxInspector;
 
 class CameraController;
 class ClientPrediction;
+class SceneRenderer;
 class IHud;
 class ManualOverlay;
 class SimRenderBridge;
@@ -64,6 +65,7 @@ struct FlightScreenDeps {
     ClientPrediction* prediction{nullptr};         // null = no prediction
     const InputBindings* inputBindings{nullptr};   // for edge-detecting autopilot/target actions (#640/#696)
     TargetDesignation* targetDesignation{nullptr}; // client-side designated target (#696); null = disabled
+    SceneRenderer* sceneRenderer{nullptr};         // for the target-slaved inset view (#698); null = disabled
     WingmanMenu* wingmanMenu{nullptr};             // null = no radio menu (#610)
     CommsMenu* commsMenu{nullptr};                 // null = no ATC comms menu (#704)
     ManualOverlay* manual{nullptr};                // null = no in-flight aircraft manual (#821)
@@ -103,6 +105,12 @@ class FlightScreen : public IScreen {
     // Used by the designator cue in buildElements(). Null = no valid designation.
     const EntityRenderEntry* m_designatedTarget{nullptr};
     char m_tgtLabel[64]{}; // "TGT F-16C  4.2 km" rebuilt each frame (HudElement::text is non-owning)
+
+    // Target-slaved inset view (#698): toggled by TargetInsetToggle; the border rect is remembered so
+    // buildElements() frames the live 3D inset the renderer draws.
+    bool m_insetOn{false};
+    glm::vec4 m_insetRect{0.0f};
+    bool m_insetActive{false}; // inset shown this frame (on + a target resolved)
 
     // Ground-crew scene (#55): landed-and-stopped detection on the OWN aircraft. The airborne→landed
     // edge records a landing score into the logbook (the #674 sink that had no producer); holding

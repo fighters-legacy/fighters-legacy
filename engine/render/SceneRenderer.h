@@ -117,6 +117,11 @@ class SceneRenderer {
     // (created lazily). Pass nullptr to disable. The registry must outlive SceneRenderer.
     void setAirportRegistry(const AirportRegistry* reg);
 
+    // Secondary-camera inset viewport (#698/#695): render the same scene a second time from `view`
+    // into the normalized `rect` (x, y, w, h, top-left origin). Pass view == nullptr to disable. Set
+    // each frame before renderFrame(); the view is copied.
+    void setInsetView(const CameraView* view, glm::vec4 rect) noexcept;
+
     // Render one entity shadow-only (kRenderFlagShadowOnly): it still casts a shadow but is not
     // drawn in the color pass. Used for the player's own aircraft in cockpit view, where the
     // camera sits at the entity origin and the mesh would otherwise fill the view, yet its
@@ -207,6 +212,11 @@ class SceneRenderer {
 
     // Ownship cockpit interior asset name (#870); empty = HUD-only cockpit. Set per frame in Cockpit.
     std::string m_cockpitMesh;
+
+    // Secondary-camera inset (#698); set each frame via setInsetView(), written into FrameScene.
+    bool m_insetEnabled{false};
+    CameraView m_insetCamera{};
+    glm::vec4 m_insetRect{0.0f};
 };
 
 } // namespace fl

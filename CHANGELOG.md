@@ -21,6 +21,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **game**: target-slaved inset view on the HUD (#698, Epic #587). A small live 3D repeater of the
+  designated target, toggled with `TargetInsetToggle` (F6) and framed bottom-centre. `CameraView`
+  construction is extracted into a shared `makeCameraView()` free function (`CameraController::view()`
+  delegates to it) so the inset cannot diverge from the main projection conventions; a pure
+  `game/fighters-legacy/InsetViewMath.h` builds the inset camera (eye on the target→ownship line at a
+  30 m stand-off, look-at the extrapolated target, degenerate-safe) and the square-pixel bottom-centre
+  rect. `SceneRenderer::setInsetView` writes the #695 `FrameScene` inset fields; `FlightScreen` toggles
+  it, feeds the camera, and draws the border, auto-hiding when the designation clears. Works alongside
+  padlock. Covered by `tests/test_inset_view.cpp`.
+
 - **game**: padlock camera mode with LOS lock-break and re-acquisition (#697, Epic #587). New
   `CameraMode::Padlock` (F5): the camera stays at the cockpit eye and slews to keep the designated
   target centred. All the math is a pure `fl::PadlockTracker` — a continuous world-space aim slewed

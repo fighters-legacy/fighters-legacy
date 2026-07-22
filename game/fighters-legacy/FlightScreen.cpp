@@ -12,6 +12,7 @@
 #include "IInput.h"
 #include "INetwork.h"
 #include "IWindow.h"
+#include "InsetViewMath.h" // target-slaved inset camera math (#698)
 #include "ManualOverlay.h"
 #include "TargetDesignation.h" // designated-target cycling (#696)
 #include "config/ControlsSettings.h"
@@ -28,6 +29,7 @@
 #include "render/FlightHud.h"
 #include "render/HudProjection.h" // designator box projection (#696)
 #include "render/IHud.h"
+#include "render/SceneRenderer.h" // setInsetView (#698)
 #include "render/SimRenderBridge.h"
 #include "render/TerrainStreamer.h"
 #include "render/WindshieldRain.h"
@@ -321,6 +323,10 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
                 }
             }
         }
+
+        // Target-slaved inset toggle (#698).
+        if (bindingJustPressed(input, d.inputBindings->get(fl::InputAction::TargetInsetToggle)))
+            m_insetOn = !m_insetOn;
     }
 
     // Feed the padlock view its target each frame (resolve auto-clears on despawn/death). Stored for
@@ -467,6 +473,24 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     // Designated target (#696): resolved above (auto-clears on despawn/death). Only shown in cockpit.
     hin.designatedTarget = cockpit ? m_designatedTarget : nullptr;
     (*d.activeHud)->update(hin);
+
+    // Target-slaved inset view (#698): a live 3D repeater of the designated target, framed bottom-centre.
+    // Built here where the frame's camera + resolved target are available; the renderer draws it via the
+    // #695 secondary-camera pass. Auto-hides when the designation clears.
+    m_insetActive = false;
+    if (d.sceneRenderer) {
+        if (m_insetOn && m_designatedTarget) {
+            m_insetRect = fl::insetRectFor(aspect);
+            const glm::vec3 up = fl::radialUp(m_frameCam.worldOrigin, radiusM);
+            const fl::CameraView insetCam = fl::buildTargetInsetView(
+                m_designatedTarget->position, m_designatedTarget->velocity, /*renderAlpha=*/0.f, m_frameCam.worldOrigin,
+                up, /*rectAspect=*/1.0f, /*standoffM=*/30.0);
+            d.sceneRenderer->setInsetView(&insetCam, m_insetRect);
+            m_insetActive = true;
+        } else {
+            d.sceneRenderer->setInsetView(nullptr, glm::vec4{0.f});
+        }
+    }
     d.windshieldRain->update(cockpit ? (1.f / 60.f) : 0.f, cockpit ? *d.env : EnvironmentState{},
                              cockpit ? rollAngleRad(viewEntry, radiusM) : 0.f);
     // Haptics only for a real ownship — an observer viewing another entity should not feel its hits.
@@ -546,6 +570,31 @@ std::span<const HudElement> FlightScreen::buildElements() {
             el.scale = 1.f;
             el.text = m_tgtLabel;
         }
+    }
+
+    // Target-slaved inset border (#698): frame the live 3D repeater the renderer draws. Four Lines
+    // around the same normalized rect the inset camera renders into.
+    if (m_insetActive && m_elementCount + 4 <= kMaxElements) {
+        const float x0 = m_insetRect.x, y0 = m_insetRect.y;
+        const float x1 = m_insetRect.x + m_insetRect.z, y1 = m_insetRect.y + m_insetRect.w;
+        auto border = [&](float ax, float ay, float bx, float by) {
+            HudElement& el = m_elements[static_cast<std::size_t>(m_elementCount++)];
+            el = {};
+            el.type = HudElement::Type::Line;
+            el.x = ax;
+            el.y = ay;
+            el.x2 = bx;
+            el.y2 = by;
+            el.strokeWidth = 1.5f;
+            el.r = 0.f;
+            el.g = 1.f;
+            el.b = 0.f;
+            el.a = 1.f;
+        };
+        border(x0, y0, x1, y0);
+        border(x1, y0, x1, y1);
+        border(x1, y1, x0, y1);
+        border(x0, y1, x0, y0);
     }
 
     // Padlock lock-state cue (#697): PADLOCK / PADLOCK — BREAK / REACQ, top-centre under the lubber.

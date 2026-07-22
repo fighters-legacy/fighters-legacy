@@ -83,6 +83,13 @@ target_include_directories(test_padlock_tracker PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy" ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_padlock_tracker)
 
+# Target-slaved inset camera math (#698): pure standoff / look-at / rect layout.
+add_executable(test_inset_view test_inset_view.cpp)
+target_link_libraries(test_inset_view PRIVATE Catch2::Catch2WithMain engine-render)
+target_include_directories(test_inset_view PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_inset_view)
+
 # Ejection / pilot survival model (#672): pure envelope + territory -> outcome logic (header-only).
 add_executable(test_ejection test_ejection.cpp)
 target_link_libraries(test_ejection PRIVATE Catch2::Catch2WithMain engine-entity)

@@ -1515,6 +1515,7 @@ void Game::startGame(const std::string& mission) {
         fsd.prediction = &d.services.prediction;
         fsd.inputBindings = &d.services.inputBindings;         // autopilot/target-cycle edge detection (#640/#696)
         fsd.targetDesignation = &d.services.targetDesignation; // designated target (#696)
+        fsd.sceneRenderer = d.services.sceneRenderer.get();    // target-slaved inset (#698)
         fsd.wingmanMenu = &d.services.wingmanMenu;
         fsd.commsMenu = &d.services.commsMenu;
         fsd.manual = &d.services.manual;

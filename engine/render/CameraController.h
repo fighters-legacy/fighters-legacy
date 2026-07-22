@@ -8,6 +8,13 @@
 
 namespace fl {
 
+// Build a CameraView from a pose (#698). Extracted from CameraController::view() so the target-slaved
+// inset and any other secondary camera construct their view with the SAME reverse-Z / Y-flip /
+// camera-relative conventions — they cannot diverge from the main path. `eye` is the world position;
+// `forward`/`up` need not be normalized or exactly orthogonal.
+[[nodiscard]] CameraView makeCameraView(const glm::dvec3& eye, glm::vec3 forward, glm::vec3 up, float aspectRatio,
+                                        float fovY = 1.0472f, float near = 0.1f);
+
 enum class CameraMode : uint8_t {
     Cockpit, // F1: locked inside the entity, looking out (the entity model is hidden in this view)
     Chase,   // F2: locked behind the entity, following its heading
