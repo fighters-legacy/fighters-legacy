@@ -22,7 +22,7 @@ struct NullHttpClient : public IHttpClient {
     }
     void shutdown() override {}
     void setEventHandler(IHttpClientHandler*) override {}
-    HttpRequestId get(const HttpRequestOptions&) override {
+    HttpRequestId request(const HttpRequestOptions&) override {
         return 0;
     }
     void cancel(HttpRequestId) override {}
@@ -43,6 +43,7 @@ struct TrackingHttpClient : public IHttpClient {
 
     std::unordered_map<std::string, Canned> responses;
     std::vector<std::string> requestedUrls;
+    std::vector<HttpRequestOptions> requests; // full options of every request (#143: method/body/url)
 
     void setResponse(const std::string& url, const std::string& body, long code = 200, std::size_t chunkSize = 0) {
         Canned c;
@@ -63,10 +64,11 @@ struct TrackingHttpClient : public IHttpClient {
     void setEventHandler(IHttpClientHandler* h) override {
         m_handler = h;
     }
-    HttpRequestId get(const HttpRequestOptions& o) override {
+    HttpRequestId request(const HttpRequestOptions& o) override {
         if (o.url.empty())
             return 0;
         requestedUrls.push_back(o.url);
+        requests.push_back(o);
         m_pending.push_back({m_nextId, o.url});
         return m_nextId++;
     }

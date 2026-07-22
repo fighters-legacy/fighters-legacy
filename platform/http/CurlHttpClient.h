@@ -24,7 +24,7 @@ class CurlHttpClient : public IHttpClient {
     bool init() override;
     void shutdown() override;
     void setEventHandler(IHttpClientHandler* handler) override;
-    HttpRequestId get(const HttpRequestOptions& options) override;
+    HttpRequestId request(const HttpRequestOptions& options) override;
     void cancel(HttpRequestId id) override;
     void service() override;
     const char* getLastError() const override;

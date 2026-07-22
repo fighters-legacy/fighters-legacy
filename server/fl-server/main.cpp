@@ -25,8 +25,10 @@
 #include "StdoutLogger.h"
 #include "TestSpawn.h"
 #include "bots.h"
+#include "http/CurlHttpClientFactory.h" // #143 lobby registration HTTP backend
 #include "match/MatchController.h"
 #include "net/DiscoveryBeacon.h"
+#include "net/LobbyRegistration.h"
 #include "net/ServerQueryResponder.h"
 #include "sensor/SensorDefParser.h"
 #include "server_config.h"
@@ -355,8 +357,6 @@ int main(int argc, char** argv) {
                       cfg.modStack.size());
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
     }
-    if (cfg.lobbyRegister)
-        log->log(LogLevel::Info, __FILE__, __LINE__, "lobby registration configured (Phase 2 -- not yet active)");
 
     // ---- Init network ----
     if (!net->init()) {
@@ -439,6 +439,36 @@ int main(int argc, char** argv) {
             beacon.reset();
         } else {
             log->log(LogLevel::Info, __FILE__, __LINE__, "LAN discovery beacon started");
+        }
+    }
+
+    // Lobby registration (#143): register with a lobby over HTTP so the entry appears in players'
+    // server browsers. Requires libcurl (the HTTP backend); a lean build logs + disables it. Serviced +
+    // ticked in the main loop, deregistered on shutdown. fl-server links platform-http (allowed: the
+    // module-boundary rules ban engine-* from a backend and fl-server from CLIENT backends only).
+    std::unique_ptr<IHttpClient> httpClient;
+    std::unique_ptr<LobbyRegistration> lobbyReg;
+    if (cfg.lobbyRegister) {
+        httpClient = fl::createHttpClient(log);
+        if (httpClient && httpClient->init()) {
+            lobbyReg = std::make_unique<LobbyRegistration>(*httpClient, *log);
+            httpClient->setEventHandler(lobbyReg.get());
+            LobbyRegistrationConfig lc;
+            lc.lobbyUrl = cfg.lobbyUrl;
+            lc.name = cfg.name;
+            lc.gamePort = cfg.port;
+            lc.maxPlayers = cfg.maxPeers;
+            lc.mode = cfg.matchMode;
+            lc.visibilityPublic = (cfg.lobbyVisibility == "public");
+            lobbyReg->configure(lc);
+            if (lobbyReg->enabled())
+                log->log(LogLevel::Info, __FILE__, __LINE__, "lobby registration active");
+            else
+                log->log(LogLevel::Info, __FILE__, __LINE__, "lobby registration disabled (visibility=private)");
+        } else {
+            log->log(LogLevel::Warn, __FILE__, __LINE__,
+                     "lobby registration requested but no HTTP backend (libcurl absent); disabled");
+            httpClient.reset();
         }
     }
 
@@ -2149,6 +2179,13 @@ int main(int argc, char** argv) {
                     {static_cast<uint8_t>(std::min(broadcaster.getPeerCount(), 255)), ss.active,
                      static_cast<uint16_t>(std::min<uint32_t>(ss.secondsRemaining, 0xFFFFu))});
         }
+        if (lobbyReg) { // #143: heartbeat the lobby registration with the live player count
+            lobbyReg->setDynamic(static_cast<int>(broadcaster.getPeerCount()), std::string{});
+            lobbyReg->tick();
+        }
+        if (httpClient)
+            httpClient->service();
+
         p.asyncFilesystem->service();
         // Follow the entity so terrain chunks are loaded at its current position.
         const double entityX = broadcaster.cachedEntityX();
@@ -2180,6 +2217,14 @@ int main(int argc, char** argv) {
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    // #143: drop the lobby entry on shutdown (best-effort DELETE + one service pass to send it).
+    if (lobbyReg)
+        lobbyReg->deregister();
+    if (httpClient) {
+        httpClient->service();
+        httpClient->shutdown();
     }
 
     if (rconServer)

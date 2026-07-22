@@ -885,6 +885,8 @@ bool UserConfig::load() {
         m_client.operatorPassword = std::move(*v);
     if (auto v = tbl["client"]["language"].value<std::string>(); v && !v->empty())
         m_client.language = std::move(*v);
+    if (auto v = tbl["client"]["lobby_urls"].value<std::string>())
+        m_client.lobbyUrls = std::move(*v);
 
     // [hud]
     m_hud.showLatency = tbl["hud"]["show_latency"].value_or(true);
@@ -976,6 +978,8 @@ bool UserConfig::save() {
     if (!m_client.operatorPassword.empty())
         client.insert_or_assign("operator_password", m_client.operatorPassword);
     client.insert_or_assign("language", m_client.language);
+    if (!m_client.lobbyUrls.empty())
+        client.insert_or_assign("lobby_urls", m_client.lobbyUrls);
 
     toml::table hud;
     hud.insert_or_assign("show_latency", m_hud.showLatency);

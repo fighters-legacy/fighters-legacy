@@ -16,6 +16,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         ScreenManager.cpp
         MainMenuScreen.cpp
         JoinServerScreen.cpp
+        ServerBrowserScreen.cpp
         LoadingScreen.cpp
         MissionSelectScreen.cpp
         MissionBriefScreen.cpp

@@ -199,7 +199,7 @@ TEST_CASE("ScreenManager: init isMultiplayer=true propagates Join Server label")
             found = true;
     CHECK(found);
     // Confirming "Join Server" now routes to the direct-connect form (#322), not straight to Loading.
-    CHECK(f.mgr.mainMenu().confirm() == Screen::JoinServer);
+    CHECK(f.mgr.mainMenu().confirm() == Screen::ServerBrowser); // #143
 }
 
 // ---------------------------------------------------------------------------

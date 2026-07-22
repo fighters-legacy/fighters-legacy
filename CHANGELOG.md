@@ -21,6 +21,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network**: fl-lobby registration client and in-game server browser (#143, Epic E #497). The HTTP HAL
+  gains a `request()` primitive with POST/PUT/DELETE methods + body/content-type (`get()` forwards to it);
+  `LobbyRegistration` heartbeats a dedicated server to an `fl-lobby` service (`POST /v1/servers` on an
+  interval, `DELETE` on shutdown, exponential backoff on failure) when `[lobby] register` is set and a
+  libcurl backend is present. The client gains a `ServerBrowserScreen` (an IGui list) backed by a pure
+  `ServerBrowserModel` that merges LAN discovery, lobby listings (`LobbyListClient` +
+  `parseLobbyServerList`, a tolerant bounded JSON scanner), and live server-info query results (ping /
+  fresh counts), deduped by `host:port` with LAN winning; selecting a row or Direct Connect prefills the
+  join form. The multiplayer main menu's "Join Server" now opens the browser. New `[client] lobby_urls`
+  (comma-separated, empty by default — federation posture). The REST contract is documented in the new
+  `docs/lobby-api.md` (the fl-lobby Go service, #999, is written from it). Covered by
+  `tests/test_lobby_list_parser.cpp`, `tests/test_lobby_registration.cpp`,
+  `tests/test_server_browser_model.cpp`, `tests/test_server_browser_screen.cpp`, and a new
+  `fuzz/fuzz_lobby_list.cpp` harness.
+
 - **i18n**: localize connection and session-failure strings (#358, Epic E #497). The game client now
   constructs `Localization` at startup from `[client] language` (default `en`) and routes the loading
   screen's session-failure text through a new `tr(loc, key, builtin)` helper that falls back to the

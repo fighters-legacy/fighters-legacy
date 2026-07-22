@@ -140,10 +140,39 @@ struct CurlHttpClient::Impl {
             curl_easy_setopt(h, CURLOPT_LOW_SPEED_TIME, static_cast<long>(req.opts.lowSpeedTimeS));
         }
 
+        // HTTP method + body (#143). GET is the default; POST/PUT carry the body, DELETE is method-only.
+        switch (req.opts.method) {
+        case HttpMethod::Get:
+            curl_easy_setopt(h, CURLOPT_HTTPGET, 1L);
+            break;
+        case HttpMethod::Post:
+            curl_easy_setopt(h, CURLOPT_POST, 1L);
+            curl_easy_setopt(h, CURLOPT_POSTFIELDS, req.opts.body.c_str());
+            curl_easy_setopt(h, CURLOPT_POSTFIELDSIZE, static_cast<long>(req.opts.body.size()));
+            break;
+        case HttpMethod::Put:
+            curl_easy_setopt(h, CURLOPT_CUSTOMREQUEST, "PUT");
+            curl_easy_setopt(h, CURLOPT_POSTFIELDS, req.opts.body.c_str());
+            curl_easy_setopt(h, CURLOPT_POSTFIELDSIZE, static_cast<long>(req.opts.body.size()));
+            break;
+        case HttpMethod::Delete_:
+            curl_easy_setopt(h, CURLOPT_CUSTOMREQUEST, "DELETE");
+            break;
+        }
+        struct curl_slist* headers = nullptr;
+        std::string ctHeader;
+        if (!req.opts.contentType.empty()) {
+            ctHeader = "Content-Type: " + req.opts.contentType;
+            headers = curl_slist_append(nullptr, ctHeader.c_str());
+            curl_easy_setopt(h, CURLOPT_HTTPHEADER, headers);
+        }
+
         const CURLcode rc = curl_easy_perform(h);
         long code = 0;
         curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, &code);
         curl_easy_cleanup(h);
+        if (headers)
+            curl_slist_free_all(headers);
 
         bool wasCancelled;
         {
@@ -228,7 +257,7 @@ void CurlHttpClient::setEventHandler(IHttpClientHandler* handler) {
     m_impl->handler = handler;
 }
 
-HttpRequestId CurlHttpClient::get(const HttpRequestOptions& options) {
+HttpRequestId CurlHttpClient::request(const HttpRequestOptions& options) {
     if (!m_impl->running || options.url.empty())
         return 0;
     HttpRequestId id;

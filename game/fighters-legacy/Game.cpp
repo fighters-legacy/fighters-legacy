@@ -30,6 +30,7 @@
 #include "RecordScheduler.h"
 #include "ScoreboardOverlay.h"
 #include "ScreenManager.h"
+#include "ServerBrowserScreen.h"
 #include "ServerNotice.h"
 #include "SessionStatus.h"
 #include "SubtitleOverlay.h"
@@ -67,6 +68,9 @@
 #include "mission/ShotDirector.h"
 #include "net/DiscoveryListener.h"
 #include "net/GameProtocol.h"
+#include "net/LobbyListClient.h"
+#include "net/ServerBrowserModel.h"
+#include "net/ServerQueryClient.h"
 #include "openal/OALAudio.h"
 #include "perf/PerformanceOverlay.h"
 #include "render/BuiltinGeometry.h"
@@ -374,6 +378,15 @@ struct GameServices {
     uint16_t connectPort{4778};
     std::string operatorPassword; // merged: CLI arg > FL_OPERATOR_PASSWORD > [client].operator_password
     std::string joinPassword;     // per-session join password for a private server (#998); not persisted
+
+    // Server browser (#143): menu-scoped LAN discovery + query + lobby list, merged into a model the
+    // ServerBrowserScreen renders. Constructed at menu setup; polled + rebuilt while the browser is up.
+    std::optional<DiscoveryListener> browserDiscovery;
+    std::optional<ServerQueryClient> browserQuery;
+    std::unique_ptr<fl::LobbyListClient> lobbyList; // null when no HTTP backend
+    ServerBrowserModel browserModel;
+    std::vector<std::string> lobbyUrls; // from [client] lobby_urls (comma-separated); empty by default
+    bool browserRefreshRequested{true}; // trigger a sweep on first open
     std::string
         requestedEntityType;     // --aircraft: aircraft to request in MsgConnectRequest; empty = server default (#834)
     bool requestObserver{false}; // --observer: join as a spectator (no aircraft) (#857)
@@ -1220,6 +1233,43 @@ void Game::initScreenManager() {
         };
         d.services.screenMgr->reinitJoinServer(std::move(jd));
     }
+
+    // Server browser (#143): LAN discovery + a query client + (when an HTTP backend exists) a lobby-list
+    // client feed a ServerBrowserModel. Selecting a row prefills the join form; Refresh re-sweeps.
+    {
+        d.services.browserDiscovery.emplace(static_cast<uint16_t>(4778), *d.services.rawLogger);
+        d.services.browserQuery.emplace(*d.services.rawLogger);
+        if (d.services.p.httpClient) {
+            d.services.lobbyList =
+                std::make_unique<fl::LobbyListClient>(*d.services.p.httpClient, *d.services.rawLogger);
+            d.services.p.httpClient->setEventHandler(d.services.lobbyList.get());
+        }
+        // [client] lobby_urls: comma-separated internet lobby endpoints (empty by default — federation
+        // posture, the operator opts in).
+        d.services.lobbyUrls.clear();
+        for (const std::string& csv = d.services.userConfig->client().lobbyUrls; const char c : csv) {
+            if (d.services.lobbyUrls.empty())
+                d.services.lobbyUrls.emplace_back();
+            if (c == ',')
+                d.services.lobbyUrls.emplace_back();
+            else if (c != ' ')
+                d.services.lobbyUrls.back().push_back(c);
+        }
+        std::erase_if(d.services.lobbyUrls, [](const std::string& s) { return s.empty(); });
+
+        ServerBrowserScreen::Deps bd;
+        bd.gui = d.services.p.gui.get();
+        bd.rows = &d.services.browserModel.rows();
+        bd.lobbyEnabled = d.services.lobbyList != nullptr;
+        GameImpl* dp = &d;
+        bd.onRefresh = [dp]() { dp->services.browserRefreshRequested = true; };
+        bd.onJoin = [dp](const std::string& host, uint16_t port) {
+            dp->services.connectHost = host;
+            dp->services.connectPort = port;
+            dp->services.joinPassword.clear();
+        };
+        d.services.screenMgr->reinitServerBrowser(std::move(bd));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1936,6 +1986,33 @@ void Game::run() {
                                                         : fl::RwrThreat::Search;
             }
             d.services.warningTones.update(wt, aud, 1.0f / 60.0f);
+        }
+
+        // Server browser (#143): while it is the active screen, poll the LAN/query sockets, run a sweep
+        // on request (lobby fetch + a query to each LAN server's query port), and rebuild the model the
+        // screen renders. Done BEFORE the screen update so it sees fresh rows this frame.
+        if (cur == Screen::ServerBrowser) {
+            if (d.services.browserDiscovery)
+                d.services.browserDiscovery->poll();
+            if (d.services.browserQuery)
+                d.services.browserQuery->poll();
+            if (d.services.browserRefreshRequested) {
+                d.services.browserRefreshRequested = false;
+                if (d.services.lobbyList)
+                    for (const std::string& url : d.services.lobbyUrls)
+                        d.services.lobbyList->refresh(url);
+                if (d.services.browserDiscovery && d.services.browserQuery)
+                    for (const auto& s : d.services.browserDiscovery->servers())
+                        if (s.beacon.queryPort != 0)
+                            d.services.browserQuery->query(s.address, s.beacon.queryPort);
+            }
+            static const std::vector<DiscoveryListener::ServerInfo> kNoLan;
+            static const std::vector<fl::LobbyServer> kNoLobby;
+            static const std::vector<ServerQueryClient::Result> kNoQuery;
+            d.services.browserModel.rebuild(d.services.browserDiscovery ? d.services.browserDiscovery->servers()
+                                                                        : kNoLan,
+                                            d.services.lobbyList ? d.services.lobbyList->servers() : kNoLobby,
+                                            d.services.browserQuery ? d.services.browserQuery->results() : kNoQuery);
         }
 
         // Screen update — runs BEFORE camera computation so FlightScreen::update() →

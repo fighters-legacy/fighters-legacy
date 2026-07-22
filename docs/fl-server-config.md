@@ -352,8 +352,11 @@ beacon advertises a passworded flag so a browser can prompt. Sent plaintext over
 
 ## [lobby] — Lobby registration
 
-> **Phase 2:** Lobby registration is not yet active. These keys are parsed and stored;
-> no requests are sent to `fl-lobby`. Tracked in issue #143.
+Registers the server with an `fl-lobby` service over HTTP (#143) so it appears in players' in-game server
+browsers. Requires a build with the libcurl HTTP backend; a lean build logs a warning and disables it. The
+server `POST`s a heartbeat every ~30 s while running and `DELETE`s its entry on shutdown. The REST contract
+is documented in [lobby-api.md](lobby-api.md). Hosting is self-host only — point `url` at a community
+`fl-lobby` instance.
 
 ### `register`
 
@@ -361,7 +364,7 @@ beacon advertises a passworded flag so a browser can prompt. Sent plaintext over
 |---|---|
 | boolean | `false` |
 
-Set to `true` to advertise this server to the `fl-lobby` matchmaking service.
+Set to `true` to advertise this server to the `fl-lobby` service named by `url`.
 
 ### `url`
 

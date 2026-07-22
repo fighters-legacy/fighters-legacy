@@ -769,6 +769,13 @@ target_link_libraries(test_join_server_screen PRIVATE Catch2::Catch2WithMain pla
 target_include_directories(test_join_server_screen PRIVATE ${CMAKE_SOURCE_DIR}/game/fighters-legacy)
 catch_discover_tests(test_join_server_screen)
 
+# ServerBrowserScreen (#143) — the IGui server-browser list, driven against NullGui.
+add_executable(test_server_browser_screen test_server_browser_screen.cpp
+    ${CMAKE_SOURCE_DIR}/game/fighters-legacy/ServerBrowserScreen.cpp)
+target_link_libraries(test_server_browser_screen PRIVATE Catch2::Catch2WithMain engine-net platform-hal)
+target_include_directories(test_server_browser_screen PRIVATE ${CMAKE_SOURCE_DIR}/game/fighters-legacy)
+catch_discover_tests(test_server_browser_screen)
+
 # ScoreboardOverlay (#647) — the IGui scoreboard table, driven against NullGui.
 add_executable(test_scoreboard_overlay test_scoreboard_overlay.cpp
     ${CMAKE_SOURCE_DIR}/game/fighters-legacy/ScoreboardOverlay.cpp)
@@ -1017,6 +1024,7 @@ add_executable(test_screen_manager test_screen_manager.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ScreenManager.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/MainMenuScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/JoinServerScreen.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ServerBrowserScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/LoadingScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/MissionSelectScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/MissionBriefScreen.cpp"
@@ -1146,6 +1154,20 @@ catch_discover_tests(test_sha256)
 add_executable(test_content_downloader test_content_downloader.cpp)
 target_link_libraries(test_content_downloader PRIVATE Catch2::Catch2WithMain engine-content engine-crypto)
 target_include_directories(test_content_downloader PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Lobby / server browser (#143): pure parser, registration client, and merge model.
+add_executable(test_lobby_list_parser test_lobby_list_parser.cpp)
+target_link_libraries(test_lobby_list_parser PRIVATE Catch2::Catch2WithMain engine-net platform-hal)
+catch_discover_tests(test_lobby_list_parser)
+
+add_executable(test_lobby_registration test_lobby_registration.cpp)
+target_link_libraries(test_lobby_registration PRIVATE Catch2::Catch2WithMain engine-net platform-hal)
+target_include_directories(test_lobby_registration PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_lobby_registration)
+
+add_executable(test_server_browser_model test_server_browser_model.cpp)
+target_link_libraries(test_server_browser_model PRIVATE Catch2::Catch2WithMain engine-net platform-hal)
+catch_discover_tests(test_server_browser_model)
 catch_discover_tests(test_content_downloader)
 
 add_executable(test_wind_profile test_wind_profile.cpp)
