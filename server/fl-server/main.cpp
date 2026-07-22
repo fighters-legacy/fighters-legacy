@@ -1128,6 +1128,12 @@ int main(int argc, char** argv) {
         if (missionRuntime)
             missionRuntime->forceOutcome(success);
     };
+    // Objective scoring (#1000): a mission trigger's world.score_objective(faction, count) routes into
+    // the match controller (count * the mode's points_per_objective, scored only during Active). This is
+    // how strike/conquest modes accumulate team score from objectives rather than kills.
+    worldApi.scoreObjective = [&](int faction, int count) {
+        matchController.recordObjective(static_cast<uint16_t>(faction), count);
+    };
     // Haptics (#128): a script's rumble()/rumble_triggers()/stop_rumble() reaches every client, which
     // plays it on its local gamepad. Args are already clamped by the engine binding.
     worldApi.rumble = [&](float low, float high, uint32_t durMs) {

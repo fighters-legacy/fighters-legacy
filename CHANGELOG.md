@@ -21,6 +21,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **match**: objective scoring channel from missions to the match controller (#1000, Epic E #497).
+  `MatchController::recordObjective(faction, count)` awards `count × points_per_objective` to a team
+  during the Active phase (frozen otherwise, inert when the mode declares no objective points). A mission
+  awards it from a Lua trigger action via a new `world.score_objective(faction, count)` binding (routed
+  through the `WorldApi::scoreObjective` host seam to the match controller in fl-server), and the updated
+  `MsgMatchState` broadcast carries the new team scores to clients. Ships the objective-scored
+  **`builtin:strike`** game mode (two teams, kill = 1, objective = 10, score limit 100, 20-minute clock).
+  Covered by new `tests/test_match_controller.cpp`, `tests/test_game_mode.cpp`, and
+  `tests/test_lua_controller.cpp` cases; documented in `docs/modding/game-modes.md`.
+
 - **network**: spectator interest position for dead/observer peers (#403, Epic E #497). A dead pilot
   awaiting respawn no longer gets a blacked-out header-only snapshot — the server seeds its interest
   center from the wreck on death and thereafter follows its camera-eye stream (#858), so it spectates

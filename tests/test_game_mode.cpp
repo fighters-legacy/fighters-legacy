@@ -124,6 +124,15 @@ TEST_CASE("BuiltinGameModes: free-flight and tdm resolve", "[game_mode]") {
     CHECK(tdm->friendlyFire == ModeFriendlyFire::Off);
     CHECK(tdm->minPlayers == 2);
 
+    auto strike = builtinGameMode("builtin:strike");
+    REQUIRE(strike.has_value());
+    CHECK_FALSE(strike->useMissionSides);
+    CHECK(strike->teams.size() == 2u);
+    CHECK(strike->pointsPerObjective == 10);
+    CHECK(strike->pointsPerKill == 1);
+    CHECK(strike->scoreLimit == 100);
+    CHECK(strike->timeLimitS == Catch::Approx(1200.0));
+
     CHECK_FALSE(builtinGameMode("builtin:nope").has_value());
     CHECK(defaultGameMode().id == "builtin:free-flight");
 }

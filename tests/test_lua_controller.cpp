@@ -833,6 +833,7 @@ struct RecordingWorld {
     std::vector<std::string> relations; // "a|b|rel"
     std::vector<std::string> music;
     std::vector<bool> outcomes;
+    std::vector<std::pair<int, int>> objectives; // (faction, count)
     int nextIdx{100};
 
     RecordingWorld() {
@@ -849,6 +850,7 @@ struct RecordingWorld {
         };
         api.setMusicState = [this](const std::string& s) { music.push_back(s); };
         api.setMissionOutcome = [this](bool ok) { outcomes.push_back(ok); };
+        api.scoreObjective = [this](int faction, int count) { objectives.emplace_back(faction, count); };
     }
 };
 
@@ -881,6 +883,34 @@ TEST_CASE("world.spawn defaults side to neutral and returns -1 with no host (#41
     REQUIRE(c->isValid());
     auto ctrl = c->sample(makeState(), 0, 1.0 / 60.0);
     CHECK(ctrl.throttle == Catch::Approx(0.5f)); // -1 => no host
+}
+
+TEST_CASE("world.score_objective routes faction + count to the host (#1000)") {
+    RecordingWorld w;
+    auto c = makeWorldCtrl("function compute_control(s,t,dt)\n"
+                           "  if t == 0 then\n"
+                           "    world.score_objective(2)\n"    // default count 1
+                           "    world.score_objective(1, 3)\n" // explicit count
+                           "  end\n"
+                           "  return {}\n"
+                           "end",
+                           &w.api);
+    REQUIRE(c->isValid());
+    c->sample(makeState(), 0, 1.0 / 60.0);
+    REQUIRE(w.objectives.size() == 2u);
+    CHECK(w.objectives[0] == std::pair<int, int>{2, 1});
+    CHECK(w.objectives[1] == std::pair<int, int>{1, 3});
+}
+
+TEST_CASE("world.score_objective is a safe no-op with no host (#1000)") {
+    auto c = makeWorldCtrl("function compute_control(s,t,dt)\n"
+                           "  world.score_objective(1, 2)\n"
+                           "  return {}\n"
+                           "end",
+                           nullptr);
+    REQUIRE(c->isValid());
+    c->sample(makeState(), 0, 1.0 / 60.0); // must not crash
+    SUCCEED();
 }
 
 TEST_CASE("world.despawn / set_relationship / set_music_state / mission outcome reach the host (#413)") {
