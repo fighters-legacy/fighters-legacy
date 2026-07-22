@@ -21,6 +21,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **platform/game**: force-feedback joystick effects via SDL3 haptics (#928, Epic #587). `IJoystick`
+  gains a force-feedback surface as non-pure, no-op-default virtuals (`supportsForceFeedback`,
+  `playFfbEffect(slot, FfbEffect{ConstantForce|Sine, direction, magnitude, period, duration})`,
+  `stopFfbEffect`, `stopAllFfbEffects`; `kFfbSlotCount = 4`) — gamepad-only backends and test mocks
+  compile unchanged. `SDL3Joystick` opens a haptic device per FFB stick (`SDL_INIT_HAPTIC` +
+  `SDL_OpenHapticFromJoystick`) and creates/updates/runs `SDL_HAPTIC_CONSTANT`/`SDL_HAPTIC_SINE`
+  effects; `HapticController` drives stall buffet (slot 0), ground roll (slot 1), and a gun-fire kick
+  (slot 2) alongside the existing rumble, capability-guarded and off without a device. Explicitly a
+  cueing layer, not control loading (no trim/spring forces). Config `[controls] ffb_enabled` /
+  `ffb_strength`; `docs/haptics.md` extended. Covered by a `TrackingJoystick` in
+  `tests/test_haptic_controller.cpp`.
+
 - **game**: head tracking via the opentrack UDP protocol (#927, Epic #587). A new `fl::HeadTracker`
   (game layer) opens a non-blocking localhost UDP socket and reads the opentrack 6-double datagram
   (x/y/z cm + yaw/pitch/roll deg); the parse and an EMA + freshness `HeadPoseFilter` are pure functions

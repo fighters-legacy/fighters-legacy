@@ -789,6 +789,9 @@ bool UserConfig::load() {
     m_controls.hotasInvertRoll = tbl["controls"]["hotas_invert_roll"].value_or(false);
     m_controls.hotasInvertRudder = tbl["controls"]["hotas_invert_rudder"].value_or(false);
     m_controls.hotasInvertThrottle = tbl["controls"]["hotas_invert_throttle"].value_or(false);
+    m_controls.ffbEnabled = tbl["controls"]["ffb_enabled"].value_or(true); // #928
+    if (auto v = tbl["controls"]["ffb_strength"].value<double>())
+        m_controls.ffbStrength = std::clamp(static_cast<float>(*v), 0.f, 1.f);
 
     // [debug]
     if (auto v = tomlInt(tbl["debug"]["overlay_mode"])) {
@@ -989,6 +992,8 @@ bool UserConfig::save() {
     controls.insert_or_assign("hotas_invert_roll", m_controls.hotasInvertRoll);
     controls.insert_or_assign("hotas_invert_rudder", m_controls.hotasInvertRudder);
     controls.insert_or_assign("hotas_invert_throttle", m_controls.hotasInvertThrottle);
+    controls.insert_or_assign("ffb_enabled", m_controls.ffbEnabled); // #928
+    controls.insert_or_assign("ffb_strength", static_cast<double>(m_controls.ffbStrength));
 
     toml::table client;
     client.insert_or_assign("motd_display_s", static_cast<int64_t>(m_client.motdDisplayS));

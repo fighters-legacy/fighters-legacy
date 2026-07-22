@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "HapticController.h"
 
+#include "IJoystick.h"
+
 #include <algorithm>
 #include <cmath>
 
 namespace fl {
 
-HapticController::HapticController(IInput& input) : m_input(input) {}
+HapticController::HapticController(IInput& input, IJoystick* joystick) : m_input(input), m_joystick(joystick) {}
 
 void HapticController::savePrev(const fl::EntityRenderEntry* player, float agl) {
     if (player) {
@@ -27,6 +29,37 @@ void HapticController::update(const fl::EntityRenderEntry* player, bool weaponFi
                                                                    player->position.z, planetRadiusM)) -
                                    terrainElev
                              : 0.0f;
+
+    // --- Force feedback (#928) — a cueing layer on an FFB stick, independent of gamepad rumble. Stall
+    // buffet (slot 0), ground roll (slot 1), gun kick (slot 2). Cueing only, not control loading.
+    if (m_joystick && m_ffbEnabled && m_joystick->supportsForceFeedback(0)) {
+        const float str = m_ffbStrength;
+        if (weaponFired)
+            m_joystick->playFfbEffect(0, 2, {IJoystick::FfbEffectKind::ConstantForce, 180.0f, 0.6f * str, 0.0f, 60u});
+        if (player) {
+            const glm::vec3 velBody = glm::inverse(player->orientation) * player->velocity;
+            const float speed = glm::length(velBody);
+            const float alpha = (speed > 1.0f) ? glm::degrees(std::atan2(-velBody.y, velBody.x)) : 0.0f;
+            const bool stall = alpha > kStallAoaDeg;
+            if (stall) {
+                const float amp = std::clamp(0.35f * str * ((alpha - kStallAoaDeg) / 8.0f + 0.3f), 0.0f, 1.0f);
+                m_joystick->playFfbEffect(0, 0, {IJoystick::FfbEffectKind::Sine, 0.0f, amp, 55.0f, 0u});
+                m_ffbStallOn = true;
+            } else if (m_ffbStallOn) {
+                m_joystick->stopFfbEffect(0, 0);
+                m_ffbStallOn = false;
+            }
+            const bool ground = agl < 3.0f && speed > 2.0f;
+            if (ground) {
+                const float amp = std::clamp(std::min(1.0f, speed / 80.0f) * 0.3f * str, 0.0f, 1.0f);
+                m_joystick->playFfbEffect(0, 1, {IJoystick::FfbEffectKind::Sine, 0.0f, amp, 18.0f, 0u});
+                m_ffbGroundOn = true;
+            } else if (m_ffbGroundOn) {
+                m_joystick->stopFfbEffect(0, 1);
+                m_ffbGroundOn = false;
+            }
+        }
+    }
 
     if (!canRumble && !canTrigger) {
         savePrev(player, agl);
@@ -211,6 +244,11 @@ void HapticController::update(const fl::EntityRenderEntry* player, bool weaponFi
 
 void HapticController::onPause(int gamepadId) {
     m_input.stopRumble(gamepadId);
+    if (m_joystick) {
+        m_joystick->stopAllFfbEffects(0); // #928
+        m_ffbStallOn = false;
+        m_ffbGroundOn = false;
+    }
     m_stallTimer = 0.0f;
     m_abTimer = 0.0f;
     m_engineFailTimer = 0.0f;

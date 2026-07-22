@@ -1384,7 +1384,11 @@ void Game::startGame(const std::string& mission) {
     // onConnect is called by LoadingScreen once serverReady fires.
     auto onConnect = [&d, isMultiplayer]() {
         d.services.activeHud = &d.services.flightHud;
-        d.session.hapticController.emplace(*d.services.p.input);
+        d.session.hapticController.emplace(*d.services.p.input, d.services.p.joystick.get());
+        if (d.services.userConfig) {
+            const auto cs = d.services.userConfig->controls(); // #928 FFB config
+            d.session.hapticController->setFfbConfig(cs.ffbEnabled, cs.ffbStrength);
+        }
         d.services.effectRouter.setHaptics(&*d.session.hapticController); // own-ship launch/release feedback (#631)
 
         // Single-player uses enet6 to match the embedded LocalServer (spawned with --transport enet);
