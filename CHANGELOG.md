@@ -21,6 +21,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **renderer**: redesigned FlightHud to a tactical fighter HUD layout (#438, Epic #587). The minimal
+  text HUD is replaced by an F-14/F-16/F-18-style layout built entirely from `HudElement`: a velocity
+  ladder (knots) on the left, an altitude tape (feet) + radar-altitude on the right, dual heading
+  tapes with cardinal labels and a lubber line, a velocity-vector flight-path marker (projected via
+  `HudProjection` #692) with the radial artificial horizon, lower AoA/Mach/G/fuel and weapon/master-arm
+  blocks, and an octagonal combiner frame — plus the relocated datalink radar/RWR MFD. `IHud::update`
+  now takes a single `HudFrameInput` bundle (changed once here; the combat/MFD/autopilot consumers add
+  defaulted fields rather than re-churning the signature), and `FlightHud::setStationInfo` replaces
+  `setStationLabels`, carrying muzzle velocity + weapon kind for the coming pipper. Element/string caps
+  raised with an `overflowed()` silent-truncation guard. Draw code split into
+  `FlightHud`/`FlightHudCombat`/`FlightHudMfd`. `FlightScreen` computes the frame's `CameraView` for the
+  HUD (D1 seam). Covered by a rewritten `tests/test_flight_hud.cpp`.
+
 - **engine**: world-to-HUD projection helper (#692, Epic #587). New `engine/render/HudProjection.h/.cpp`
   — `worldToHud(CameraView, dvec3)` rebases in double, transforms through the live projection, rejects
   behind-camera points via `clip.w <= 0` (the correct test for the infinite reverse-Z projection), and

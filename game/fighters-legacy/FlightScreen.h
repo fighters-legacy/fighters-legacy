@@ -84,6 +84,11 @@ class FlightScreen : public IScreen {
     const EntityRenderEntry* m_playerEntry{nullptr};
     bool m_weaponFired{false};
 
+    // The frame's camera view (#438 D1 seam). Computed in update() right after CameraInput sets the
+    // pose, cached so buildElements()-time world->screen cues (#696/#698) project against the same
+    // matrix the HUD used.
+    CameraView m_frameCam{};
+
     // Ground-crew scene (#55): landed-and-stopped detection on the OWN aircraft. The airborne→landed
     // edge records a landing score into the logbook (the #674 sink that had no producer); holding
     // landed-and-stopped for a couple of seconds blends the Chase camera into a slow ramp orbit,

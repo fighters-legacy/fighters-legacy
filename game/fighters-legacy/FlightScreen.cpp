@@ -71,7 +71,7 @@ FlightScreen::~FlightScreen() {
         m_deps.clientNetHandler->snapshotCallback = nullptr;
 }
 
-Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
+Screen FlightScreen::update(IInput& input, IWindow& window) {
     auto& d = m_deps;
 
     uint32_t idx = d.assignedEntityIdx ? *d.assignedEntityIdx : 0;
@@ -338,8 +338,23 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
     // Datalink track picture + RWR (#528) for the HUD radar scope — only when this peer flies its own
     // aircraft (a spectator following another entity has no datalink of its own to draw).
     const fl::RadarView radar = (cockpit && d.clientNetHandler) ? d.clientNetHandler->radarView() : fl::RadarView{};
-    (*d.activeHud)
-        ->update(cockpit ? viewEntry : nullptr, d.env->timeOfDay, terrainElev, latencyMs, showLat, radiusM, radar);
+
+    // Build the HUD input bundle (#438). The camera pose is current (CameraInput::update just ran), so
+    // computing the frame's CameraView here is exact — D1 seam: FlightScreen owns the view the HUD's
+    // world->screen symbology projects against. m_frameCam is cached for buildElements()-time cues.
+    const float aspect = static_cast<float>(window.width()) / static_cast<float>(std::max(1, window.height()));
+    m_frameCam = d.cameraController->view(aspect);
+    fl::HudFrameInput hin;
+    hin.ownship = cockpit ? viewEntry : nullptr;
+    hin.camera = m_frameCam;
+    hin.cameraValid = cockpit;
+    hin.timeOfDay = d.env->timeOfDay;
+    hin.terrainElevation = terrainElev;
+    hin.latencyMs = latencyMs;
+    hin.showLatency = showLat;
+    hin.planetRadiusM = radiusM;
+    hin.radar = radar;
+    (*d.activeHud)->update(hin);
     d.windshieldRain->update(cockpit ? (1.f / 60.f) : 0.f, cockpit ? *d.env : EnvironmentState{},
                              cockpit ? rollAngleRad(viewEntry, radiusM) : 0.f);
     // Haptics only for a real ownship — an observer viewing another entity should not feel its hits.

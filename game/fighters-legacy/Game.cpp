@@ -1038,14 +1038,39 @@ void Game::buildManualFor(uint32_t typeIndex) {
     // stationCount 0: cycling is off and the HUD line stays blank, by design.
     d.services.flightInput.setStationCount(static_cast<uint8_t>(std::min<std::size_t>(fullDef.hardpoints.size(), 254)));
     {
-        std::vector<std::string> labels;
-        labels.reserve(fullDef.hardpoints.size());
+        // Per-station facts (#438/#641): the label names the ARM line, muzzle velocity + kind drive
+        // the #641 gun pipper / CCIP. Resolved from the pack WeaponDef here, the one place the client
+        // owns the full def of the aircraft it flies.
+        std::vector<fl::HudStationInfo> stations;
+        stations.reserve(fullDef.hardpoints.size());
         for (const fl::Hardpoint& hpt : fullDef.hardpoints) {
             const fl::WeaponDef* w =
                 hpt.defaultWeapon.empty() ? nullptr : d.services.weapons.findById(hpt.defaultWeapon.c_str());
-            labels.push_back(w ? w->name : hpt.defaultWeapon); // unresolved id shown verbatim; empty = empty
+            fl::HudStationInfo info;
+            info.label = w ? w->name : hpt.defaultWeapon; // unresolved id shown verbatim; empty = empty
+            if (w) {
+                info.muzzleVelMps = w->performance.maxSpeedMps;
+                switch (w->type) {
+                case fl::WeaponType::Gun:
+                    info.kind = 1;
+                    break;
+                case fl::WeaponType::Missile:
+                    info.kind = 2;
+                    break;
+                case fl::WeaponType::Bomb:
+                    info.kind = 3;
+                    break;
+                case fl::WeaponType::Rocket:
+                    info.kind = 4;
+                    break;
+                default:
+                    info.kind = 0;
+                    break;
+                }
+            }
+            stations.push_back(std::move(info));
         }
-        d.services.flightHud.setStationLabels(std::move(labels));
+        d.services.flightHud.setStationInfo(std::move(stations));
     }
 
     // The flight model: the same one prediction flies, resolved the same way.

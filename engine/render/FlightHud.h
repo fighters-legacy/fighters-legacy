@@ -2,9 +2,7 @@
 #pragma once
 
 #include "RenderTypes.h"
-#include "flight/Geodetic.h" // kEarthRadiusM (default planet radius)
 #include "render/IHud.h"
-#include "render/RenderSnapshot.h"
 
 #include <array>
 #include <cstddef>
@@ -14,47 +12,88 @@
 
 namespace fl {
 
-// Builtin aircraft HUD for the no-content-pack sandbox. Implements IHud.
-// Produces a list of 2D HudElements (text + geometry) for IRenderer::submitOverlayElements().
+// Static per-station facts the HUD needs to name and aim weapons (#438/#641). Resolved once when the
+// client loads the aircraft's def (Game.cpp buildManualFor) and pushed via setStationInfo(); the
+// dynamic facts (selected station, rounds, seeker lock) ride the snapshot on EntityRenderEntry.
+struct HudStationInfo {
+    std::string label;         // e.g. "AIM-9"; empty -> "STA n"
+    float muzzleVelMps{0.0f};  // gun muzzle velocity for the pipper lead (#641); 0 = not a gun
+    float dragDecayPerS{0.0f}; // bomb drag for the CCIP solution (#641); 0 = no drag modelled
+    uint8_t kind{0};           // 0 none, 1 gun, 2 missile, 3 bomb, 4 rocket
+};
+
+// Builtin aircraft HUD (#438) — an F-14/F-16/F-18-style tactical layout built entirely from
+// HudElement Text/Line/Rect: a velocity ladder (left), altitude tape (right), dual heading tapes,
+// a flight-path marker + boresight cross, lower AoA/Mach/G/fuel and weapon/nav blocks, an octagonal
+// combiner frame, plus the datalink radar/RWR MFD (#528/#642) and combat symbology (#641).
 //
-// The HUD is active only when a valid EntityRenderEntry pointer is passed to update().
-// Pass nullptr (e.g. when not in Cockpit camera mode) to suppress all output.
-//
-// Default color: bright military green. Will be user-configurable in a later phase.
+// Active only when HudFrameInput::ownship is non-null (Cockpit mode). Default colour: military green.
 class FlightHud : public IHud {
   public:
-    // Build HUD elements for this frame.
-    // Pass nullptr to produce no elements (e.g. when camera mode != Cockpit).
-    // timeOfDay: hours [0, 24) displayed as HH:MM in the top-right corner.
-    // terrainElevation: ground height in metres at the player XZ position (from
-    // TerrainStreamer::heightAt). Falls back to 0.0 (AGL == MSL) when not loaded.
-    void update(const EntityRenderEntry* playerEntry, float timeOfDay = 12.0f, float terrainElevation = 0.0f,
-                uint32_t latencyMs = 0, bool showLatency = false, double planetRadiusM = kEarthRadiusM,
-                const RadarView& radar = {}) override;
-
-    // Returns elements for IRenderer::submitOverlayElements(). Valid until next update().
+    void update(const HudFrameInput& in) override;
     [[nodiscard]] std::span<const HudElement> elements() const override;
 
-    // Weapon-station labels (#440), indexed by station: what the ARM line shows next to the
-    // selected station's rounds. Set once when the client resolves the aircraft's def (Game.cpp
-    // buildManualFor); empty = no labels (the line shows "STA n" instead). FlightHud-specific,
-    // deliberately NOT on IHud — the label source is client content policy, not HUD contract.
-    void setStationLabels(std::vector<std::string> labels) {
-        m_stationLabels = std::move(labels);
+    // Per-station weapon facts (#438/#641). Set once when the client resolves the aircraft's def;
+    // empty = no labels (the weapon block shows "STA n"). FlightHud-specific, deliberately not on IHud
+    // — the label source is client content policy, not the HUD contract.
+    void setStationInfo(std::vector<HudStationInfo> info) {
+        m_stations = std::move(info);
     }
 
   private:
-    // Bumped for the datalink radar scope + RWR (#528): the base HUD uses ~15, the scope adds a frame,
-    // up to kScopeMaxTracks contact marks, and up to kMaxDatalinkThreats RWR strobes.
+    // Per-frame draw context: the input bundle plus precomputed scalars, so the draw methods (split
+    // across FlightHud.cpp / FlightHudCombat.cpp / FlightHudMfd.cpp) share one consistent derivation
+    // of attitude/atmosphere instead of each re-deriving it. Defined in the header so all three
+    // translation units see it.
+    struct Ctx {
+        const HudFrameInput& in;
+        const EntityRenderEntry& e;
+        float q[4];
+        float altMsl;   // geodetic MSL altitude (m)
+        float iasKts;   // calibrated airspeed (kt)
+        float tasMps;   // true airspeed magnitude (m/s)
+        float mach;     // TAS / local speed of sound
+        float pitchRad; // local-level pitch
+        float bankRad;  // local-level bank
+        float hdgDeg;   // true heading of the nose (0 = N)
+        float aoaDeg;   // angle of attack (body frame)
+        float loadG;    // load factor (g)
+        float aspect;   // viewport aspect for square symbology
+    };
+
+    void drawFrame(Ctx& c);         // octagon combiner outline + boresight cross + clock + latency
+    void drawSpeedLadder(Ctx& c);   // left: boxed IAS (kt), 10/50-kt ticks scrolling with speed
+    void drawAltTape(Ctx& c);       // right: boxed altitude (ft), 500-ft ticks
+    void drawHeadingTapes(Ctx& c);  // top + bottom compass tapes, cardinal labels, lubber line
+    void drawFpmAndHorizon(Ctx& c); // flight-path marker + radial artificial horizon
+    void drawDataBlocks(Ctx& c);    // lower-left AoA/Mach/G/fuel, lower-right weapon/nav + autopilot
+    void drawCombat(Ctx& c);        // #641 target box / pipper / CCIP (FlightHudCombat.cpp)
+    void drawMfd(Ctx& c);           // #642 radar MFD + RWR pages (FlightHudMfd.cpp)
+
+    // Appenders shared by every draw method (return false on cap overflow — see m_overflowed).
+    bool pushText(HudAlign align, float x, float y, float r, float g, float b, const char* fmt, ...);
+    bool pushLine(float x0, float y0, float x1, float y1, float thick, float r, float g, float b, float a = 1.0f);
+    bool pushRect(float x0, float y0, float x1, float y1, float r, float g, float b, float a);
+
+    // Element/string storage. Caps raised for the tape/ladder tick marks and their labels (#438): the
+    // classic layout drew ~15 elements; a full tactical HUD with tapes + scope is far more.
     static constexpr int kScopeMaxTracks = 40;
-    static constexpr int kMaxElements = 96;
-    static constexpr int kMaxStrings = 16;
+    static constexpr int kMaxElements = 320;
+    static constexpr int kMaxStrings = 48;
 
     std::array<HudElement, kMaxElements> m_elements;
     std::array<std::string, kMaxStrings> m_strings;
     std::size_t m_elementCount{0};
     std::size_t m_stringCount{0};
-    std::vector<std::string> m_stationLabels;
+    bool m_overflowed{false}; // set if any append hit a cap — asserted against in tests
+    std::vector<HudStationInfo> m_stations;
+
+  public:
+    // True if the last update() overflowed the element/string caps (a silent-truncation guard for
+    // tests; the worst-case frame must stay under the caps).
+    [[nodiscard]] bool overflowed() const noexcept {
+        return m_overflowed;
+    }
 };
 
 } // namespace fl
