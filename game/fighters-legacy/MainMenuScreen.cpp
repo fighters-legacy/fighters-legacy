@@ -12,7 +12,7 @@ static constexpr float kItemH = 0.05f;
 
 MainMenuScreen::MainMenuScreen(bool hasPacks, bool isMultiplayer) {
     if (isMultiplayer) {
-        m_items.push_back({"Join Server", Screen::Loading, ""});
+        m_items.push_back({"Join Server", Screen::JoinServer, ""}); // #322: the direct-connect form
     } else {
         // Instant Action (#40): jump straight into the builtin skirmish -- a wingman + bandits + a SAM
         // to kill -- with no content pack. Free Flight is the empty practice world (HOTAS calibration,

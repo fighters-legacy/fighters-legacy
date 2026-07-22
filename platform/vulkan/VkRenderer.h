@@ -183,6 +183,10 @@ class VkRenderer : public IRenderer {
     bool captureScreenshot(const char* path) override;
     bool setCaptureSink(std::function<void(const CaptureFrame&)> sink) override;
 
+    // ── Dear ImGui backend bridge (#156) ──────────────────────────────────────
+    bool initGuiRenderBackend() override;
+    void shutdownGuiRenderBackend() override;
+
   private:
     // ── Core Vulkan objects ────────────────────────────────────────────────
     bool createInstance();
@@ -565,6 +569,13 @@ class VkRenderer : public IRenderer {
     VkImage m_fontImage{VK_NULL_HANDLE};
     VkDeviceMemory m_fontImageMemory{VK_NULL_HANDLE};
     VkImageView m_fontImageView{VK_NULL_HANDLE};
+
+    // ── Dear ImGui backend (#156) ──────────────────────────────────────────
+    // A dedicated descriptor pool for ImGui's font + user textures. m_guiEnabled gates the per-frame
+    // draw-data recording (in recordCommandBuffer, after the overlay pass) and the teardown; it is only
+    // ever set true by initGuiRenderBackend() when the IGui backend attaches. Windowed path only.
+    VkDescriptorPool m_imguiPool{VK_NULL_HANDLE};
+    bool m_guiEnabled{false};
 
     // Host-visible vertex buffer shared by overlay text and 2D HUD elements (rebuilt each frame).
     static constexpr uint32_t kMaxOverlayChars = 1024; // debug text characters

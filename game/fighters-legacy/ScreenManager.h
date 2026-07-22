@@ -2,6 +2,7 @@
 #pragma once
 
 #include "IScreen.h"
+#include "JoinServerScreen.h" // #322: JoinServerScreen::Deps is used by value in reinitJoinServer()
 #include "SessionStatus.h"
 
 #include <atomic>
@@ -58,6 +59,10 @@ class ScreenManager {
     // after session objects (clientNet, hapticController, etc.) are created.
     void reinitFlight(FlightScreenDeps deps);
 
+    // Create the multiplayer join-server screen (#322). Called once from Game after the IGui backend and
+    // the Services connect callback exist. Persistent (not per-session), like the other menu screens.
+    void reinitJoinServer(JoinServerScreen::Deps deps);
+
     Screen current() const {
         return m_current;
     }
@@ -75,6 +80,7 @@ class ScreenManager {
     void setSettingsReturnTarget(Screen target);
 
     MainMenuScreen& mainMenu();
+    JoinServerScreen& joinServer();
     LoadingScreen& loading();
     MissionSelectScreen& missionSelect();
     MissionBriefScreen& missionBrief();
@@ -89,6 +95,7 @@ class ScreenManager {
     std::function<void(std::string_view)> m_serverCmd;
 
     std::unique_ptr<MainMenuScreen> m_mainMenu;
+    std::unique_ptr<JoinServerScreen> m_joinServer; // #322; null until reinitJoinServer()
     std::unique_ptr<LoadingScreen> m_loading;
     std::unique_ptr<MissionSelectScreen> m_missionSelect;
     std::unique_ptr<MissionBriefScreen> m_missionBrief;

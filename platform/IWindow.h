@@ -4,6 +4,7 @@
 #include "IDisplay.h"
 #include "IWindowEventHandler.h"
 
+#include <functional>
 #include <optional>
 #include <string>
 
@@ -38,6 +39,14 @@ class IWindow {
     // as an opaque pointer so the Vulkan backend can create VkSurfaceKHR without
     // any platform header appearing in this file.
     virtual void* nativeHandle() const = 0;
+
+    // Forward each raw platform window event (an opaque `SDL_Event*` for the SDL backend) to `fn` at the
+    // TOP of the event pump, before the game's own input sinks — the seam the IGui/Dear ImGui backend
+    // uses to update its keyboard/mouse/IME state and capture flags (#156). Non-pure no-op default so
+    // mocks and non-SDL backends need no change. Pass an empty std::function to stop forwarding.
+    virtual void setGuiEventForwarder(std::function<void(const void*)> fn) {
+        (void)fn;
+    }
 
     // Returns a human-readable description of the last error, or nullptr if none.
     // Valid until the next call on this interface.

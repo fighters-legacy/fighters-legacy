@@ -110,6 +110,7 @@ Dependencies are pulled via FetchContent or system packages (they are **not** ve
 | OpenSSL | Apache-2.0 | GNS crypto backend |
 | enet6 | MIT | enet6 transport |
 | libogg / libvorbis | BSD-3-Clause | OGG Vorbis audio decode (engine-audio; FetchContent-pinned, #723) |
+| Dear ImGui | MIT | IGui HAL backend (`platform-gui`; FetchContent-pinned, Vulkan-gated, #156) |
 | SDL3 / OpenAL Soft / GLM / KTX / Lua / tomlplusplus / Catch2 | zlib / LGPL-2.1 / MIT / Apache-2.0 / MIT / MIT / BSL-1.0 | see `cmake/dependencies.cmake` |
 
 > Release packaging (`release.yml`) is responsible for bundling the BSD-3-Clause / Apache-2.0 / MIT notice texts alongside the shipped binaries (the GPL source-offer covers the rest). Tracked as a release-hardening follow-up.

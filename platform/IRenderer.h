@@ -150,6 +150,20 @@ class IRenderer {
         (void)sink;
         return false;
     }
+
+    // ── Dear ImGui backend bridge (#156) ──────────────────────────────────────
+    // The IGui backend (platform-gui, ImGuiGui) owns the ImGui context + SDL3 platform backend and the
+    // widget vocabulary, but the ImGui *Vulkan* renderer backend must live here — only VkRenderer holds
+    // the VkInstance/Device/queue/swapchain-format the ImGui backend needs, and the draw data is recorded
+    // into the swapchain pass from inside the renderer's command buffer. initGuiRenderBackend() wires
+    // ImGui_ImplVulkan up (the ImGui context must already exist); the renderer then records the draw data
+    // internally each frame after its overlay pass. shutdownGuiRenderBackend() tears it down before the
+    // GUI backend destroys the context. Non-pure no-op defaults so every other backend/mock is unchanged;
+    // both are no-ops on a headless renderer. Returns true when the ImGui Vulkan backend was initialised.
+    virtual bool initGuiRenderBackend() {
+        return false;
+    }
+    virtual void shutdownGuiRenderBackend() {}
 };
 
 } // namespace fl

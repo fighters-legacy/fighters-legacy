@@ -318,6 +318,25 @@ if(Vulkan_FOUND)
             endif()
         endforeach()
     endif()
+
+    # ---------------------------------------------------------------------------
+    # Dear ImGui — immediate-mode GUI behind the IGui HAL (#156; platform-gui, Vulkan-gated).
+    # Ships loose sources + backends/ with no CMakeLists, so populate-only (the stb/Lua idiom);
+    # the actual `imgui` static library target is built in platform/gui/CMakeLists.txt from
+    # ${imgui_SOURCE_DIR}. MIT-licensed (recorded in docs/development.md).
+    # ---------------------------------------------------------------------------
+    message(STATUS "Dear ImGui: FetchContent (populate-only)")
+    FetchContent_Declare(imgui
+        GIT_REPOSITORY https://github.com/ocornut/imgui.git
+        GIT_TAG        v1.91.5
+        GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
+        SYSTEM
+    )
+    FetchContent_GetProperties(imgui)
+    if(NOT imgui_POPULATED)
+        FetchContent_Populate(imgui)
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
