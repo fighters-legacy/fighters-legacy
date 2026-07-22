@@ -355,6 +355,14 @@ struct FrameScene {
     EnvironmentState environment{};
     std::span<const ParticleEmitterState> particleEmitters{};
     std::span<const SubtitleEntry> subtitles{}; // VkRenderer ignores until Phase 4 IGui
+
+    // Secondary-camera inset viewport (#695): render the same scene a second time from another camera
+    // into a sub-rect (the #698 target-slaved inset now; rear-view / missile-cam / MFD repeaters later).
+    // POD fields only — NO new IRenderer pure virtuals, so MockRenderer and every setScene consumer
+    // compile unchanged. Disabled by default and bit-identical to today when off.
+    bool insetEnabled{false};
+    CameraView insetCamera{}; // its proj should be built with the inset rect's aspect
+    float insetRect[4]{};     // normalized x, y, w, h (top-left origin — the HudElement convention)
 };
 
 } // namespace fl

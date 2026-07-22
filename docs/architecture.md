@@ -218,6 +218,20 @@ revised by a dated decision record instead of a full RFC, provided the change is
 with its rationale. This keeps the velocity of pre-1.0 architecture work without leaving the
 locked table silently stale.
 
+**2026-07-22 — secondary render views extend `FrameScene` as POD fields, never new `IRenderer` pure
+virtuals (#695, Epic #587).** The renderer was strictly one `CameraView` per frame; the target-slaved
+inset (#698) needs the frame's scene rendered a second time from another camera into a sub-rect.
+Rather than add an `IRenderer` method (which every backend + `MockRenderer` would have to implement),
+`FrameScene` gains three POD fields — `insetEnabled`, `insetCamera`, `insetRect[4]` — so mocks and
+every `setScene` consumer compile unchanged and the disabled path is bit-identical to before.
+`VkRenderer` renders the inset as a scissored second forward pass into the HDR target (after the
+transparent pass, before the HDR→sampled barrier) with its own per-frame camera UBO/descriptor set.
+The camera-relative rebase invariant is preserved by composing the inset view with
+`translate(mainOrigin − insetOrigin)` in double precision — `RenderItem` transforms stay
+main-origin-relative, so `planetCenter` in the inset UBO is the MAIN camera's rebased value. Sky,
+transparents, and a per-inset GTAO recompute are v1 out-of-scope (documented in code). This is the
+generic capability; rear-view / missile-cam / MFD repeaters reuse it.
+
 **2026-07-22 — client-side IFF stays client-side; the faction relationship matrix never crosses
 the wire (#688, Epic #587).** The client already receives an entity's `factionIndex` (#860) and a
 datalink track's server-computed `ident` (#528), but had no way to answer friend/foe for an

@@ -21,6 +21,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **renderer**: secondary-camera inset viewport via `FrameScene` (#695, Epic #587). `FrameScene` gains
+  POD `insetEnabled`/`insetCamera`/`insetRect` fields (no new `IRenderer` pure virtuals — mocks and every
+  `setScene` consumer compile unchanged), and `VkRenderer` renders the same scene a second time from the
+  inset camera into a scissored sub-rect of the HDR target with its own per-frame camera UBO/descriptor
+  set. The camera-relative rebase invariant is preserved by composing the inset view with
+  `translate(mainOrigin − insetOrigin)` in double precision. The disabled path is bit-identical to
+  before (default-off asserted in `tests/test_scene_renderer.cpp`); sky/transparents/per-inset GTAO are
+  v1 out-of-scope. Backs the #698 target-slaved inset.
+
 - **game**: client-side target designation with next/prev cycling (#696, Epic #587). A new
   `fl::TargetDesignation` (game layer) is the single client-side source of truth for the designated
   target: cycle with the `NextTarget`/`PrevTarget` actions (N/P), resolve auto-clears on despawn /

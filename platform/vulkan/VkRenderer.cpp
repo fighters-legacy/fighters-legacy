@@ -662,6 +662,31 @@ void VkRenderer::writeFrameUBOs(const FrameScene& scene) {
     cam.planetCenter = glm::vec4(glm::vec3(scene.camera.planetCenter - scene.camera.worldOrigin), 0.0f);
     std::memcpy(pf.cameraMapped, &cam, sizeof(cam));
 
+    // Secondary-camera inset (#695): write a CameraUBO for the inset viewport. Only touched when
+    // enabled, so the disabled path leaves insetCameraMapped stale and the inset pass is skipped —
+    // bit-identical to before.
+    if (scene.insetEnabled) {
+        CameraUBO icam{};
+        // REBASE GOTCHA: RenderItem.transform (push.model) translations are rebased against the MAIN
+        // camera's worldOrigin by SceneRenderer, and the inset pass reuses those same transforms.
+        // insetCamera.view is built with the inset eye at ITS relative origin (inset-origin-relative
+        // geometry). So compose it with a translate of (mainOrigin - insetOrigin), done in double then
+        // cast to vec3: main-origin-relative geometry → (+shift) → inset-origin-relative → insetView →
+        // correct inset clip position. This also keeps mesh.frag's viewDepth (camera.view * fragWorldPos)
+        // correct for shadow-cascade selection.
+        const glm::vec3 originShift = glm::vec3(scene.camera.worldOrigin - scene.insetCamera.worldOrigin);
+        icam.view = scene.insetCamera.view * glm::translate(glm::mat4(1.0f), originShift);
+        icam.proj = scene.insetCamera.proj;
+        // worldOrigin is the (absolute) inset eye — documented as "camera world position"; the mesh
+        // shaders never actually read it (comments only). planetCenter, however, IS read by mesh.frag
+        // for terrain radial-up as `fragWorldPos - planetCenter`, and fragWorldPos stays in the MAIN
+        // frame (push.model is unchanged in the inset pass), so planetCenter must be the SAME
+        // main-origin-relative value as the main camera — NOT the inset's own rebase.
+        icam.worldOrigin = glm::vec4(glm::vec3(scene.insetCamera.worldOrigin), 0.0f);
+        icam.planetCenter = glm::vec4(glm::vec3(scene.camera.planetCenter - scene.camera.worldOrigin), 0.0f);
+        std::memcpy(pf.insetCameraMapped, &icam, sizeof(icam));
+    }
+
     LightUBO light{};
     light.sunDirection = glm::vec4(scene.environment.sunDirection, 0.0f);
     light.sunColor = glm::vec4(scene.environment.sunColor, 1.0f);
@@ -1061,6 +1086,14 @@ void VkRenderer::shutdown() {
             vkDestroyBuffer(m_device, pf.cameraBuffer, nullptr);
         if (pf.cameraMemory != VK_NULL_HANDLE)
             vkFreeMemory(m_device, pf.cameraMemory, nullptr);
+
+        // Inset camera UBO (#695)
+        if (pf.insetCameraMapped && pf.insetCameraMemory != VK_NULL_HANDLE)
+            vkUnmapMemory(m_device, pf.insetCameraMemory);
+        if (pf.insetCameraBuffer != VK_NULL_HANDLE)
+            vkDestroyBuffer(m_device, pf.insetCameraBuffer, nullptr);
+        if (pf.insetCameraMemory != VK_NULL_HANDLE)
+            vkFreeMemory(m_device, pf.insetCameraMemory, nullptr);
 
         if (pf.lightMapped && pf.lightMemory != VK_NULL_HANDLE)
             vkUnmapMemory(m_device, pf.lightMemory);
@@ -2248,14 +2281,16 @@ void VkRenderer::recordGtao(VkCommandBuffer cmd) {
 // Per-frame UBO buffers + descriptor sets
 // ---------------------------------------------------------------------------
 bool VkRenderer::createPerFrameDescriptors() {
-    // Pool: 2 frames × (3 UBOs + 1 shadow-map sampler).
+    // Pool: 2 frames × two set-0 allocations (the main set + the #695 inset set), each consuming
+    // 3 UBO descriptors (camera/light/shadow) + 1 shadow-map sampler. The inset set reuses the same
+    // layout; only its camera binding points at a separate buffer.
     const std::array<VkDescriptorPoolSize, 2> poolSizes{{
-        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * 3},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT)},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * 3 * 2},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * 2},
     }};
     VkDescriptorPoolCreateInfo poolCI{};
     poolCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolCI.maxSets = MAX_FRAMES_IN_FLIGHT;
+    poolCI.maxSets = MAX_FRAMES_IN_FLIGHT * 2;
     poolCI.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
     poolCI.pPoolSizes = poolSizes.data();
     if (vkCreateDescriptorPool(m_device, &poolCI, nullptr, &m_perFramePool) != VK_SUCCESS) {
@@ -2268,6 +2303,8 @@ bool VkRenderer::createPerFrameDescriptors() {
 
         if (!createHostBuffer(m_device, m_physicalDevice, sizeof(CameraUBO), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                               pf.cameraBuffer, pf.cameraMemory, pf.cameraMapped) ||
+            !createHostBuffer(m_device, m_physicalDevice, sizeof(CameraUBO), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                              pf.insetCameraBuffer, pf.insetCameraMemory, pf.insetCameraMapped) ||
             !createHostBuffer(m_device, m_physicalDevice, sizeof(LightUBO), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                               pf.lightBuffer, pf.lightMemory, pf.lightMapped) ||
             !createHostBuffer(m_device, m_physicalDevice, sizeof(ShadowUBO), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
@@ -2307,6 +2344,33 @@ bool VkRenderer::createPerFrameDescriptors() {
              VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &shadowImgInfo, nullptr, nullptr},
         }};
         vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+
+        // ── Inset forward descriptor set (set 0, #695) ────────────────────
+        // Same layout as the main set; binding 0 points at the inset camera buffer while
+        // light/shadow UBOs + the shadow map are shared (approximate shadows in a small inset are
+        // fine — the main-camera cascades are reused).
+        VkDescriptorSetAllocateInfo insetAllocCI{};
+        insetAllocCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        insetAllocCI.descriptorPool = m_perFramePool;
+        insetAllocCI.descriptorSetCount = 1;
+        insetAllocCI.pSetLayouts = &m_perFrameSetLayout;
+        if (vkAllocateDescriptorSets(m_device, &insetAllocCI, &pf.insetDescriptorSet) != VK_SUCCESS) {
+            m_lastError = "vkAllocateDescriptorSets (per-frame inset) failed";
+            return false;
+        }
+
+        VkDescriptorBufferInfo insetCamInfo{pf.insetCameraBuffer, 0, sizeof(CameraUBO)};
+        const std::array<VkWriteDescriptorSet, 4> insetWrites{{
+            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, pf.insetDescriptorSet, 0, 0, 1,
+             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &insetCamInfo, nullptr},
+            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, pf.insetDescriptorSet, 1, 0, 1,
+             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &lgtInfo, nullptr},
+            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, pf.insetDescriptorSet, 2, 0, 1,
+             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &shadowInfo, nullptr},
+            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, pf.insetDescriptorSet, 3, 0, 1,
+             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &shadowImgInfo, nullptr, nullptr},
+        }};
+        vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(insetWrites.size()), insetWrites.data(), 0, nullptr);
 
         // ── Shadow pipeline descriptor set (set 0) ────────────────────────
         VkDescriptorSetAllocateInfo shadowAllocCI{};
@@ -3965,6 +4029,56 @@ void VkRenderer::recordBloomPasses(VkCommandBuffer cmd) {
 }
 
 // ---------------------------------------------------------------------------
+// drawOpaqueItems — the shared forward-opaque draw loop (main pass + #695 inset pass)
+// ---------------------------------------------------------------------------
+// Assumes the forward pipeline is already bound and the viewport/scissor are set by the caller.
+// Binds set 0 (`set0` — the main or inset camera set) + set 2 (terrain biome arrays), then iterates
+// m_pendingScene.renderItems binding the per-material set 1 and pushing per-object constants.
+void VkRenderer::drawOpaqueItems(VkCommandBuffer cmd, VkDescriptorSet set0) {
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_forwardLayout, 0, 1, &set0, 0, nullptr);
+    // Set 2: terrain biome arrays (#446) — bound once for the whole opaque pass; only the terrain
+    // path in mesh.frag samples it.
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_forwardLayout, 2, 1, &m_terrainBiomeSet, 0,
+                            nullptr);
+
+    for (const auto& item : m_pendingScene.renderItems) {
+        if (item.flags & kRenderFlagShadowOnly)
+            continue; // rendered into the shadow map only, not the color pass
+        const GpuMesh* mesh = m_resources.getMesh(item.mesh);
+        if (!mesh)
+            continue;
+
+        // Resolve material; fall back to a default if invalid.
+        const GpuMaterial* mat = m_resources.getMaterial(item.material);
+
+        // Bind per-material descriptor set (set 1: base color texture).
+        if (mat && mat->descriptorSet != VK_NULL_HANDLE) {
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_forwardLayout, 1, 1, &mat->descriptorSet, 0,
+                                    nullptr);
+        }
+
+        // Push per-object constants.
+        ForwardPushConstants pc{};
+        pc.model = item.transform;
+        pc.baseColorFactor = mat ? mat->baseColorFactor : glm::vec4(1.0f);
+        pc.metallicFactor = mat ? mat->metallicFactor : 0.0f;
+        pc.roughnessFactor = mat ? mat->roughnessFactor : 1.0f;
+        pc.shadingMode = (item.flags & kRenderFlagTerrain)            ? 1.0f
+                         : (item.flags & kRenderFlagDebugFaceColor)   ? 2.0f
+                         : (item.flags & kRenderFlagRunway)           ? 3.0f
+                         : (item.flags & kRenderFlagTerrainSatellite) ? 4.0f
+                                                                      : 0.0f;
+        vkCmdPushConstants(cmd, m_forwardLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                           sizeof(pc), &pc);
+
+        const VkDeviceSize offset = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &mesh->vertexBuffer, &offset);
+        vkCmdBindIndexBuffer(cmd, mesh->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, mesh->indexCount, 1, 0, 0, 0);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // recordCommandBuffer
 // ---------------------------------------------------------------------------
 void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
@@ -4109,50 +4223,8 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         VkRect2D scissor{{0, 0}, m_swapchainExtent};
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-        // Bind per-frame descriptor set (set 0: camera + light UBOs).
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_forwardLayout, 0, 1,
-                                &m_perFrame[m_currentFrame].descriptorSet, 0, nullptr);
-        // Set 2: terrain biome arrays (#446) — bound once for the whole opaque pass; only the terrain
-        // path in mesh.frag samples it.
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_forwardLayout, 2, 1, &m_terrainBiomeSet, 0,
-                                nullptr);
-
-        // Draw each submitted RenderItem.
-        for (const auto& item : m_pendingScene.renderItems) {
-            if (item.flags & kRenderFlagShadowOnly)
-                continue; // rendered into the shadow map only, not the color pass
-            const GpuMesh* mesh = m_resources.getMesh(item.mesh);
-            if (!mesh)
-                continue;
-
-            // Resolve material; fall back to a default if invalid.
-            const GpuMaterial* mat = m_resources.getMaterial(item.material);
-
-            // Bind per-material descriptor set (set 1: base color texture).
-            if (mat && mat->descriptorSet != VK_NULL_HANDLE) {
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_forwardLayout, 1, 1,
-                                        &mat->descriptorSet, 0, nullptr);
-            }
-
-            // Push per-object constants.
-            ForwardPushConstants pc{};
-            pc.model = item.transform;
-            pc.baseColorFactor = mat ? mat->baseColorFactor : glm::vec4(1.0f);
-            pc.metallicFactor = mat ? mat->metallicFactor : 0.0f;
-            pc.roughnessFactor = mat ? mat->roughnessFactor : 1.0f;
-            pc.shadingMode = (item.flags & kRenderFlagTerrain)            ? 1.0f
-                             : (item.flags & kRenderFlagDebugFaceColor)   ? 2.0f
-                             : (item.flags & kRenderFlagRunway)           ? 3.0f
-                             : (item.flags & kRenderFlagTerrainSatellite) ? 4.0f
-                                                                          : 0.0f;
-            vkCmdPushConstants(cmd, m_forwardLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                               sizeof(pc), &pc);
-
-            const VkDeviceSize offset = 0;
-            vkCmdBindVertexBuffers(cmd, 0, 1, &mesh->vertexBuffer, &offset);
-            vkCmdBindIndexBuffer(cmd, mesh->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-            vkCmdDrawIndexed(cmd, mesh->indexCount, 1, 0, 0, 0);
-        }
+        // Bind set 0 (main camera) + set 2 (biome arrays) and draw each submitted opaque RenderItem.
+        drawOpaqueItems(cmd, m_perFrame[m_currentFrame].descriptorSet);
 
         vkCmdEndRendering(cmd);
     }
@@ -4293,6 +4365,81 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
 
             vkCmdEndRendering(cmd);
         }
+    }
+
+    // ── Secondary-camera inset viewport (#695) ────────────────────────────
+    // A scissored second forward-opaque pass into the SAME HDR + normal G-buffer + depth attachments,
+    // viewed from scene.insetCamera. v1 scope + accepted approximations:
+    //   • Opaque geometry only — no sky (the sky pipeline's invViewProj is the MAIN camera's and would
+    //     paint a wrong-direction sky), no transparent items, no particles.
+    //   • GTAO ran earlier from MAIN-view depth; tonemap applies that AO over the inset pixels too.
+    //   • Shadows reuse the MAIN camera's cascades (the inset set shares the shadow UBO + map).
+    //   • Specular view vector (mesh.frag `V = -fragWorldPos`) is evaluated from the MAIN origin since
+    //     fragWorldPos stays main-relative — slightly off-axis highlights in the inset.
+    // Disabled path (insetEnabled == false) skips this whole block → bit-identical to before.
+    if (m_pendingScene.insetEnabled) {
+        // Pixel rect from the normalized top-left-origin inset rect, clamped to the framebuffer (min 1px).
+        const float fbW = static_cast<float>(m_swapchainExtent.width);
+        const float fbH = static_cast<float>(m_swapchainExtent.height);
+        const int extW = static_cast<int>(m_swapchainExtent.width);
+        const int extH = static_cast<int>(m_swapchainExtent.height);
+        int px = std::clamp(static_cast<int>(m_pendingScene.insetRect[0] * fbW), 0, extW - 1);
+        int py = std::clamp(static_cast<int>(m_pendingScene.insetRect[1] * fbH), 0, extH - 1);
+        int pw = std::clamp(static_cast<int>(m_pendingScene.insetRect[2] * fbW), 1, extW - px);
+        int ph = std::clamp(static_cast<int>(m_pendingScene.insetRect[3] * fbH), 1, extH - py);
+        const VkRect2D insetRect{{px, py}, {static_cast<uint32_t>(pw), static_cast<uint32_t>(ph)}};
+
+        VkRenderingAttachmentInfo colorAtts[2]{};
+        colorAtts[0].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        colorAtts[0].imageView = m_hdrView;
+        colorAtts[0].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        colorAtts[0].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        colorAtts[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        // Both forward color attachments must be attached (the forward pipeline declares two).
+        colorAtts[1].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        colorAtts[1].imageView = m_normalView;
+        colorAtts[1].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        colorAtts[1].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        colorAtts[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+        VkRenderingAttachmentInfo depthAtt{};
+        depthAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        depthAtt.imageView = m_depthView;
+        depthAtt.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        depthAtt.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        depthAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+        VkRenderingInfo renderInfo{};
+        renderInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        renderInfo.renderArea = {{0, 0}, m_swapchainExtent};
+        renderInfo.layerCount = 1;
+        renderInfo.colorAttachmentCount = 2;
+        renderInfo.pColorAttachments = colorAtts;
+        renderInfo.pDepthAttachment = &depthAtt;
+
+        vkCmdBeginRendering(cmd, &renderInfo);
+
+        // Scissored clear of the inset rect only: dark background (no sky in v1) + reverse-Z far depth
+        // (0.0, matching the main forward depth clear) so the inset renders a fresh depth buffer.
+        VkClearAttachment clears[2]{};
+        clears[0].aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        clears[0].colorAttachment = 0;
+        clears[0].clearValue.color = {{0.02f, 0.03f, 0.05f, 1.0f}};
+        clears[1].aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        clears[1].clearValue.depthStencil = {0.0f, 0};
+        const VkClearRect clearRect{insetRect, 0, 1};
+        vkCmdClearAttachments(cmd, 2, clears, 1, &clearRect);
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_forwardPipeline);
+
+        VkViewport viewport{
+            static_cast<float>(px), static_cast<float>(py), static_cast<float>(pw), static_cast<float>(ph), 0.0f, 1.0f};
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+        vkCmdSetScissor(cmd, 0, 1, &insetRect);
+
+        drawOpaqueItems(cmd, m_perFrame[m_currentFrame].insetDescriptorSet);
+
+        vkCmdEndRendering(cmd);
     }
 
     // ── HDR → SHADER_READ_ONLY ───────────────────────────────────────────

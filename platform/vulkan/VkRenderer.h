@@ -273,6 +273,12 @@ class VkRenderer : public IRenderer {
 
     void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex);
 
+    // Replay the opaque RenderItem draw loop (shadow-only items skipped) with the forward pipeline
+    // already bound. `set0` is the per-frame set 0 (main camera, or the inset camera for the #695
+    // secondary-viewport pass). Shared by the main forward-opaque pass and the inset pass so the
+    // per-item bind/push/draw logic exists once.
+    void drawOpaqueItems(VkCommandBuffer cmd, VkDescriptorSet set0);
+
     // ── Overlay pipeline ──────────────────────────────────────────────────
     bool createOverlayPipeline();
     void recordOverlayPass(VkCommandBuffer cmd);
@@ -393,6 +399,14 @@ class VkRenderer : public IRenderer {
         VkBuffer cameraBuffer{VK_NULL_HANDLE};
         VkDeviceMemory cameraMemory{VK_NULL_HANDLE};
         void* cameraMapped{nullptr};
+
+        // Secondary-camera inset (#695): a second CameraUBO + set-0 descriptor bound to the SAME
+        // per-frame layout as descriptorSet. Only binding 0 (camera) differs — light/shadow UBOs and
+        // the shadow map are shared with the main set. Written + drawn only when scene.insetEnabled.
+        VkBuffer insetCameraBuffer{VK_NULL_HANDLE};
+        VkDeviceMemory insetCameraMemory{VK_NULL_HANDLE};
+        void* insetCameraMapped{nullptr};
+        VkDescriptorSet insetDescriptorSet{VK_NULL_HANDLE};
 
         VkBuffer lightBuffer{VK_NULL_HANDLE};
         VkDeviceMemory lightMemory{VK_NULL_HANDLE};
