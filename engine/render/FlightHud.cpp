@@ -351,25 +351,24 @@ void FlightHud::drawDataBlocks(Ctx& c) {
     if (c.e.hasLoadout && (c.e.weaponFlags & 0x01u))
         pushText(HudAlign::Center, 0.5f, 0.40f, kHudR, kHudG, kHudB, "%s", "LOCK");
 
-    // Autopilot annunciation (#640): a single line naming the engaged holds.
+    // Autopilot annunciation (#640): a single line naming the engaged holds. Built with bounded
+    // snprintf appends tracking the write offset (portable — strncat trips MSVC's C4996).
     if (c.in.apModes != 0) {
         char buf[48] = "AP";
-        auto append = [&](const char* seg) { std::strncat(buf, seg, sizeof(buf) - std::strlen(buf) - 1); };
-        if (c.in.apModes & 0x1u) {
-            char s[20];
-            std::snprintf(s, sizeof(s), " ALT%d", static_cast<int>(std::lround(c.in.apTargetAltM * kM2Ft)));
-            append(s);
-        }
-        if (c.in.apModes & 0x2u) {
-            char s[16];
-            std::snprintf(s, sizeof(s), " HDG%03d", static_cast<int>(std::lround(c.in.apTargetHeadingDeg)) % 360);
-            append(s);
-        }
-        if (c.in.apModes & 0x4u) {
-            char s[16];
-            std::snprintf(s, sizeof(s), " SPD%d", static_cast<int>(std::lround(c.in.apTargetSpeedMps * kMps2Kt)));
-            append(s);
-        }
+        int len = 2;
+        auto append = [&](const char* fmt, int value) {
+            if (len < static_cast<int>(sizeof(buf)) - 1) {
+                const int n = std::snprintf(buf + len, sizeof(buf) - static_cast<std::size_t>(len), fmt, value);
+                if (n > 0)
+                    len += n;
+            }
+        };
+        if (c.in.apModes & 0x1u)
+            append(" ALT%d", static_cast<int>(std::lround(c.in.apTargetAltM * kM2Ft)));
+        if (c.in.apModes & 0x2u)
+            append(" HDG%03d", static_cast<int>(std::lround(c.in.apTargetHeadingDeg)) % 360);
+        if (c.in.apModes & 0x4u)
+            append(" SPD%d", static_cast<int>(std::lround(c.in.apTargetSpeedMps * kMps2Kt)));
         pushText(HudAlign::Center, 0.5f, 0.20f, kHudR, kHudG, kHudB, "%s", buf);
     }
 }
