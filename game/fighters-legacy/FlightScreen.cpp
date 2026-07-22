@@ -2,11 +2,13 @@
 #include "FlightScreen.h"
 
 #include "CameraInput.h"
+#include "ChatOverlay.h"
 #include "ClientNetEventHandler.h"
 #include "ClientPrediction.h"
 #include "CommsMenu.h"
 #include "FlightInputCollector.h"
 #include "HapticController.h"
+#include "IGui.h"
 #include "IInput.h"
 #include "INetwork.h"
 #include "IWindow.h"
@@ -76,12 +78,26 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
     uint32_t gen = d.assignedEntityGen ? *d.assignedEntityGen : 0;
     m_playerEntry = findEntry(*d.renderBridge, idx, gen);
 
+    // Remember the last known own position so the dead-pilot ghost camera starts at the wreck (#403).
+    if (m_playerEntry)
+        m_lastOwnPos = m_playerEntry->position;
+
     // Observer entity picker (#860): a spectator has no ownship, so the camera views a SELECTED live
     // entity. Num1/Num2 cycle the selection; the first pick jumps the free ghost camera into Chase so
-    // the choice is immediately visible. A pilot always views its own aircraft.
+    // the choice is immediately visible. A live pilot always views its own aircraft. #403 extends the
+    // spectator state to a DEAD pilot awaiting respawn, not just a role-observer.
     const bool observer = d.clientNetHandler && d.clientNetHandler->grantedRole() == fl::PeerRole::Observer;
+    const bool deadSpectator = d.clientNetHandler && d.clientNetHandler->awaitingRespawn();
+    const bool spectating = observer || deadSpectator;
+    // On the rising edge into a dead-pilot spectate, drop into the free ghost camera at the wreck (the
+    // role-observer path is seeded by Game.cpp's #859 flow instead).
+    if (spectating && !m_wasSpectating && deadSpectator && !observer) {
+        d.camInput->setFlyEye(m_lastOwnPos);
+        d.cameraController->setMode(fl::CameraMode::Free);
+    }
+    m_wasSpectating = spectating;
     const fl::EntityRenderEntry* viewEntry = m_playerEntry;
-    if (observer) {
+    if (spectating) {
         const std::span<const fl::EntityRenderEntry> entries =
             d.renderBridge->hasSnapshot() ? std::span<const fl::EntityRenderEntry>(d.renderBridge->current().entries)
                                           : std::span<const fl::EntityRenderEntry>{};
@@ -137,12 +153,36 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
         }
     }
 
+    // In-match text chat (#646). Y opens the all channel, H the team channel. While the input box is up
+    // it OWNS the keyboard (textEntry below suppresses all flight keys so typing does not fire the gun);
+    // the gamepad/HOTAS axes stay live. Send = the Send button or Enter; Escape cancels. Mutually
+    // exclusive with the radio/comms menus and the console.
+    const bool chatWasOpen = d.chat && d.chat->isInputOpen();
+    if (d.chat && !d.gameConsole->isOpen() && !menuWasOpen && !commsMenuWasOpen) {
+        if (!chatWasOpen) {
+            if (input.isKeyJustPressed(Key::Y))
+                d.chat->open(fl::ChatChannel::All);
+            else if (input.isKeyJustPressed(Key::H))
+                d.chat->open(fl::ChatChannel::Team);
+        } else {
+            const bool sendBtn = d.chat->renderInput(d.gui);
+            if (sendBtn || input.isKeyJustPressed(Key::Enter)) {
+                if (d.clientNetHandler && !d.chat->text().empty())
+                    d.clientNetHandler->sendChat(d.chat->channel(), d.chat->text());
+                d.chat->submit();
+            } else if (input.isKeyJustPressed(Key::Escape)) {
+                d.chat->cancel();
+            }
+        }
+    }
+    const bool chatOpen = d.chat && d.chat->isInputOpen();
+
     // Crew seat picker (#975), non-modal like the radio menu. K cycles joinable seats across every
     // crewed aircraft the client knows; L joins the selected seat; U leaves the current seat. These keys
     // are NOT flight controls (avoiding J = ECM etc.), so no input is suppressed. Suppressed only while
     // the console/radio menu is up (they own the keyboard then).
     if (d.clientNetHandler && !d.gameConsole->isOpen() && !(d.wingmanMenu && d.wingmanMenu->isOpen()) &&
-        !(d.commsMenu && d.commsMenu->isOpen())) {
+        !(d.commsMenu && d.commsMenu->isOpen()) && !chatOpen) {
         const bool kNow = input.isKeyDown(Key::K), lNow = input.isKeyDown(Key::L), uNow = input.isKeyDown(Key::U);
         if (kNow && !m_prevSeatCycle) {
             m_seatPicker.rebuild(d.clientNetHandler->crewRosters());
@@ -205,9 +245,10 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
         return Screen::MainMenu;
 
     const ControlsSettings cs = d.userConfig->controls();
-    const bool uiFocused = (d.wingmanMenu && d.wingmanMenu->isOpen()) || (d.commsMenu && d.commsMenu->isOpen());
-    if (auto msg =
-            d.flightInput->poll(*d.renderBridge, *d.camInput, *d.gameConsole, input, d.joystick, cs, uiFocused)) {
+    const bool uiFocused =
+        (d.wingmanMenu && d.wingmanMenu->isOpen()) || (d.commsMenu && d.commsMenu->isOpen()) || chatOpen;
+    if (auto msg = d.flightInput->poll(*d.renderBridge, *d.camInput, *d.gameConsole, input, d.joystick, cs, uiFocused,
+                                       /*textEntry=*/chatOpen)) {
         // Stamp the snapshot ack (tickIndex + selective-ack mask, #566) from the net handler — the single
         // ack authority — before prediction and send, so the outgoing input carries a consistent ack.
         if (d.clientNetHandler)
@@ -228,7 +269,7 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
     // Observer picker label (#860): name + faction of the entity being viewed, shown top-centre. Built
     // here where the registry (type name) and the net handler (faction name) are both reachable.
     m_pickerLabel[0] = '\0';
-    if (observer && viewEntry) {
+    if (spectating && viewEntry) {
         const char* typeName = "entity";
         if (d.entityRegistry) {
             if (const fl::EntityDef* def = d.entityRegistry->byIndex(viewEntry->typeIndex))
@@ -322,10 +363,11 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
         d.manual->update();
     }
 
-    // Escape closed the radio menu or the manual this frame; it must NOT also open the pause screen.
+    // Escape closed the radio menu, the manual, or the chat box this frame; it must NOT also open the
+    // pause screen.
     const bool manualClosedThisFrame = manualWasOpen && d.manual && !d.manual->isOpen();
-    if (!menuWasOpen && !commsMenuWasOpen && !manualClosedThisFrame && !consoleWasOpen && !d.gameConsole->isOpen() &&
-        input.isKeyJustPressed(Key::Escape))
+    if (!menuWasOpen && !commsMenuWasOpen && !manualClosedThisFrame && !chatWasOpen && !consoleWasOpen &&
+        !d.gameConsole->isOpen() && input.isKeyJustPressed(Key::Escape))
         return Screen::Pause;
 
     return Screen::Flight;

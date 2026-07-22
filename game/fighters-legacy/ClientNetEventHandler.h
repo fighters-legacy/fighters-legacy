@@ -27,6 +27,8 @@ class ClientEffectRouter;
 class GameConsole;
 class ILogger;
 class ServerNotice;
+class KillFeed;
+class ChatOverlay;
 struct RenderSnapshot;
 struct MsgClientInput;
 struct MsgHeartbeat;
@@ -62,6 +64,8 @@ struct ClientNetEventHandler : INetworkEventHandler {
     ServerNotice* notice{nullptr};        // optional: server notices shown as screen banner
     WingmanMenu* wingman{nullptr};        // optional: flight check-in / order acks / relayed radio calls (#610)
     ClientEffectRouter* effects{nullptr}; // optional: cosmetic weapon effects (#625) — particles now, audio #631
+    KillFeed* killFeed{nullptr};          // optional: multiplayer kill feed overlay, fed from the Kill branch (#647)
+    ChatOverlay* chat{nullptr};           // optional: in-match chat overlay, fed from MsgChatEvent (#646)
     uint32_t motdDisplaySeconds{15};      // user-configurable; 0 = persistent
 
     uint32_t assignedEntityIdx{0};
@@ -119,6 +123,52 @@ struct ClientNetEventHandler : INetworkEventHandler {
         return m_selfPeerId;
     }
 
+    // True after this client's own aircraft was destroyed and before it respawns (#403). Set from the
+    // CombatEvent Kill branch when the victim is our entity; cleared by the next MsgConnectAck (a respawn
+    // hands out a fresh entity). Drives the client's dead-pilot spectator camera.
+    [[nodiscard]] bool awaitingRespawn() const noexcept {
+        return m_awaitingRespawn;
+    }
+
+    // ── match state + scoreboard (#647/#523) ─────────────────────────────────
+    // Decoded MsgMatchState: phase + limits + per-team scores. `valid` is false until the first
+    // MsgMatchState arrives. Read on the main thread by the scoreboard overlay and the debrief.
+    struct MatchTeam {
+        uint16_t factionIndex{0};
+        int32_t score{0};
+    };
+    struct MatchStateView {
+        bool valid{false};
+        uint8_t phase{0};         // MatchPhase ordinal; gate with fl::isMatchPhaseOrdinal before casting
+        uint16_t scoreLimit{0};   // team score that ends the match; 0 = none
+        uint64_t phaseEndTick{0}; // tick the current phase ends; 0 = untimed
+        std::string modeId;
+        std::string modeName;
+        std::vector<MatchTeam> teamScores;
+    };
+    const MatchStateView& matchState() const noexcept {
+        return m_matchState;
+    }
+
+    // Decoded MsgScoreboard rows, upserted by participantId across the unreliable chunked stream. Rows
+    // are pruned when the matching participant leaves the roster.
+    struct ScoreboardEntry {
+        int32_t score{0};
+        uint16_t kills{0};
+        uint16_t deaths{0};
+        uint16_t pingMs{0};
+        uint16_t factionIndex{0};
+    };
+    const std::unordered_map<uint32_t, ScoreboardEntry>& scoreboard() const noexcept {
+        return m_scoreboard;
+    }
+
+    // Highest processed WorldSnapshot tick — the clock the scoreboard overlay renders the match phase
+    // countdown against (phaseEndTick - currentTick). 0 until the first snapshot.
+    uint64_t currentTick() const noexcept {
+        return m_lastSnapshotTick;
+    }
+
     // Resolve a mission object id (e.g. "bandit1") to its network entity idx/gen from the MsgMissionRoster
     // table (#914). Returns false when the id is not in the roster (no mission, unbound player slot, or an
     // unknown id). Used by the cinematic recorder to drive entity-relative camera shots.
@@ -156,6 +206,10 @@ struct ClientNetEventHandler : INetworkEventHandler {
     // the current seat. Reliable. The outcome arrives as MsgSeatResult (see takeSeatResult()).
     void sendSeatRequest(uint32_t entityIdx, uint32_t entityGen, uint8_t seat);
     void sendSeatLeave();
+
+    // Send a chat line (#646). Reliable; the server sanitizes/rate-limits/routes it. Text is truncated to
+    // kMaxChatBytes on a UTF-8 codepoint boundary. Empty text is dropped.
+    void sendChat(fl::ChatChannel channel, std::string_view text);
 
     // The outcome of the last MsgSeatRequest (#975), for the seat-picker UI to surface. `valid` is
     // false until the first result arrives; `fresh` marks a result not yet consumed by the UI.
@@ -319,7 +373,10 @@ struct ClientNetEventHandler : INetworkEventHandler {
     PeerRole m_grantedRole{PeerRole::Pilot};            // role granted by MsgConnectAck (#857)
     bool m_gotConnectAck{false};                        // true once a MsgConnectAck arrives; "was I admitted?" (#853)
     uint32_t m_selfPeerId{0};                           // this client's own participant id, from MsgConnectAck (#996)
+    bool m_awaitingRespawn{false};                      // #403: own aircraft dead, awaiting respawn ack
     std::unordered_map<uint32_t, RosterEntry> m_roster; // participant id -> display record (#996)
+    MatchStateView m_matchState;                        // #647/#523 — from MsgMatchState
+    std::unordered_map<uint32_t, ScoreboardEntry> m_scoreboard; // #647/#523 — from MsgScoreboard (upsert)
     float m_planetRadiusKm{6371.f};
     SessionCombatStats m_sessionStats{}; // #626 — fed by CombatEvent Stats records
     fl::MissionResultCode m_missionOutcome{fl::MissionResultCode::Incomplete}; // #584 — from MsgMissionOutcome

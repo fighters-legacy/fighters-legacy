@@ -45,6 +45,12 @@ struct WorldApi {
     // state machine to the terminal state (as if a mission_success/mission_failure trigger fired).
     std::function<void(bool success)> setMissionOutcome;
 
+    // Award `count` completed objectives to team `faction` (#1000). The host routes it to the match
+    // controller (count * the mode's pointsPerObjective, scored only during the Active phase), which is
+    // how the strike/conquest modes score. A no-op on a server with no match running. Called from a
+    // mission trigger's action when an objective completes.
+    std::function<void(int faction, int count)> scoreObjective;
+
     // Haptic feedback (#128). A script never touches the IInput HAL directly; these route to the host,
     // which resolves "the current player's gamepad" (never a gamepad id from the script) and, on a
     // dedicated server, broadcasts the event to clients to play on their local pad. The engine binding

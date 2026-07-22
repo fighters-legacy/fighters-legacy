@@ -58,6 +58,10 @@ target_link_libraries(fuzz_snapshot_codec PRIVATE engine-protocol)
 fl_add_fuzzer(fuzz_wire_tlv)
 target_link_libraries(fuzz_wire_tlv PRIVATE engine-protocol)
 
+# Lobby server-list JSON scanner: fl::parseLobbyServerList (#143).
+fl_add_fuzzer(fuzz_lobby_list)
+target_link_libraries(fuzz_lobby_list PRIVATE engine-net)
+
 # Source-Engine RCON packet decoder: fl::rcon::decodePacket. RconServer.cpp is not in any library
 # (fl-server compiles it directly), so mirror tests/CMakeLists.txt's test_rcon_server recipe.
 fl_add_fuzzer(fuzz_rcon_packet)
@@ -85,6 +89,7 @@ fl_add_fuzzer(fuzz_client_msg)
 target_sources(fuzz_client_msg PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientEffectRouter.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ChatOverlay.cpp" # ChatEvent -> chat overlay (#646)
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/WingmanMenu.cpp")
 target_link_libraries(fuzz_client_msg PRIVATE engine-net engine-render engine-entity engine-console engine-weather

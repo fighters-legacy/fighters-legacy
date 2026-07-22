@@ -66,6 +66,11 @@ class MatchController {
     // suppresses the point award (a team kill scores nothing) but the event still happened.
     void recordKill(uint32_t killer, uint32_t victim, bool sameTeam);
 
+    // Credit `count` completed objectives to `faction` (#1000). Awards count * pointsPerObjective;
+    // ignored outside the Active phase or when the mode declares no objective points. This is the
+    // channel the strike/conquest modes score on — a mission objective / trigger fire routes here.
+    void recordObjective(uint16_t faction, int count = 1);
+
     // Force the match to end now (a mission-scripted victory, #584). Optional winner for the record.
     void forceEnd(std::optional<uint16_t> winner);
 

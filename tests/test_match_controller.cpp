@@ -135,6 +135,44 @@ TEST_CASE("MatchController: same-team kill scores nothing", "[match_controller]"
     CHECK(mc.teamScores()[0].score == 0);
 }
 
+TEST_CASE("MatchController: recordObjective scores during Active, frozen outside (#1000)", "[match_controller]") {
+    MatchController mc;
+    GameModeDef strike = testTdm(100, 0, 0.0, 1);
+    strike.pointsPerObjective = 10;
+    mc.configure(strike, twoTeams(), 1.0);
+    mc.participantJoined(0, 1, false);
+
+    // Frozen during warmup (before Active).
+    mc.recordObjective(1, 1);
+    mc.step(1); // Idle->Warmup
+    mc.step(2); // Warmup->Active
+    REQUIRE(mc.phase() == MatchPhase::Active);
+    CHECK(mc.teamScores()[0].score == 0); // the warmup objective did not count
+
+    mc.recordObjective(1, 1); // team 1 (index 0): +10
+    CHECK(mc.teamScores()[0].score == 10);
+    mc.recordObjective(1, 3); // +30
+    CHECK(mc.teamScores()[0].score == 40);
+    mc.recordObjective(2, 1); // team 2 (index 1): +10
+    CHECK(mc.teamScores()[1].score == 10);
+    // A non-positive count or an unknown faction awards nothing.
+    mc.recordObjective(1, 0);
+    mc.recordObjective(99, 1);
+    CHECK(mc.teamScores()[0].score == 40);
+}
+
+TEST_CASE("MatchController: recordObjective is inert when the mode has no objective points (#1000)",
+          "[match_controller]") {
+    MatchController mc;
+    mc.configure(testTdm(50, 0, 0.0, 1), twoTeams(), 1.0); // pointsPerObjective defaults to 0
+    mc.participantJoined(0, 1, false);
+    mc.step(1); // Idle->Warmup
+    mc.step(2); // Warmup->Active
+    REQUIRE(mc.phase() == MatchPhase::Active);
+    mc.recordObjective(1, 5);
+    CHECK(mc.teamScores()[0].score == 0);
+}
+
 TEST_CASE("MatchController: time limit ends with the leader; a tie is a draw", "[match_controller]") {
     MatchController mc;
     mc.configure(testTdm(0, 3.0, 0.0, 1), twoTeams(), 1.0); // 3-tick time limit

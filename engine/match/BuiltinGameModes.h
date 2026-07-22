@@ -17,8 +17,9 @@ namespace fl {
 //                        the pre-#521 sandbox behavior, so an unconfigured server behaves as it did.
 //   builtin:tdm          two teams (Red/Blue), score limit 50, 15-minute clock, 10 s respawn, 30 s
 //                        warmup, friendly fire off, needs 2 players.
-//
-// Strike/conquest are deferred until the objective-scoring channel lands (#1000).
+//   builtin:strike       two teams, OBJECTIVE-scored (#1000): points come from mission objectives
+//                        (points_per_objective = 10), a kill is worth 1, score limit 100, 20-minute
+//                        clock. A mission's world.score_objective(faction, count) accrues the score.
 
 namespace detail {
 
@@ -77,6 +78,39 @@ waves = false
 friendly_fire = "off"
 )";
 
+inline constexpr std::string_view kBuiltinStrikeToml = R"([mode]
+id = "builtin:strike"
+name = "Strike"
+
+[teams]
+use_mission_sides = false
+[[teams.team]]
+id = "red"
+name = "Red Force"
+capacity = 0
+[[teams.team]]
+id = "blue"
+name = "Blue Force"
+capacity = 0
+
+[scoring]
+points_per_kill = 1
+points_per_objective = 10
+score_limit = 100
+
+[match]
+time_limit_min = 20
+warmup_s = 30
+min_players = 2
+
+[respawn]
+delay_s = 10
+waves = false
+
+[rules]
+friendly_fire = "off"
+)";
+
 } // namespace detail
 
 // Resolve a "builtin:" game-mode id to its parsed GameModeDef, or nullopt if the id is not a builtin.
@@ -87,6 +121,8 @@ inline std::optional<GameModeDef> builtinGameMode(std::string_view id) {
         toml = detail::kBuiltinFreeFlightToml;
     else if (id == "builtin:tdm")
         toml = detail::kBuiltinTdmToml;
+    else if (id == "builtin:strike")
+        toml = detail::kBuiltinStrikeToml;
     else
         return std::nullopt;
     GameModeParseResult r = parseGameModeToml(toml);

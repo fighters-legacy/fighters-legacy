@@ -274,6 +274,13 @@ catch_discover_tests(test_input)
 
 add_executable(test_localization test_localization.cpp)
 target_link_libraries(test_localization PRIVATE Catch2::Catch2WithMain engine-i18n)
+
+# Session-failure i18n coverage (#358): keys present in the repo locale/en/ui.toml + tr fallback.
+add_executable(test_session_i18n test_session_i18n.cpp)
+target_link_libraries(test_session_i18n PRIVATE Catch2::Catch2WithMain engine-i18n platform-stdfs platform-hal)
+target_include_directories(test_session_i18n PRIVATE "${CMAKE_SOURCE_DIR}/game/fighters-legacy")
+target_compile_definitions(test_session_i18n PRIVATE FL_REPO_ROOT="${CMAKE_SOURCE_DIR}")
+catch_discover_tests(test_session_i18n)
 catch_discover_tests(test_localization)
 
 add_executable(test_firstrun test_firstrun.cpp)
@@ -762,6 +769,33 @@ target_link_libraries(test_join_server_screen PRIVATE Catch2::Catch2WithMain pla
 target_include_directories(test_join_server_screen PRIVATE ${CMAKE_SOURCE_DIR}/game/fighters-legacy)
 catch_discover_tests(test_join_server_screen)
 
+# ServerBrowserScreen (#143) — the IGui server-browser list, driven against NullGui.
+add_executable(test_server_browser_screen test_server_browser_screen.cpp
+    ${CMAKE_SOURCE_DIR}/game/fighters-legacy/ServerBrowserScreen.cpp)
+target_link_libraries(test_server_browser_screen PRIVATE Catch2::Catch2WithMain engine-net platform-hal)
+target_include_directories(test_server_browser_screen PRIVATE ${CMAKE_SOURCE_DIR}/game/fighters-legacy)
+catch_discover_tests(test_server_browser_screen)
+
+# ScoreboardOverlay (#647) — the IGui scoreboard table, driven against NullGui.
+add_executable(test_scoreboard_overlay test_scoreboard_overlay.cpp
+    ${CMAKE_SOURCE_DIR}/game/fighters-legacy/ScoreboardOverlay.cpp)
+target_link_libraries(test_scoreboard_overlay PRIVATE Catch2::Catch2WithMain platform-hal)
+target_include_directories(test_scoreboard_overlay PRIVATE ${CMAKE_SOURCE_DIR}/game/fighters-legacy)
+catch_discover_tests(test_scoreboard_overlay)
+
+# KillFeed (#647) — the HudElement kill-feed ring; header-only, deterministic clock.
+add_executable(test_kill_feed test_kill_feed.cpp)
+target_link_libraries(test_kill_feed PRIVATE Catch2::Catch2WithMain platform-hal)
+target_include_directories(test_kill_feed PRIVATE ${CMAKE_SOURCE_DIR}/game/fighters-legacy)
+catch_discover_tests(test_kill_feed)
+
+# ChatOverlay (#646) — the chat display ring + IGui input box, driven against NullGui + a manual clock.
+add_executable(test_chat_overlay test_chat_overlay.cpp
+    ${CMAKE_SOURCE_DIR}/game/fighters-legacy/ChatOverlay.cpp)
+target_link_libraries(test_chat_overlay PRIVATE Catch2::Catch2WithMain engine-net platform-hal)
+target_include_directories(test_chat_overlay PRIVATE ${CMAKE_SOURCE_DIR}/game/fighters-legacy)
+catch_discover_tests(test_chat_overlay)
+
 # Frame-capture swizzle helper (#912): the pure GPU-independent core of the capture readback.
 add_executable(test_capture_frame test_capture_frame.cpp)
 target_link_libraries(test_capture_frame PRIVATE Catch2::Catch2WithMain platform-hal)
@@ -922,6 +956,7 @@ add_executable(test_client_net_event_handler test_client_net_event_handler.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp"
     # ClientNetEventHandler dispatches MsgWingmanAck into the radio menu (#610).
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/WingmanMenu.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ChatOverlay.cpp" # ChatEvent -> chat overlay (#646)
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ManualOverlay.cpp")
 target_link_libraries(test_client_net_event_handler PRIVATE
     Catch2::Catch2WithMain engine-net engine-render engine-entity engine-console engine-weather engine-audio
@@ -944,7 +979,7 @@ catch_discover_tests(test_main_menu_screen)
 
 add_executable(test_loading_screen test_loading_screen.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/LoadingScreen.cpp")
-target_link_libraries(test_loading_screen PRIVATE Catch2::Catch2WithMain platform-hal)
+target_link_libraries(test_loading_screen PRIVATE Catch2::Catch2WithMain platform-hal engine-i18n)
 target_include_directories(test_loading_screen PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_loading_screen)
@@ -989,6 +1024,7 @@ add_executable(test_screen_manager test_screen_manager.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ScreenManager.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/MainMenuScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/JoinServerScreen.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ServerBrowserScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/LoadingScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/MissionSelectScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/MissionBriefScreen.cpp"
@@ -996,6 +1032,7 @@ add_executable(test_screen_manager test_screen_manager.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/PauseMenuScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/DebriefScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightScreen.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ChatOverlay.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientEffectRouter.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/WingmanMenu.cpp"
@@ -1006,7 +1043,7 @@ add_executable(test_screen_manager test_screen_manager.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightInputCollector.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp")
 target_link_libraries(test_screen_manager PRIVATE
-    Catch2::Catch2WithMain engine-config engine-render engine-sandbox engine-content engine-console engine-input engine-net engine-entity engine-weather engine-flight engine-manual engine-audio platform-sdl3 platform-hal SDL3::SDL3)
+    Catch2::Catch2WithMain engine-config engine-render engine-sandbox engine-content engine-console engine-input engine-net engine-entity engine-weather engine-flight engine-manual engine-audio engine-i18n platform-sdl3 platform-hal SDL3::SDL3)
 target_include_directories(test_screen_manager PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_screen_manager)
@@ -1117,6 +1154,20 @@ catch_discover_tests(test_sha256)
 add_executable(test_content_downloader test_content_downloader.cpp)
 target_link_libraries(test_content_downloader PRIVATE Catch2::Catch2WithMain engine-content engine-crypto)
 target_include_directories(test_content_downloader PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Lobby / server browser (#143): pure parser, registration client, and merge model.
+add_executable(test_lobby_list_parser test_lobby_list_parser.cpp)
+target_link_libraries(test_lobby_list_parser PRIVATE Catch2::Catch2WithMain engine-net platform-hal)
+catch_discover_tests(test_lobby_list_parser)
+
+add_executable(test_lobby_registration test_lobby_registration.cpp)
+target_link_libraries(test_lobby_registration PRIVATE Catch2::Catch2WithMain engine-net platform-hal)
+target_include_directories(test_lobby_registration PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_lobby_registration)
+
+add_executable(test_server_browser_model test_server_browser_model.cpp)
+target_link_libraries(test_server_browser_model PRIVATE Catch2::Catch2WithMain engine-net platform-hal)
+catch_discover_tests(test_server_browser_model)
 catch_discover_tests(test_content_downloader)
 
 add_executable(test_wind_profile test_wind_profile.cpp)

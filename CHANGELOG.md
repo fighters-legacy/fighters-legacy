@@ -21,6 +21,80 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network**: fl-lobby registration client and in-game server browser (#143, Epic E #497). The HTTP HAL
+  gains a `request()` primitive with POST/PUT/DELETE methods + body/content-type (`get()` forwards to it);
+  `LobbyRegistration` heartbeats a dedicated server to an `fl-lobby` service (`POST /v1/servers` on an
+  interval, `DELETE` on shutdown, exponential backoff on failure) when `[lobby] register` is set and a
+  libcurl backend is present. The client gains a `ServerBrowserScreen` (an IGui list) backed by a pure
+  `ServerBrowserModel` that merges LAN discovery, lobby listings (`LobbyListClient` +
+  `parseLobbyServerList`, a tolerant bounded JSON scanner), and live server-info query results (ping /
+  fresh counts), deduped by `host:port` with LAN winning; selecting a row or Direct Connect prefills the
+  join form. The multiplayer main menu's "Join Server" now opens the browser. New `[client] lobby_urls`
+  (comma-separated, empty by default — federation posture). The REST contract is documented in the new
+  `docs/lobby-api.md` (the fl-lobby Go service, #999, is written from it). Covered by
+  `tests/test_lobby_list_parser.cpp`, `tests/test_lobby_registration.cpp`,
+  `tests/test_server_browser_model.cpp`, `tests/test_server_browser_screen.cpp`, and a new
+  `fuzz/fuzz_lobby_list.cpp` harness.
+
+- **i18n**: localize connection and session-failure strings (#358, Epic E #497). The game client now
+  constructs `Localization` at startup from `[client] language` (default `en`) and routes the loading
+  screen's session-failure text through a new `tr(loc, key, builtin)` helper that falls back to the
+  built-in English string when a key is missing or no locale is loaded — a partial translation degrades
+  to English rather than showing raw keys. Each `SessionFailure` enumerator gains a stable
+  `sessionFailureKey()`, and `locale/en/ui.toml` is populated with the `[session]`, `[chat]`,
+  `[scoreboard]`, `[join]`, `[spectate]`, `[debrief]`, and `[browser]` sections. `tests/test_session_i18n.cpp`
+  guards against enum/TOML drift (every failure key present + non-empty in the repo locale, tr fallback).
+  Documented in `docs/modding/localization.md`.
+
+- **match**: objective scoring channel from missions to the match controller (#1000, Epic E #497).
+  `MatchController::recordObjective(faction, count)` awards `count × points_per_objective` to a team
+  during the Active phase (frozen otherwise, inert when the mode declares no objective points). A mission
+  awards it from a Lua trigger action via a new `world.score_objective(faction, count)` binding (routed
+  through the `WorldApi::scoreObjective` host seam to the match controller in fl-server), and the updated
+  `MsgMatchState` broadcast carries the new team scores to clients. Ships the objective-scored
+  **`builtin:strike`** game mode (two teams, kill = 1, objective = 10, score limit 100, 20-minute clock).
+  Covered by new `tests/test_match_controller.cpp`, `tests/test_game_mode.cpp`, and
+  `tests/test_lua_controller.cpp` cases; documented in `docs/modding/game-modes.md`.
+
+- **network**: spectator interest position for dead/observer peers (#403, Epic E #497). A dead pilot
+  awaiting respawn no longer gets a blacked-out header-only snapshot — the server seeds its interest
+  center from the wreck on death and thereafter follows its camera-eye stream (#858), so it spectates
+  the world around it. A new admin `spectate <peer> <entityIdx|off>` command (and
+  `WorldBroadcaster::setSpectateTarget`) locks a spectator's view onto a chosen entity (auto-clearing
+  when that entity dies). An optional `[world] spectate_delay_s` (0 = off) buffers a spectator's
+  positional snapshots by N seconds as anti-ghosting — reliable channels (chat/kill feed/match state)
+  stay live — capped at 4 MB/peer and cleared on respawn/role change/disconnect. Client-side, a downed
+  pilot drops into a free ghost camera at the wreck and can cycle live entities with the observer picker
+  (Num1/Num2), returning to the cockpit on the respawn ack. Covered by new
+  `tests/test_world_broadcaster.cpp` and `tests/test_admin_console.cpp` cases.
+
+- **network**: in-match text chat (#646, Epic E #497). New `MsgChat` (0x20, client→server) and
+  `MsgChatEvent` (0x21, server→client) wire messages plus a `ChatChannel` (All/Team) enum. The server
+  sanitizes each line (BMP UTF-8, control characters stripped, codepoint-boundary truncation at 240
+  bytes), rate-limits per peer (`[chat] rate_limit_per_s`, warn-once-per-window), applies a per-session
+  admin mute (`mute` / `unmute` / `mutes` commands) and a moderation hook (fl-server default logs an
+  audit line and allows), then routes the line — All to every handshake-complete peer including the
+  sender's echo, Team to the sender's faction only. The client sends via a chat input box (`Y` = all,
+  `H` = team) that captures the keyboard while open (a new `textEntry` gate on `FlightInputCollector::poll`
+  suppresses flight keys but keeps the gamepad/HOTAS axes live), and displays a bottom-left fading ring of
+  recent lines with local per-callsign muting. `[chat] enabled` toggles the whole channel. New
+  `ChatOverlay`, `InputAction::ChatAll`/`ChatTeam`, and `[chat]` config section. Unit-tested end to end
+  (`tests/test_chat_overlay.cpp`, server routing/mute/sanitize/rate-limit/hook cases in
+  `tests/test_world_broadcaster.cpp`, send/receive in `tests/test_client_net_event_handler.cpp`, admin
+  commands in `tests/test_admin_console.cpp`).
+
+- **game**: multiplayer kill feed and scoreboard (#647, Epic E #497). The client now decodes the
+  server's `MsgMatchState` (0x1D, match phase + limits + per-team scores) and `MsgScoreboard` (0x1E,
+  per-participant kills/deaths/score/ping, upserted across the unreliable chunked stream and pruned when a
+  participant leaves the roster). A top-right `KillFeed` HudElement overlay renders recent "X destroyed Y"
+  lines — names resolved from the match roster, tinted green/red when you score/take the kill — replacing
+  the anonymous "peer N" kill line. A `ScoreboardOverlay` IGui table (held on the Scoreboard key, default
+  `I`, and auto-shown in the match end phase) groups players by team with the authoritative match score,
+  a phase/countdown header, and a highlighted self row. The debrief adds a winner/draw banner and per-team
+  final scores above the personal tallies. New `InputAction::Scoreboard`. Unit-tested against the scripted
+  NullGui and a deterministic clock (`tests/test_kill_feed.cpp`, `tests/test_scoreboard_overlay.cpp`, plus
+  `MsgMatchState`/`MsgScoreboard` decode + kill-feed name cases in `tests/test_client_net_event_handler.cpp`).
+
 - **game**: multiplayer join-server screen (#322, Epic E #497). The first IGui consumer — a direct-connect
   form with real text fields for the server address (`host[:port]`), an optional join password (#998,
   masked) and a callsign (pre-filled from the pilot profile). Connect (button or Enter) parses the address,

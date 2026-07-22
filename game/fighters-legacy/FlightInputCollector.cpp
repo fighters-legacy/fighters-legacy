@@ -17,7 +17,8 @@ namespace fl {
 std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRenderBridge& /*bridge*/,
                                                              CameraInput& camInput, const GameConsole& console,
                                                              IInput& input, IJoystick* joystick,
-                                                             const ControlsSettings& cs, bool uiFocused) {
+                                                             const ControlsSettings& cs, bool uiFocused,
+                                                             bool textEntry) {
     m_weaponFired = false;
 
     const auto now = m_clock->now();
@@ -32,79 +33,86 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
 
     constexpr float kThrottleStep = 1.0f / 60.0f;
     if (!console.isOpen()) {
-        if (input.isKeyDown(Key::PageUp))
-            camInput.adjustThrottle(kThrottleStep);
-        if (input.isKeyDown(Key::PageDown))
-            camInput.adjustThrottle(-kThrottleStep);
-        inp.throttle = input.isKeyDown(Key::LeftShift) ? 1.f : camInput.throttle();
-        inp.elevator = (input.isKeyDown(Key::ArrowUp) ? -1.f : 0.f) + (input.isKeyDown(Key::ArrowDown) ? 1.f : 0.f);
-        inp.aileron = (input.isKeyDown(Key::ArrowRight) ? 1.f : 0.f) + (input.isKeyDown(Key::ArrowLeft) ? -1.f : 0.f);
-        inp.rudder = (input.isKeyDown(Key::X) ? 1.f : 0.f) + (input.isKeyDown(Key::Z) ? -1.f : 0.f);
-        inp.buttons = input.isKeyDown(Key::Space) ? 1u : 0u;
-        if (input.isKeyDown(Key::Tab))
-            inp.buttons |= 0x02u;
-        // Wheel brakes (#700): B holds the brakes. A flight control like throttle/AB, so it is not
-        // gated on uiFocused — the server ignores it unless the aircraft is on the ground anyway.
-        if (input.isKeyDown(Key::B))
-            inp.buttons |= fl::kInputButtonWheelBrake;
-        // Fire the selected store (#625): mouse-right or the Enter key. Level on the wire — the
-        // server's FireControl edge-detects, so holding it is one shot. Gated while an overlay owns
-        // the discrete keys (the radio menu's picks are the digit keys the cycle uses, #610).
-        if (!uiFocused && (input.isMouseButtonDown(MouseButton::Right) || input.isKeyDown(Key::Enter)))
-            inp.buttons |= 0x04u;
-        // Weapon-station cycling (#625): local edge detection, ABSOLUTE selection on the wire (an
-        // absolute value converges on a lossy channel; a lost cycle-edge would not). Wraps within
-        // the station count Game.cpp provides from the entity def; 0 = unknown (selection off).
-        const bool nextDown = !uiFocused && input.isKeyDown(Key::Num1); // NextWeapon primary binding
-        const bool prevDown = !uiFocused && input.isKeyDown(Key::Num2); // PrevWeapon primary binding
-        if (m_stationCount > 0) {
-            const bool nextEdge = nextDown && !m_prevNextKey;
-            const bool prevEdge = prevDown && !m_prevPrevKey;
-            // 255 = "keep the server's default selection". Only a deliberate cycle replaces it —
-            // an untouched selector must never override what the server chose at spawn.
-            if ((nextEdge || prevEdge) && m_selectedStation == 255)
-                m_selectedStation = 0;
-            else if (nextEdge)
-                m_selectedStation = static_cast<uint8_t>((m_selectedStation + 1) % m_stationCount);
-            else if (prevEdge)
-                m_selectedStation = static_cast<uint8_t>((m_selectedStation + m_stationCount - 1) % m_stationCount);
-        }
-        m_prevNextKey = nextDown;
-        m_prevPrevKey = prevDown;
+        // The keyboard control block is suppressed while a text field owns the keyboard (chat, #646) —
+        // the gamepad + HOTAS blocks below stay live so a partner keeps flying. Throttle holds.
+        if (textEntry)
+            inp.throttle = camInput.throttle();
+        if (!textEntry) {
+            if (input.isKeyDown(Key::PageUp))
+                camInput.adjustThrottle(kThrottleStep);
+            if (input.isKeyDown(Key::PageDown))
+                camInput.adjustThrottle(-kThrottleStep);
+            inp.throttle = input.isKeyDown(Key::LeftShift) ? 1.f : camInput.throttle();
+            inp.elevator = (input.isKeyDown(Key::ArrowUp) ? -1.f : 0.f) + (input.isKeyDown(Key::ArrowDown) ? 1.f : 0.f);
+            inp.aileron =
+                (input.isKeyDown(Key::ArrowRight) ? 1.f : 0.f) + (input.isKeyDown(Key::ArrowLeft) ? -1.f : 0.f);
+            inp.rudder = (input.isKeyDown(Key::X) ? 1.f : 0.f) + (input.isKeyDown(Key::Z) ? -1.f : 0.f);
+            inp.buttons = input.isKeyDown(Key::Space) ? 1u : 0u;
+            if (input.isKeyDown(Key::Tab))
+                inp.buttons |= 0x02u;
+            // Wheel brakes (#700): B holds the brakes. A flight control like throttle/AB, so it is not
+            // gated on uiFocused — the server ignores it unless the aircraft is on the ground anyway.
+            if (input.isKeyDown(Key::B))
+                inp.buttons |= fl::kInputButtonWheelBrake;
+            // Fire the selected store (#625): mouse-right or the Enter key. Level on the wire — the
+            // server's FireControl edge-detects, so holding it is one shot. Gated while an overlay owns
+            // the discrete keys (the radio menu's picks are the digit keys the cycle uses, #610).
+            if (!uiFocused && (input.isMouseButtonDown(MouseButton::Right) || input.isKeyDown(Key::Enter)))
+                inp.buttons |= 0x04u;
+            // Weapon-station cycling (#625): local edge detection, ABSOLUTE selection on the wire (an
+            // absolute value converges on a lossy channel; a lost cycle-edge would not). Wraps within
+            // the station count Game.cpp provides from the entity def; 0 = unknown (selection off).
+            const bool nextDown = !uiFocused && input.isKeyDown(Key::Num1); // NextWeapon primary binding
+            const bool prevDown = !uiFocused && input.isKeyDown(Key::Num2); // PrevWeapon primary binding
+            if (m_stationCount > 0) {
+                const bool nextEdge = nextDown && !m_prevNextKey;
+                const bool prevEdge = prevDown && !m_prevPrevKey;
+                // 255 = "keep the server's default selection". Only a deliberate cycle replaces it —
+                // an untouched selector must never override what the server chose at spawn.
+                if ((nextEdge || prevEdge) && m_selectedStation == 255)
+                    m_selectedStation = 0;
+                else if (nextEdge)
+                    m_selectedStation = static_cast<uint8_t>((m_selectedStation + 1) % m_stationCount);
+                else if (prevEdge)
+                    m_selectedStation = static_cast<uint8_t>((m_selectedStation + m_stationCount - 1) % m_stationCount);
+            }
+            m_prevNextKey = nextDown;
+            m_prevPrevKey = prevDown;
 
-        // Radar mode cycle (#526/#528): R steps Silent -> Search -> TWS -> STT -> Silent. Absolute on
-        // the wire (converges on the unreliable channel); 255 = keep the server default until the
-        // player first presses it, so a fresh spawn stays in its TWS mode.
-        const bool radarKey = !uiFocused && input.isKeyDown(Key::R);
-        if (radarKey && !m_prevRadarKey) {
-            m_radarMode = static_cast<uint8_t>((m_radarMode + 1) % 4);
-            m_radarModeTouched = true;
-        }
-        m_prevRadarKey = radarKey;
-        inp.radarMode = m_radarModeTouched ? m_radarMode : 255u;
+            // Radar mode cycle (#526/#528): R steps Silent -> Search -> TWS -> STT -> Silent. Absolute on
+            // the wire (converges on the unreliable channel); 255 = keep the server default until the
+            // player first presses it, so a fresh spawn stays in its TWS mode.
+            const bool radarKey = !uiFocused && input.isKeyDown(Key::R);
+            if (radarKey && !m_prevRadarKey) {
+                m_radarMode = static_cast<uint8_t>((m_radarMode + 1) % 4);
+                m_radarModeTouched = true;
+            }
+            m_prevRadarKey = radarKey;
+            inp.radarMode = m_radarModeTouched ? m_radarMode : 255u;
 
-        // Electronic warfare (#529). E dispenses chaff+flare (bit 3, level on the wire — the server
-        // edge-detects, so holding E is one pop); J toggles the ECM jammer (bit 4, level).
-        if (!uiFocused && input.isKeyDown(Key::E))
-            inp.buttons |= 0x08u;
-        const bool ecmKey = !uiFocused && input.isKeyDown(Key::J);
-        if (ecmKey && !m_prevEcmKey)
-            m_ecmOn = !m_ecmOn;
-        m_prevEcmKey = ecmKey;
-        if (m_ecmOn)
-            inp.buttons |= 0x10u;
+            // Electronic warfare (#529). E dispenses chaff+flare (bit 3, level on the wire — the server
+            // edge-detects, so holding E is one pop); J toggles the ECM jammer (bit 4, level).
+            if (!uiFocused && input.isKeyDown(Key::E))
+                inp.buttons |= 0x08u;
+            const bool ecmKey = !uiFocused && input.isKeyDown(Key::J);
+            if (ecmKey && !m_prevEcmKey)
+                m_ecmOn = !m_ecmOn;
+            m_prevEcmKey = ecmKey;
+            if (m_ecmOn)
+                inp.buttons |= 0x10u;
 
-        // Ejection (#672): End commands the seat, level on the wire — the server edge-detects, so
-        // holding it is one ejection. Gated while an overlay owns the keys, like the other discretes.
-        if (!uiFocused && input.isKeyDown(Key::End))
-            inp.buttons |= fl::kInputButtonEject;
+            // Ejection (#672): End commands the seat, level on the wire — the server edge-detects, so
+            // holding it is one ejection. Gated while an overlay owns the keys, like the other discretes.
+            if (!uiFocused && input.isKeyDown(Key::End))
+                inp.buttons |= fl::kInputButtonEject;
 
-        // Respawn (#648): Backspace requests a respawn after death. Level on the wire; the server
-        // edge-detects and only acts while the player is dead in a match with respawn enabled.
-        if (!uiFocused && input.isKeyDown(Key::Backspace))
-            inp.buttons |= fl::kInputButtonRespawn;
+            // Respawn (#648): Backspace requests a respawn after death. Level on the wire; the server
+            // edge-detects and only acts while the player is dead in a match with respawn enabled.
+            if (!uiFocused && input.isKeyDown(Key::Backspace))
+                inp.buttons |= fl::kInputButtonRespawn;
 
-        m_weaponFired = (inp.buttons & 1u) != 0u;
+            m_weaponFired = (inp.buttons & 1u) != 0u;
+        } // end keyboard block (suppressed during text entry)
 
         if (input.getGamepadCount() > 0) {
             auto readAxis = [&](fl::InputAction action) -> float {

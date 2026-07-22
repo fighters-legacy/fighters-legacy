@@ -126,6 +126,13 @@ struct PeerInputState {
     std::chrono::steady_clock::time_point radioCmdWindowStart{};
     uint32_t radioCmdCount{0};
 
+    // Text chat channel (#646). Same per-peer 1 s rate-limit window pattern as wingman (warn once per
+    // window, silently drop the rest). chatMuted is session-scoped, set by the admin mute command.
+    std::chrono::steady_clock::time_point chatWindowStart{};
+    uint32_t chatCount{0};
+    bool chatRateLimitWarned{false};
+    bool chatMuted{false};
+
     // Connect handshake (#853/#857). Set when MsgConnectRequest is processed. Before that a connected
     // peer has an input slot (so idle-timeout covers it) but no entity, no role, and no snapshot
     // delivery -- it is not admitted until it sends a request.
@@ -136,6 +143,16 @@ struct PeerInputState {
     // position, then driven by the client's camera eye each frame (#858, set in onReceive from
     // MsgClientInput::cameraEye). Unused for a pilot, whose aircraft transform wins in the gather.
     glm::dvec3 interestCenter{0.0, 0.0, 0.0};
+
+    // Spectate (#403). spectateTargetIdx overrides the interest center onto a chosen live entity (the
+    // admin `spectate` command); it auto-clears when that entity dies. snapshotDelayQueue holds a
+    // dead/observer peer's snapshot payloads for spectateDelayTicks before delivery (anti-ghosting for
+    // positional intel), FIFO, capped by bytes. Both are cleared on respawn / role change / disconnect.
+    static constexpr uint32_t kNoSpectateTarget = 0xFFFFFFFFu;
+    uint32_t spectateTargetIdx{kNoSpectateTarget};
+    std::deque<std::pair<uint64_t, std::vector<uint8_t>>> snapshotDelayQueue; // {dueTick, payload}
+    std::size_t snapshotDelayBytes{0};
+    bool snapshotDelayEvicted{false}; // one warn per peer when the cap evicts
 };
 
 // Snapshot of a connected peer's state, delivered by forEachPeer. The struct form makes future
@@ -806,6 +823,40 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // MsgTeamRequest path both route here. A no-op if the peer has no roster entry.
     void setPeerFaction(uint32_t peerId, uint16_t faction);
 
+    // ── in-match text chat (#646) — sim-thread only ─────────────────────────
+    // Enable/disable the chat channel (default enabled) and set the per-peer rate limit (lines/second).
+    // Call before gameLoop.start(); hot-reloadable via reload_config.
+    void setChatEnabled(bool enabled) noexcept {
+        m_chatEnabled = enabled;
+    }
+    void setChatRateLimit(int perSecond) noexcept {
+        m_chatRateLimit = perSecond < 1 ? 1 : perSecond;
+    }
+    // Moderation hook: return false to suppress a line (fl-server default logs an audit line + allows).
+    // Unset ⇒ every line passes. Sim-thread; wired before gameLoop.start().
+    using ChatModerationHook = std::function<bool(uint32_t peerId, uint8_t channel, std::string_view text)>;
+    void setChatModerationHook(ChatModerationHook fn) {
+        m_chatModerationHook = std::move(fn);
+    }
+    // Session-scoped mute for a peer (admin mute/unmute). Sim-thread. Returns false if the peer is
+    // unknown. A muted peer's chat lines are dropped silently (no rate-limit warning).
+    bool setPeerMuted(uint32_t peerId, bool muted);
+    [[nodiscard]] bool isPeerMuted(uint32_t peerId) const;
+    // Participant ids of every currently muted peer (for the admin `mutes` command). Sim-thread.
+    [[nodiscard]] std::vector<uint32_t> mutedPeers() const;
+
+    // ── spectate (#403) — sim-thread only ───────────────────────────────────
+    // Override a dead/observer peer's interest center onto a chosen live entity (admin `spectate <peer>
+    // <idx>`). entityIdx == PeerInputState::kNoSpectateTarget clears it (`spectate <peer> off`). The
+    // target auto-clears when the entity dies. Returns false if the peer is unknown.
+    bool setSpectateTarget(uint32_t peerId, uint32_t entityIdx);
+    // Delay a dead/observer peer's snapshot delivery by `seconds` (anti-ghosting; 0 = off, the default,
+    // which is byte-identical to no buffering). Applied to positional snapshots only — reliable channels
+    // (chat / kill feed / match state) stay live. Call before gameLoop.start(); [0, 300].
+    void setSpectateDelay(int seconds) noexcept {
+        m_spectateDelayTicks = static_cast<uint32_t>((seconds < 0 ? 0 : seconds > 300 ? 300 : seconds) * 60);
+    }
+
     // ── match lifecycle + scoring (#523) — sim-thread only ───────────────────
     // A POD mirror of the MatchController's public state (engine-net does not depend on engine-match).
     // fl-server fills it from the controller and hands it here; the broadcaster stores it, broadcasts
@@ -1187,6 +1238,17 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Player radio channel (#703). Sim-thread only (called from onReceive). Parses the verb, rate-
     // limits per peer, dispatches to the ATC service, and sends an immediate acknowledgement.
     void handleRadioCommand(uint32_t peerId, const void* data, std::size_t size);
+
+    // Text chat channel (#646). Sim-thread only (called from onReceive). Handshake-gated; sanitizes the
+    // text (BMP UTF-8, control chars stripped, truncated on a codepoint boundary), per-peer rate-limits,
+    // honors mute + the moderation hook, then routes a MsgChatEvent to the channel's recipients.
+    void handleChat(uint32_t peerId, const void* data, std::size_t size);
+    // Build + send one MsgChatEvent to a single peer. Sim-thread.
+    void sendChatEvent(uint32_t peerId, uint8_t channel, uint32_t senderPeerId, std::string_view text);
+
+    // Push a positional snapshot onto a spectator peer's delay queue (#403), evicting the oldest when the
+    // 4 MB/peer cap is exceeded (warn once). Sim-thread.
+    void enqueueDelayedSnapshot(PeerInputState& pin, uint64_t dueTick, const std::vector<uint8_t>& payload);
     // Convert an ATC RadioTransmission to the wire message and send it: unicast to the peer owning the
     // target entity if one does, else broadcast to every peer (so nearby players hear an AI's clearance).
     void sendRadioTransmission(const fl::atc::RadioTransmission& tx);
@@ -1264,6 +1326,10 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     std::vector<RequiredPack> m_requiredPacks;              // #872: packs a client must have (id + optional version)
     RequiredPackPolicy m_requiredPackPolicy{RequiredPackPolicy::Warn}; // #872: what to do when one is missing
     int m_flightCmdRateLimit{4};                                       // orders per second per peer
+    bool m_chatEnabled{true};                                          // #646: false = drop all chat
+    int m_chatRateLimit{2};                                            // #646: chat lines per second per peer
+    ChatModerationHook m_chatModerationHook;                           // #646: null = every line passes
+    uint32_t m_spectateDelayTicks{0};                                  // #403: spectator snapshot delay; 0 = off
     // EntityId.index -> {sim, controller}. Replaces the old peerId-keyed flight-sim map: any control
     // source (peer, AI, script) registers here and is stepped uniformly in onTick.
     std::unordered_map<uint32_t, ControlledEntity> m_controlledEntities;
@@ -1675,6 +1741,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         EntityId peerEid;                      // invalid for an observer (no entity) (#857)
         const EntityState* peerState{nullptr}; // null for an observer
         double center[3]{};                    // interest center: the pilot's entity, or the observer's point
+        bool spectator{false};                 // #403: observer or dead pilot — eligible for the snapshot delay
 
         PeerInputState* pin{nullptr};
         std::unordered_map<uint32_t, PeerEntityRec>* knownGens{nullptr};

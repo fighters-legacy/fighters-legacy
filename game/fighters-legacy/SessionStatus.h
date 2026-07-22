@@ -75,4 +75,48 @@ inline const char* sessionFailureMessage(SessionFailure f) {
     return "";
 }
 
+// Stable i18n key for a failure (#358), e.g. "session.server_spawn_failed". Paired with
+// sessionFailureMessage(): the client looks the key up in the active locale and falls back to the
+// English message when the key is absent. None returns "" (never displayed). Every enumerator has a
+// key; tests/test_session_i18n.cpp asserts each key is present + non-empty in locale/en/ui.toml.
+inline const char* sessionFailureKey(SessionFailure f) {
+    switch (f) {
+    case SessionFailure::None:
+        return "";
+    case SessionFailure::ServerSpawnFailed:
+        return "ui.session.server_spawn_failed";
+    case SessionFailure::ServerBindFailed:
+        return "ui.session.server_bind_failed";
+    case SessionFailure::ServerStartTimeout:
+        return "ui.session.server_start_timeout";
+    case SessionFailure::ServerStartHang:
+        return "ui.session.server_start_hang";
+    case SessionFailure::VersionMismatch:
+        return "ui.session.version_mismatch";
+    case SessionFailure::Banned:
+        return "ui.session.banned";
+    case SessionFailure::AccessDenied:
+        return "ui.session.access_denied";
+    case SessionFailure::RateLimited:
+        return "ui.session.rate_limited";
+    case SessionFailure::TooManyConnections:
+        return "ui.session.too_many_connections";
+    case SessionFailure::ConnectionRefused:
+        return "ui.session.connection_refused";
+    case SessionFailure::ConnectTimeout:
+        return "ui.session.connect_timeout";
+    case SessionFailure::RoleDenied:
+        return "ui.session.role_denied";
+    case SessionFailure::MissingRequiredPack:
+        return "ui.session.missing_required_pack";
+    case SessionFailure::EntitlementRequired:
+        return "ui.session.entitlement_required";
+    case SessionFailure::MatchFull:
+        return "ui.session.match_full";
+    case SessionFailure::BadPassword:
+        return "ui.session.bad_password";
+    }
+    return "";
+}
+
 } // namespace fl

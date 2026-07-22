@@ -23,9 +23,21 @@ enum class HttpStatus : uint8_t {
     Cancelled, // cancel() was called, or a data handler returned false
 };
 
+// HTTP method (#143 — the lobby registration client needs POST/DELETE alongside the download GET).
+// Delete_ has a trailing underscore to avoid the C++ `delete` keyword.
+enum class HttpMethod : uint8_t {
+    Get,
+    Post,
+    Put,
+    Delete_,
+};
+
 struct HttpRequestOptions {
     std::string url;
-    std::string userAgent;            // empty -> the backend's default
+    std::string userAgent; // empty -> the backend's default
+    HttpMethod method{HttpMethod::Get};
+    std::string body;                 // request body for POST/PUT (ignored for GET/DELETE)
+    std::string contentType;          // e.g. "application/json"; empty -> none set
     uint32_t connectTimeoutMs{15000}; // 0 -> backend default
     uint32_t totalTimeoutMs{0};       // 0 -> no overall cap
     uint32_t lowSpeedLimitBps{1};     // stall watchdog: abort if slower than this...
@@ -63,8 +75,17 @@ class IHttpClient {
     // Register the completion handler; nullptr deregisters.
     virtual void setEventHandler(IHttpClientHandler* handler) = 0;
 
-    // Enqueue a GET. Returns an id >= 1, or 0 if it could not be enqueued (before init(), empty url).
-    virtual HttpRequestId get(const HttpRequestOptions& options) = 0;
+    // Enqueue a request using options.method. Returns an id >= 1, or 0 if it could not be enqueued
+    // (before init(), empty url). This is the primitive; get() is a convenience forwarder.
+    virtual HttpRequestId request(const HttpRequestOptions& options) = 0;
+
+    // Enqueue a GET (forwards to request() with method = Get). Non-virtual so a backend only implements
+    // request(). Kept for the existing download call sites.
+    HttpRequestId get(const HttpRequestOptions& options) {
+        HttpRequestOptions o = options;
+        o.method = HttpMethod::Get;
+        return request(o);
+    }
 
     // Best-effort cancellation; the completion callback still fires (Success if already done, else
     // Cancelled). No-op for id 0 or an already-dispatched request.

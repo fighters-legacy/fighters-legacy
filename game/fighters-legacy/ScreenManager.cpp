@@ -42,6 +42,10 @@ void ScreenManager::reinitJoinServer(JoinServerScreen::Deps deps) {
     m_joinServer = std::make_unique<JoinServerScreen>(std::move(deps));
 }
 
+void ScreenManager::reinitServerBrowser(ServerBrowserScreen::Deps deps) {
+    m_serverBrowser = std::make_unique<ServerBrowserScreen>(std::move(deps));
+}
+
 void ScreenManager::reinitLoading(std::atomic<bool>& serverReady, std::function<bool()> isConnected,
                                   std::function<void()> onConnect, bool isSinglePlayer,
                                   std::atomic<SessionFailure>* sessionFailure) {
@@ -56,6 +60,8 @@ IScreen& ScreenManager::active() {
     case Screen::JoinServer:
         // Constructed by reinitJoinServer() before the menu can navigate here; fall back defensively.
         return m_joinServer ? static_cast<IScreen&>(*m_joinServer) : static_cast<IScreen&>(*m_mainMenu);
+    case Screen::ServerBrowser:
+        return m_serverBrowser ? static_cast<IScreen&>(*m_serverBrowser) : static_cast<IScreen&>(*m_mainMenu);
     case Screen::Loading:
         return *m_loading;
     case Screen::MissionSelect:
@@ -116,6 +122,10 @@ void ScreenManager::setSettingsReturnTarget(Screen target) {
 
 JoinServerScreen& ScreenManager::joinServer() {
     return *m_joinServer;
+}
+
+ServerBrowserScreen& ScreenManager::serverBrowser() {
+    return *m_serverBrowser;
 }
 
 MainMenuScreen& ScreenManager::mainMenu() {
