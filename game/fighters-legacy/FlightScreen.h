@@ -7,6 +7,7 @@
 #include "Autopilot.h"      // player autopilot holds (#640)
 #include "CrewSeatMenu.h"   // crew seat picker (#975)
 #include "EntitySelector.h" // observer entity picker (#860)
+#include "render/IHud.h"    // HudMfdState (#642)
 #include "render/RenderSnapshot.h"
 
 #include <array>
@@ -111,6 +112,9 @@ class FlightScreen : public IScreen {
     bool m_insetOn{false};
     glm::vec4 m_insetRect{0.0f};
     bool m_insetActive{false}; // inset shown this frame (on + a target resolved)
+
+    // Radar MFD page state (#642): client UI, cycled with MfdPage/MfdRange; fed to the HUD each frame.
+    HudMfdState m_mfd{};
 
     // Ground-crew scene (#55): landed-and-stopped detection on the OWN aircraft. The airborne→landed
     // edge records a landing score into the logbook (the #674 sink that had no producer); holding

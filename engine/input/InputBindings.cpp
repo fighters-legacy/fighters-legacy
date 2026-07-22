@@ -53,6 +53,8 @@ static constexpr const char* kActionNames[] = {
     "AutopilotHdgHold",
     "AutopilotSpdHold",
     "MasterArm",
+    "MfdPage",
+    "MfdRange",
 };
 static_assert(std::size(kActionNames) == static_cast<size_t>(InputAction::Count),
               "kActionNames must have one entry per InputAction");
@@ -735,6 +737,11 @@ void InputBindings::applyDefaults() {
     // Master arm (#641): V toggles ARM/SAFE. Free key, off the flight cluster.
     m_primary[static_cast<int>(InputAction::MasterArm)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::V),
                                                            false};
+
+    // Radar MFD (#642): O cycles the page, Num3 the range scale. Free keys.
+    m_primary[static_cast<int>(InputAction::MfdPage)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::O), false};
+    m_primary[static_cast<int>(InputAction::MfdRange)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::Num3),
+                                                          false};
 }
 
 // ---------------------------------------------------------------------------

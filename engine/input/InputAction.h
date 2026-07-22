@@ -76,6 +76,10 @@ enum class InputAction : uint32_t {
     // Master arm toggle (#641) — ARM/SAFE; SAFE gates the fire triggers
     MasterArm,
 
+    // Radar MFD (#642) — cycle the display page / the range scale
+    MfdPage,
+    MfdRange,
+
     Count
 };
 

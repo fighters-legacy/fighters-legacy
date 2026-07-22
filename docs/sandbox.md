@@ -52,6 +52,10 @@ The combat symbology renders in Cockpit/Padlock view against the designated targ
 | Key | Action | Binding |
 |---|---|---|
 | V | Master arm (ARM / SAFE) | `MasterArm` |
+| O | Cycle radar MFD page (Off → PPI → B-scope → RWR) | `MfdPage` |
+| 3 | Cycle radar MFD range (10 / 20 / 40 / 80 nm) | `MfdRange` |
+
+The MFD (lower-left) presents the fused datalink picture (#528): the PPI is a 360° plan view (ownship centred, nose up), the B-scope plots azimuth (±60°) vs range, and the RWR page is a dedicated threat-warning ring. All are IFF-coloured (friend green / foe red / unknown amber) and annunciate the requested radar mode (SIL/SRCH/TWS/STT, cycled with **R**). An RWR `RWR LAUNCH` / `RWR LOCK` caption shows on **every** page, including Off.
 
 ### Free camera (F4)
 

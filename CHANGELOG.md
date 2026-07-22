@@ -21,6 +21,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **game**: radar MFD and RWR display pages (#642, Epic #587). The datalink scope (#528) becomes a
+  cyclable MFD: `HudMfdState` (owned by `FlightScreen`, cycled with the new `MfdPage`/`MfdRange` actions
+  on O/3) selects an Off page, the 360° PPI, a B-scope (azimuth ±60° vs range), or a dedicated RWR
+  threat-warning ring, with IFF-coloured contacts, a range caption, and a SIL/SRCH/TWS/STT radar-mode
+  annunciation from the requested mode. The `RWR LAUNCH`/`RWR LOCK` threat caption is never page-gated
+  (shows even on the Off page). Rendered entirely through the existing `HudElement` overlay path
+  (IGui-independent). Covered by new cases in `tests/test_flight_hud.cpp` (page/range cycling, the
+  never-gated caption, B-scope geometry).
+
 - **game**: combat HUD modes — target box, pipper, CCIP, weapon status, master arm (#641, Epic #587).
   `FlightHud::drawCombat` renders the gun pipper (ballistic lead via `computeBallisticLead`, gravity
   from the local radial up), the CCIP bomb-release cross + fall line + time-of-fall (`computeCcip`

@@ -21,6 +21,23 @@ struct HudMfdState {
     Page page{Page::Ppi};
     float rangeScaleM{74080.0f}; // scope range (m); 74080 = 40 nm. Cycled 10/20/40/80 nm.
     uint8_t radarMode{1};        // sensor::RadarMode ordinal (Silent/Search/Tws/Stt) for the annunciation
+
+    // Cycle the page Off -> Ppi -> BScope -> Rwr -> Off (pure, unit-testable).
+    void cyclePage() noexcept {
+        page = static_cast<Page>((static_cast<uint8_t>(page) + 1u) % 4u);
+    }
+    // Cycle the range scale 10 -> 20 -> 40 -> 80 nm -> 10 (nautical miles, stored SI).
+    void cycleRange() noexcept {
+        constexpr float nm = 1852.0f;
+        constexpr float steps[] = {10.f * nm, 20.f * nm, 40.f * nm, 80.f * nm};
+        int cur = 0;
+        for (int i = 0; i < 4; ++i)
+            if (rangeScaleM <= steps[i] + 1.0f) {
+                cur = i;
+                break;
+            }
+        rangeScaleM = steps[(cur + 1) % 4];
+    }
 };
 
 // Everything the HUD needs for one frame (#438). A single struct instead of a growing positional-

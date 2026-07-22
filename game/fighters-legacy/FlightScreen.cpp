@@ -327,6 +327,12 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
         // Target-slaved inset toggle (#698).
         if (bindingJustPressed(input, d.inputBindings->get(fl::InputAction::TargetInsetToggle)))
             m_insetOn = !m_insetOn;
+
+        // Radar MFD page / range cycling (#642).
+        if (bindingJustPressed(input, d.inputBindings->get(fl::InputAction::MfdPage)))
+            m_mfd.cyclePage();
+        if (bindingJustPressed(input, d.inputBindings->get(fl::InputAction::MfdRange)))
+            m_mfd.cycleRange();
     }
 
     // Feed the padlock view its target each frame (resolve auto-clears on despawn/death). Stored for
@@ -465,6 +471,9 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     hin.showLatency = showLat;
     hin.planetRadiusM = radiusM;
     hin.radar = radar;
+    // Radar MFD page state (#642); annunciate the requested radar mode from the collector.
+    m_mfd.radarMode = d.flightInput ? d.flightInput->radarMode() : 2;
+    hin.mfd = m_mfd;
     // Autopilot annunciation (#640).
     hin.apModes = m_autopilot.modes();
     hin.apTargetAltM = m_autopilot.targetAltM();

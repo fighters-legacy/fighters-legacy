@@ -471,3 +471,72 @@ TEST_CASE("FlightHud: the weapon-status block lists all stations, selected brack
     CHECK(hasText(hud, "[2]"));
     CHECK(hasText(hud, "AIM9"));
 }
+
+// ── MFD pages (#642) ─────────────────────────────────────────────────────────
+
+TEST_CASE("HudMfdState: page and range cycling wrap correctly (#642)", "[flight_hud]") {
+    HudMfdState m;
+    CHECK(m.page == HudMfdState::Page::Ppi);
+    m.cyclePage();
+    CHECK(m.page == HudMfdState::Page::BScope);
+    m.cyclePage();
+    CHECK(m.page == HudMfdState::Page::Rwr);
+    m.cyclePage();
+    CHECK(m.page == HudMfdState::Page::Off);
+    m.cyclePage();
+    CHECK(m.page == HudMfdState::Page::Ppi);
+
+    // Range 40 -> 80 -> 10 -> 20 -> 40 nm.
+    CHECK(m.rangeScaleM == Catch::Approx(40.f * 1852.f).margin(2.f));
+    m.cycleRange();
+    CHECK(m.rangeScaleM == Catch::Approx(80.f * 1852.f).margin(2.f));
+    m.cycleRange();
+    CHECK(m.rangeScaleM == Catch::Approx(10.f * 1852.f).margin(2.f));
+}
+
+TEST_CASE("FlightHud: the RWR launch caption shows on every MFD page, including Off (#642)", "[flight_hud]") {
+    auto e = makeEntry();
+    RwrStrobe s{};
+    s.emitterPos[0] = 0.0;
+    s.emitterPos[1] = 3500.0;
+    s.emitterPos[2] = -5000.0;
+    s.level = kThreatLaunch;
+    RadarView radar;
+    radar.strobes = std::span<const RwrStrobe>(&s, 1);
+    radar.valid = true;
+
+    for (HudMfdState::Page pg :
+         {HudMfdState::Page::Ppi, HudMfdState::Page::BScope, HudMfdState::Page::Rwr, HudMfdState::Page::Off}) {
+        FlightHud hud;
+        auto in = makeInput(e);
+        in.radar = radar;
+        in.mfd.page = pg;
+        hud.update(in);
+        INFO("page " << static_cast<int>(pg));
+        CHECK(hasText(hud, "LAUNCH"));
+    }
+}
+
+TEST_CASE("FlightHud: the B-scope plots a dead-ahead contact near the boresight column (#642)", "[flight_hud]") {
+    auto e = makeEntry();
+    e.position = {0.0, 3500.0, 0.0};
+    RadarTrack t{};
+    t.pos[0] = 20000.0; // dead ahead: identity orientation's nose is world +X near the origin
+    t.pos[1] = 3500.0;
+    t.pos[2] = 0.0;
+    t.ident = kIffFoe;
+    RadarView radar;
+    radar.tracks = std::span<const RadarTrack>(&t, 1);
+    radar.valid = true;
+    FlightHud hud;
+    auto in = makeInput(e);
+    in.radar = radar;
+    in.mfd.page = HudMfdState::Page::BScope;
+    hud.update(in);
+    // A foe Rect blip appears somewhere on the B-scope panel (lower-left region).
+    bool blip = false;
+    for (const auto& el : hud.elements())
+        if (el.type == HudElement::Type::Rect && el.r > 0.9f && el.g < 0.5f)
+            blip = true;
+    CHECK(blip);
+}
