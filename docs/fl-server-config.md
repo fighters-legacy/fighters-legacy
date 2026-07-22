@@ -352,8 +352,11 @@ beacon advertises a passworded flag so a browser can prompt. Sent plaintext over
 
 ## [lobby] — Lobby registration
 
-> **Phase 2:** Lobby registration is not yet active. These keys are parsed and stored;
-> no requests are sent to `fl-lobby`. Tracked in issue #143.
+Registers the server with an `fl-lobby` service over HTTP (#143) so it appears in players' in-game server
+browsers. Requires a build with the libcurl HTTP backend; a lean build logs a warning and disables it. The
+server `POST`s a heartbeat every ~30 s while running and `DELETE`s its entry on shutdown. The REST contract
+is documented in [lobby-api.md](lobby-api.md). Hosting is self-host only — point `url` at a community
+`fl-lobby` instance.
 
 ### `register`
 
@@ -361,7 +364,7 @@ beacon advertises a passworded flag so a browser can prompt. Sent plaintext over
 |---|---|
 | boolean | `false` |
 
-Set to `true` to advertise this server to the `fl-lobby` matchmaking service.
+Set to `true` to advertise this server to the `fl-lobby` service named by `url`.
 
 ### `url`
 
@@ -570,6 +573,14 @@ switchable mid-session with the `set_role <peerId> <pilot|observer>` admin comma
 | float | `200.0` | `[1, 100000]` |
 
 Per-peer interest management radius in kilometres. Only entities within this XZ-plane radius of a peer's own entity are included in that peer's `MsgWorldSnapshot`. The default of 200 km covers any current Phase 2 theater. Out-of-range values are rejected with a Warn and the default is used. **Hot-reloadable** via `reload_config`.
+
+### `spectate_delay_s`
+
+| Type | Default | Range |
+|---|---|---|
+| int | `0` | `[0, 300]` |
+
+Anti-ghosting delay (seconds) for a **spectator** — a role-observer, or a dead pilot awaiting respawn (#403). Their positional `MsgWorldSnapshot` is buffered this many seconds before delivery, so a dead player cannot relay live enemy positions to teammates faster than a living pilot could see them. `0` (the default) is off — snapshots deliver immediately, byte-identical to before. The reliable channels (chat, kill feed, match state) are unaffected; only positional intel is delayed. A live pilot is never delayed. The per-peer buffer is capped at 4 MB (oldest snapshots dropped, warned once) and is cleared on respawn / role change / disconnect.
 
 > **Delta-baseline recovery is automatic (client-acked, #517).** There is no baseline-interval knob.
 > The server keys full-vs-delta off the last snapshot tick each client echoes in
@@ -995,6 +1006,22 @@ zero content packs (the compiled-in `builtin:airfield` is always available when 
 Default `"builtin:debug-entity"`. The entity type spawned by `atc_scramble` / `atc.scramble` when a
 caller does not name one. Scrambled aircraft spawn hold-short of the runway, are sequenced onto it by
 the tower, take off in order, and hand off to a loiter over the field.
+
+## [chat] — In-match text chat (#646)
+
+Player-to-player text chat over the reliable channel, with `all` and `team` (same-faction) channels.
+The server sanitizes each line (BMP UTF-8 only, control characters stripped, truncated on a codepoint
+boundary at 240 bytes), rate-limits per peer, honours a per-session mute (the `mute` / `unmute` / `mutes`
+admin commands), and logs every routed line as an audit line via the moderation hook.
+
+### `enabled`
+
+Default `true`. When `false`, every incoming chat line is dropped (no `ChatEvent` is routed).
+
+### `rate_limit_per_s`
+
+Default `2`, range `[1, 60]`. Chat lines accepted per second per peer. Over the limit, the peer gets one
+"sending chat too fast" notice per one-second window and the excess lines are dropped silently.
 
 ## [network] — Transport backend
 

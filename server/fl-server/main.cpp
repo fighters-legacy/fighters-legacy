@@ -25,8 +25,10 @@
 #include "StdoutLogger.h"
 #include "TestSpawn.h"
 #include "bots.h"
+#include "http/CurlHttpClientFactory.h" // #143 lobby registration HTTP backend
 #include "match/MatchController.h"
 #include "net/DiscoveryBeacon.h"
+#include "net/LobbyRegistration.h"
 #include "net/ServerQueryResponder.h"
 #include "sensor/SensorDefParser.h"
 #include "server_config.h"
@@ -355,8 +357,6 @@ int main(int argc, char** argv) {
                       cfg.modStack.size());
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
     }
-    if (cfg.lobbyRegister)
-        log->log(LogLevel::Info, __FILE__, __LINE__, "lobby registration configured (Phase 2 -- not yet active)");
 
     // ---- Init network ----
     if (!net->init()) {
@@ -439,6 +439,36 @@ int main(int argc, char** argv) {
             beacon.reset();
         } else {
             log->log(LogLevel::Info, __FILE__, __LINE__, "LAN discovery beacon started");
+        }
+    }
+
+    // Lobby registration (#143): register with a lobby over HTTP so the entry appears in players'
+    // server browsers. Requires libcurl (the HTTP backend); a lean build logs + disables it. Serviced +
+    // ticked in the main loop, deregistered on shutdown. fl-server links platform-http (allowed: the
+    // module-boundary rules ban engine-* from a backend and fl-server from CLIENT backends only).
+    std::unique_ptr<IHttpClient> httpClient;
+    std::unique_ptr<LobbyRegistration> lobbyReg;
+    if (cfg.lobbyRegister) {
+        httpClient = fl::createHttpClient(log);
+        if (httpClient && httpClient->init()) {
+            lobbyReg = std::make_unique<LobbyRegistration>(*httpClient, *log);
+            httpClient->setEventHandler(lobbyReg.get());
+            LobbyRegistrationConfig lc;
+            lc.lobbyUrl = cfg.lobbyUrl;
+            lc.name = cfg.name;
+            lc.gamePort = cfg.port;
+            lc.maxPlayers = cfg.maxPeers;
+            lc.mode = cfg.matchMode;
+            lc.visibilityPublic = (cfg.lobbyVisibility == "public");
+            lobbyReg->configure(lc);
+            if (lobbyReg->enabled())
+                log->log(LogLevel::Info, __FILE__, __LINE__, "lobby registration active");
+            else
+                log->log(LogLevel::Info, __FILE__, __LINE__, "lobby registration disabled (visibility=private)");
+        } else {
+            log->log(LogLevel::Warn, __FILE__, __LINE__,
+                     "lobby registration requested but no HTTP backend (libcurl absent); disabled");
+            httpClient.reset();
         }
     }
 
@@ -865,6 +895,21 @@ int main(int argc, char** argv) {
     broadcaster.setPlayerFaction(cfg.playerFaction);
     broadcaster.setFlightCommandRateLimit(cfg.flight.commandRateLimitPerS);
 
+    // In-match text chat (#646). The moderation hook default logs an audit line and allows every message;
+    // an operator replaces it with a filter. Rate limit + enable come from [chat].
+    broadcaster.setChatEnabled(cfg.chat.enabled);
+    broadcaster.setChatRateLimit(cfg.chat.rateLimitPerS);
+    broadcaster.setChatModerationHook([log](uint32_t peerId, uint8_t channel, std::string_view text) {
+        char buf[320];
+        std::snprintf(buf, sizeof(buf), "[chat] peer %u ch%u: %.*s", peerId, static_cast<unsigned>(channel),
+                      static_cast<int>(text.size()), text.data());
+        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+        return true; // allow
+    });
+
+    // Spectator snapshot delay (#403): anti-ghosting for dead/observer peers (0 = off).
+    broadcaster.setSpectateDelay(cfg.spectateDelayS);
+
     if (cfg.flight.size > 0 && cfg.playerFaction == 0) {
         // A flight whose threat logic can never fire is a silently broken feature, not a
         // configuration: areFactionsHostile gives a faction-0 entity no enemies at all.
@@ -1112,6 +1157,12 @@ int main(int argc, char** argv) {
     worldApi.setMissionOutcome = [&](bool success) {
         if (missionRuntime)
             missionRuntime->forceOutcome(success);
+    };
+    // Objective scoring (#1000): a mission trigger's world.score_objective(faction, count) routes into
+    // the match controller (count * the mode's points_per_objective, scored only during Active). This is
+    // how strike/conquest modes accumulate team score from objectives rather than kills.
+    worldApi.scoreObjective = [&](int faction, int count) {
+        matchController.recordObjective(static_cast<uint16_t>(faction), count);
     };
     // Haptics (#128): a script's rumble()/rumble_triggers()/stop_rumble() reaches every client, which
     // plays it on its local gamepad. Args are already clamped by the engine binding.
@@ -2128,6 +2179,13 @@ int main(int argc, char** argv) {
                     {static_cast<uint8_t>(std::min(broadcaster.getPeerCount(), 255)), ss.active,
                      static_cast<uint16_t>(std::min<uint32_t>(ss.secondsRemaining, 0xFFFFu))});
         }
+        if (lobbyReg) { // #143: heartbeat the lobby registration with the live player count
+            lobbyReg->setDynamic(static_cast<int>(broadcaster.getPeerCount()), std::string{});
+            lobbyReg->tick();
+        }
+        if (httpClient)
+            httpClient->service();
+
         p.asyncFilesystem->service();
         // Follow the entity so terrain chunks are loaded at its current position.
         const double entityX = broadcaster.cachedEntityX();
@@ -2159,6 +2217,14 @@ int main(int argc, char** argv) {
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    // #143: drop the lobby entry on shutdown (best-effort DELETE + one service pass to send it).
+    if (lobbyReg)
+        lobbyReg->deregister();
+    if (httpClient) {
+        httpClient->service();
+        httpClient->shutdown();
     }
 
     if (rconServer)

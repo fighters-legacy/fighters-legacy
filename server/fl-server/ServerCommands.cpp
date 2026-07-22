@@ -338,6 +338,59 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                                  }
                              });
 
+    // mute / unmute <peerId>  -- toggle a peer's chat mute (#646). Session-scoped, dropped on disconnect.
+    for (const bool muteVal : {true, false}) {
+        const char* name = muteVal ? "mute" : "unmute";
+        const char* help = muteVal ? "mute <peerId>  -- silence a peer's chat for this session"
+                                   : "unmute <peerId>  -- restore a muted peer's chat";
+        registry.registerCommand(name, help, [ctx, muteVal, name](std::span<std::string_view> args) -> std::string {
+            if (args.empty())
+                return std::string("usage: ") + name + " <peerId>";
+            if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
+                return std::string(name) + ": not available";
+            std::string arg(args[0]);
+            if (!isNumeric(arg))
+                return std::string(name) + ": expected a peer ID";
+            uint32_t peerId = 0;
+            auto [ptr, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), peerId);
+            if (ec != std::errc{})
+                return std::string(name) + ": invalid peer ID";
+            ctx.sim.gameLoop->enqueueSimCallback([ctx, peerId, muteVal, name]() {
+                const bool ok = ctx.sim.broadcaster->setPeerMuted(peerId, muteVal);
+                char m[80];
+                std::snprintf(m, sizeof(m), "[admin] %s peer %u%s", name, peerId, ok ? "" : " (unknown peer)");
+                std::printf("%s\n", m);
+                if (ctx.rcon.shell)
+                    ctx.rcon.shell->print(m);
+                std::fflush(stdout);
+            });
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%s: queued peer %u", name, peerId);
+            return std::string(buf);
+        });
+    }
+
+    // mutes  -- list currently muted peers (#646)
+    registry.registerCommand("mutes", "mutes  -- list currently muted peers",
+                             [ctx](std::span<std::string_view>) -> std::string {
+                                 if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
+                                     return "mutes: not available";
+                                 ctx.sim.gameLoop->enqueueSimCallback([ctx]() {
+                                     const std::vector<uint32_t> ids = ctx.sim.broadcaster->mutedPeers();
+                                     std::string line = "[admin] muted peers: ";
+                                     if (ids.empty())
+                                         line += "(none)";
+                                     else
+                                         for (std::size_t i = 0; i < ids.size(); ++i)
+                                             line += (i ? ", " : "") + std::to_string(ids[i]);
+                                     std::printf("%s\n", line.c_str());
+                                     if (ctx.rcon.shell)
+                                         ctx.rcon.shell->print(line);
+                                     std::fflush(stdout);
+                                 });
+                                 return "mutes: queued";
+                             });
+
     // set_role <peerId> <pilot|observer>  -- switch a peer between pilot and spectator without a reconnect (#857)
     registry.registerCommand(
         "set_role", "set_role <peerId> <pilot|observer>  -- switch a peer's role without a reconnect",
@@ -436,6 +489,46 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                                  std::snprintf(buf, sizeof(buf), "respawn: queued peer %u", peerId);
                                  return std::string(buf);
                              });
+
+    // spectate <peerId> <entityIdx|off>  -- point a dead/observer peer's interest at an entity (#403)
+    registry.registerCommand(
+        "spectate", "spectate <peerId> <entityIdx|off>  -- lock a dead/observer peer's view onto an entity",
+        [ctx](std::span<std::string_view> args) -> std::string {
+            if (args.size() < 2)
+                return "usage: spectate <peerId> <entityIdx|off>";
+            if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
+                return "spectate: not available";
+            std::string idArg(args[0]);
+            if (!isNumeric(idArg))
+                return "spectate: invalid peer ID";
+            uint32_t peerId = 0;
+            if (auto [p, ec] = std::from_chars(idArg.data(), idArg.data() + idArg.size(), peerId); ec != std::errc{})
+                return "spectate: invalid peer ID";
+            uint32_t target = 0xFFFFFFFFu; // off
+            if (args[1] != "off") {
+                std::string tArg(args[1]);
+                if (!isNumeric(tArg))
+                    return "spectate: entity index must be a number or 'off'";
+                if (auto [p, ec] = std::from_chars(tArg.data(), tArg.data() + tArg.size(), target); ec != std::errc{})
+                    return "spectate: invalid entity index";
+            }
+            ctx.sim.gameLoop->enqueueSimCallback([ctx, peerId, target]() {
+                const bool ok = ctx.sim.broadcaster->setSpectateTarget(peerId, target);
+                char m[80];
+                if (target == 0xFFFFFFFFu)
+                    std::snprintf(m, sizeof(m), "[admin] spectate off for peer %u%s", peerId, ok ? "" : " (unknown)");
+                else
+                    std::snprintf(m, sizeof(m), "[admin] peer %u spectating entity %u%s", peerId, target,
+                                  ok ? "" : " (unknown)");
+                std::printf("%s\n", m);
+                if (ctx.rcon.shell)
+                    ctx.rcon.shell->print(m);
+                std::fflush(stdout);
+            });
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "spectate: queued peer %u", peerId);
+            return std::string(buf);
+        });
 
     // seats <entityIdx>  -- inspect a crewed aircraft's seat roster/occupancy (#974)
     registry.registerCommand("seats", "seats <entityIdx>  -- show a crewed aircraft's seat roster and occupancy",

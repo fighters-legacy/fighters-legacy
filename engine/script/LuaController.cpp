@@ -484,6 +484,16 @@ static int luaWorldMissionFailure(lua_State* L) {
     return 0;
 }
 
+// world.score_objective(faction, count)  -- award `count` (default 1) objectives to team `faction` (#1000)
+static int luaWorldScoreObjective(lua_State* L) {
+    LuaController::Impl* impl = worldImpl(L);
+    const int faction = static_cast<int>(luaL_checkinteger(L, 1));
+    const int count = lua_isnoneornil(L, 2) ? 1 : static_cast<int>(luaL_checkinteger(L, 2));
+    if (impl->worldApi && impl->worldApi->scoreObjective && faction >= 0)
+        impl->worldApi->scoreObjective(faction, count);
+    return 0;
+}
+
 // world.get_elapsed_time() -> seconds since this controller started
 static int luaWorldGetElapsedTime(lua_State* L) {
     LuaController::Impl* impl = worldImpl(L);
@@ -687,6 +697,7 @@ static void registerWorldModule(lua_State* L, LuaController::Impl* impl) {
         {"set_music_state", luaWorldSetMusicState},
         {"mission_success", luaWorldMissionSuccess},
         {"mission_failure", luaWorldMissionFailure},
+        {"score_objective", luaWorldScoreObjective},
         {"get_elapsed_time", luaWorldGetElapsedTime},
         {"on_trigger", luaWorldOnTrigger},
         {"timer", luaWorldTimer},

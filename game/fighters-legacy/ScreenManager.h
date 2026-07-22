@@ -2,7 +2,8 @@
 #pragma once
 
 #include "IScreen.h"
-#include "JoinServerScreen.h" // #322: JoinServerScreen::Deps is used by value in reinitJoinServer()
+#include "JoinServerScreen.h"    // #322: JoinServerScreen::Deps is used by value in reinitJoinServer()
+#include "ServerBrowserScreen.h" // #143: ServerBrowserScreen::Deps used by value in reinitServerBrowser()
 #include "SessionStatus.h"
 
 #include <atomic>
@@ -62,6 +63,7 @@ class ScreenManager {
     // Create the multiplayer join-server screen (#322). Called once from Game after the IGui backend and
     // the Services connect callback exist. Persistent (not per-session), like the other menu screens.
     void reinitJoinServer(JoinServerScreen::Deps deps);
+    void reinitServerBrowser(ServerBrowserScreen::Deps deps);
 
     Screen current() const {
         return m_current;
@@ -81,6 +83,7 @@ class ScreenManager {
 
     MainMenuScreen& mainMenu();
     JoinServerScreen& joinServer();
+    ServerBrowserScreen& serverBrowser();
     LoadingScreen& loading();
     MissionSelectScreen& missionSelect();
     MissionBriefScreen& missionBrief();
@@ -95,7 +98,8 @@ class ScreenManager {
     std::function<void(std::string_view)> m_serverCmd;
 
     std::unique_ptr<MainMenuScreen> m_mainMenu;
-    std::unique_ptr<JoinServerScreen> m_joinServer; // #322; null until reinitJoinServer()
+    std::unique_ptr<JoinServerScreen> m_joinServer;       // #322; null until reinitJoinServer()
+    std::unique_ptr<ServerBrowserScreen> m_serverBrowser; // #143; null until reinitServerBrowser()
     std::unique_ptr<LoadingScreen> m_loading;
     std::unique_ptr<MissionSelectScreen> m_missionSelect;
     std::unique_ptr<MissionBriefScreen> m_missionBrief;

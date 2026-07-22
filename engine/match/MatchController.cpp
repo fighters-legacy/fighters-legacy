@@ -103,6 +103,14 @@ void MatchController::recordKill(uint32_t killer, uint32_t victim, bool sameTeam
     }
 }
 
+void MatchController::recordObjective(uint16_t faction, int count) {
+    if (m_phase != MatchPhase::Active)
+        return; // scoring frozen outside Active
+    if (count <= 0 || m_mode.pointsPerObjective == 0)
+        return;
+    addScore(faction, count * m_mode.pointsPerObjective);
+}
+
 void MatchController::forceEnd(std::optional<uint16_t> winner) {
     if (m_phase == MatchPhase::Ending || m_phase == MatchPhase::PostMatch)
         return;

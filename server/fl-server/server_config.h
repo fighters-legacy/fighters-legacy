@@ -67,6 +67,7 @@ struct ServerConfig {
     double planetRadiusM = 6'371'000.0;  // sphere radius (m); Earth default
     bool earthRotation = true;           // #482: Coriolis + centrifugal in the Earth-fixed world frame
     double drawDistanceKm = 200.0;       // per-peer interest radius (km); [1, 100000]
+    int spectateDelayS = 0;              // dead/observer snapshot delay (s); anti-ghosting; [0, 300]; 0 = off (#403)
     double spatialCellSizeKm = 10.0;     // SpatialIndex cell size (km); 0 = auto from draw distance; [0, 1000]; restart
     uint32_t snapshotBudgetBytes = 1200; // per-client snapshot byte budget; 0 = unlimited; [0, 65535] (#516)
     uint32_t jitterBufferDepth = 4;      // per-peer input queue depth (ticks); [1, 32]
@@ -241,6 +242,13 @@ struct ServerConfig {
         std::string scrambleEntityType = "builtin:debug-entity"; // default type for atc_scramble / atc.scramble
     };
     AtcConfig atc;
+
+    // [chat]  — in-match text chat (#646)
+    struct ChatConfig {
+        bool enabled = true;   // route player chat lines; false = drop all chat
+        int rateLimitPerS = 2; // chat lines per second per peer; [1, 60]
+    };
+    ChatConfig chat;
 
     // [network]  — transport backend selection (#507)
     struct NetworkConfig {

@@ -99,6 +99,9 @@ Active in all camera modes. All game inputs (flight controls and camera) are sup
 | K | Crew seat picker (#975): open / cycle the joinable non-fly seats across every crewed aircraft the client knows |
 | L | Join the selected crew seat (a gunner on that airframe; the bot parks) |
 | U | Leave the current crew seat (become an observer) |
+| Y | Open the chat input box on the **all** channel (#646). While it is open the keyboard is captured — type your line, `Enter` (or the Send button) sends, `Escape` cancels. The gamepad/HOTAS axes stay live. |
+| H | Open the chat input box on the **team** channel (#646; reaches only your faction) |
+| I | Hold to show the multiplayer scoreboard (#647). Auto-shown in the match end phase. |
 
 While the radio menu is open, Enter and the digit keys belong to the menu — the fire-store bit and
 station cycling are suppressed, the flight axes and gun trigger stay live.

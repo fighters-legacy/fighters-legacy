@@ -6,6 +6,7 @@
 #include "Game.h"
 
 #include "CameraInput.h"
+#include "ChatOverlay.h"
 #include "ClientEffectRouter.h"
 #include "ClientNetEventHandler.h"
 #include "CommsMenu.h"
@@ -17,6 +18,8 @@
 #include "HapticController.h"
 #include "HeadlessHal.h"
 #include "IWindowEventHandler.h"
+#include "KillFeed.h"
+#include "LoadingScreen.h"
 #include "LocalServer.h"
 #include "MainMenuScreen.h"
 #include "MissionBriefScreen.h"
@@ -25,7 +28,9 @@
 #include "Platform.h"
 #include "PrecipitationController.h"
 #include "RecordScheduler.h"
+#include "ScoreboardOverlay.h"
 #include "ScreenManager.h"
+#include "ServerBrowserScreen.h"
 #include "ServerNotice.h"
 #include "SessionStatus.h"
 #include "SubtitleOverlay.h"
@@ -56,12 +61,16 @@
 #include "flight/Geodetic.h"
 #include "gui/ImGuiGui.h"               // #156: Dear ImGui backend behind the IGui HAL
 #include "http/CurlHttpClientFactory.h" // createHttpClient (#490)
+#include "i18n/Localization.h"
 #include "input/AxisConfig.h"
 #include "input/InputBindings.h"
 #include "mission/MissionParser.h"
 #include "mission/ShotDirector.h"
 #include "net/DiscoveryListener.h"
 #include "net/GameProtocol.h"
+#include "net/LobbyListClient.h"
+#include "net/ServerBrowserModel.h"
+#include "net/ServerQueryClient.h"
 #include "openal/OALAudio.h"
 #include "perf/PerformanceOverlay.h"
 #include "render/BuiltinGeometry.h"
@@ -219,6 +228,44 @@ static const fl::EntityRenderEntry* findPlayerEntry(const fl::SimRenderBridge& b
     return nullptr;
 }
 
+// Assemble the per-frame scoreboard snapshot (#647) from the client handler's match state, scoreboard
+// rows and roster. Kept out of the overlay so ScoreboardOverlay renders a plain POD and stays testable.
+static fl::ScoreboardData buildScoreboardData(const ClientNetEventHandler& h) {
+    fl::ScoreboardData sb;
+    const auto& ms = h.matchState();
+    sb.hasMatch = ms.valid;
+    sb.modeName = ms.modeName;
+    sb.phaseLabel = std::string(fl::matchPhaseLabel(ms.phase));
+    sb.scoreLimit = ms.scoreLimit;
+    if (ms.phaseEndTick > 0) {
+        const uint64_t now = h.currentTick();
+        const uint64_t remTicks = ms.phaseEndTick > now ? ms.phaseEndTick - now : 0u;
+        sb.secondsRemaining = static_cast<std::int64_t>(remTicks / 60u); // 60 Hz sim tick
+    }
+    for (const auto& t : ms.teamScores) {
+        fl::ScoreboardTeam team;
+        team.factionIndex = t.factionIndex;
+        team.name = h.factionName(t.factionIndex);
+        if (team.name.empty())
+            team.name = "Team " + std::to_string(t.factionIndex);
+        team.score = t.score;
+        sb.teams.push_back(std::move(team));
+    }
+    for (const auto& [pid, e] : h.scoreboard()) {
+        fl::ScoreboardPlayer p;
+        p.callsign = h.displayName(pid);
+        p.factionIndex = e.factionIndex;
+        p.score = e.score;
+        p.kills = e.kills;
+        p.deaths = e.deaths;
+        p.pingMs = e.pingMs;
+        p.isBot = fl::isBotParticipant(pid);
+        p.isSelf = h.gotConnectAck() && pid == h.selfPeerId();
+        sb.players.push_back(std::move(p));
+    }
+    return sb;
+}
+
 static void updateAudioListener(IAudio& audio, const CameraView& cam, const glm::vec3& vel) {
     const glm::vec3 fwd = -glm::vec3(cam.view[2][0], cam.view[2][1], cam.view[2][2]);
     const glm::vec3 up = glm::vec3(cam.view[1][0], cam.view[1][1], cam.view[1][2]);
@@ -297,8 +344,9 @@ struct GameServices {
 
     // Config + renderer settings
     std::optional<UserConfig> userConfig;
-    fl::InputBindings inputBindings;     // loaded from config/bindings.toml; stored for Phase 4
-    fl::AxisConfigTable axisConfigTable; // loaded from config/bindings.toml [axis_config]
+    std::unique_ptr<fl::Localization> localization; // UI locale (#358); null before initContent
+    fl::InputBindings inputBindings;                // loaded from config/bindings.toml; stored for Phase 4
+    fl::AxisConfigTable axisConfigTable;            // loaded from config/bindings.toml [axis_config]
     RendererSettings rendererSettings;
     ResizeHandler resizeHandler;
 
@@ -330,6 +378,15 @@ struct GameServices {
     uint16_t connectPort{4778};
     std::string operatorPassword; // merged: CLI arg > FL_OPERATOR_PASSWORD > [client].operator_password
     std::string joinPassword;     // per-session join password for a private server (#998); not persisted
+
+    // Server browser (#143): menu-scoped LAN discovery + query + lobby list, merged into a model the
+    // ServerBrowserScreen renders. Constructed at menu setup; polled + rebuilt while the browser is up.
+    std::optional<DiscoveryListener> browserDiscovery;
+    std::optional<ServerQueryClient> browserQuery;
+    std::unique_ptr<fl::LobbyListClient> lobbyList; // null when no HTTP backend
+    ServerBrowserModel browserModel;
+    std::vector<std::string> lobbyUrls; // from [client] lobby_urls (comma-separated); empty by default
+    bool browserRefreshRequested{true}; // trigger a sweep on first open
     std::string
         requestedEntityType;     // --aircraft: aircraft to request in MsgConnectRequest; empty = server default (#834)
     bool requestObserver{false}; // --observer: join as a spectator (no aircraft) (#857)
@@ -384,13 +441,16 @@ struct GameServices {
     fl::IHud* activeHud{nullptr};
     fl::WindshieldRain windshieldRain;
     ServerNotice serverNotice;
-    WingmanMenu wingmanMenu;           // the radio menu for ordering your flight (#610)
-    CommsMenu commsMenu;               // the ATC comms menu (#704)
-    VoiceCalloutManager voiceCallouts; // resolved-text radio callouts -> subtitle + optional voice (#704)
-    SubtitleOverlay subtitleOverlay;   // renders the subtitle queue as a HUD overlay layer (#704)
-    ManualOverlay manual;              // the in-flight aircraft manual, generated from the flight model (#821)
-    WeaponRegistry weapons;            // the client's copy of the pack's stores, for the manual's loadout section
-    ContentIndex contentIndex;         // id -> asset name, so the client can resolve def cross-references (#810)
+    WingmanMenu wingmanMenu;             // the radio menu for ordering your flight (#610)
+    CommsMenu commsMenu;                 // the ATC comms menu (#704)
+    VoiceCalloutManager voiceCallouts;   // resolved-text radio callouts -> subtitle + optional voice (#704)
+    SubtitleOverlay subtitleOverlay;     // renders the subtitle queue as a HUD overlay layer (#704)
+    KillFeed killFeed;                   // multiplayer kill feed, fed from the CombatEvent Kill branch (#647)
+    ScoreboardOverlay scoreboardOverlay; // multiplayer scoreboard IGui table (#647)
+    ChatOverlay chatOverlay;             // in-match chat display + input (#646)
+    ManualOverlay manual;                // the in-flight aircraft manual, generated from the flight model (#821)
+    WeaponRegistry weapons;              // the client's copy of the pack's stores, for the manual's loadout section
+    ContentIndex contentIndex;           // id -> asset name, so the client can resolve def cross-references (#810)
 
     // Debug console
     CommandRegistry cmdRegistry;
@@ -754,6 +814,11 @@ bool Game::initPlatform(int argc, char** argv) {
     }
     if (d.services.operatorPassword.empty())
         d.services.operatorPassword = d.services.userConfig->client().operatorPassword;
+
+    // UI localization (#358): load the configured locale ([client] language, default "en") from the base
+    // locale/ tree. Missing keys fall back to the built-in English strings at each call site via tr().
+    d.services.localization = std::make_unique<fl::Localization>(*d.services.p.filesystem, *d.services.rawLogger);
+    d.services.localization->load(d.services.userConfig->client().language.c_str(), /*rootDirs=*/{});
 
     auto oalAudio = std::make_unique<OALAudio>();
     if (!oalAudio->init()) {
@@ -1168,6 +1233,43 @@ void Game::initScreenManager() {
         };
         d.services.screenMgr->reinitJoinServer(std::move(jd));
     }
+
+    // Server browser (#143): LAN discovery + a query client + (when an HTTP backend exists) a lobby-list
+    // client feed a ServerBrowserModel. Selecting a row prefills the join form; Refresh re-sweeps.
+    {
+        d.services.browserDiscovery.emplace(static_cast<uint16_t>(4778), *d.services.rawLogger);
+        d.services.browserQuery.emplace(*d.services.rawLogger);
+        if (d.services.p.httpClient) {
+            d.services.lobbyList =
+                std::make_unique<fl::LobbyListClient>(*d.services.p.httpClient, *d.services.rawLogger);
+            d.services.p.httpClient->setEventHandler(d.services.lobbyList.get());
+        }
+        // [client] lobby_urls: comma-separated internet lobby endpoints (empty by default — federation
+        // posture, the operator opts in).
+        d.services.lobbyUrls.clear();
+        for (const std::string& csv = d.services.userConfig->client().lobbyUrls; const char c : csv) {
+            if (d.services.lobbyUrls.empty())
+                d.services.lobbyUrls.emplace_back();
+            if (c == ',')
+                d.services.lobbyUrls.emplace_back();
+            else if (c != ' ')
+                d.services.lobbyUrls.back().push_back(c);
+        }
+        std::erase_if(d.services.lobbyUrls, [](const std::string& s) { return s.empty(); });
+
+        ServerBrowserScreen::Deps bd;
+        bd.gui = d.services.p.gui.get();
+        bd.rows = &d.services.browserModel.rows();
+        bd.lobbyEnabled = d.services.lobbyList != nullptr;
+        GameImpl* dp = &d;
+        bd.onRefresh = [dp]() { dp->services.browserRefreshRequested = true; };
+        bd.onJoin = [dp](const std::string& host, uint16_t port) {
+            dp->services.connectHost = host;
+            dp->services.connectPort = port;
+            dp->services.joinPassword.clear();
+        };
+        d.services.screenMgr->reinitServerBrowser(std::move(bd));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1257,6 +1359,10 @@ void Game::startGame(const std::string& mission) {
             std::make_unique<ClientNetEventHandler>(d.services.renderBridge, d.services.entityRegistry,
                                                     *d.services.rawLogger, *d.session.clientNet, d.services.env);
         d.session.clientHandler->notice = &d.services.serverNotice;
+        d.session.clientHandler->killFeed = &d.services.killFeed;   // multiplayer kill feed (#647)
+        d.services.killFeed.clear();                                // no stale lines across sessions
+        d.session.clientHandler->chat = &d.services.chatOverlay;    // in-match chat (#646)
+        d.services.chatOverlay.clear();                             // no stale lines across sessions
         d.session.clientHandler->wingman = &d.services.wingmanMenu; // check-ins, order acks, relayed calls
         d.session.clientHandler->console = &*d.services.gameConsole;
         d.session.clientHandler->effects = &d.services.effectRouter; // weapon cosmetics (#625)
@@ -1377,6 +1483,8 @@ void Game::startGame(const std::string& mission) {
         fsd.wingmanMenu = &d.services.wingmanMenu;
         fsd.commsMenu = &d.services.commsMenu;
         fsd.manual = &d.services.manual;
+        fsd.chat = &d.services.chatOverlay; // in-match chat (#646)
+        fsd.gui = d.services.p.gui.get();   // chat input box (null-safe)
         fsd.assignedEntityIdx = &d.session.clientHandler->assignedEntityIdx;
         fsd.assignedEntityGen = &d.session.clientHandler->assignedEntityGen;
 
@@ -1421,6 +1529,8 @@ void Game::startGame(const std::string& mission) {
             return false;
         },
         std::move(onConnect), !isMultiplayer, &d.session.sessionFailure);
+    // Localize the loading screen's session-failure text (#358); null = English built-ins.
+    d.services.screenMgr->loading().setLocalization(d.services.localization.get());
 
     // Lazy SandboxInspector init (no-pack path).
     if (d.services.outcome == FirstRunOutcome::LaunchSandboxInspector)
@@ -1523,6 +1633,35 @@ void Game::handleTransition(Screen next) {
         const bool missionSuccess =
             !d.session.clientHandler || d.session.clientHandler->missionOutcome() != fl::MissionResultCode::Failure;
         d.services.screenMgr->debrief().setStats(static_cast<int>(kills), static_cast<int>(losses), missionSuccess);
+
+        // Match result (#647): if this was a multiplayer match, show the winning team + final scores above
+        // the personal tallies. Absent match state (single-player / free-flight) clears the section.
+        {
+            std::vector<std::pair<std::string, int>> teamScores;
+            std::string winner;
+            if (d.session.clientHandler) {
+                const auto& ms = d.session.clientHandler->matchState();
+                if (ms.valid && !ms.teamScores.empty()) {
+                    int best = ms.teamScores.front().score;
+                    for (const auto& t : ms.teamScores)
+                        best = std::max(best, static_cast<int>(t.score));
+                    int leaders = 0;
+                    std::string bestName;
+                    for (const auto& t : ms.teamScores) {
+                        std::string name = d.session.clientHandler->factionName(t.factionIndex);
+                        if (name.empty())
+                            name = "Team " + std::to_string(t.factionIndex);
+                        teamScores.emplace_back(name, static_cast<int>(t.score));
+                        if (static_cast<int>(t.score) == best) {
+                            ++leaders;
+                            bestName = name;
+                        }
+                    }
+                    winner = leaders > 1 ? std::string("DRAW") : bestName + " WINS";
+                }
+            }
+            d.services.screenMgr->debrief().setMatchResult(std::move(winner), std::move(teamScores));
+        }
         // The pilot's career log accumulates per session, exactly once, on the way into debrief:
         // kills/losses from the server's tallies plus this session's flight time (#634).
         if (d.services.userConfig) {
@@ -1793,9 +1932,12 @@ void Game::run() {
                 // fovY matches CameraController's 60 deg default).
                 d.services.terrainStreamer->setViewParams(static_cast<float>(d.services.p.window->height()),
                                                           glm::radians(60.0f));
-                // Stream terrain around the ownship (pilot) or the ghost camera eye (observer, #859).
+                // Stream terrain around the ownship (pilot), or the ghost camera eye for an observer (#859)
+                // or a dead pilot awaiting respawn (#403).
+                const bool ghostCam =
+                    observer || (d.session.clientHandler && d.session.clientHandler->awaitingRespawn());
                 const glm::dvec3 terrainPos =
-                    playerEntry ? playerEntry->position : (observer ? d.services.camInput.eyeWorld() : glm::dvec3{});
+                    playerEntry ? playerEntry->position : (ghostCam ? d.services.camInput.eyeWorld() : glm::dvec3{});
                 d.services.terrainStreamer->update(terrainPos);
             }
         }
@@ -1844,6 +1986,33 @@ void Game::run() {
                                                         : fl::RwrThreat::Search;
             }
             d.services.warningTones.update(wt, aud, 1.0f / 60.0f);
+        }
+
+        // Server browser (#143): while it is the active screen, poll the LAN/query sockets, run a sweep
+        // on request (lobby fetch + a query to each LAN server's query port), and rebuild the model the
+        // screen renders. Done BEFORE the screen update so it sees fresh rows this frame.
+        if (cur == Screen::ServerBrowser) {
+            if (d.services.browserDiscovery)
+                d.services.browserDiscovery->poll();
+            if (d.services.browserQuery)
+                d.services.browserQuery->poll();
+            if (d.services.browserRefreshRequested) {
+                d.services.browserRefreshRequested = false;
+                if (d.services.lobbyList)
+                    for (const std::string& url : d.services.lobbyUrls)
+                        d.services.lobbyList->refresh(url);
+                if (d.services.browserDiscovery && d.services.browserQuery)
+                    for (const auto& s : d.services.browserDiscovery->servers())
+                        if (s.beacon.queryPort != 0)
+                            d.services.browserQuery->query(s.address, s.beacon.queryPort);
+            }
+            static const std::vector<DiscoveryListener::ServerInfo> kNoLan;
+            static const std::vector<fl::LobbyServer> kNoLobby;
+            static const std::vector<ServerQueryClient::Result> kNoQuery;
+            d.services.browserModel.rebuild(d.services.browserDiscovery ? d.services.browserDiscovery->servers()
+                                                                        : kNoLan,
+                                            d.services.lobbyList ? d.services.lobbyList->servers() : kNoLobby,
+                                            d.services.browserQuery ? d.services.browserQuery->results() : kNoQuery);
         }
 
         // Screen update — runs BEFORE camera computation so FlightScreen::update() →
@@ -1948,12 +2117,26 @@ void Game::run() {
         // the F3 performance overlay.
         d.services.gameConsole->buildHud(playerEntry ? &playerEntry->position : nullptr);
 
-        // Overlay layers: screen content + server notice + radio subtitles + console.
+        // Overlay layers: screen content + server notice + radio subtitles + kill feed + console.
         d.services.p.renderer->submitOverlayElements(d.services.screenMgr->active().buildElements());
         d.services.p.renderer->submitOverlayElements(d.services.serverNotice.buildElements());
         d.services.p.renderer->submitOverlayElements(
-            d.services.subtitleOverlay.build(d.services.subtitleQueue)); // radio/ATC callouts (#704)
+            d.services.subtitleOverlay.build(d.services.subtitleQueue));                   // radio/ATC callouts (#704)
+        d.services.p.renderer->submitOverlayElements(d.services.killFeed.buildElements()); // #647
+        d.services.p.renderer->submitOverlayElements(d.services.chatOverlay.buildElements()); // #646
         d.services.p.renderer->setConsoleElements(d.services.gameConsole->elements());
+
+        // Scoreboard (#647): an IGui table shown in Flight while the Scoreboard key is held, and auto-shown
+        // in the match end phase. Emitted between the GUI newFrame/render bracket.
+        if (cur == Screen::Flight && d.session.clientHandler && d.services.p.gui) {
+            const auto& ms = d.session.clientHandler->matchState();
+            const fl::Binding sbBind = d.services.inputBindings.get(fl::InputAction::Scoreboard);
+            const bool keyHeld = sbBind.source == fl::BindingSource::Keyboard &&
+                                 d.services.p.input->isKeyDown(static_cast<fl::Key>(sbBind.id));
+            if (keyHeld || (ms.valid && fl::scoreboardAutoShows(ms.phase)))
+                d.services.scoreboardOverlay.render(d.services.p.gui.get(),
+                                                    buildScoreboardData(*d.session.clientHandler));
+        }
 
         {
             auto* h = d.session.clientHandler.get();

@@ -35,6 +35,8 @@ class WindshieldRain;
 class WingmanMenu;
 class CommsMenu;
 class ManualOverlay;
+class ChatOverlay;
+class IGui;
 
 struct EnvironmentState;
 
@@ -60,6 +62,8 @@ struct FlightScreenDeps {
     WingmanMenu* wingmanMenu{nullptr};     // null = no radio menu (#610)
     CommsMenu* commsMenu{nullptr};         // null = no ATC comms menu (#704)
     ManualOverlay* manual{nullptr};        // null = no in-flight aircraft manual (#821)
+    ChatOverlay* chat{nullptr};            // null = no in-match chat (#646)
+    IGui* gui{nullptr};                    // null = no GUI backend (chat input box degrades off)
     uint32_t* assignedEntityIdx{nullptr};
     uint32_t* assignedEntityGen{nullptr};
 };
@@ -90,10 +94,13 @@ class FlightScreen : public IScreen {
     bool m_groundSceneOn{false};
 
     // Observer entity picker (#860): which live entity a spectator views from, cycled with Num1/Num2.
+    // #403 extends "spectator" to a dead pilot awaiting respawn, not just a role-observer.
     EntitySelector m_selector;
     bool m_prevNextTarget{false}; // Num1 edge detector (next entity)
     bool m_prevPrevTarget{false}; // Num2 edge detector (previous entity)
     char m_pickerLabel[96]{};     // "[ F-16C | Blue ]" built each frame; empty = not shown
+    bool m_wasSpectating{false};  // spectate rising-edge detector (#403)
+    glm::dvec3 m_lastOwnPos{};    // last known own-aircraft position, seeds the dead-pilot ghost eye (#403)
 
     // Crew seat picker (#975): K cycles joinable seats across all crewed aircraft, J joins the selected
     // seat, L leaves the current seat. Non-modal (axes stay live), like the radio menu. The overlay +

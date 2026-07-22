@@ -17,7 +17,7 @@ and the engine cannot disagree.
 Files live in `modes/` inside the content pack directory (e.g. `modes/tdm.toml`), and are
 referenced by their file stem prefixed with the pack namespace, e.g. `fl-base:tdm`.
 
-Two modes ship compiled in and need no content pack:
+Three modes ship compiled in and need no content pack:
 
 - **`builtin:free-flight`** — the default. No teams beyond the mission's sides, no
   score or time limit, no warmup, immediate respawn, friendly fire follows the server
@@ -25,9 +25,19 @@ Two modes ship compiled in and need no content pack:
 - **`builtin:tdm`** — team deathmatch: two teams (Red/Blue), a 50-point score limit, a
   15-minute clock, a 30-second warmup, 10-second respawns, friendly fire off, minimum
   2 players.
+- **`builtin:strike`** — objective-scored (#1000): two teams, a kill worth 1 and each
+  completed objective worth 10 (`points_per_objective`), a 100-point score limit, a
+  20-minute clock. The score comes from mission objectives, not just kills — a mission
+  trigger's action calls `world.score_objective(faction, count)` (see below).
 
-Strike/conquest (objective scoring) modes are deferred until the objective-scoring
-channel (#1000) lands.
+### Objective scoring
+
+A mission awards objective points to a team from a Lua trigger action:
+`world.score_objective(faction, count)` (count defaults to 1). The host routes it to the
+match controller, which adds `count × points_per_objective` to that team — but only
+during the **Active** phase, and only when the mode declares a non-zero
+`points_per_objective`. This is how strike/conquest modes accumulate score from
+objectives rather than (or alongside) kills.
 
 ---
 
@@ -118,7 +128,7 @@ count mismatch warns and the mission's sides win.
 |---|---|---|---|
 | `points_per_kill` | int | −1000..1000 | Points a team scores per enemy kill (a team kill scores nothing) |
 | `points_per_assist` | int | −1000..1000 | Parsed and stored; wired when the assist channel lands |
-| `points_per_objective` | int | −100000..100000 | Parsed and stored; wired by #1000 |
+| `points_per_objective` | int | −100000..100000 | Points per completed objective (#1000); awarded via `world.score_objective` during Active |
 | `score_limit` | int | 0–1000000 | Team score that ends the match; `0` = no score limit |
 
 ### `[match]`

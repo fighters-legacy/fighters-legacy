@@ -901,6 +901,45 @@ static_assert(offsetof(ScoreboardRow, factionIndex) == 14u, "ScoreboardRow::fact
 inline constexpr std::size_t kMaxScoreboardRowsPerPacket = 30; // 8 + 30*16 = 488 B
 
 // ---------------------------------------------------------------------------------------------
+// In-match text chat (#646)
+// ---------------------------------------------------------------------------------------------
+
+// Server-enforced maximum byte length of a chat text payload (NUL terminator excluded).
+inline constexpr std::size_t kMaxChatBytes = 240;
+
+// Chat channel (#646). All = every handshake-complete peer; Team = the sender's faction only.
+enum class ChatChannel : uint8_t {
+    All = 0,
+    Team = 1,
+};
+inline bool isChatChannelOrdinal(uint8_t v) noexcept {
+    return v <= static_cast<uint8_t>(ChatChannel::Team);
+}
+
+// Client->server, reliable: a chat line the player typed. 4-byte header + null-terminated UTF-8 text
+// (<= kMaxChatBytes) at offset 4. The server sanitizes/rate-limits/routes it into MsgChatEvent.
+struct MsgChatHeader {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::Chat)}; // @0
+    uint8_t channel{0};                               // @1 ChatChannel
+    uint16_t reserved{0};                             // @2
+}; // 4 bytes, align 2; char text[] + NUL follow at offset 4
+static_assert(sizeof(MsgChatHeader) == 4u, "MsgChatHeader wire size changed");
+static_assert(alignof(MsgChatHeader) == 2u, "MsgChatHeader alignment changed");
+static_assert(offsetof(MsgChatHeader, channel) == 1u, "MsgChatHeader::channel offset changed");
+
+// Server->client, reliable: a routed chat line. 8-byte header + null-terminated UTF-8 text at offset 8.
+// senderPeerId is the sender's participant id; kNoOwningPeer marks a system line (no sender name).
+struct MsgChatEventHeader {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::ChatEvent)}; // @0
+    uint8_t channel{0};                                    // @1 ChatChannel
+    uint16_t reserved{0};                                  // @2
+    uint32_t senderPeerId{0};                              // @4 sender participant id; kNoOwningPeer = system line
+}; // 8 bytes, align 4; char text[] + NUL follow at offset 8
+static_assert(sizeof(MsgChatEventHeader) == 8u, "MsgChatEventHeader wire size changed");
+static_assert(alignof(MsgChatEventHeader) == 4u, "MsgChatEventHeader alignment changed");
+static_assert(offsetof(MsgChatEventHeader, senderPeerId) == 4u, "MsgChatEventHeader::senderPeerId offset changed");
+
+// ---------------------------------------------------------------------------------------------
 // Datalink / shared team track picture (#528)
 // ---------------------------------------------------------------------------------------------
 // The fused picture a peer's TEAM can see: the peer's own sensor contacts PLUS every same-faction
