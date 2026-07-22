@@ -963,6 +963,7 @@ catch_discover_tests(test_precipitation_controller)
 
 add_executable(test_flight_input_collector test_flight_input_collector.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightInputCollector.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/PadlockTracker.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/CameraInput.cpp")
 target_link_libraries(test_flight_input_collector PRIVATE
     Catch2::Catch2WithMain
@@ -970,6 +971,7 @@ target_link_libraries(test_flight_input_collector PRIVATE
     platform-sdl3
     SDL3::SDL3
     engine-render
+    engine-spatial
     engine-console
     engine-config
     engine-input

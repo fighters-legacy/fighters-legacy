@@ -402,3 +402,72 @@ TEST_CASE("FlightHud: the datalink MFD draws contacts and an RWR launch caption 
             anyBlip = true;
     CHECK_FALSE(anyBlip);
 }
+
+// ── combat symbology (#641) ──────────────────────────────────────────────────
+
+TEST_CASE("FlightHud: the gun pipper appears with a gun station + designated target + master arm (#641)",
+          "[flight_hud]") {
+    FlightHud hud;
+    HudStationInfo gun;
+    gun.label = "M61";
+    gun.kind = 1; // gun
+    gun.muzzleVelMps = 1000.f;
+    hud.setStationInfo({gun});
+
+    auto own = makeEntry();
+    own.position = {0.0, 3500.0, 0.0};
+    own.velocity = {0.f, 0.f, -200.f}; // flying along -Z toward the target
+    own.hasLoadout = true;
+    own.selectedStation = 0;
+    own.stationRounds = 500;
+
+    auto target = makeEntry();
+    target.entityIdx = 2;
+    target.position = {0.0, 3500.0, -1500.0}; // 1.5 km dead ahead
+    target.velocity = {80.f, 0.f, 0.f};       // crossing
+
+    auto in = makeInput(own);
+    in.designatedTarget = &target;
+    in.masterArm = true;
+
+    hud.update(in);
+    // The pipper is a cluster of Lines near the projected lead point (small span, near screen centre-ish).
+    int pipLines = 0;
+    for (const auto& el : hud.elements())
+        if (el.type == HudElement::Type::Line && std::abs(el.x2 - el.x) < 0.03f && el.y > 0.3f && el.y < 0.7f)
+            ++pipLines;
+    CHECK(pipLines >= 6); // 8-seg circle + dot
+
+    // SAFE suppresses the pipper.
+    in.masterArm = false;
+    hud.update(in);
+    int pipLines2 = 0;
+    for (const auto& el : hud.elements())
+        if (el.type == HudElement::Type::Line && std::abs(el.x2 - el.x) < 0.03f && el.y > 0.45f && el.y < 0.55f)
+            ++pipLines2;
+    CHECK(pipLines2 < pipLines);
+
+    // The SAFE flag shows in the weapon block.
+    CHECK(hasText(hud, "SAFE"));
+}
+
+TEST_CASE("FlightHud: the weapon-status block lists all stations, selected bracketed (#641)", "[flight_hud]") {
+    FlightHud hud;
+    HudStationInfo a;
+    a.label = "AIM9";
+    a.kind = 2;
+    HudStationInfo b;
+    b.label = "AIM9";
+    b.kind = 2;
+    hud.setStationInfo({a, b});
+
+    auto own = makeEntry();
+    own.hasLoadout = true;
+    own.selectedStation = 1;
+    own.stationRounds = 2;
+    auto in = makeInput(own);
+    hud.update(in);
+    // Selected station 2 is bracketed "[2]".
+    CHECK(hasText(hud, "[2]"));
+    CHECK(hasText(hud, "AIM9"));
+}

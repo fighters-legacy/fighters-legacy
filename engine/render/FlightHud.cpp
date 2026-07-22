@@ -340,22 +340,12 @@ void FlightHud::drawDataBlocks(Ctx& c) {
     pushText(HudAlign::Left, lx, 0.70f, kHudR, kHudG, kHudB, "G %4.1f", c.loadG);
     pushText(HudAlign::Left, lx, 0.74f, kHudR, kHudG, kHudB, "FUEL %3d", static_cast<int>(c.e.fuelPct));
 
-    // Lower-right: weapon / master-arm / throttle / nav placeholder.
+    // Lower-right: master-arm / throttle / nav placeholder. The per-station weapon block is drawn by
+    // drawCombat (#641).
     constexpr float rx = 0.70f;
-    pushText(HudAlign::Left, rx, 0.62f, kHudR, kHudG, kHudB, "%s", c.in.masterArm ? "ARM" : "SAFE");
-    if (c.e.hasLoadout && c.e.selectedStation != 255) {
-        const std::size_t sel = c.e.selectedStation;
-        const char* label =
-            (sel < m_stations.size() && !m_stations[sel].label.empty()) ? m_stations[sel].label.c_str() : nullptr;
-        if (label)
-            pushText(HudAlign::Left, rx, 0.66f, kHudR, kHudG, kHudB, "%s x%u", label,
-                     static_cast<unsigned>(c.e.stationRounds));
-        else
-            pushText(HudAlign::Left, rx, 0.66f, kHudR, kHudG, kHudB, "STA%u x%u", static_cast<unsigned>(sel + 1),
-                     static_cast<unsigned>(c.e.stationRounds));
-    }
-    pushText(HudAlign::Left, rx, 0.70f, kHudR, kHudG, kHudB, "THR %3d%%", static_cast<int>(c.e.throttle));
-    pushText(HudAlign::Left, rx, 0.74f, kHudR, kHudG, kHudB, "%s", "TCN ---");
+    pushText(HudAlign::Left, rx, 0.55f, kHudR, kHudG, kHudB, "%s", c.in.masterArm ? "ARM" : "SAFE");
+    pushText(HudAlign::Left, rx, 0.59f, kHudR, kHudG, kHudB, "THR %3d%%", static_cast<int>(c.e.throttle));
+    pushText(HudAlign::Left, rx, 0.63f, kHudR, kHudG, kHudB, "%s", "TCN ---");
 
     // Seeker LOCK annunciator (#628) from the own-record weaponFlags bit 0.
     if (c.e.hasLoadout && (c.e.weaponFlags & 0x01u))

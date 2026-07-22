@@ -472,6 +472,10 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     hin.apTargetSpeedMps = m_autopilot.targetSpeedMps();
     // Designated target (#696): resolved above (auto-clears on despawn/death). Only shown in cockpit.
     hin.designatedTarget = cockpit ? m_designatedTarget : nullptr;
+    hin.masterArm = d.flightInput ? d.flightInput->masterArm() : true; // #641
+    hin.terrainHeightAt = [ts = d.terrainStreamer](const glm::dvec3& p) {
+        return ts ? ts->heightAt(p) : 0.0; // #641 CCIP fall solution
+    };
     (*d.activeHud)->update(hin);
 
     // Target-slaved inset view (#698): a live 3D repeater of the designated target, framed bottom-centre.
@@ -547,25 +551,49 @@ std::span<const HudElement> FlightScreen::buildElements() {
         const glm::dvec3 tpos = m_designatedTarget->position + glm::dvec3(m_designatedTarget->velocity * (1.f / 60.f));
         if (auto p = fl::worldToHud(m_frameCam, tpos);
             p && p->x > 0.02f && p->x < 0.98f && p->y > 0.02f && p->y < 0.98f && m_elementCount + 5 <= kMaxElements) {
-            const auto box = fl::hudBox(*p, glm::vec2{0.03f, 0.03f}, 0.9f, 0.9f, 0.2f, 1.0f, 1.5f);
+            // IFF colour (#641): friend green, foe red, unknown amber — via the #688 client helper.
+            float br = 0.9f, bg = 0.9f, bb = 0.2f;
+            if (m_deps.clientNetHandler) {
+                const uint8_t ident = m_deps.clientNetHandler->identForEntity(
+                    m_designatedTarget->entityIdx, m_designatedTarget->entityGen, m_designatedTarget->factionIndex);
+                if (ident == fl::kIffFriend) {
+                    br = 0.2f;
+                    bg = 1.0f;
+                    bb = 0.4f;
+                } else if (ident == fl::kIffFoe) {
+                    br = 1.0f;
+                    bg = 0.2f;
+                    bb = 0.2f;
+                }
+            }
+            const auto box = fl::hudBox(*p, glm::vec2{0.03f, 0.03f}, br, bg, bb, 1.0f, 1.5f);
             for (const auto& e : box)
                 m_elements[static_cast<std::size_t>(m_elementCount++)] = e;
-            const double rngKm = glm::length(m_designatedTarget->position - m_playerEntry->position) / 1000.0;
+            // Range + closure (Vc = -d(range)/dt along the LOS, kt): positive = closing.
+            const glm::dvec3 los = m_designatedTarget->position - m_playerEntry->position;
+            const double rngM = glm::length(los);
+            const double rngKm = rngM / 1000.0;
+            float closureKt = 0.f;
+            if (rngM > 1.0) {
+                const glm::vec3 relVel = m_designatedTarget->velocity - m_playerEntry->velocity;
+                const float rangeRate = glm::dot(relVel, glm::vec3(los / rngM)); // +opening
+                closureKt = -rangeRate * 1.94384f;
+            }
             const char* typeName = "TGT";
             if (m_deps.entityRegistry) {
                 if (const fl::EntityDef* def = m_deps.entityRegistry->byIndex(m_designatedTarget->typeIndex))
                     typeName = def->name.empty() ? def->id.c_str() : def->name.c_str();
             }
-            std::snprintf(m_tgtLabel, sizeof(m_tgtLabel), "TGT %s  %.1f km", typeName, rngKm);
+            std::snprintf(m_tgtLabel, sizeof(m_tgtLabel), "TGT %s  %.1f km  %+.0f kt", typeName, rngKm, closureKt);
             HudElement& el = m_elements[static_cast<std::size_t>(m_elementCount++)];
             el = {};
             el.type = HudElement::Type::Text;
             el.x = std::clamp(p->x, 0.05f, 0.95f);
             el.y = std::clamp(p->y + 0.05f, 0.05f, 0.95f);
             el.align = HudAlign::Center;
-            el.r = 0.9f;
-            el.g = 0.9f;
-            el.b = 0.2f;
+            el.r = br;
+            el.g = bg;
+            el.b = bb;
             el.a = 1.0f;
             el.scale = 1.f;
             el.text = m_tgtLabel;

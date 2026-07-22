@@ -45,6 +45,14 @@ Client-side hold modes, shaped over your input before it is sent (the server sta
 | F10 | Heading hold (captures current heading) | `AutopilotHdgHold` |
 | F11 | Speed hold (captures current airspeed) | `AutopilotSpdHold` |
 
+### Combat HUD (#641)
+
+The combat symbology renders in Cockpit/Padlock view against the designated target (#696): an IFF-coloured designator box with range + closure, a gun pipper with ballistic lead when a gun station is selected, a CCIP impact cross + fall line for bombs, and a lower-right weapon-status block. **V** toggles master arm — SAFE really suppresses the fire triggers (not just a HUD label).
+
+| Key | Action | Binding |
+|---|---|---|
+| V | Master arm (ARM / SAFE) | `MasterArm` |
+
 ### Free camera (F4)
 
 When switching to Free camera while a player entity exists, the pivot snaps to the entity's position so it is immediately in view.

@@ -73,6 +73,9 @@ enum class InputAction : uint32_t {
     AutopilotHdgHold,
     AutopilotSpdHold,
 
+    // Master arm toggle (#641) — ARM/SAFE; SAFE gates the fire triggers
+    MasterArm,
+
     Count
 };
 

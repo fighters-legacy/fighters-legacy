@@ -101,6 +101,13 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
             if (m_ecmOn)
                 inp.buttons |= 0x10u;
 
+            // Master arm (#641): V toggles ARM/SAFE. Edge-detected; the gate below is applied after the
+            // gamepad block too, so SAFE really suppresses the fire triggers on every input path.
+            const bool armKey = !uiFocused && input.isKeyDown(Key::V);
+            if (armKey && !m_prevArmKey)
+                m_masterArm = !m_masterArm;
+            m_prevArmKey = armKey;
+
             // Ejection (#672): End commands the seat, level on the wire — the server edge-detects, so
             // holding it is one ejection. Gated while an overlay owns the keys, like the other discretes.
             if (!uiFocused && input.isKeyDown(Key::End))
@@ -219,6 +226,13 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
         }
     } else {
         inp.throttle = camInput.throttle();
+    }
+
+    // Master-arm gate (#641): SAFE suppresses the gun trigger (bit 0) and fire-store (bit 2) on every
+    // input path (keyboard + gamepad), and clears the wasWeaponFired signal. A real safety.
+    if (!m_masterArm) {
+        inp.buttons &= static_cast<uint8_t>(~(0x01u | 0x04u));
+        m_weaponFired = false;
     }
 
     // Absolute station selection rides every packet (#625): idempotent under loss, converges.

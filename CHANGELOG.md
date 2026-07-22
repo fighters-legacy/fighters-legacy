@@ -21,6 +21,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **game**: combat HUD modes — target box, pipper, CCIP, weapon status, master arm (#641, Epic #587).
+  `FlightHud::drawCombat` renders the gun pipper (ballistic lead via `computeBallisticLead`, gravity
+  from the local radial up), the CCIP bomb-release cross + fall line + time-of-fall (`computeCcip`
+  against the terrain height query, capped at 30 s), and a lower-right multi-station weapon-status
+  block (selected station bracketed with its live round count; unselected stations show `x--` pending
+  the per-station-ammo wire follow-up). The designator box (drawn by `FlightScreen`) gains IFF colour
+  via the #688 helper plus range + closure. Master arm is a real V-key toggle in `FlightInputCollector`
+  that suppresses the gun + fire-store trigger bits and `wasWeaponFired` when SAFE (new `MasterArm`
+  input action, default V). Pipper/CCIP are gated by master arm and the selected station's weapon kind
+  (from `HudStationInfo`). Covered by new cases in `tests/test_flight_hud.cpp` and
+  `tests/test_flight_input_collector.cpp`.
+
 - **game**: target-slaved inset view on the HUD (#698, Epic #587). A small live 3D repeater of the
   designated target, toggled with `TargetInsetToggle` (F6) and framed bottom-centre. `CameraView`
   construction is extracted into a shared `makeCameraView()` free function (`CameraController::view()`
