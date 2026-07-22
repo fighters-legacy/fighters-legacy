@@ -4493,6 +4493,7 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
             (m_settings.aaMode == RendererAAMode::FXAA || m_settings.aaMode == RendererAAMode::TAA) ? 1u : 0u;
         pc.bloomStrength = m_settings.bloom ? 0.10f : 0.0f;
         pc.aoStrength = (m_settings.aoMode != RendererAOMode::Off) ? 0.85f : 0.0f;
+        pc.nvgIntensity = m_nvgIntensity; // #210 night-vision green gain (0 = off)
         vkCmdPushConstants(cmd, m_tonemapLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 
         vkCmdDraw(cmd, 3, 1, 0, 0); // fullscreen triangle

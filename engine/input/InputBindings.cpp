@@ -55,6 +55,7 @@ static constexpr const char* kActionNames[] = {
     "MasterArm",
     "MfdPage",
     "MfdRange",
+    "NvgToggle",
 };
 static_assert(std::size(kActionNames) == static_cast<size_t>(InputAction::Count),
               "kActionNames must have one entry per InputAction");
@@ -742,6 +743,10 @@ void InputBindings::applyDefaults() {
     m_primary[static_cast<int>(InputAction::MfdPage)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::O), false};
     m_primary[static_cast<int>(InputAction::MfdRange)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::Num3),
                                                           false};
+
+    // Night-vision goggles (#210): F7 toggles.
+    m_primary[static_cast<int>(InputAction::NvgToggle)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::F7),
+                                                           false};
 }
 
 // ---------------------------------------------------------------------------

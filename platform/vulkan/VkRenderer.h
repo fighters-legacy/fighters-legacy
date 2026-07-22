@@ -97,7 +97,8 @@ struct TonemapPush {
     uint32_t enableFxaa{0};    // 1 = apply FXAA on tonemapped output
     float bloomStrength{0.0f}; // bloom blend multiplier (0 = disabled)
     float aoStrength{0.0f};    // GTAO darkening strength (0 = AO disabled)
-    float _pad[3]{};           // 16-byte alignment → 32 bytes
+    float nvgIntensity{0.0f};  // night-vision green tint/gain (#210); 0 = off (consumes a pad slot)
+    float _pad[2]{};           // 16-byte alignment → 32 bytes
 };
 static_assert(sizeof(TonemapPush) == 32);
 static_assert(sizeof(TonemapPush) <= 128);
@@ -182,6 +183,9 @@ class VkRenderer : public IRenderer {
     void setConsoleElements(std::span<const HudElement> elements) override;
     bool captureScreenshot(const char* path) override;
     bool setCaptureSink(std::function<void(const CaptureFrame&)> sink) override;
+    void setNightVision(float intensity) override {
+        m_nvgIntensity = intensity < 0.0f ? 0.0f : (intensity > 1.0f ? 1.0f : intensity); // #210
+    }
 
     // ── Dear ImGui backend bridge (#156) ──────────────────────────────────────
     bool initGuiRenderBackend() override;
@@ -429,6 +433,7 @@ class VkRenderer : public IRenderer {
 
     // ── Settings ──────────────────────────────────────────────────────────
     RendererSettings m_settings{};
+    float m_nvgIntensity{0.0f}; // #210 night-vision goggles gain (0 = off); set via setNightVision()
 
     // Runtime shadow / particle parameters (derived from m_settings at init and on applySettings).
     uint32_t m_shadowRes{kShadowRes};

@@ -67,6 +67,7 @@ struct FlightScreenDeps {
     const InputBindings* inputBindings{nullptr};   // for edge-detecting autopilot/target actions (#640/#696)
     TargetDesignation* targetDesignation{nullptr}; // client-side designated target (#696); null = disabled
     SceneRenderer* sceneRenderer{nullptr};         // for the target-slaved inset view (#698); null = disabled
+    float* nvgIntensity{nullptr};                  // NVG gain sink read by Game.cpp -> setNightVision (#210)
     WingmanMenu* wingmanMenu{nullptr};             // null = no radio menu (#610)
     CommsMenu* commsMenu{nullptr};                 // null = no ATC comms menu (#704)
     ManualOverlay* manual{nullptr};                // null = no in-flight aircraft manual (#821)
@@ -115,6 +116,9 @@ class FlightScreen : public IScreen {
 
     // Radar MFD page state (#642): client UI, cycled with MfdPage/MfdRange; fed to the HUD each frame.
     HudMfdState m_mfd{};
+
+    // Night-vision goggles (#210): client-local toggle, applied only in cockpit view.
+    bool m_nvgOn{false};
 
     // Ground-crew scene (#55): landed-and-stopped detection on the OWN aircraft. The airborne→landed
     // edge records a landing score into the logbook (the #674 sink that had no producer); holding

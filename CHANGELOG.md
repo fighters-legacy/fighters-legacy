@@ -21,6 +21,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **renderer/game**: NVG cockpit overlay (#210, Epic #587). Night-vision goggles as a tonemap-stage
+  green photocathode gain rather than a flat overlay: `TonemapPush` gains an `nvgIntensity` field
+  (consuming a pad slot, size unchanged) and `tonemap.frag` a soft-knee luminance amplification painted
+  P43 phosphor green, so dim starlit terrain reads and bright sources bloom through the existing bloom
+  path. New non-pure `IRenderer::setNightVision(float)` (no-op default — mocks unchanged) with a
+  `VkRenderer` override. Toggled with the new `NvgToggle` action (F7), cockpit-only, driving the render
+  loop each frame and an `NVG` HUD annunciator. There is no client-side visibility penalty to suppress —
+  the brightening is the mechanic. Mocks compile untouched; the `TonemapPush` size asserts and the
+  input-default test cover the ABI + binding.
+
 - **game**: radar MFD and RWR display pages (#642, Epic #587). The datalink scope (#528) becomes a
   cyclable MFD: `HudMfdState` (owned by `FlightScreen`, cycled with the new `MfdPage`/`MfdRange` actions
   on O/3) selects an Off page, the 360° PPI, a B-scope (azimuth ±60° vs range), or a dedicated RWR

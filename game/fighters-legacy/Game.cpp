@@ -476,6 +476,10 @@ struct GameServices {
     // Client-side target designation (#696) — the single source of truth for the designated target,
     // consumed by the padlock camera (#697), the target inset (#698), and the combat HUD (#641).
     TargetDesignation targetDesignation;
+
+    // Night-vision goggles gain (#210): FlightScreen writes it (cockpit + toggle); the render loop
+    // applies it via IRenderer::setNightVision each frame.
+    float nvgIntensity{0.0f};
 };
 
 // Per-session objects — created in startGame(), torn down in stopGame(). Hold pointers/refs into
@@ -1516,6 +1520,7 @@ void Game::startGame(const std::string& mission) {
         fsd.inputBindings = &d.services.inputBindings;         // autopilot/target-cycle edge detection (#640/#696)
         fsd.targetDesignation = &d.services.targetDesignation; // designated target (#696)
         fsd.sceneRenderer = d.services.sceneRenderer.get();    // target-slaved inset (#698)
+        fsd.nvgIntensity = &d.services.nvgIntensity;           // night-vision goggles (#210)
         fsd.wingmanMenu = &d.services.wingmanMenu;
         fsd.commsMenu = &d.services.commsMenu;
         fsd.manual = &d.services.manual;
@@ -2147,6 +2152,8 @@ void Game::run() {
             emitters.insert(emitters.end(), precip.begin(), precip.end());
             const auto fx = d.services.effectRouter.buildEmitters(d.services.particleSystem, 1.f / 60.f);
             emitters.insert(emitters.end(), fx.begin(), fx.end());
+            if (d.services.p.renderer)
+                d.services.p.renderer->setNightVision(d.services.nvgIntensity); // #210
             d.services.sceneRenderer->renderFrame(alpha, cam, d.services.env, emitters);
         }
 

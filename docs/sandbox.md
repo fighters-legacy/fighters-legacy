@@ -28,6 +28,7 @@ The camera-mode keys are now rebindable `InputAction`s (`CameraCockpit`/`CameraC
 | F4 | Free (default) — freely movable pivot camera | `CameraFree` |
 | F5 | Padlock — slew to keep the designated target centered; auto-picks best-in-cone if nothing is designated, breaks lock with a `PADLOCK — BREAK` cue when terrain or the airframe masks the target, and reverts to Cockpit after a 4 s reacquire window (#697) | `PadlockToggle` (gamepad: RightStick click) |
 | F6 | Toggle the target-slaved inset view (#698) | `TargetInsetToggle` |
+| F7 | Toggle night-vision goggles — a green photocathode gain applied at the tonemap stage; brightens dim night scenes (#210) | `NvgToggle` |
 | N / P | Cycle to the next / previous target (#696) | `NextTarget` / `PrevTarget` (gamepad: DpadUp = next) |
 | PageUp / PageDown / ← / → | Pan the cockpit view (keyboard alternative to RMB drag; Cockpit/Padlock only) | `ViewUp` / `ViewDown` / `ViewLeft` / `ViewRight` |
 | F3 | Cycle performance overlay (Off → Compact → Full) | raw |

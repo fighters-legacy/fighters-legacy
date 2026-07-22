@@ -333,6 +333,10 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
             m_mfd.cyclePage();
         if (bindingJustPressed(input, d.inputBindings->get(fl::InputAction::MfdRange)))
             m_mfd.cycleRange();
+
+        // Night-vision goggles toggle (#210).
+        if (bindingJustPressed(input, d.inputBindings->get(fl::InputAction::NvgToggle)))
+            m_nvgOn = !m_nvgOn;
     }
 
     // Feed the padlock view its target each frame (resolve auto-clears on despawn/death). Stored for
@@ -474,6 +478,11 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     // Radar MFD page state (#642); annunciate the requested radar mode from the collector.
     m_mfd.radarMode = d.flightInput ? d.flightInput->radarMode() : 2;
     hin.mfd = m_mfd;
+    // Night-vision goggles (#210): cockpit-only. Publishes the gain to the render loop and the HUD cue.
+    const bool nvg = m_nvgOn && cockpit;
+    hin.nvgActive = nvg;
+    if (d.nvgIntensity)
+        *d.nvgIntensity = nvg ? 1.0f : 0.0f;
     // Autopilot annunciation (#640).
     hin.apModes = m_autopilot.modes();
     hin.apTargetAltM = m_autopilot.targetAltM();

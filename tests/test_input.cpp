@@ -510,6 +510,12 @@ TEST_CASE("InputBindings: camera + view-family actions have their #689 defaults"
     CHECK(b.get(InputAction::TargetInsetToggle).id == static_cast<uint32_t>(Key::F6));
     CHECK(b.get(InputAction::NextTarget).id == static_cast<uint32_t>(Key::N));
     CHECK(b.get(InputAction::PrevTarget).id == static_cast<uint32_t>(Key::P));
+    // Later epic-587 actions keep their reserved defaults.
+    CHECK(b.get(InputAction::MasterArm).id == static_cast<uint32_t>(Key::V));
+    CHECK(b.get(InputAction::MfdPage).id == static_cast<uint32_t>(Key::O));
+    CHECK(b.get(InputAction::MfdRange).id == static_cast<uint32_t>(Key::Num3));
+    CHECK(b.get(InputAction::NvgToggle).id == static_cast<uint32_t>(Key::F7));
+    CHECK(b.get(InputAction::AutopilotAltHold).id == static_cast<uint32_t>(Key::F9));
     // View* now have cockpit-pan defaults instead of being unbound.
     CHECK(b.get(InputAction::ViewLeft).id == static_cast<uint32_t>(Key::ArrowLeft));
     CHECK(b.get(InputAction::ViewRight).id == static_cast<uint32_t>(Key::ArrowRight));

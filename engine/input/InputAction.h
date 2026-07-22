@@ -80,6 +80,9 @@ enum class InputAction : uint32_t {
     MfdPage,
     MfdRange,
 
+    // Night-vision goggles toggle (#210)
+    NvgToggle,
+
     Count
 };
 
