@@ -87,7 +87,7 @@ TEST_CASE("Autopilot: SpdHold opens the throttle when slow, closes it when fast 
     CHECK(cmdFast.throttle < 0.5f);
 }
 
-TEST_CASE("Autopilot: disengage logic — stick drops attitude holds, throttle drops speed hold (#640)", "[autopilot]") {
+TEST_CASE("Autopilot: disengage logic - stick drops attitude holds, throttle drops speed hold (#640)", "[autopilot]") {
     Autopilot ap;
     auto s = levelState(2000.0, 200.f);
     ap.toggleAltHold(s, kR);

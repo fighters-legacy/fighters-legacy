@@ -479,7 +479,7 @@ TEST_CASE("ClientNetEventHandler: ownFactionIndex prefers the assigned entity, f
     CHECK(handler.ownFactionIndex() == 3u);
 }
 
-TEST_CASE("ClientNetEventHandler: identForEntity precedence — faction, then track, then affiliation (#688)",
+TEST_CASE("ClientNetEventHandler: identForEntity precedence - faction, then track, then affiliation (#688)",
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
