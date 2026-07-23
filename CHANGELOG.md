@@ -7,6 +7,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.9] - 2026-07-23
+
 ### Fixed
 
 - **network**: harden `SpatialIndex` against an extreme-but-finite world coordinate (#993, deep-fuzz
@@ -447,6 +449,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   throttle, airspeed and afterburner; the wind rush swells with dynamic pressure. Only air vehicles hum
   (category predicate). A null audio device is a silent no-op, so CI opens no device. Unit-tested headless
   via a tracking `IAudio` (mapping, byte-stable PCM, head-lock/doppler/distance wiring).
+
+## [0.3.8] - 2026-07-20
 
 ### Added
 
