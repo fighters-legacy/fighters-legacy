@@ -4956,6 +4956,40 @@ TEST_CASE("WorldBroadcaster: grant re-sends ConnectAck with the authority TLV (#
     CHECK(sawAck);
 }
 
+TEST_CASE("WorldBroadcaster: worldState aggregate is rebuilt at ~1 Hz and lists live entities (#600)",
+          "[world_broadcaster][world_state]") {
+    MockLogger log;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    for (int i = 0; i < 3; ++i) {
+        fl::EntityTransform t{};
+        t.pos[0] = static_cast<double>(i * 10);
+        t.pos[1] = 500.0;
+        em.spawn("builtin:debug-entity", t);
+    }
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    connectPilotPeer(broadcaster, net, 0u); // adds a 4th entity (the pilot)
+
+    // Tick 0 is a rebuild tick (0 % 60 == 0): the aggregate reflects the live set.
+    broadcaster.onTick(1.0 / 60.0, 0u);
+    const fl::WorldStateSnapshot& ws = broadcaster.worldState();
+    CHECK(ws.tick == 0u);
+    CHECK(ws.entities.size() == 4u); // 3 spawned + 1 pilot
+    CHECK(ws.peers.size() == 1u);    // the connected pilot appears in the peer picture
+    // Entities are in ascending pool order.
+    for (std::size_t i = 1; i < ws.entities.size(); ++i)
+        CHECK(ws.entities[i - 1].entityIdx < ws.entities[i].entityIdx);
+
+    // A non-multiple-of-60 tick does not rebuild (the snapshot stays at tick 0).
+    broadcaster.onTick(1.0 / 60.0, 30u);
+    CHECK(broadcaster.worldState().tick == 0u);
+    // The next multiple advances it.
+    broadcaster.onTick(1.0 / 60.0, 60u);
+    CHECK(broadcaster.worldState().tick == 60u);
+}
+
 TEST_CASE("WorldBroadcaster: password auth grants Admin caps (rung 1 unchanged, #946)",
           "[world_broadcaster][admin_command][permission]") {
     MockLogger log;

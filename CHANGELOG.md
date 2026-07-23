@@ -21,6 +21,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **server**: aggregated world-state surface core (part of #600, Epic M #589). New
+  `engine/net/WorldState.{h,cpp}` — a plain-data `WorldStateSnapshot` (entities with
+  id/gen/faction/type/owner/formation/category/damage/pos/vel/hp, a per-peer summary, weather, time)
+  and a pure, deterministic `buildWorldStateSnapshot` builder (SDL/ENet-free, golden-testable) that
+  iterates `EntityManager::forEach` in ascending pool order. `WorldBroadcaster` rebuilds it in the
+  Serialize phase every ~1 Hz (a bounded sim-thread copy) and exposes `worldState()`. This is the
+  single surface designed once for both the Epic M agentic-AI read API (JSON/socket built on top
+  later) and the #861 game-master overview map (its first consumer — a 128-player map cannot use
+  per-camera interest). Covered by `tests/test_world_state.cpp` and a cadence case in
+  `test_world_broadcaster`.
+
 - **netcode**: granted-authority ConnectAck extension and client affordance gating (#949, epic #944).
   New `ExtTag::ConnectAckAuthority = 0x0201` (first tag in the reserved `0x0200–0x02FF` MsgConnectAck
   range): a `{u64 caps, u16 factionIndex}` TLV appended after the entity-type records when a peer holds

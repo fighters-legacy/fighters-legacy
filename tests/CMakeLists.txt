@@ -789,6 +789,11 @@ add_executable(test_capability test_capability.cpp)
 target_link_libraries(test_capability PRIVATE Catch2::Catch2WithMain engine-protocol)
 catch_discover_tests(test_capability)
 
+# Aggregated world-state surface (#600; pure builder, SDL/ENet-free).
+add_executable(test_world_state test_world_state.cpp)
+target_link_libraries(test_world_state PRIVATE Catch2::Catch2WithMain engine-net)
+catch_discover_tests(test_world_state)
+
 # Engine-layer snapshot payload codec (#775; zstd wrapper in engine-compress).
 add_executable(test_snapshot_compression test_snapshot_compression.cpp)
 target_link_libraries(test_snapshot_compression PRIVATE Catch2::Catch2WithMain engine-compress)

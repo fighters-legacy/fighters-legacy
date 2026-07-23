@@ -1930,6 +1930,12 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         m_scoreboardDirty = false;
     }
 
+    // ~1 Hz aggregated world-state rebuild (#600 / #861). The bounded copy is the sim thread's only
+    // cost; the GM-map feed (#861) reads m_worldState, and Epic M's JSON/event-stream surface will
+    // serialize the same struct off-thread. Kept at ~1 Hz (agent/GM-map cadence), not the 60 Hz tick.
+    if (tickIndex % kWorldStateIntervalTicks == 0)
+        rebuildWorldState(tickIndex);
+
     // Respawn (#648): deferred death teardown + fire any due respawns (humans on request, bots auto).
     processRespawns();
 
@@ -2571,6 +2577,34 @@ bool WorldBroadcaster::setPeerAuthority(uint32_t peerId, const PeerAuthority& au
 PeerAuthority WorldBroadcaster::getPeerAuthority(uint32_t peerId) const {
     auto it = m_peerInputs.find(peerId);
     return (it != m_peerInputs.end()) ? it->second.authority : PeerAuthority{};
+}
+
+void WorldBroadcaster::rebuildWorldState(uint64_t tickIndex) {
+    // Gather the per-peer summary (the "peer picture"): every admitted peer, its role, faction, and
+    // latency class. Pilots and observers both appear (an observer has no entity but still holds a
+    // role + latency the GM view wants).
+    std::vector<WorldStatePeer> peers;
+    peers.reserve(m_peerInputs.size());
+    for (const auto& [peerId, ps] : m_peerInputs) {
+        if (!ps.handshakeComplete)
+            continue;
+        WorldStatePeer wp;
+        wp.peerId = peerId;
+        wp.role = static_cast<uint8_t>(ps.role);
+        wp.factionIndex = factionForPeer(peerId);
+        wp.delayTicks = static_cast<uint16_t>(std::min<uint32_t>(ps.estimatedDelayTicks, 0xFFFFu));
+        peers.push_back(wp);
+    }
+
+    uint8_t weatherPreset = 0;
+    float timeOfDay = 12.f;
+    if (m_weather) {
+        weatherPreset = static_cast<uint8_t>(m_weather->preset());
+        timeOfDay = m_weather->timeOfDay();
+    }
+
+    m_worldState = buildWorldStateSnapshot(tickIndex, m_entityManager, m_registry, &m_formations, std::move(peers),
+                                           weatherPreset, timeOfDay);
 }
 
 uint16_t WorldBroadcaster::factionForPeer(uint32_t peerId) const noexcept {

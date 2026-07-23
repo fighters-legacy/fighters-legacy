@@ -13,6 +13,7 @@
 #include "SnapshotScheduler.h"
 #include "TickGovernor.h"
 #include "TransformHistory.h"          // lag-compensation rewind ring (#425)
+#include "WorldState.h"                // ~1 Hz aggregated world-state surface (#600 / #861 GM map)
 #include "config/DifficultySettings.h" // AiScaling — sensing difficulty scaling (#685)
 #include "entity/Collision.h"          // CollisionPair — entity-entity collision (#630)
 #include "entity/DamageApplication.h"  // DamageRules — the gameplay damage gates (#626)
@@ -642,6 +643,14 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // controllers receive it via the si parameter of IEntityController::sample().
     [[nodiscard]] const SpatialIndex& spatialIndex() const noexcept {
         return m_spatialIndex;
+    }
+
+    // The most recent ~1 Hz aggregated world-state snapshot (#600 / #861). Rebuilt in the Serialize
+    // phase every kWorldStateIntervalTicks; the GM-map feed and (later) the Epic M world-state read
+    // API consume this. Sim-thread-only read (it is rebuilt on the sim thread). Empty until the first
+    // rebuild tick.
+    [[nodiscard]] const WorldStateSnapshot& worldState() const noexcept {
+        return m_worldState;
     }
 
     // Seconds until the scheduled shutdown; 0 if none active (sim-thread-only read).
@@ -1433,10 +1442,17 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     bool m_combatFrozen{false};                  // true in Ending/PostMatch — gates fire input + kill scoring
     uint64_t m_lastScoreboardTick{0};            // last tick a periodic MsgScoreboard went out
     bool m_scoreboardDirty{false};               // a score changed since the last broadcast
-    void broadcastMatchState();                  // send m_matchState to every handshake-complete peer
-    void sendMatchStateTo(uint32_t peerId);      // unicast to one peer (late joiner)
-    void broadcastScoreboard();                  // build + send MsgScoreboard (chunked) to all peers
-    void sendScoreboardTo(uint32_t peerId);      // unicast to one peer (on admit)
+
+    // ~1 Hz aggregated world-state surface (#600 / #861). Rebuilt in the Serialize phase from a cheap
+    // sim-thread copy of entity/formation/peer state; the GM-map feed (and later the Epic M read API)
+    // consume it. Rebuild cadence matched to the ~1 Hz agent/GM-map cadence, not the 60 Hz tick.
+    static constexpr uint64_t kWorldStateIntervalTicks = 60;
+    WorldStateSnapshot m_worldState;
+    void rebuildWorldState(uint64_t tickIndex); // gather peers + weather, call buildWorldStateSnapshot
+    void broadcastMatchState();                 // send m_matchState to every handshake-complete peer
+    void sendMatchStateTo(uint32_t peerId);     // unicast to one peer (late joiner)
+    void broadcastScoreboard();                 // build + send MsgScoreboard (chunked) to all peers
+    void sendScoreboardTo(uint32_t peerId);     // unicast to one peer (on admit)
     void appendScoreboardRows(std::vector<uint8_t>& pkt, std::size_t begin, std::size_t count,
                               const std::vector<uint32_t>& order) const;
 
