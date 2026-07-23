@@ -228,15 +228,9 @@ uint32_t PreviewScene::debugFlags() const noexcept {
     case PreviewDebugView::FaceColor:
         return kRenderFlagDebugFaceColor;
     case PreviewDebugView::Wireframe:
+        return kRenderFlagWireframe; // renderer ignores it when the device lacks fillModeNonSolid
     case PreviewDebugView::Normals:
-        // The LINE pipeline + normals shadingMode land with fl-viewer (#838); until then these
-        // views fall back to Shaded. Warn once so the enum is stable across the two commits.
-        if (!m_warnedUnsupportedView && m_logger) {
-            m_warnedUnsupportedView = true;
-            m_logger->log(LogLevel::Warn, __FILE__, __LINE__,
-                          "preview: wireframe/normals views not yet supported — showing shaded (#838)");
-        }
-        return 0;
+        return kRenderFlagDebugNormals;
     case PreviewDebugView::Shaded:
     default:
         return 0;

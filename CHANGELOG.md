@@ -9,6 +9,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **tools**: `fl-viewer` interactive model viewer (#838, Epic #836) — the DCS-Model-Viewer-shape tool
+  every established sim ships. `fl-viewer --entity fl-base:f5e` (or a bare `.glb`) opens a window
+  showing the aircraft exactly as the game draws it, with an orbit/pan/zoom camera, a glTF node-tree
+  panel (via the new `describeMeshNodes` in `validate-mesh-lib`), inline validate-mesh diagnostics, a
+  grid + engine-axis gizmo, damage-mesh toggle, and live hot-reload (#152) — edit the mesh on disk and
+  the view updates, the killer iteration feature. New renderer debug views back it: a **wireframe**
+  view (a LINE-polygon forward pipeline behind the newly enabled `fillModeNonSolid`) and a
+  **normals** view (`shadingMode 5` — visualize the final world-space normal to debug normal maps),
+  selectable in snapshot mode too (`--view wireframe|normals`). The IGui HAL gains `checkbox` /
+  `treeNode` / `treePop`. The single tinygltf+stb implementation is centralized into a shared
+  `tinygltf-impl` target so the viewer can link both the renderer and the mesh-validation lib.
 - **content**: asset hot-reload (#152, Epic #836). Editing a mesh, texture, livery, flight model or
   localization file on disk now updates the running game live, no restart — gated behind
   `FL_HOT_RELOAD=1` (all build configs; the env var is inherited by the single-player fl-server

@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// tinygltf implementation defines — must appear in exactly one .cpp file.
-// TINYGLTF_NO_STB_IMAGE_WRITE: we only load/validate models, never write images.
-// Skipping stb_image_write.h eliminates -Wmissing-field-initializers in that header.
-#define TINYGLTF_IMPLEMENTATION
-#define TINYGLTF_NO_STB_IMAGE_WRITE
-#define STB_IMAGE_IMPLEMENTATION
+// tinygltf DECLARATIONS only — the single implementation lives in the shared `tinygltf-impl` target
+// (third_party/tinygltf_impl.cpp), which validate-mesh-lib links. This lets fl-viewer link both this
+// lib (the node tree + diagnostics) AND platform-vulkan (the renderer) without the two tinygltf
+// implementations colliding at link time (#836).
 #include <tiny_gltf.h>
 
 #include "mesh_validator.h"
@@ -429,6 +427,131 @@ MeshValidationResult validateMesh(const std::string& filePath) {
     }
 
     return r;
+}
+
+// ── Node-tree description (#838) ────────────────────────────────────────────
+
+namespace {
+// Compose a node's local TRS into a column-major 4x4 (matrix wins if present, else T*R*S), into
+// out[16]. Pure arithmetic — no glm dependency in this lib.
+void composeLocalMatrix(const tinygltf::Node& node, float out[16]) {
+    // Identity.
+    for (int i = 0; i < 16; ++i)
+        out[i] = (i % 5 == 0) ? 1.0f : 0.0f;
+    if (node.matrix.size() == 16) {
+        for (int i = 0; i < 16; ++i)
+            out[i] = static_cast<float>(node.matrix[i]);
+        return;
+    }
+    const double tx = node.translation.size() == 3 ? node.translation[0] : 0.0;
+    const double ty = node.translation.size() == 3 ? node.translation[1] : 0.0;
+    const double tz = node.translation.size() == 3 ? node.translation[2] : 0.0;
+    const double qx = node.rotation.size() == 4 ? node.rotation[0] : 0.0;
+    const double qy = node.rotation.size() == 4 ? node.rotation[1] : 0.0;
+    const double qz = node.rotation.size() == 4 ? node.rotation[2] : 0.0;
+    const double qw = node.rotation.size() == 4 ? node.rotation[3] : 1.0;
+    const double sx = node.scale.size() == 3 ? node.scale[0] : 1.0;
+    const double sy = node.scale.size() == 3 ? node.scale[1] : 1.0;
+    const double sz = node.scale.size() == 3 ? node.scale[2] : 1.0;
+    // R (column-major) from the quaternion, scaled per axis.
+    const double xx = qx * qx, yy = qy * qy, zz = qz * qz;
+    const double xy = qx * qy, xz = qx * qz, yz = qy * qz;
+    const double wx = qw * qx, wy = qw * qy, wz = qw * qz;
+    out[0] = static_cast<float>((1 - 2 * (yy + zz)) * sx);
+    out[1] = static_cast<float>((2 * (xy + wz)) * sx);
+    out[2] = static_cast<float>((2 * (xz - wy)) * sx);
+    out[4] = static_cast<float>((2 * (xy - wz)) * sy);
+    out[5] = static_cast<float>((1 - 2 * (xx + zz)) * sy);
+    out[6] = static_cast<float>((2 * (yz + wx)) * sy);
+    out[8] = static_cast<float>((2 * (xz + wy)) * sz);
+    out[9] = static_cast<float>((2 * (yz - wx)) * sz);
+    out[10] = static_cast<float>((1 - 2 * (xx + yy)) * sz);
+    out[12] = static_cast<float>(tx);
+    out[13] = static_cast<float>(ty);
+    out[14] = static_cast<float>(tz);
+}
+
+MeshNodeTree buildNodeTree(const tinygltf::Model& model) {
+    MeshNodeTree tree;
+    tree.meshCount = static_cast<int>(model.meshes.size());
+    tree.nodes.resize(model.nodes.size());
+    for (size_t i = 0; i < model.nodes.size(); ++i) {
+        const tinygltf::Node& node = model.nodes[i];
+        MeshNodeInfo& info = tree.nodes[i];
+        info.name = node.name;
+        info.meshIndex = node.mesh;
+        info.damageVariant = node.name.size() >= 2 && node.name.compare(node.name.size() - 2, 2, "_b") == 0;
+        info.engineDrawn = (node.mesh == 0); // the engine draws meshes[0].primitives[0] only
+        composeLocalMatrix(node, info.localMatrix);
+        if (node.mesh >= 0 && node.mesh < static_cast<int>(model.meshes.size())) {
+            const tinygltf::Mesh& m = model.meshes[node.mesh];
+            info.primitiveCount = static_cast<int>(m.primitives.size());
+            tree.totalPrimitives += info.primitiveCount;
+            // Node-local AABB = union of its primitives' POSITION accessor min/max.
+            for (const auto& prim : m.primitives) {
+                auto it = prim.attributes.find("POSITION");
+                if (it == prim.attributes.end() || it->second < 0 ||
+                    it->second >= static_cast<int>(model.accessors.size()))
+                    continue;
+                const tinygltf::Accessor& acc = model.accessors[it->second];
+                if (acc.minValues.size() != 3 || acc.maxValues.size() != 3)
+                    continue;
+                for (int k = 0; k < 3; ++k) {
+                    const float lo = static_cast<float>(acc.minValues[k]);
+                    const float hi = static_cast<float>(acc.maxValues[k]);
+                    if (!info.hasAabb) {
+                        info.aabbMin[k] = lo;
+                        info.aabbMax[k] = hi;
+                    } else {
+                        info.aabbMin[k] = std::min(info.aabbMin[k], lo);
+                        info.aabbMax[k] = std::max(info.aabbMax[k], hi);
+                    }
+                }
+                info.hasAabb = true;
+            }
+        }
+    }
+    // Parent links from each node's children list.
+    for (size_t i = 0; i < model.nodes.size(); ++i)
+        for (int child : model.nodes[i].children)
+            if (child >= 0 && child < static_cast<int>(tree.nodes.size()))
+                tree.nodes[child].parent = static_cast<int>(i);
+    return tree;
+}
+} // namespace
+
+std::optional<MeshNodeTree> describeMeshNodesFromJson(std::string_view jsonContent) {
+    tinygltf::TinyGLTF loader;
+    tinygltf::Model model;
+    std::string err, warn;
+    if (!loader.LoadASCIIFromString(&model, &err, &warn, jsonContent.data(),
+                                    static_cast<unsigned int>(jsonContent.size()), ""))
+        return std::nullopt;
+    return buildNodeTree(model);
+}
+
+std::optional<MeshNodeTree> describeMeshNodesFromMemory(const uint8_t* glb, size_t len) {
+    tinygltf::TinyGLTF loader;
+    tinygltf::Model model;
+    std::string err, warn;
+    if (!loader.LoadBinaryFromMemory(&model, &err, &warn, glb, static_cast<unsigned int>(len)))
+        return std::nullopt;
+    return buildNodeTree(model);
+}
+
+std::optional<MeshNodeTree> describeMeshNodes(const std::string& filePath) {
+    tinygltf::TinyGLTF loader;
+    tinygltf::Model model;
+    std::string err, warn;
+    fs::path p(filePath);
+    std::string ext = p.extension().string();
+    for (char& c : ext)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const bool loaded = (ext == ".glb") ? loader.LoadBinaryFromFile(&model, &err, &warn, filePath)
+                                        : loader.LoadASCIIFromFile(&model, &err, &warn, filePath);
+    if (!loaded)
+        return std::nullopt;
+    return buildNodeTree(model);
 }
 
 } // namespace fl

@@ -40,6 +40,9 @@ class ImGuiGui final : public IGui {
     bool inputText(std::string_view label, char* buf, std::size_t cap, bool masked = false) override;
     bool button(std::string_view label) override;
     bool selectable(std::string_view label, bool selected) override;
+    bool checkbox(std::string_view label, bool* value) override;
+    bool treeNode(std::string_view id, std::string_view label, bool* selected, bool leaf) override;
+    void treePop() override;
     bool beginTable(std::string_view id, int columns) override;
     void tableHeadersRow(std::span<const std::string_view> headers) override;
     void tableNextRow() override;

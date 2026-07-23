@@ -140,7 +140,6 @@ class PreviewScene {
     bool m_loadedContent{false};
     bool m_damaged{false};
     PreviewDebugView m_view{PreviewDebugView::Shaded};
-    mutable bool m_warnedUnsupportedView{false}; // set inside const debugFlags() (warn-once)
 
     EnvironmentState m_env;
     std::vector<RenderItem> m_items;

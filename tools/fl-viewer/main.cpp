@@ -8,6 +8,7 @@
 
 #include "entity_resolve.h"
 #include "snapshot.h"
+#include "viewer_app.h"
 #include "viewer_options.h"
 
 #include "StdoutLogger.h"
@@ -65,11 +66,8 @@ int main(int argc, char** argv) {
         }
     }
 
-    if (opts.snapshotPath.empty()) {
-        std::fprintf(stderr, "fl-viewer: interactive viewer mode lands with #838; pass --snapshot <out.png> "
-                             "for headless capture (or --help).\n");
-        return 2;
-    }
+    if (opts.snapshotPath.empty())
+        return runViewer(opts, std::move(model), content.get(), assets, logger); // interactive window (#838)
 
     return runSnapshot(opts, std::move(model), assets, logger);
 }

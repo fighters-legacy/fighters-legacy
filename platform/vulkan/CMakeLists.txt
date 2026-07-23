@@ -99,6 +99,7 @@ target_link_libraries(platform-vulkan
             VulkanMemoryAllocator
             ${_ktx_target}
             tinygltf
+            tinygltf-impl # #836: the single tinygltf+stb implementation TU (shared with validate-mesh-lib)
             imgui # #156: records ImGui draw data into the swapchain pass (backends/imgui_impl_vulkan)
 )
 

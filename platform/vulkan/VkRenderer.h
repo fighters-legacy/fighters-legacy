@@ -165,6 +165,9 @@ class VkRenderer : public IRenderer {
     MaterialHandle createMaterial(const MaterialDesc& desc) override;
     MaterialHandle getMeshMaterial(MeshHandle h) const override;
     bool getMeshBounds(MeshHandle h, glm::vec3& outMin, glm::vec3& outMax) const override;
+    bool supportsWireframe() const override {
+        return m_wireframeSupported && m_forwardWirePipeline != VK_NULL_HANDLE;
+    }
     void destroyMesh(MeshHandle h) override;
     void destroyTexture(TextureHandle h) override;
     void destroyMaterial(MaterialHandle h) override;
@@ -448,7 +451,9 @@ class VkRenderer : public IRenderer {
     VkPipelineCache m_pipelineCache{VK_NULL_HANDLE};
     VkPipelineLayout m_forwardLayout{VK_NULL_HANDLE};
     VkPipeline m_forwardPipeline{VK_NULL_HANDLE};
+    VkPipeline m_forwardWirePipeline{VK_NULL_HANDLE};  // LINE-polygon variant for the wireframe view (#838)
     VkPipeline m_forwardAlphaPipeline{VK_NULL_HANDLE}; // alpha-blended transparent pass
+    bool m_wireframeSupported{false};                  // device has fillModeNonSolid (#838)
     VkPipelineLayout m_tonemapLayout{VK_NULL_HANDLE};
     VkPipeline m_tonemapPipeline{VK_NULL_HANDLE};
     VkPipelineLayout m_shadowLayout{VK_NULL_HANDLE};

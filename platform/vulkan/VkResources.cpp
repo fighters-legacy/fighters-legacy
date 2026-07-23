@@ -15,15 +15,17 @@
 #include <vk_mem_alloc.h>
 
 // ---------------------------------------------------------------------------
-// tinygltf + stb_image implementation — exactly one TU in this library.
-// TINYGLTF_HEADER_ONLY suppresses tinygltf's own compiled target; we define
-// TINYGLTF_IMPLEMENTATION here to pull in all definitions. stb_image is
-// included via this path (as a system header → warnings suppressed).
+// tinygltf + stb_image are DECLARATIONS only here — the single implementation lives in the shared
+// `tinygltf-impl` target (third_party/tinygltf_impl.cpp), which platform-vulkan links, so fl-viewer
+// can link BOTH this and validate-mesh-lib without the two implementations colliding (#836). The
+// direct stbi_load_from_memory / stbi_image_free calls below resolve against that TU (declared here,
+// as VkRenderer.cpp declares stbi_write_png — tiny_gltf.h no longer pulls stb_image.h without the impl).
 // ---------------------------------------------------------------------------
-#define TINYGLTF_IMPLEMENTATION
-#define STB_IMAGE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <tiny_gltf.h>
+
+extern "C" unsigned char* stbi_load_from_memory(const unsigned char* buffer, int len, int* x, int* y,
+                                                int* channels_in_file, int desired_channels);
+extern "C" void stbi_image_free(void* retval_from_stbi_load);
 
 // ---------------------------------------------------------------------------
 // KTX2 / Basis Universal

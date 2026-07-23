@@ -147,6 +147,13 @@ class IRenderer {
     // Cleared by endFrame.
     virtual void setConsoleElements(std::span<const HudElement> elements) = 0;
 
+    // Whether the backend can render kRenderFlagWireframe items (needs the fillModeNonSolid device
+    // feature). A viewer greys its wireframe toggle when false. Non-pure false default — mocks/backends
+    // without it (and every test mock) need no change; VkRenderer overrides it (#838).
+    virtual bool supportsWireframe() const {
+        return false;
+    }
+
     // Capture the next presented frame to a PNG at `path` (#909 groundwork). Returns true if the
     // request was accepted (the write happens at the end of the current/next frame). Non-pure with a
     // false default so a backend/mock without capture support (and every test mock) needs no change.

@@ -40,12 +40,17 @@ target_link_libraries(test_preview_scene PRIVATE Catch2::Catch2WithMain engine-r
 target_include_directories(test_preview_scene PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_preview_scene)
 
-# fl-viewer option parsing (#666) — only when the tool (and its lib) is built (needs platform-vulkan).
+# fl-viewer option parsing (#666) + overlay gizmos (#838) — only when the tool's lib is built.
 if(TARGET fl-viewer-lib)
     add_executable(test_viewer_options test_viewer_options.cpp)
     target_link_libraries(test_viewer_options PRIVATE Catch2::Catch2WithMain fl-viewer-lib)
     target_include_directories(test_viewer_options PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     catch_discover_tests(test_viewer_options)
+
+    add_executable(test_overlay_gizmos test_overlay_gizmos.cpp)
+    target_link_libraries(test_overlay_gizmos PRIVATE Catch2::Catch2WithMain fl-viewer-lib)
+    target_include_directories(test_overlay_gizmos PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    catch_discover_tests(test_overlay_gizmos)
 endif()
 
 add_executable(test_flight_hud test_flight_hud.cpp)
@@ -767,6 +772,11 @@ add_executable(test_validate_mesh test_validate_mesh.cpp)
 target_link_libraries(test_validate_mesh
     PRIVATE Catch2::Catch2WithMain validate-mesh-lib)
 catch_discover_tests(test_validate_mesh)
+
+# Mesh node-tree description for the fl-viewer panel (#838).
+add_executable(test_mesh_node_tree test_mesh_node_tree.cpp)
+target_link_libraries(test_mesh_node_tree PRIVATE Catch2::Catch2WithMain validate-mesh-lib)
+catch_discover_tests(test_mesh_node_tree)
 
 add_executable(test_tex_compress test_tex_compress.cpp)
 target_link_libraries(test_tex_compress

@@ -41,28 +41,33 @@ add_executable(validate-playlist validate-playlist/main.cpp)
 target_link_libraries(validate-playlist PRIVATE validate-playlist-lib)
 
 # fl-viewer: standalone model preview on the game renderer (#836). Snapshot mode (#666) is windowless
-# (headless Vulkan), so it needs platform-vulkan but NOT SDL3; the interactive window (#838) adds
-# platform-sdl3 + platform-gui. The pure option-parsing + entity-resolution live in a lib so they are
-# unit-testable without a GPU.
-if(TARGET platform-vulkan)
+# (headless Vulkan); the interactive window (#838) adds SDL3 + IGui + the overlay gizmos + the
+# validate-mesh node tree. The pure option-parsing / entity-resolution / gizmo builders live in a lib
+# so they are unit-testable without a GPU.
+if(TARGET platform-sdl3 AND TARGET platform-vulkan)
     add_library(fl-viewer-lib STATIC
         fl-viewer/viewer_options.cpp
-        fl-viewer/entity_resolve.cpp)
+        fl-viewer/entity_resolve.cpp
+        fl-viewer/overlay_gizmos.cpp)
     target_link_libraries(fl-viewer-lib PUBLIC engine-render engine-content engine-entity platform-hal)
     target_include_directories(fl-viewer-lib PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/fl-viewer"
         "${CMAKE_SOURCE_DIR}/platform/stdfs")
 
-    add_executable(fl-viewer fl-viewer/main.cpp fl-viewer/snapshot.cpp)
-    target_link_libraries(fl-viewer PRIVATE fl-viewer-lib platform-stdfs platform-vulkan Vulkan::Vulkan)
+    add_executable(fl-viewer fl-viewer/main.cpp fl-viewer/snapshot.cpp fl-viewer/viewer_app.cpp)
+    target_link_libraries(fl-viewer PRIVATE fl-viewer-lib validate-mesh-lib
+        platform-stdfs platform-sdl3 platform-gui platform-vulkan SDL3::SDL3 Vulkan::Vulkan)
     target_include_directories(fl-viewer PRIVATE
+        "${CMAKE_SOURCE_DIR}/platform/sdl3"
+        "${CMAKE_SOURCE_DIR}/platform/gui"
         "${CMAKE_SOURCE_DIR}/platform/vulkan"
+        "${CMAKE_SOURCE_DIR}/tools/validate-mesh"
         "${CMAKE_BINARY_DIR}/engine")   # generated Version.h
     if(MSVC)
         target_compile_definitions(fl-viewer PRIVATE _CRT_SECURE_NO_WARNINGS)
     endif()
     # Conditional install (like the game's Vulkan-gated install): CI legs that configure without
-    # Vulkan simply don't build or ship fl-viewer.
+    # SDL3/Vulkan simply don't build or ship fl-viewer.
     install(TARGETS fl-viewer RUNTIME DESTINATION . COMPONENT tools)
 endif()
 
@@ -259,6 +264,9 @@ target_include_directories(validate-mesh-lib SYSTEM PUBLIC
 if(TARGET tinygltf)
     target_link_libraries(validate-mesh-lib PUBLIC tinygltf)
 endif()
+# The tinygltf/stb implementation now lives in the shared tinygltf-impl TU (#836), so validate-mesh-lib
+# no longer emits its own — this is what lets fl-viewer link both it and platform-vulkan.
+target_link_libraries(validate-mesh-lib PUBLIC tinygltf-impl)
 
 add_executable(validate-mesh validate-mesh/main.cpp)
 target_link_libraries(validate-mesh PRIVATE validate-mesh-lib)
