@@ -6,10 +6,21 @@
 
 namespace fl {
 
-enum class TexFormat { BC1, BC3, BC7 };
+// Basis Universal encodings. BOTH are transcodable — the KTX2 stores a Basis payload (vkFormat =
+// VK_FORMAT_UNDEFINED), and the runtime transcodes each to BC7 on desktop / ASTC 4x4 on Apple
+// Silicon / RGBA32 fallback via `ktxTexture2_TranscodeBasis` (see VkResources.cpp). That is what
+// makes a content pack's textures PORTABLE across GPUs. (toktx has no raw-BCn encode: passing
+// `--encode bc7` makes toktx v4 silently emit an UNCOMPRESSED texture — the latent desktop-only bug
+// this replaced, #846.)
+enum class TexEncoding {
+    Etc1s, // ETC1S / BasisLZ: small, heavily supercompressed. For base color / albedo. Mangles
+           // tangent-space data, so NEVER for normal maps.
+    Uastc, // UASTC + zstd (`--zcmp`): high quality, larger. For normal / ORM / emissive, where
+           // ETC1S banding is visible.
+};
 
 struct TexCompressOptions {
-    TexFormat format{TexFormat::BC7};
+    TexEncoding encoding{TexEncoding::Uastc}; // safe general default; `--type diffuse` selects Etc1s.
     bool genMipmaps{true};
     std::string toktxPath{"toktx"};
 };

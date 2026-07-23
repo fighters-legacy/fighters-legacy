@@ -125,38 +125,42 @@ artefacts at distance.
 
 ---
 
-## Format selection
+## Encoding selection — Basis Universal
 
-Use `--type` to select the compression preset, or `--format` to override explicitly.
+`tex-compress` produces **Basis Universal** KTX2, not raw block-compressed textures. A Basis KTX2
+stores a *transcodable* payload (`vkFormat = VK_FORMAT_UNDEFINED`); at load time the engine transcodes
+it to the block format the running GPU wants — **BC7 on desktop, ASTC 4×4 on Apple Silicon**, RGBA32
+as a last resort (`ktxTexture2_TranscodeBasis`, `VkResources.cpp`). This is why one committed texture
+runs everywhere; it is what `KHR_texture_basisu` exists for. (Raw BCn is a dead end here — `toktx` has
+no raw-BCn encoder, so asking for one silently yields an *uncompressed* texture.)
 
-| `--type` | Default format | Reason |
+There are two Basis encodings, and the split matters:
+
+| `--type` | Encoding | Why |
 |---|---|---|
-| `diffuse` (opaque) | BC1 | Smallest size; no alpha overhead |
-| `diffuse` (alpha) | BC3 | Preserves alpha channel; use for canopy glass, decals |
-| `normal` | BC7 | Highest quality; preserves RG precision without BC5's two-channel restriction |
-| `orm` | BC7 | Packed three-channel data; BC7 avoids cross-channel compression artefacts |
-| `emissive` | BC7 | Preserves HDR-range colour values accurately |
+| `diffuse` (base color / albedo) | **ETC1S** | Small, heavily supercompressed. Fine for colour. |
+| `normal` | **UASTC** | ETC1S mangles tangent-space normals — banding shows as lighting artefacts. |
+| `orm` | **UASTC** | Packed three-channel data; ETC1S's block palette corrupts the separate channels. |
+| `emissive` | **UASTC** | Preserves bright glow values. |
 
-When in doubt, use **BC7** — it is the best-quality format and the size penalty is modest on
-modern hardware (roughly 2× BC1 for the same texture). Use BC1/BC3 only where storage is
-constrained (weapon textures, terrain detail maps).
+UASTC is larger than ETC1S, so `tex-compress` always zstd-supercompresses it (`--zcmp`) — a UASTC
+KTX2 without it is several times the size. Rule of thumb: **base color → ETC1S, everything else →
+UASTC.** Override the preset with `--format etc1s|uastc` when you have a reason.
 
 ---
 
 ## `tex-compress` usage
 
 ```bash
-# Basic usage — output defaults to same path with .ktx2 extension
+# Presets pick the encoding: diffuse -> etc1s, normal/orm/emissive -> uastc.
+# Output defaults to the same path with a .ktx2 extension.
 tex-compress --type diffuse  fa18c_diffuse.png
 tex-compress --type normal   fa18c_normal.png
 tex-compress --type orm      fa18c_orm.png
 tex-compress --type emissive fa18c_emissive.png
 
-# Opaque diffuse with explicit format
-tex-compress --format bc1 fa18c_diffuse.png
-
-# Diffuse with alpha (canopy)
-tex-compress --type diffuse --format bc3 fa18c_canopy.png
+# Force an encoding explicitly (e.g. a high-fidelity base color)
+tex-compress --format uastc fa18c_diffuse.png
 
 # Specify output path explicitly (textures live in the pack's textures/ directory)
 tex-compress --type diffuse fa18c_diffuse.png textures/fa18c_diffuse.ktx2
@@ -164,9 +168,9 @@ tex-compress --type diffuse fa18c_diffuse.png textures/fa18c_diffuse.ktx2
 # Disable mipmap generation (UI textures only)
 tex-compress --type diffuse --no-mipmaps ui_crosshair.png
 
-# Batch convert all PNGs in a directory (bash)
-for f in aircraft/fa18c/*.png; do
-    tex-compress --type diffuse "$f"
+# Batch convert a mesh's committed masters (bash)
+for f in aircraft/fa18c/textures-src/*.png; do
+    tex-compress --type diffuse "$f" "textures/$(basename "${f%.png}").ktx2"
 done
 
 # Windows toktx not in PATH — specify full path
@@ -177,12 +181,15 @@ tex-compress --toktx "C:\VulkanSDK\1.3.290.0\Bin\toktx.exe" --type diffuse fa18c
 
 | Flag | Default | Description |
 |---|---|---|
-| `--type diffuse\|normal\|orm\|emissive` | — | Selects compression preset (see table above) |
-| `--format bc1\|bc3\|bc7` | BC7 | Override format explicitly, ignoring `--type` default |
+| `--type diffuse\|normal\|orm\|emissive` | — | Selects the Basis encoding preset (see table above) |
+| `--format etc1s\|uastc` | `uastc` | Override the encoding explicitly, ignoring `--type` |
 | `--no-mipmaps` | off | Skip mipmap generation (use only for UI textures that must not blur) |
 | `--layers <in…>` | — | 2D-**array** mode: pack N layer-major PNGs into one array KTX2 (see below) |
 | `-o, --output <path>` | — | Output KTX2 path (required in `--layers` mode; optional otherwise) |
 | `--toktx <path>` | `toktx` | Path to the `toktx` binary; defaults to `toktx` in PATH |
+
+The deprecated `--format bc1\|bc3\|bc7` aliases still parse — they map to `etc1s` (bc1/bc3) or
+`uastc` (bc7) with a warning — so old build scripts keep working.
 
 Exit codes: 0 = success, 1 = conversion failure, 2 = bad arguments.
 
@@ -194,7 +201,7 @@ one for combined normal+roughness ("normalORM") — where the **array layer inde
 
 ```bash
 # Base colour array (sRGB): layer 0 grass, 1 dirt, 2 rock, 3 snow.
-tex-compress --type diffuse --format bc7 --layers grass_c.png dirt_c.png rock_c.png snow_c.png \
+tex-compress --type diffuse --layers grass_c.png dirt_c.png rock_c.png snow_c.png \
              -o textures/biome_basecolor.ktx2
 
 # Normal+roughness array (linear): RG = tangent-space normal xy, B = roughness, A = occlusion.
@@ -265,10 +272,13 @@ treat them as you would any generated artifact — git-ignore them, ship them in
 
 ## Known limitations
 
-- BC1 and BC3 do not support HDR values; use BC7 for emissive textures with bright glow effects
-- Normal maps stored as BC7 use 4 bytes/texel vs BC5's 2 bytes/texel; the quality gain outweighs
-  the cost at typical aircraft texture resolutions
-- `tex-compress` cannot auto-detect whether a diffuse texture has a meaningful alpha channel;
-  use `--format bc3` explicitly when alpha is needed
+- Basis stores LDR only; a bright emissive glow authored in HDR must be tone-mapped into the 8-bit
+  PNG master before encoding.
+- ETC1S has a single block palette shared across all channels — never use it for a normal map or a
+  packed ORM map, only for base color. `--type` already enforces this; only an explicit
+  `--format etc1s` on a normal/ORM map defeats it.
+- The transcode target is chosen by the running GPU, so the on-disk KTX2 is identical everywhere but
+  the sampled block format (BC7 vs ASTC) is not — do not assume byte-identical GPU output across
+  platforms when comparing golden images.
 
 For glTF material setup and node naming conventions see [`docs/modding/3d-models.md`](3d-models.md).

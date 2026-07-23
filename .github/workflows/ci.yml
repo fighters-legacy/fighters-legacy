@@ -263,12 +263,16 @@ jobs:
           demo_out=$(./build/debug/tools/validate-mission missions/demos/*.yaml 2>&1)
           if [ -n "$demo_out" ]; then echo "demo missions failed validation:"; echo "$demo_out"; exit 1; fi
 
-      - name: Smoke test tex-compress array KTX2 (Linux)
+      - name: Smoke test tex-compress Basis KTX2 (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          # Real encode gate (#447): install toktx from the KTX-Software release (not reliably an
-          # apt package), pack 4 layer PNGs into an array KTX2, and assert layerCount == 4 — so this
-          # gate actually runs the encode, not just --version.
+          # Real encode gate (#447/#846): install toktx from the KTX-Software release (not reliably an
+          # apt package) and actually run the encode. Two assertions that matter:
+          #   1. the ETC1S array is a Basis payload (vkFormat == VK_FORMAT_UNDEFINED == 0) with
+          #      layerCount == 4 — a raw BCn output (the old silent-uncompressed bug) has a nonzero
+          #      vkFormat and would NOT transcode to ASTC on Apple Silicon;
+          #   2. a UASTC single texture is likewise Basis (vkFormat == 0).
+          # vkFormat is a uint32 LE at KTX2 offset 12; layerCount at offset 32.
           set -e
           KTXVER=4.4.2
           curl -sSL -o /tmp/ktx.tar.bz2 \
@@ -287,13 +291,18 @@ jobs:
           PY
           ./build/debug/tools/tex-compress --type diffuse --layers /tmp/grass.png /tmp/dirt.png /tmp/rock.png /tmp/snow.png \
             -o /tmp/biome.ktx2 --toktx /tmp/ktx/bin/toktx
-          # KTX2 header: layerCount is a uint32 LE at byte offset 32.
+          ./build/debug/tools/tex-compress --type normal /tmp/grass.png /tmp/normal.ktx2 --toktx /tmp/ktx/bin/toktx
           python3 - <<'PY'
           import struct, sys
-          data = open("/tmp/biome.ktx2", "rb").read()
-          layers = struct.unpack_from("<I", data, 32)[0]
-          print("array KTX2 layerCount =", layers)
-          sys.exit(0 if layers == 4 else 1)
+          def vkformat(p): return struct.unpack_from("<I", open(p, "rb").read(), 12)[0]
+          arr = open("/tmp/biome.ktx2", "rb").read()
+          layers = struct.unpack_from("<I", arr, 32)[0]
+          arr_fmt = struct.unpack_from("<I", arr, 12)[0]
+          uastc_fmt = vkformat("/tmp/normal.ktx2")
+          print("array ETC1S KTX2: layerCount =", layers, "vkFormat =", arr_fmt)
+          print("UASTC KTX2: vkFormat =", uastc_fmt)
+          ok = layers == 4 and arr_fmt == 0 and uastc_fmt == 0
+          sys.exit(0 if ok else 1)
           PY
 
       - name: Smoke test asset pipeline tools (Windows)

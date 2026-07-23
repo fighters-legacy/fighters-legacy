@@ -70,6 +70,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **tools**: `tex-compress` now emits **Basis Universal** KTX2, not raw block-compressed textures
+  (#846, Epic #836). This is a correctness fix as much as a portability one: the tool asked toktx for
+  `--encode bc7`, but toktx v4 has no raw-BCn encoder and *silently emitted an uncompressed texture*
+  (`vkFormat = VK_FORMAT_R8G8B8_SRGB`, not a block format) — so packs were shipping uncompressed,
+  desktop-only assets. The engine already transcodes Basis at load (`ktxTexture2_TranscodeBasis` →
+  BC7 on desktop / ASTC 4×4 on Apple Silicon), so a Basis KTX2 is the portable form every GPU wants.
+  `--type` now selects the encoding — base color → **ETC1S** (small), normal/ORM/emissive → **UASTC**
+  (high quality, zstd-supercompressed via `--zcmp`), the split `KHR_texture_basisu` exists for.
+  `--format` takes `etc1s|uastc` (the old `bc1|bc3|bc7` values parse as deprecated aliases with a
+  warning). The CI smoke now asserts the output is Basis (`vkFormat == 0`), not merely that a file
+  appeared. `gen_terrain_color.py` switches its satellite tiles to UASTC.
 - **docs**: rewrite `docs/modding/textures.md` around the source-vs-artifact split (#846, Epic #836).
   The guide previously told authors to commit `.ktx2` and discard the source `.png` — backwards, and
   self-contradicted by its own later sections. It now states the industry pattern plainly: **PNG
