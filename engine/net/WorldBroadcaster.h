@@ -127,6 +127,13 @@ struct PeerInputState {
     std::chrono::steady_clock::time_point radioCmdWindowStart{};
     uint32_t radioCmdCount{0};
 
+    // Admin command channel, grant-path only (#946). A peer NOT authenticating with the operator
+    // password (empty token) reaches dispatch via its granted caps; a zero-cap peer is refused. This
+    // 1 s window rate-limits that unauthenticated path so it is not a free probe/amplification channel.
+    // The password-authenticated path is not rate-limited here (an operator is trusted).
+    std::chrono::steady_clock::time_point adminCmdWindowStart{};
+    uint32_t adminCmdCount{0};
+
     // Text chat channel (#646). Same per-peer 1 s rate-limit window pattern as wingman (warn once per
     // window, silently drop the rest). chatMuted is session-scoped, set by the admin mute command.
     std::chrono::steady_clock::time_point chatWindowStart{};
@@ -1022,10 +1029,13 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         return !m_joinPassword.empty();
     }
 
-    // Attach the admin command dispatcher for MsgAdminCommand handling.
-    // Typically: [&adminRegistry](std::string_view cmd){ return adminRegistry.dispatch(cmd); }
+    // Attach the admin command dispatcher for MsgAdminCommand handling. The dispatcher receives the
+    // command string AND a CommandIssuer describing who sent it (#946) — the peer id, its capability
+    // mask, and its faction binding — so the registry can permission-check.
+    // Typically: [&adminRegistry](std::string_view cmd, const CommandIssuer& iss){
+    //                return adminRegistry.dispatch(cmd, iss); }
     // Call before gameLoop.start(). Does not take ownership.
-    void setAdminDispatch(std::function<std::string(std::string_view)> fn);
+    void setAdminDispatch(std::function<std::string(std::string_view, const CommandIssuer&)> fn);
 
     // Wire CommandShell mark/drainSince callbacks so that output written inside
     // enqueueSimCallback lambdas is forwarded to the requesting peer as follow-on
@@ -1184,6 +1194,17 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // shares the spawn/teardown mechanism with connect/disconnect — the same seam #648 (death ->
     // spectator -> respawn) reuses.
     void setPeerRole(uint32_t peerId, PeerRole role);
+
+    // Set / clear a peer's granted authority (#946/#947). The grant channel (empty-token
+    // MsgAdminCommand) authenticates a peer by these caps; the operator-password path is unaffected.
+    // Ephemeral — erased when the peer disconnects (persistence is the identity-bound issue #950).
+    // No-op if the peer is unknown. Sim-thread only (call via GameLoop::enqueueSimCallback from the
+    // grant/revoke admin command). Returns false only if the peer has no input slot.
+    bool setPeerAuthority(uint32_t peerId, const PeerAuthority& authority);
+
+    // A peer's current granted authority (zero caps / no binding if unknown or ungranted). Sim-thread
+    // read; used by the grant/revoke commands and the granted-authority ConnectAck TLV (#949).
+    [[nodiscard]] PeerAuthority getPeerAuthority(uint32_t peerId) const;
 
   private:
     // Handle MsgConnectRequest (#853): grant a role, admit the peer (pilot = spawn its entity + form its
@@ -1633,15 +1654,19 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     bool m_aiAutoEject{false}; // #672 AI pilots auto-eject when critically hit; off by default
 
     // Network admin channel state (set before gameLoop.start(); read on sim thread only).
-    std::string m_operatorPassword;                               // empty = admin channel disabled
-    std::string m_joinPassword;                                   // #998: empty = open server
-    std::function<std::string(std::string_view)> m_adminDispatch; // null = admin channel disabled
+    std::string m_operatorPassword; // empty = admin channel disabled
+    std::string m_joinPassword;     // #998: empty = open server
+    std::function<std::string(std::string_view, const CommandIssuer&)> m_adminDispatch; // null = admin channel disabled
     AuthTracker m_adminAuthTracker{5, 300}; // per-IP failed-auth lockout (defaults: 5 attempts, 5 min)
 
     // Deferred admin shell drain: one entry per in-flight MsgAdminCommand; fires after a 20 ms
     // wall-clock deadline (matching the RCON drain) so enqueueSimCallback lambdas have run and
     // shell output is available. Wall-clock is immune to GameLoop tick-batch catch-up.
     static constexpr int kENetAdminDrainDelayMs = 20;
+    // Rate cap for the unauthenticated (grant-channel) admin path (#946): commands/second per peer
+    // beyond which they are silently dropped, so a zero-cap peer cannot flood the permission-denied
+    // response path. The password-authenticated path is not capped (an operator is trusted).
+    static constexpr uint32_t kUnauthAdminCmdsPerSecond = 8;
     struct PendingAdminDrain {
         uint32_t peerId;
         uint16_t reqId;

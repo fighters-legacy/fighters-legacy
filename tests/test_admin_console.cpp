@@ -854,7 +854,7 @@ TEST_CASE("AdminConsole wb: status and admin_auth_status reflect active lockout"
     f.net.peerAddr = "1.2.3.4";
     f.broadcaster.setAdminAuthParams(1, 300);
     f.broadcaster.setOperatorPassword("correct");
-    f.broadcaster.setAdminDispatch([](std::string_view) { return std::string{}; });
+    f.broadcaster.setAdminDispatch([](std::string_view, const CommandIssuer&) { return std::string{}; });
     f.registry.registerType(makeWbEntityDef());
     f.broadcaster.onConnect(0u);
 
@@ -880,7 +880,7 @@ TEST_CASE("AdminConsole wb: admin_auth_status shows pending failure line", "[adm
     f.net.peerAddr = "1.2.3.4";
     f.broadcaster.setAdminAuthParams(3, 300);
     f.broadcaster.setOperatorPassword("correct");
-    f.broadcaster.setAdminDispatch([](std::string_view) { return std::string{}; });
+    f.broadcaster.setAdminDispatch([](std::string_view, const CommandIssuer&) { return std::string{}; });
     f.registry.registerType(makeWbEntityDef());
     f.broadcaster.onConnect(0u);
 
@@ -948,7 +948,7 @@ TEST_CASE("AdminConsole wb: status shows no lockout line after admin_unlock clea
     f.net.peerAddr = "1.2.3.4";
     f.broadcaster.setAdminAuthParams(1, 300);
     f.broadcaster.setOperatorPassword("correct");
-    f.broadcaster.setAdminDispatch([](std::string_view) { return std::string{}; });
+    f.broadcaster.setAdminDispatch([](std::string_view, const CommandIssuer&) { return std::string{}; });
     f.registry.registerType(makeWbEntityDef());
     f.broadcaster.onConnect(0u);
 
@@ -1103,4 +1103,79 @@ TEST_CASE("AdminConsole: atc commands report unavailable with no service", "[adm
     CHECK(reg.dispatch("atc_status").find("not available") != std::string::npos);
     CHECK(reg.dispatch("atc_scramble a b").find("not available") != std::string::npos);
     CHECK(reg.dispatch("atc_hold a on").find("not available") != std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// Permission-checked dispatch (#946): the issuer-aware dispatch(line, issuer) refuses commands the
+// issuer lacks the capability for. The plain dispatch(line) path (every test above) is unchanged —
+// it is the implicit-Admin path (stdin / RCON / --admin-token) and never cap-checks.
+// ---------------------------------------------------------------------------
+
+static bool refused(const std::string& out) {
+    return out.find("permission denied") != std::string::npos;
+}
+
+TEST_CASE("AdminConsole: dispatch(line) implicit-Admin path never cap-checks", "[admin_console][permission]") {
+    auto reg = makeRegistry();
+    // The no-issuer overload runs every command regardless of caps (stdin / RCON / --admin-token).
+    CHECK_FALSE(refused(reg.dispatch("kick 42")));
+    CHECK_FALSE(refused(reg.dispatch("spawn x 0 0 0")));
+    CHECK_FALSE(refused(reg.dispatch("set_weather storm")));
+    CHECK_FALSE(refused(reg.dispatch("quit")));
+}
+
+TEST_CASE("AdminConsole: Admin issuer runs every capability class", "[admin_console][permission]") {
+    auto reg = makeRegistry();
+    const CommandIssuer admin{7, kAdminCaps, PeerAuthority::kNoFactionBinding};
+    CHECK_FALSE(refused(reg.dispatch("kick 42", admin)));
+    CHECK_FALSE(refused(reg.dispatch("spawn x 0 0 0", admin)));
+    CHECK_FALSE(refused(reg.dispatch("set_weather storm", admin)));
+    CHECK_FALSE(refused(reg.dispatch("flight list", admin)));
+    CHECK_FALSE(refused(reg.dispatch("spectate 1 2", admin)));
+    CHECK_FALSE(refused(reg.dispatch("set_role 1 observer", admin)));
+    CHECK_FALSE(refused(reg.dispatch("quit", admin))); // unannotated = Admin-only
+}
+
+TEST_CASE("AdminConsole: public commands run for a zero-cap issuer", "[admin_console][permission]") {
+    auto reg = makeRegistry();
+    const CommandIssuer nobody{9, 0u, PeerAuthority::kNoFactionBinding};
+    // help/status/peers/tickstats/mutes/seats/atc_status are annotated public (0 caps).
+    CHECK_FALSE(refused(reg.dispatch("help", nobody)));
+    CHECK(reg.dispatch("help", nobody).find("status") != std::string::npos); // real handler ran
+    CHECK_FALSE(refused(reg.dispatch("status", nobody)));
+    CHECK_FALSE(refused(reg.dispatch("peers", nobody)));
+    // But a privileged command is refused with a message naming the missing capability.
+    const std::string k = reg.dispatch("kick 42", nobody);
+    CHECK(refused(k));
+    CHECK(k.find("kick_ban") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole: Moderator caps permit kick/ban, refuse spawn/config/grant", "[admin_console][permission]") {
+    auto reg = makeRegistry();
+    const CommandIssuer mod{3, kModeratorCaps, PeerAuthority::kNoFactionBinding};
+    // Permitted: kick/ban/unban (KickBan), mute (Mute), spectate (SpectateAny).
+    CHECK_FALSE(refused(reg.dispatch("kick 42", mod)));
+    CHECK_FALSE(refused(reg.dispatch("ban 1.2.3.4", mod)));
+    CHECK_FALSE(refused(reg.dispatch("mute 3", mod)));
+    CHECK_FALSE(refused(reg.dispatch("spectate 1 2", mod)));
+    // Refused: spawn (SpawnAny), config (ServerConfig), AI orders (CommandAnyAi), grant (GrantRoles).
+    CHECK(refused(reg.dispatch("spawn x 0 0 0", mod)));
+    CHECK(refused(reg.dispatch("set_weather storm", mod)));
+    CHECK(refused(reg.dispatch("flight list", mod)));
+    CHECK(refused(reg.dispatch("set_role 1 observer", mod)));
+    // A moderator cannot self-elevate: it lacks GrantRoles (set_role is GrantRoles-gated).
+    CHECK(refused(reg.dispatch("set_role 1 observer", mod)));
+}
+
+TEST_CASE("AdminConsole: GameMaster caps permit map/spawn/orders, refuse config/grant", "[admin_console][permission]") {
+    auto reg = makeRegistry();
+    const CommandIssuer gm{5, kGameMasterCaps, PeerAuthority::kNoFactionBinding};
+    // Permitted: spawn (SpawnAny), flight orders (CommandAnyAi), spectate (SpectateAny).
+    CHECK_FALSE(refused(reg.dispatch("spawn x 0 0 0", gm)));
+    CHECK_FALSE(refused(reg.dispatch("flight list", gm)));
+    CHECK_FALSE(refused(reg.dispatch("spectate 1 2", gm)));
+    // Refused: server config and grant (a GM is not a config admin, and cannot grant roles).
+    CHECK(refused(reg.dispatch("set_weather storm", gm)));
+    CHECK(refused(reg.dispatch("reload_config", gm)));
+    CHECK(refused(reg.dispatch("set_role 1 observer", gm)));
 }

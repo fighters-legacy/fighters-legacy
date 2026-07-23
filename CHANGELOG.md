@@ -21,6 +21,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network**: permission-checked admin command dispatch with issuer context (#946, epic #944).
+  `CommandRegistry::registerCommand` gains a required-capability mask (an unannotated command defaults
+  to Admin-only, preserving today's semantics) and a new `dispatch(line, CommandIssuer)` overload that
+  refuses with a clear "permission denied: <cmd> requires <cap>" when the issuer lacks a required
+  capability; the plain `dispatch(line)` stays the implicit-Admin path (stdin console / RCON /
+  single-player `--admin-token`). Every command in `ServerCommands.cpp` is annotated (kick/ban →
+  `kick_ban`, spawn/kill/tp/detonate → `spawn_any`, flight orders → `command_any_ai`, weather/config/
+  shutdown → `server_config`, spectate → `spectate_any`, grant-family → `grant_roles`, status/peers/
+  help → public). `WorldBroadcaster`'s `MsgAdminCommand` handler now builds a `CommandIssuer`: the
+  operator password grants Admin caps (rung 1, byte-for-byte today's behavior), while an empty-token
+  peer authenticates by its granted caps (the grant channel) — a zero-cap peer is a rate-limited
+  permission refusal, never an auth-lockout failure. New `WorldBroadcaster::setPeerAuthority` /
+  `getPeerAuthority`. Covered by reduced-caps issuer fixtures in `test_admin_console` and grant-channel
+  cases in `test_world_broadcaster`.
+
 - **network**: server capability vocabulary and per-peer authority (#945, epic #944). A new
   stdlib-only `engine/net/Capability.h` (the `WingmanCommand.h` pattern — engine, fl-server, and the
   game client include it with no link dependency) defines `enum class Capability` (bit positions:

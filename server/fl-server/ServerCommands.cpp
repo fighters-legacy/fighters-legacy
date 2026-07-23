@@ -181,7 +181,7 @@ static std::string formatAuthSection(const char* label, const fl::AuthLockoutSum
 void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx) {
 
     // help [command]
-    registry.registerCommand("help", "help [command]  -- list all commands or show usage for one",
+    registry.registerCommand("help", "help [command]  -- list all commands or show usage for one", 0,
                              [&registry](std::span<std::string_view> args) -> std::string {
                                  if (!args.empty())
                                      return registry.helpFor(args[0]);
@@ -190,7 +190,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
 
     // status
     registry.registerCommand(
-        "status", "status  -- show server state (uptime, peer count, entity count, tick rate)",
+        "status", "status  -- show server state (uptime, peer count, entity count, tick rate)", 0,
         [ctx](std::span<std::string_view>) -> std::string {
             if (!ctx.sim.broadcaster || !ctx.sim.entityManager)
                 return "status: not available";
@@ -221,7 +221,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
 
     // tickstats — per-phase server tick budget (integrate/ai/collision/serialize/total).
     registry.registerCommand(
-        "tickstats", "tickstats  -- per-phase sim tick budget (ms: mean/p95/p99/max) + actual tick Hz",
+        "tickstats", "tickstats  -- per-phase sim tick budget (ms: mean/p95/p99/max) + actual tick Hz", 0,
         [ctx](std::span<std::string_view>) -> std::string {
             if (!ctx.sim.broadcaster)
                 return "tickstats: not available";
@@ -258,7 +258,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
     registry.registerCommand("peers",
                              "peers  -- list connected peers (peerId, address, entity, delay, EWMA delay, jitter, buf "
                              "fill/max, send rate, loss)",
-                             [ctx](std::span<std::string_view>) -> std::string {
+                             0, [ctx](std::span<std::string_view>) -> std::string {
                                  if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
                                      return "peers: not available";
                                  ctx.sim.gameLoop->enqueueSimCallback([ctx]() {
@@ -293,7 +293,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
 
     // kick <peerId|IP>
     registry.registerCommand("kick", "kick <peerId|IP>  -- disconnect a peer by ID or all peers from an IP address",
-                             [ctx](std::span<std::string_view> args) -> std::string {
+                             capBit(Capability::KickBan), [ctx](std::span<std::string_view> args) -> std::string {
                                  if (args.empty())
                                      return "usage: kick <peerId|IP>";
                                  if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
@@ -343,35 +343,37 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         const char* name = muteVal ? "mute" : "unmute";
         const char* help = muteVal ? "mute <peerId>  -- silence a peer's chat for this session"
                                    : "unmute <peerId>  -- restore a muted peer's chat";
-        registry.registerCommand(name, help, [ctx, muteVal, name](std::span<std::string_view> args) -> std::string {
-            if (args.empty())
-                return std::string("usage: ") + name + " <peerId>";
-            if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
-                return std::string(name) + ": not available";
-            std::string arg(args[0]);
-            if (!isNumeric(arg))
-                return std::string(name) + ": expected a peer ID";
-            uint32_t peerId = 0;
-            auto [ptr, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), peerId);
-            if (ec != std::errc{})
-                return std::string(name) + ": invalid peer ID";
-            ctx.sim.gameLoop->enqueueSimCallback([ctx, peerId, muteVal, name]() {
-                const bool ok = ctx.sim.broadcaster->setPeerMuted(peerId, muteVal);
-                char m[80];
-                std::snprintf(m, sizeof(m), "[admin] %s peer %u%s", name, peerId, ok ? "" : " (unknown peer)");
-                std::printf("%s\n", m);
-                if (ctx.rcon.shell)
-                    ctx.rcon.shell->print(m);
-                std::fflush(stdout);
-            });
-            char buf[64];
-            std::snprintf(buf, sizeof(buf), "%s: queued peer %u", name, peerId);
-            return std::string(buf);
-        });
+        registry.registerCommand(name, help, capBit(Capability::Mute),
+                                 [ctx, muteVal, name](std::span<std::string_view> args) -> std::string {
+                                     if (args.empty())
+                                         return std::string("usage: ") + name + " <peerId>";
+                                     if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
+                                         return std::string(name) + ": not available";
+                                     std::string arg(args[0]);
+                                     if (!isNumeric(arg))
+                                         return std::string(name) + ": expected a peer ID";
+                                     uint32_t peerId = 0;
+                                     auto [ptr, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), peerId);
+                                     if (ec != std::errc{})
+                                         return std::string(name) + ": invalid peer ID";
+                                     ctx.sim.gameLoop->enqueueSimCallback([ctx, peerId, muteVal, name]() {
+                                         const bool ok = ctx.sim.broadcaster->setPeerMuted(peerId, muteVal);
+                                         char m[80];
+                                         std::snprintf(m, sizeof(m), "[admin] %s peer %u%s", name, peerId,
+                                                       ok ? "" : " (unknown peer)");
+                                         std::printf("%s\n", m);
+                                         if (ctx.rcon.shell)
+                                             ctx.rcon.shell->print(m);
+                                         std::fflush(stdout);
+                                     });
+                                     char buf[64];
+                                     std::snprintf(buf, sizeof(buf), "%s: queued peer %u", name, peerId);
+                                     return std::string(buf);
+                                 });
     }
 
     // mutes  -- list currently muted peers (#646)
-    registry.registerCommand("mutes", "mutes  -- list currently muted peers",
+    registry.registerCommand("mutes", "mutes  -- list currently muted peers", 0,
                              [ctx](std::span<std::string_view>) -> std::string {
                                  if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
                                      return "mutes: not available";
@@ -394,7 +396,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
     // set_role <peerId> <pilot|observer>  -- switch a peer between pilot and spectator without a reconnect (#857)
     registry.registerCommand(
         "set_role", "set_role <peerId> <pilot|observer>  -- switch a peer's role without a reconnect",
-        [ctx](std::span<std::string_view> args) -> std::string {
+        capBit(Capability::GrantRoles), [ctx](std::span<std::string_view> args) -> std::string {
             if (args.size() < 2)
                 return "usage: set_role <peerId> <pilot|observer>";
             if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
@@ -431,7 +433,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
     // team <peerId> <factionIndex>  -- move a peer to a team (#522). Bypasses the balance guard (admin).
     registry.registerCommand(
         "team", "team <peerId> <factionIndex>  -- move a peer to a team (bypasses the balance guard)",
-        [ctx](std::span<std::string_view> args) -> std::string {
+        capBit(Capability::GrantRoles), [ctx](std::span<std::string_view> args) -> std::string {
             if (args.size() < 2)
                 return "usage: team <peerId> <factionIndex>";
             if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
@@ -464,7 +466,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
 
     // respawn <peerId>  -- force a dead peer to respawn immediately (#648)
     registry.registerCommand("respawn", "respawn <peerId>  -- force a dead peer to respawn now",
-                             [ctx](std::span<std::string_view> args) -> std::string {
+                             capBit(Capability::SpawnAny), [ctx](std::span<std::string_view> args) -> std::string {
                                  if (args.empty())
                                      return "usage: respawn <peerId>";
                                  if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
@@ -493,7 +495,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
     // spectate <peerId> <entityIdx|off>  -- point a dead/observer peer's interest at an entity (#403)
     registry.registerCommand(
         "spectate", "spectate <peerId> <entityIdx|off>  -- lock a dead/observer peer's view onto an entity",
-        [ctx](std::span<std::string_view> args) -> std::string {
+        capBit(Capability::SpectateAny), [ctx](std::span<std::string_view> args) -> std::string {
             if (args.size() < 2)
                 return "usage: spectate <peerId> <entityIdx|off>";
             if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
@@ -531,7 +533,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         });
 
     // seats <entityIdx>  -- inspect a crewed aircraft's seat roster/occupancy (#974)
-    registry.registerCommand("seats", "seats <entityIdx>  -- show a crewed aircraft's seat roster and occupancy",
+    registry.registerCommand("seats", "seats <entityIdx>  -- show a crewed aircraft's seat roster and occupancy", 0,
                              [ctx](std::span<std::string_view> args) -> std::string {
                                  if (args.empty())
                                      return "usage: seats <entityIdx>";
@@ -550,7 +552,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
     // set_seat <entityIdx> <seat> <peerId|bot|empty>  -- force a non-fly seat's occupancy (#974)
     registry.registerCommand(
         "set_seat", "set_seat <entityIdx> <seat> <peerId|bot|empty>  -- force a non-fly seat's occupancy",
-        [ctx](std::span<std::string_view> args) -> std::string {
+        capBit(Capability::GrantRoles), [ctx](std::span<std::string_view> args) -> std::string {
             if (args.size() < 3)
                 return "usage: set_seat <entityIdx> <seat> <peerId|bot|empty>";
             if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
@@ -604,7 +606,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
 
     // ban <peerId|IP>
     registry.registerCommand("ban", "ban <peerId|IP>  -- add IP to in-memory ban list and kick matching peers",
-                             [ctx](std::span<std::string_view> args) -> std::string {
+                             capBit(Capability::KickBan), [ctx](std::span<std::string_view> args) -> std::string {
                                  if (args.empty())
                                      return "usage: ban <peerId|IP>";
                                  if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
@@ -658,7 +660,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
 
     // unban <IP>
     registry.registerCommand("unban", "unban <IP>  -- remove an IP from the in-memory ban list",
-                             [ctx](std::span<std::string_view> args) -> std::string {
+                             capBit(Capability::KickBan), [ctx](std::span<std::string_view> args) -> std::string {
                                  if (args.empty())
                                      return "usage: unban <IP>";
                                  if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
@@ -731,7 +733,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
     // set_weather <preset>
     registry.registerCommand(
         "set_weather", "set_weather <clear|partly_cloudy|overcast|rain|storm|snow|blizzard>  -- change weather preset",
-        [ctx](std::span<std::string_view> args) -> std::string {
+        capBit(Capability::ServerConfig), [ctx](std::span<std::string_view> args) -> std::string {
             if (args.empty())
                 return "usage: set_weather <clear|partly_cloudy|overcast|rain|storm|snow|blizzard>";
             if (!ctx.sim.weatherController || !ctx.sim.gameLoop)
@@ -759,7 +761,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
 
     // set_time <hours>
     registry.registerCommand("set_time", "set_time <0-24>  -- set in-game time of day (hours, float)",
-                             [ctx](std::span<std::string_view> args) -> std::string {
+                             capBit(Capability::ServerConfig), [ctx](std::span<std::string_view> args) -> std::string {
                                  if (args.empty())
                                      return "usage: set_time <0-24>";
                                  // Validate argument before context check so parse/range errors are always reported.
@@ -783,7 +785,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                              });
 
     // ── Air-traffic control (#705) ───────────────────────────────────────────
-    registry.registerCommand("atc_status", "atc_status [airport]  -- show ATC facility queues and runway occupancy",
+    registry.registerCommand("atc_status", "atc_status [airport]  -- show ATC facility queues and runway occupancy", 0,
                              [ctx](std::span<std::string_view> args) -> std::string {
                                  if (!ctx.sim.atc)
                                      return "atc_status: ATC not available";
@@ -793,7 +795,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
 
     registry.registerCommand(
         "atc_scramble", "atc_scramble <airport> <type> [count]  -- launch AI departures from a named airport",
-        [ctx](std::span<std::string_view> args) -> std::string {
+        capBit(Capability::CommandAnyAi), [ctx](std::span<std::string_view> args) -> std::string {
             if (args.size() < 2)
                 return "usage: atc_scramble <airport> <type> [count]";
             if (!ctx.sim.atc || !ctx.sim.gameLoop)
@@ -819,7 +821,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         });
 
     registry.registerCommand("atc_hold", "atc_hold <airport> <on|off>  -- freeze or release departures at an airport",
-                             [ctx](std::span<std::string_view> args) -> std::string {
+                             capBit(Capability::CommandAnyAi), [ctx](std::span<std::string_view> args) -> std::string {
                                  if (args.size() < 2)
                                      return "usage: atc_hold <airport> <on|off>";
                                  if (!ctx.sim.atc || !ctx.sim.gameLoop)
@@ -842,7 +844,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         "spawn",
         "spawn <type> <x> <y> <z> [--faction <n>] [--ai <behavior> [args...]]  -- spawn entity with optional "
         "faction and AI controller",
-        [ctx](std::span<std::string_view> args) -> std::string {
+        capBit(Capability::SpawnAny), [ctx](std::span<std::string_view> args) -> std::string {
             if (args.size() < 4)
                 return "usage: spawn <type> <x> <y> <z> [--faction <n>] [--ai <behavior> [args...]]";
             if (!ctx.sim.entityManager || !ctx.sim.gameLoop)
@@ -1018,7 +1020,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
     // kill <idx>
     registry.registerCommand(
         "kill", "kill <idx>  -- remove a live entity by pool index (see 'peers' or 'entities')",
-        [ctx](std::span<std::string_view> args) -> std::string {
+        capBit(Capability::SpawnAny), [ctx](std::span<std::string_view> args) -> std::string {
             if (args.empty())
                 return "usage: kill <idx>";
             if (!ctx.sim.entityManager || !ctx.sim.gameLoop)
@@ -1052,7 +1054,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
 
     // tp <idx> <x> <y> <z>
     registry.registerCommand(
-        "tp", "tp <idx> <x> <y> <z>  -- teleport entity to world position",
+        "tp", "tp <idx> <x> <y> <z>  -- teleport entity to world position", capBit(Capability::SpawnAny),
         [ctx](std::span<std::string_view> args) -> std::string {
             if (args.size() < 4)
                 return "usage: tp <idx> <x> <y> <z>";
@@ -1102,7 +1104,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         "detonate",
         "detonate <x> <y> <z> <blast_radius_m> <damage> [--nuclear]  -- AoE warhead at a world "
         "position; --nuclear adds the EMP ring (avionics kill) at 4x the blast radius",
-        [ctx](std::span<std::string_view> args) -> std::string {
+        capBit(Capability::SpawnAny), [ctx](std::span<std::string_view> args) -> std::string {
             if (args.size() < 5)
                 return "usage: detonate <x> <y> <z> <blast_radius_m> <damage> [--nuclear]";
             if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
@@ -1158,7 +1160,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         " overrun_budget_floor_bytes, overrun_min_interest_fraction, compress_snapshots,"
         " sensor_check_hz, gameplay.friendly_fire, gameplay.crash_damage, ai.difficulty (other"
         " fields, incl. max_catchup_ticks and gns_nagle_time_us, require restart)",
-        [ctx](std::span<std::string_view>) -> std::string {
+        capBit(Capability::ServerConfig), [ctx](std::span<std::string_view>) -> std::string {
             if (!ctx.env.configPath || ctx.env.configPath->empty())
                 return "reload_config: not available";
             std::ifstream f(*ctx.env.configPath);
@@ -1230,7 +1232,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
     // reload_banlist
     registry.registerCommand("reload_banlist",
                              "reload_banlist  -- reload ban list from security.banlist_path in server.toml",
-                             [ctx](std::span<std::string_view>) -> std::string {
+                             capBit(Capability::ServerConfig), [ctx](std::span<std::string_view>) -> std::string {
                                  if (!ctx.bans.banlistPath || ctx.bans.banlistPath->empty())
                                      return "reload_banlist: not available (security.banlist_path not configured)";
                                  if (!ctx.sim.broadcaster || !ctx.sim.gameLoop || !ctx.bans.loadBanlist)
@@ -1253,7 +1255,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
     // reload_allowlist
     registry.registerCommand("reload_allowlist",
                              "reload_allowlist  -- reload allowlist from security.allowlist_path in server.toml",
-                             [ctx](std::span<std::string_view>) -> std::string {
+                             capBit(Capability::ServerConfig), [ctx](std::span<std::string_view>) -> std::string {
                                  if (!ctx.bans.allowlistPath || ctx.bans.allowlistPath->empty())
                                      return "reload_allowlist: not available (security.allowlist_path not configured)";
                                  if (!ctx.sim.broadcaster || !ctx.sim.gameLoop || !ctx.bans.loadAllowlist)
@@ -1277,7 +1279,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
     // peer's accepted MsgClientInput to per-peer FLIT traces for bot_swarm `--pattern trace:` replay.
     registry.registerCommand(
         "trace_start", "trace_start [dir]  -- start recording peer inputs to FLIT traces (default: configured dir)",
-        [ctx](std::span<std::string_view> args) -> std::string {
+        capBit(Capability::ServerConfig), [ctx](std::span<std::string_view> args) -> std::string {
             if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
                 return "trace_start: not available";
             std::string dir;
@@ -1302,7 +1304,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         });
 
     registry.registerCommand("trace_stop", "trace_stop  -- stop input tracing and close all trace files",
-                             [ctx](std::span<std::string_view>) -> std::string {
+                             capBit(Capability::ServerConfig), [ctx](std::span<std::string_view>) -> std::string {
                                  if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
                                      return "trace_stop: not available";
                                  ctx.sim.gameLoop->enqueueSimCallback([ctx]() {
@@ -1322,7 +1324,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         " [--reason <text>]"
         "  -- schedule/cancel fl-server graceful shutdown with countdown notices;"
         " --reason prepends custom text to each broadcast (stops consuming at next -- flag)",
-        [ctx](std::span<std::string_view> args) -> std::string {
+        capBit(Capability::ServerConfig), [ctx](std::span<std::string_view> args) -> std::string {
             if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
                 return "shutdown: not available";
 
@@ -1462,7 +1464,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
 
     // pause / resume
     registry.registerCommand("pause", "pause  -- pause the simulation (ticks stop; connections stay active)",
-                             [ctx](std::span<std::string_view>) -> std::string {
+                             capBit(Capability::ServerConfig), [ctx](std::span<std::string_view>) -> std::string {
                                  if (!ctx.sim.gameLoop)
                                      return "pause: game loop not available";
                                  ctx.sim.gameLoop->setRate(TimeRate::Paused);
@@ -1472,7 +1474,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                              });
 
     registry.registerCommand("resume", "resume  -- resume the simulation at normal rate",
-                             [ctx](std::span<std::string_view>) -> std::string {
+                             capBit(Capability::ServerConfig), [ctx](std::span<std::string_view>) -> std::string {
                                  if (!ctx.sim.gameLoop)
                                      return "resume: game loop not available";
                                  ctx.sim.gameLoop->setRate(TimeRate::Normal);
@@ -1497,7 +1499,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         "       | add <id> <entityIdx> [slot] | order <id> <command> [--member <idx>] [--cascade]\n"
         "       | disband <id>   -- formations and the chain of command; `order` commands are the six "
         "wingman commands (attack_my_target, engage_bandits, rejoin, cover_me, hold_fire, return_to_base)",
-        [ctx](std::span<std::string_view> args) -> std::string {
+        capBit(Capability::CommandAnyAi), [ctx](std::span<std::string_view> args) -> std::string {
             if (!ctx.sim.broadcaster || !ctx.sim.gameLoop || !ctx.sim.entityManager)
                 return "flight: not available";
             if (args.empty())

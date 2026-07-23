@@ -4802,7 +4802,8 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand discarded when no password configur
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
-    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "pong"; }); // password NOT set
+    broadcaster.setAdminDispatch(
+        [](std::string_view, const CommandIssuer&) -> std::string { return "pong"; }); // password NOT set
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -4822,7 +4823,7 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand discarded on wrong token", "[world_
     fl::EntityManager em(log, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
     broadcaster.setOperatorPassword("secret");
-    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "pong"; });
+    broadcaster.setAdminDispatch([](std::string_view, const CommandIssuer&) -> std::string { return "pong"; });
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -4843,7 +4844,7 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand dispatches on correct token and sen
     fl::EntityManager em(log, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
     broadcaster.setOperatorPassword("secret");
-    broadcaster.setAdminDispatch([](std::string_view cmd) -> std::string {
+    broadcaster.setAdminDispatch([](std::string_view cmd, const CommandIssuer&) -> std::string {
         if (cmd == "ping")
             return "pong";
         return "";
@@ -4862,6 +4863,101 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand dispatches on correct token and sen
     CHECK(net.sendReliable);
 }
 
+// --- Grant channel (#946): empty-token MsgAdminCommand authenticated by granted caps ---
+
+TEST_CASE("WorldBroadcaster: empty-token admin command dispatches with granted caps (#946)",
+          "[world_broadcaster][admin_command][permission]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret");
+    fl::CapabilityMask seenCaps = 0;
+    uint32_t seenPeer = 0xFFFFFFFFu;
+    broadcaster.setAdminDispatch([&](std::string_view, const CommandIssuer& iss) -> std::string {
+        seenCaps = iss.caps;
+        seenPeer = iss.peerId;
+        return "ok";
+    });
+
+    connectPilotPeer(broadcaster, net, 0u);
+    // Grant the peer game-master caps; it now authenticates by caps, not the operator password.
+    REQUIRE(broadcaster.setPeerAuthority(0u, fl::PeerAuthority{fl::kGameMasterCaps, 5}));
+    net.sends.clear();
+
+    auto pkt = makeAdminCmd("", "spawn foo 0 0 0"); // empty token -> grant channel
+    broadcaster.onReceive(0u, pkt.data(), pkt.size());
+
+    CHECK(seenCaps == fl::kGameMasterCaps); // the dispatcher saw the granted caps, not Admin
+    CHECK(seenPeer == 0u);
+    fl::MsgAdminResponse resp{};
+    REQUIRE(parseLastAdminResponse(net, resp));
+    CHECK(std::string(resp.text) == "ok");
+}
+
+TEST_CASE("WorldBroadcaster: password auth grants Admin caps (rung 1 unchanged, #946)",
+          "[world_broadcaster][admin_command][permission]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret");
+    fl::CapabilityMask seenCaps = 0;
+    broadcaster.setAdminDispatch([&](std::string_view, const CommandIssuer& iss) -> std::string {
+        seenCaps = iss.caps;
+        return "ok";
+    });
+
+    connectPilotPeer(broadcaster, net, 0u);
+    net.sends.clear();
+
+    auto pkt = makeAdminCmd("secret", "status");
+    broadcaster.onReceive(0u, pkt.data(), pkt.size());
+    CHECK(seenCaps == fl::kAdminCaps); // password path arrives with full authority
+}
+
+TEST_CASE("WorldBroadcaster: zero-cap empty-token command refused without lockout pollution (#947)",
+          "[world_broadcaster][admin_command][permission]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret");
+    broadcaster.setAdminAuthParams(3, 60); // lock out after 3 genuine auth failures
+    bool dispatched = false;
+    broadcaster.setAdminDispatch([&](std::string_view, const CommandIssuer&) -> std::string {
+        dispatched = true;
+        return "ok";
+    });
+
+    connectPilotPeer(broadcaster, net, 0u); // peer holds zero caps
+    net.sends.clear();
+
+    // Several empty-token commands: refused every time, never dispatched, and — critically — never
+    // an auth failure, so the peer is never locked out or kicked (a permission refusal is not a
+    // brute-force attempt).
+    for (int i = 0; i < 3; ++i) {
+        auto pkt = makeAdminCmd("", "status");
+        broadcaster.onReceive(0u, pkt.data(), pkt.size());
+    }
+    CHECK_FALSE(dispatched);
+    CHECK(net.disconnectedPeers.empty());
+    CHECK(broadcaster.getAuthLockoutSummary().activeCount == 0);
+    // The refusal is surfaced to the client (a password is configured, so the channel is "on").
+    fl::MsgAdminResponse resp{};
+    REQUIRE(parseLastAdminResponse(net, resp));
+    CHECK(std::string(resp.text).find("permission denied") != std::string::npos);
+}
+
 TEST_CASE("WorldBroadcaster: MsgAdminCommand discarded if packet too small", "[world_broadcaster][admin_command]") {
     MockLogger log;
     MockNetwork net;
@@ -4871,7 +4967,7 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand discarded if packet too small", "[w
     fl::EntityManager em(log, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
     broadcaster.setOperatorPassword("secret");
-    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "pong"; });
+    broadcaster.setAdminDispatch([](std::string_view, const CommandIssuer&) -> std::string { return "pong"; });
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -4893,7 +4989,7 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand token without null terminator fails
     fl::EntityManager em(log, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
     broadcaster.setOperatorPassword("secret");
-    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "pong"; });
+    broadcaster.setAdminDispatch([](std::string_view, const CommandIssuer&) -> std::string { return "pong"; });
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -4920,7 +5016,8 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand with empty command string is discar
     fl::EntityManager em(log, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
     broadcaster.setOperatorPassword("secret");
-    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "should not be called"; });
+    broadcaster.setAdminDispatch(
+        [](std::string_view, const CommandIssuer&) -> std::string { return "should not be called"; });
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -4948,7 +5045,7 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand empty dispatcher result still sends
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
     broadcaster.setOperatorPassword("secret");
     // Dispatcher returns empty string (e.g. fire-and-forget command).
-    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return ""; });
+    broadcaster.setAdminDispatch([](std::string_view, const CommandIssuer&) -> std::string { return ""; });
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -4973,7 +5070,8 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand result >123 chars streams as MsgAdm
     fl::EntityManager em(log, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
     broadcaster.setOperatorPassword("secret");
-    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return std::string(200, 'x'); });
+    broadcaster.setAdminDispatch(
+        [](std::string_view, const CommandIssuer&) -> std::string { return std::string(200, 'x'); });
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -4998,7 +5096,8 @@ TEST_CASE("WorldBroadcaster: sendAdminResponse fast-path for result <=123 chars"
     fl::EntityManager em(log, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
     broadcaster.setOperatorPassword("secret");
-    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return std::string(50, 'a'); });
+    broadcaster.setAdminDispatch(
+        [](std::string_view, const CommandIssuer&) -> std::string { return std::string(50, 'a'); });
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -5021,7 +5120,8 @@ TEST_CASE("WorldBroadcaster: sendAdminResponse fast-path at exactly 123 chars", 
     fl::EntityManager em(log, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
     broadcaster.setOperatorPassword("secret");
-    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return std::string(123, 'x'); });
+    broadcaster.setAdminDispatch(
+        [](std::string_view, const CommandIssuer&) -> std::string { return std::string(123, 'x'); });
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -5045,7 +5145,7 @@ TEST_CASE("WorldBroadcaster: sendAdminResponse echoes reqId in MsgAdminResponse"
     fl::EntityManager em(log, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
     broadcaster.setOperatorPassword("secret");
-    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "ok"; });
+    broadcaster.setAdminDispatch([](std::string_view, const CommandIssuer&) -> std::string { return "ok"; });
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -5069,7 +5169,8 @@ TEST_CASE("WorldBroadcaster: sendAdminResponse 124-char result sends one chunk w
     fl::EntityManager em(log, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
     broadcaster.setOperatorPassword("secret");
-    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return std::string(124, 'y'); });
+    broadcaster.setAdminDispatch(
+        [](std::string_view, const CommandIssuer&) -> std::string { return std::string(124, 'y'); });
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -5096,7 +5197,7 @@ TEST_CASE("WorldBroadcaster: sendAdminResponse >505 chars sends two chunks", "[w
     fl::EntityManager em(log, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
     broadcaster.setOperatorPassword("secret");
-    broadcaster.setAdminDispatch([&](std::string_view) -> std::string { return longResult; });
+    broadcaster.setAdminDispatch([&](std::string_view, const CommandIssuer&) -> std::string { return longResult; });
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -5132,7 +5233,7 @@ TEST_CASE("WorldBroadcaster: sendAdminResponse echoes reqId in every MsgAdminRes
     fl::EntityManager em(log, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
     broadcaster.setOperatorPassword("secret");
-    broadcaster.setAdminDispatch([&](std::string_view) -> std::string { return longResult; });
+    broadcaster.setAdminDispatch([&](std::string_view, const CommandIssuer&) -> std::string { return longResult; });
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -5157,7 +5258,7 @@ TEST_CASE("WorldBroadcaster: sendAdminResponse echoes reqId in every MsgAdminRes
 // threshold, 60 s lockout, injectable clock, and peer 0 connected from 1.2.3.4.
 static void setupAuthFixture(fl::WorldBroadcaster& broadcaster, MockNetwork& net, fl::ManualClock& now) {
     broadcaster.setOperatorPassword("pw");
-    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "ok"; });
+    broadcaster.setAdminDispatch([](std::string_view, const CommandIssuer&) -> std::string { return "ok"; });
     broadcaster.setAdminAuthParams(3, 60);
     broadcaster.setClock(now);
     connectPilotPeer(broadcaster, net, 0u);
@@ -5513,7 +5614,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain sends no follow-on when shell not
     fl::ManualClock t;
     broadcaster.setClock(t);
     broadcaster.setOperatorPassword("secret");
-    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "queued"; });
+    broadcaster.setAdminDispatch([](std::string_view, const CommandIssuer&) -> std::string { return "queued"; });
     // setAdminShell NOT called
 
     connectPilotPeer(broadcaster, net, 0u);
@@ -5541,7 +5642,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain does not fire before wall-clock d
     fl::ManualClock t;
     broadcaster.setClock(t);
     broadcaster.setOperatorPassword("secret");
-    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "queued"; });
+    broadcaster.setAdminDispatch([](std::string_view, const CommandIssuer&) -> std::string { return "queued"; });
 
     ShellDrainMock shell;
     broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
@@ -5572,7 +5673,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain fires after wall-clock deadline a
     fl::ManualClock t;
     broadcaster.setClock(t);
     broadcaster.setOperatorPassword("secret");
-    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "queued"; });
+    broadcaster.setAdminDispatch([](std::string_view, const CommandIssuer&) -> std::string { return "queued"; });
 
     ShellDrainMock shell;
     broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
@@ -5611,7 +5712,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain sends nothing when drain returns 
     fl::ManualClock t;
     broadcaster.setClock(t);
     broadcaster.setOperatorPassword("secret");
-    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "queued"; });
+    broadcaster.setAdminDispatch([](std::string_view, const CommandIssuer&) -> std::string { return "queued"; });
 
     ShellDrainMock shell; // lines stays empty
     broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
@@ -5640,7 +5741,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain skips disconnected peer", "[world
     fl::ManualClock t;
     broadcaster.setClock(t);
     broadcaster.setOperatorPassword("secret");
-    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "queued"; });
+    broadcaster.setAdminDispatch([](std::string_view, const CommandIssuer&) -> std::string { return "queued"; });
 
     ShellDrainMock shell;
     broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
@@ -5675,7 +5776,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain echoes correct reqId in follow-on
     fl::ManualClock t;
     broadcaster.setClock(t);
     broadcaster.setOperatorPassword("secret");
-    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "queued"; });
+    broadcaster.setAdminDispatch([](std::string_view, const CommandIssuer&) -> std::string { return "queued"; });
 
     ShellDrainMock shell;
     broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
@@ -5711,7 +5812,7 @@ TEST_CASE("WorldBroadcaster: two admin commands queue independent drains with se
     fl::ManualClock t;
     broadcaster.setClock(t);
     broadcaster.setOperatorPassword("secret");
-    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "queued"; });
+    broadcaster.setAdminDispatch([](std::string_view, const CommandIssuer&) -> std::string { return "queued"; });
 
     ShellDrainMock shell;
     broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
@@ -5759,7 +5860,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain fires exactly once", "[world_broa
     fl::ManualClock t;
     broadcaster.setClock(t);
     broadcaster.setOperatorPassword("secret");
-    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "queued"; });
+    broadcaster.setAdminDispatch([](std::string_view, const CommandIssuer&) -> std::string { return "queued"; });
 
     ShellDrainMock shell;
     broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
@@ -5798,7 +5899,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain with long output streams as MsgAd
     fl::ManualClock t;
     broadcaster.setClock(t);
     broadcaster.setOperatorPassword("secret");
-    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "queued"; });
+    broadcaster.setAdminDispatch([](std::string_view, const CommandIssuer&) -> std::string { return "queued"; });
 
     ShellDrainMock shell;
     broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
@@ -5838,7 +5939,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain joins multiple lines with newline
     fl::ManualClock t;
     broadcaster.setClock(t);
     broadcaster.setOperatorPassword("secret");
-    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "queued"; });
+    broadcaster.setAdminDispatch([](std::string_view, const CommandIssuer&) -> std::string { return "queued"; });
 
     ShellDrainMock shell;
     broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
@@ -5875,7 +5976,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain sends nothing when all drain line
     fl::ManualClock t;
     broadcaster.setClock(t);
     broadcaster.setOperatorPassword("secret");
-    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "queued"; });
+    broadcaster.setAdminDispatch([](std::string_view, const CommandIssuer&) -> std::string { return "queued"; });
 
     ShellDrainMock shell;
     broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
@@ -5908,7 +6009,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain fires at wall-clock deadline rega
     fl::ManualClock t;
     broadcaster.setClock(t);
     broadcaster.setOperatorPassword("secret");
-    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "queued"; });
+    broadcaster.setAdminDispatch([](std::string_view, const CommandIssuer&) -> std::string { return "queued"; });
 
     ShellDrainMock shell;
     broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
@@ -5947,7 +6048,7 @@ TEST_CASE("WorldBroadcaster: two admin commands at staggered deadlines drain ind
     fl::ManualClock t;
     broadcaster.setClock(t);
     broadcaster.setOperatorPassword("secret");
-    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "queued"; });
+    broadcaster.setAdminDispatch([](std::string_view, const CommandIssuer&) -> std::string { return "queued"; });
 
     ShellDrainMock shell;
     broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });

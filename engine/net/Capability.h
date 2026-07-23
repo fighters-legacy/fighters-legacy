@@ -171,4 +171,19 @@ struct PeerAuthority {
     }
 };
 
+// Who issued a command, threaded through CommandRegistry::dispatch so a command can be
+// permission-checked (#946). Named CommandIssuer rather than the #944 "CommandContext" because that
+// name is already taken by the game client's console context (engine/console/ConsoleCommands.h, same
+// namespace fl). The implicit-Admin paths (stdin console / RCON / single-player --admin-token /
+// operator_password auth) use dispatch(line) without an issuer; a default-constructed issuer is Admin
+// so constructing one is never a surprise. kIssuerNoPeer mirrors fl::kNoPeer
+// (engine/world/Formation.h) without pulling that header, keeping this vocabulary header stdlib-only.
+inline constexpr uint32_t kIssuerNoPeer = 0xFFFFFFFFu;
+
+struct CommandIssuer {
+    uint32_t peerId{kIssuerNoPeer};                          // kIssuerNoPeer = console / RCON / system
+    CapabilityMask caps{kAdminCaps};                         // default: full authority (system issuer)
+    uint16_t factionIndex{PeerAuthority::kNoFactionBinding}; // faction binding for a faction-scoped grant (#948)
+};
+
 } // namespace fl

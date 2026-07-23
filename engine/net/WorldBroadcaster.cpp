@@ -550,7 +550,7 @@ void WorldBroadcaster::setOperatorPassword(std::string password) {
     m_operatorPassword = std::move(password);
 }
 
-void WorldBroadcaster::setAdminDispatch(std::function<std::string(std::string_view)> fn) {
+void WorldBroadcaster::setAdminDispatch(std::function<std::string(std::string_view, const CommandIssuer&)> fn) {
     m_adminDispatch = std::move(fn);
 }
 
@@ -2546,6 +2546,21 @@ void WorldBroadcaster::setPeerRole(uint32_t peerId, PeerRole role) {
     }
 }
 
+bool WorldBroadcaster::setPeerAuthority(uint32_t peerId, const PeerAuthority& authority) {
+    auto it = m_peerInputs.find(peerId);
+    if (it == m_peerInputs.end())
+        return false;
+    // Sanitize the mask against the known bits so an unknown future capability can never be granted.
+    it->second.authority.caps = authority.caps & kAllCaps;
+    it->second.authority.factionIndex = authority.factionIndex;
+    return true;
+}
+
+PeerAuthority WorldBroadcaster::getPeerAuthority(uint32_t peerId) const {
+    auto it = m_peerInputs.find(peerId);
+    return (it != m_peerInputs.end()) ? it->second.authority : PeerAuthority{};
+}
+
 uint16_t WorldBroadcaster::factionForPeer(uint32_t peerId) const noexcept {
     const auto it = m_peerEntities.find(peerId);
     if (it == m_peerEntities.end())
@@ -4024,8 +4039,11 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         }
         // else: degenerate viewAxis — retain previous good value
     } else if (msgId == static_cast<uint8_t>(MsgId::AdminCommand)) {
-        // Feature gates: both password and dispatcher must be configured.
-        if (m_operatorPassword.empty() || !m_adminDispatch)
+        // Feature gate: the dispatcher must be configured. Two authentication rungs then decide the
+        // issuer (#946): (1) the operator password grants Admin caps for this command; (2) an
+        // empty-token peer is authenticated by its GRANTED caps (the grant channel). With neither a
+        // password set nor any peer granted caps, the channel is effectively off.
+        if (!m_adminDispatch)
             return;
         if (size < sizeof(MsgAdminCommand))
             return;
@@ -4039,9 +4057,23 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         msg.command[sizeof(msg.command) - 1] = '\0';
         uint16_t const reqId = msg.reqId;
 
-        // Constant-time token comparison: XOR-accumulate the full fixed-size token field
-        // to avoid a length or early-exit timing oracle.
-        {
+        // A client with no operator password configured sends an all-NUL token; that is the signal to
+        // authenticate via granted caps instead of the password (a non-empty wrong token is a genuine
+        // auth-failure attempt and must still trip the lockout).
+        bool tokenAllZero = true;
+        for (std::size_t i = 0; i < sizeof(msg.token); ++i) {
+            if (msg.token[i] != '\0') {
+                tokenAllZero = false;
+                break;
+            }
+        }
+
+        CommandIssuer issuer;
+        bool authorized = false;
+
+        // Rung 1: operator password (constant-time compare, only meaningful when a password is set —
+        // an empty password must never match, or an empty token would authenticate everyone).
+        if (!m_operatorPassword.empty()) {
             const std::string& pw = m_operatorPassword;
             uint8_t diff = 0;
             for (std::size_t i = 0; i < sizeof(msg.token); ++i) {
@@ -4051,7 +4083,13 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
             }
             for (std::size_t i = sizeof(msg.token); i < pw.size(); ++i)
                 diff |= static_cast<uint8_t>(pw[i]);
-            if (diff != 0) {
+            if (diff == 0) {
+                issuer = CommandIssuer{peerId, kAdminCaps, factionForPeer(peerId)};
+                authorized = true;
+                if (!adminIp.empty())
+                    m_adminAuthTracker.recordSuccess(adminIp);
+            } else if (!tokenAllZero) {
+                // A non-empty wrong token is a brute-force attempt: log + lockout, exactly as before.
                 char lmsg[96];
                 std::snprintf(lmsg, sizeof(lmsg), "peer %u: MsgAdminCommand bad token — discarding", peerId);
                 m_logger.log(LogLevel::Warn, __FILE__, __LINE__, lmsg);
@@ -4064,17 +4102,51 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
                 }
                 return;
             }
+            // else: password set but token empty — fall through to the grant channel below.
+        }
+
+        // Rung 2: the grant channel. A peer that did not authenticate with the password reaches
+        // dispatch via its granted caps. A granted peer runs unthrottled (like an operator); a
+        // zero-cap peer is a permission refusal, NOT an auth failure (no lockout pollution, #947).
+        if (!authorized) {
+            auto pit = m_peerInputs.find(peerId);
+            PeerInputState* ps = (pit != m_peerInputs.end()) ? &pit->second : nullptr;
+
+            if (ps && ps->authority.any()) {
+                issuer = CommandIssuer{peerId, ps->authority.caps, ps->authority.factionIndex};
+                authorized = true;
+            } else {
+                // No password match and no granted caps. Rate-limit this refuse path (1 s window,
+                // wingman idiom) so it is not a free probe/amplification channel, then either refuse
+                // with a clear message (when a password is configured, i.e. the channel is on and the
+                // peer merely lacks a grant) or silently drop (no password set — the channel is off
+                // for an ungranted peer, preserving the "no admin without credentials" behavior).
+                if (ps) {
+                    const auto now = m_clock->now();
+                    if (now - ps->adminCmdWindowStart >= std::chrono::seconds(1)) {
+                        ps->adminCmdWindowStart = now;
+                        ps->adminCmdCount = 0;
+                    }
+                    if (++ps->adminCmdCount > kUnauthAdminCmdsPerSecond)
+                        return;
+                }
+                if (!m_operatorPassword.empty()) {
+                    sendAdminResponse(m_net, peerId, reqId,
+                                      "permission denied: the admin channel requires a granted role or the "
+                                      "operator password");
+                }
+                return;
+            }
         }
 
         std::string_view cmdView(msg.command);
         if (cmdView.empty())
             return;
 
-        // Dispatch on the sim thread (same as stdin admin loop).
+        // Dispatch on the sim thread (same as stdin admin loop). The registry permission-checks the
+        // command against issuer.caps and refuses with a clear message when insufficient.
         // Mutating commands enqueue via gameLoop.enqueueSimCallback() internally.
-        std::string result = m_adminDispatch(cmdView);
-        if (!adminIp.empty())
-            m_adminAuthTracker.recordSuccess(adminIp);
+        std::string result = m_adminDispatch(cmdView, issuer);
 
         {
             char lmsg[256];

@@ -54,7 +54,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setClock(clock);
     broadcaster.setOperatorPassword("fz"); // enable the admin channel (dispatch reachable via a seed's token)
-    broadcaster.setAdminDispatch([](std::string_view cmd) { return std::string(cmd); });
+    broadcaster.setAdminDispatch([](std::string_view cmd, const fl::CommandIssuer&) { return std::string(cmd); });
 
     // Wingman/flight order channel (#610). Without these hooks installed the MsgWingmanCommand branch
     // discards early and the whole path would be fuzzed as a no-op — so wire the same seams fl-server
