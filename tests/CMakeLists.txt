@@ -783,6 +783,12 @@ target_link_libraries(test_validate_campaign PRIVATE Catch2::Catch2WithMain vali
 target_include_directories(test_validate_campaign PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_validate_campaign)
 
+# validate-mod (#651): the whole-pack validator.
+add_executable(test_validate_mod test_validate_mod.cpp)
+target_link_libraries(test_validate_mod PRIVATE Catch2::Catch2WithMain validate-mod-lib engine-crypto)
+target_include_directories(test_validate_mod PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_validate_mod)
+
 # Mesh node-tree description for the fl-viewer panel (#838).
 add_executable(test_mesh_node_tree test_mesh_node_tree.cpp)
 target_link_libraries(test_mesh_node_tree PRIVATE Catch2::Catch2WithMain validate-mesh-lib)

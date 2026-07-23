@@ -9,6 +9,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **tools**: `validate-mod` (#651, Epic #836) — one command validates a whole content pack, so
+  fl-base-pack CI runs one gate instead of seven. It composes the existing per-asset validators by
+  LINKING their libs (never subprocessing): the manifest (through a new shared `parseModManifest` that
+  `ModLoader` now also delegates to, so the loader and the validator cannot drift), an optional
+  `[files]` SHA-256 integrity table (the cheap half of #246, via `engine-crypto`), pack-structure
+  checks, and every asset through `validateEntityPack` / `validatePackWeapons` / `validateLiveryPack`
+  / `validateSensor` / `validateMesh` / `validateFlightModel` / `validateMission` / `validateCampaign`
+  / `validateGameMode` / `parseAirportDef` / `parseTheaterManifest` / `validatePlaylist` / REUSE
+  licenses. Findings are domain-prefixed. `validate-mod <pack>` passes on fl-base-pack (the Phase 9
+  acceptance criterion, mechanized).
 - **tools**: `validate-campaign` (#847, Epic #836) — the campaign format's first validator, so a
   campaign author's feedback loop is no longer "the engine failed to load it". It delegates the schema
   to the engine's `parseCampaign` (anti-drift) and, with `--pack`, resolves every theater manifest,

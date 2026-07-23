@@ -180,7 +180,7 @@ jobs:
           cmake --install build/debug --prefix /tmp/dist --component tools
           missing=0
           for f in fighters-legacy fl-server fl-viewer validate-flight-model validate-weapon validate-sensor \
-                   validate-entity validate-mission validate-campaign validate-mode validate-mesh validate-playlist \
+                   validate-entity validate-mission validate-campaign validate-mod validate-mode validate-mesh validate-playlist \
                    validate-licenses validate-livery tex-compress fm-trim; do
             if [ ! -f "/tmp/dist/$f" ]; then echo "MISSING from the release archive: $f"; missing=1; fi
           done
@@ -203,6 +203,7 @@ jobs:
           ./build/debug/tools/validate-flight-model --version
           ./build/debug/tools/validate-mission --version
           ./build/debug/tools/validate-campaign --version
+          ./build/debug/tools/validate-mod --version
           ./build/debug/tools/validate-mode --version
           ./build/debug/tools/validate-weapon --version
           ./build/debug/tools/validate-sensor --version
@@ -301,6 +302,7 @@ jobs:
           .\build\debug-msvc\tools\validate-flight-model.exe --version
           .\build\debug-msvc\tools\validate-mission.exe --version
           .\build\debug-msvc\tools\validate-campaign.exe --version
+          .\build\debug-msvc\tools\validate-mod.exe --version
           .\build\debug-msvc\tools\validate-weapon.exe --version
           .\build\debug-msvc\tools\validate-sensor.exe --version
           .\build\debug-msvc\tools\validate-entity.exe --version

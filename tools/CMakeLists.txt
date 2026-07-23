@@ -253,6 +253,21 @@ target_include_directories(validate-campaign-lib
 add_executable(validate-campaign validate-campaign/main.cpp)
 target_link_libraries(validate-campaign PRIVATE validate-campaign-lib)
 
+# validate-mod (#651): the whole-pack validator. Composes every per-asset validator lib (linking,
+# never subprocessing) + the shared ModManifest parser + the sha256 hook + the airport/theater
+# runtime parsers.
+add_library(validate-mod-lib STATIC validate-mod/mod_validator.cpp)
+target_link_libraries(validate-mod-lib
+    PUBLIC  validate-entity-lib validate-weapon-lib validate-sensor-lib validate-livery-lib
+            validate-mission-lib validate-campaign-lib validate-mode-lib validate-flight-model-lib
+            validate-mesh-lib validate-playlist-lib validate-licenses-lib
+            engine-content engine-campaign engine-crypto engine-world
+    PRIVATE tomlplusplus::tomlplusplus)
+target_include_directories(validate-mod-lib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/validate-mod")
+
+add_executable(validate-mod validate-mod/main.cpp)
+target_link_libraries(validate-mod PRIVATE validate-mod-lib)
+
 # Game-mode validator (#521): shares the runtime parseGameModeToml so validator and engine agree.
 add_library(validate-mode-lib STATIC validate-mode/mode_validator.cpp)
 target_link_libraries(validate-mode-lib PRIVATE engine-match)
@@ -321,6 +336,7 @@ install(TARGETS
     validate-entity
     validate-mission
     validate-campaign
+    validate-mod
     validate-mode
     validate-mesh
     validate-playlist

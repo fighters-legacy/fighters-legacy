@@ -5,6 +5,7 @@ add_library(engine-content STATIC
     content/AssetPaths.cpp
     content/FolderContentPack.cpp
     content/ModLoader.cpp
+    content/ModManifest.cpp
     content/AssetManager.cpp
     content/AssetValidator.cpp
     content/BundledBaseTerrain.cpp
