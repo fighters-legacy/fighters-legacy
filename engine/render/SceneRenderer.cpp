@@ -425,7 +425,27 @@ MeshHandle SceneRenderer::getOrUploadMesh(const std::string& meshAssetName, cons
     // the "<slot>.<map>" override with per-map fallback to base, and loads the bytes — a partial/broken
     // livery degrades, never fails. `liveryOverrides` outlives this call (owned by the caller /
     // m_liveryCache) and the resolver is invoked synchronously inside createMesh below.
-    desc.textureResolver = makeMeshTextureResolver(m_assets, liveryOverrides);
+    //
+    // Wrap the resolver to record which Texture asset names this mesh actually consumed (#152), so a
+    // hot-reload texture change re-uploads exactly the meshes that referenced it.
+    auto baseResolver = makeMeshTextureResolver(m_assets, liveryOverrides);
+    std::vector<std::string>& deps = m_meshTextureDeps[cacheKey];
+    deps.clear();
+    desc.textureResolver = [&deps, &liveryOverrides,
+                            baseResolver = std::move(baseResolver)](std::string_view uri) -> std::vector<uint8_t> {
+        // Record both the resolved (livery-override) name and the base name — a change to either
+        // must re-upload this mesh.
+        const std::string baseAsset = textureAssetNameFromUri(uri);
+        deps.push_back(baseAsset);
+        if (!liveryOverrides.empty()) {
+            const std::string key = liveryKeyFromBaseAsset(baseAsset);
+            if (!key.empty()) {
+                if (auto ov = liveryOverrides.find(key); ov != liveryOverrides.end())
+                    deps.push_back(ov->second);
+            }
+        }
+        return baseResolver(uri);
+    };
     MeshHandle h = m_renderer.createMesh(desc);
     if (!h.valid() && m_logger) {
         char buf[176];
@@ -472,6 +492,70 @@ const SceneRenderer::LiveryTextureSet* SceneRenderer::resolveLivery(uint32_t typ
 void SceneRenderer::setLiveryResolver(LiveryResolver resolver) noexcept {
     m_liveryResolver = std::move(resolver);
     m_liveryCache.clear(); // a new resolver may re-skin already-seen types
+}
+
+// ── Hot-reload invalidation (#152) ──────────────────────────────────────────
+
+void SceneRenderer::evictMeshCacheKey(const std::string& cacheKey) {
+    if (auto it = m_meshCache.find(cacheKey); it != m_meshCache.end()) {
+        if (it->second.valid())
+            m_renderer.destroyMesh(it->second); // cascades material + textures (#152)
+        m_meshCache.erase(it);
+    }
+    // The material cache entry is either the mesh-owned material (destroyed by the cascade) or the
+    // shared grey fallback (must never be destroyed) — so drop the entry without destroyMaterial.
+    m_materialCache.erase(cacheKey);
+    m_meshTextureDeps.erase(cacheKey);
+}
+
+void SceneRenderer::invalidateMesh(std::string_view meshAssetName) {
+    const std::string base(meshAssetName);
+    // Evict the plain key and every "<name>@@<livery>" variant.
+    const std::string prefix = base + "@@";
+    std::vector<std::string> keys;
+    for (const auto& [k, _] : m_meshCache)
+        if (k == base || k.compare(0, prefix.size(), prefix) == 0)
+            keys.push_back(k);
+    for (const auto& k : keys)
+        evictMeshCacheKey(k);
+}
+
+void SceneRenderer::invalidateTexture(std::string_view textureAssetName) {
+    const std::string tex(textureAssetName);
+    // Re-upload every mesh whose recorded deps include this texture.
+    std::vector<std::string> keys;
+    for (const auto& [k, deps] : m_meshTextureDeps)
+        if (std::find(deps.begin(), deps.end(), tex) != deps.end())
+            keys.push_back(k);
+    for (const auto& k : keys)
+        evictMeshCacheKey(k);
+}
+
+void SceneRenderer::invalidateLiveries() {
+    m_liveryCache.clear();
+    // Every livery-variant cache key carries the "@@" separator.
+    std::vector<std::string> keys;
+    for (const auto& [k, _] : m_meshCache)
+        if (k.find("@@") != std::string::npos)
+            keys.push_back(k);
+    for (const auto& k : keys)
+        evictMeshCacheKey(k);
+}
+
+void SceneRenderer::invalidateAllAssets() {
+    std::vector<std::string> keys;
+    keys.reserve(m_meshCache.size());
+    for (const auto& [k, _] : m_meshCache)
+        keys.push_back(k);
+    for (const auto& k : keys)
+        evictMeshCacheKey(k);
+    m_meshCache.clear();
+    m_materialCache.clear();
+    m_meshTextureDeps.clear();
+    m_liveryCache.clear();
+    m_typeNameCache.clear();
+    // Builtin placeholders + floor (m_builtin*, m_fallbackEntityMat) are untouched — they never come
+    // from a pack, so a content change can't stale them.
 }
 
 } // namespace fl

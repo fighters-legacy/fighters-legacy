@@ -2,6 +2,7 @@
 # Sources added here as Workstream A progresses
 
 add_library(engine-content STATIC
+    content/AssetPaths.cpp
     content/FolderContentPack.cpp
     content/ModLoader.cpp
     content/AssetManager.cpp

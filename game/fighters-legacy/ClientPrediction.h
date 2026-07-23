@@ -81,6 +81,13 @@ class ClientPrediction {
     // Clear all prediction state (session end / disconnect). Safe to call multiple times.
     void reset();
 
+    // Hot-reload seam (#152): drop the resolved model + integrator (and its custom gravity) but KEEP
+    // the input-history ring, resolver, config, and player idx/gen. The next reconcile() lazily
+    // re-resolves the model from the (now cache-invalidated) resolver and re-seeds from the
+    // authoritative snapshot — the existing first-snapshot init path. Call when a FlightModel asset
+    // the player's aircraft uses changed.
+    void invalidateModel();
+
     [[nodiscard]] bool isInitialized() const noexcept {
         return m_initialized;
     }

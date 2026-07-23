@@ -363,6 +363,49 @@ struct ConstantController : fl::IEntityController {
     }
 };
 
+TEST_CASE("WorldBroadcaster: replaceController swaps the controller preserving the integrator (#152)",
+          "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    fl::EntityTransform t{};
+    t.pos[1] = 3000.0;
+    t.quat[3] = 1.f;
+    const fl::EntityId id = em.spawn("builtin:debug-entity", t);
+    broadcaster.registerController(id, std::make_unique<ConstantController>(), nullptr, /*airspeed=*/120.f,
+                                   /*aiScriptName=*/"patrol");
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    const fl::EntityState* s0 = em.get(id);
+    REQUIRE(s0 != nullptr);
+    const double vAfterTick = s0->transform.vel[0];
+
+    // Tag query finds it.
+    auto tagged = broadcaster.entitiesUsingAiScript("patrol");
+    REQUIRE(tagged.size() == 1);
+    CHECK(tagged[0].index == id.index);
+
+    // Swap the controller; the live integrator (velocity) is preserved (not reset to a spawn state).
+    auto slow = std::make_unique<ConstantController>();
+    slow->throttle = 0.0f;
+    CHECK(broadcaster.replaceController(id, std::move(slow), "reload"));
+    broadcaster.onTick(1.0 / 60.0, 2u);
+    const fl::EntityState* s1 = em.get(id);
+    REQUIRE(s1 != nullptr);
+    // Still moving forward from the preserved momentum (a rebuild-from-spawn would have zeroed it).
+    CHECK(s1->transform.vel[0] > 0.5 * vAfterTick);
+
+    // Re-tagged to the new script.
+    CHECK(broadcaster.entitiesUsingAiScript("patrol").empty());
+    CHECK(broadcaster.entitiesUsingAiScript("reload").size() == 1);
+
+    // Replacing an unknown entity fails.
+    CHECK_FALSE(broadcaster.replaceController(fl::EntityId{9999, 1}, std::make_unique<ConstantController>()));
+}
+
 TEST_CASE("WorldBroadcaster: an airborne spawn flies along its heading at t=0 (#883)", "[world_broadcaster][mission]") {
     MockLogger logger;
     MockNetwork net;

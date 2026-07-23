@@ -15,6 +15,9 @@ class IWindow;
 //   createMesh / createTexture / createMaterial — upload to GPU, return handle.
 //   destroyMesh / destroyTexture / destroyMaterial — deferred-delete (safe to
 //     call immediately; GPU cleanup is deferred until in-flight frames complete).
+//   destroyMesh CASCADES (#152): it also destroys the material createMesh parsed
+//     from the mesh's own glTF (#833) and that material's textures, so a hot-reload
+//     re-upload does not leak them. The shared default textures are never destroyed.
 //
 // Per-frame submission (between beginFrame and endFrame):
 //   setScene — upload camera/light UBO data, store RenderItems for this frame.

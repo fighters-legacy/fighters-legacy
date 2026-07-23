@@ -92,6 +92,7 @@
 #include "sdl3/SDL3Window.h"
 #include "stdfs/StdAsyncFilesystem.h"
 #include "stdfs/StdFilesystem.h"
+#include "stdfs/StdFilesystemWatcher.h"
 #include "vulkan/VkRendererFactory.h"
 #include "weather/WeatherController.h" // applyGeographicSun — per-observer sun (#481)
 
@@ -843,6 +844,20 @@ bool Game::initPlatform(int argc, char** argv) {
     d.services.localization = std::make_unique<fl::Localization>(*d.services.p.filesystem, *d.services.rawLogger);
     d.services.localization->load(d.services.userConfig->client().language.c_str(), /*rootDirs=*/{});
 
+    // Asset hot-reload (#152, Epic #836): opt-in via FL_HOT_RELOAD=1 in ALL build configs — artists
+    // run release builds, the cost is zero when off, and the env var is inherited by the LocalServer
+    // subprocess so ONE variable lights up both halves of single-player. Watch the asset subdirs; the
+    // per-frame poll (Game::run) routes changes to the SceneRenderer / prediction / localization.
+    if (const char* hr = SDL_getenv("FL_HOT_RELOAD"); hr && std::strcmp(hr, "1") == 0) {
+        d.services.p.filesystemWatcher = std::make_unique<fl::StdFilesystemWatcher>(
+            d.services.assetsRoot, d.services.userDataDir, /*pollIntervalMs=*/250, /*maxFilesPerWatch=*/20000,
+            d.services.rawLogger);
+        d.services.assets->enableHotReload(*d.services.p.filesystemWatcher);
+        d.services.localization->watch(d.services.p.filesystemWatcher.get());
+        d.services.rawLogger->log(LogLevel::Info, __FILE__, __LINE__,
+                                  "hot-reload enabled (FL_HOT_RELOAD=1): editing an asset updates the game live");
+    }
+
     auto oalAudio = std::make_unique<OALAudio>();
     if (!oalAudio->init()) {
         d.services.rawLogger->log(LogLevel::Error, __FILE__, __LINE__, oalAudio->getLastError());
@@ -1482,6 +1497,21 @@ void Game::startGame(const std::string& mission) {
         }
         d.session.clientNet->setEventHandler(d.session.clientHandler.get());
 
+        // reload_content (#152): the client-side full reload — evict every asset cache and re-upload,
+        // invalidate prediction + localization + the manual. Wired into the console command (which also
+        // forwards to the server). Manual full reload works with no watcher and no env var.
+        auto reloadContent = [&d]() -> std::string {
+            if (d.services.assets)
+                d.services.assets->evictAll();
+            if (d.services.sceneRenderer)
+                d.services.sceneRenderer->invalidateAllAssets();
+            d.services.prediction.invalidateModel();
+            if (d.services.localization)
+                d.services.localization->reload();
+            d.session.manualBuilt = false;
+            return "reload_content: client caches reloaded";
+        };
+
         if (!isMultiplayer) {
             d.services.env = d.session.localServer->initialEnvironment();
 
@@ -1490,7 +1520,7 @@ void Game::startGame(const std::string& mission) {
             d.session.localServer->registerConsoleCommands(
                 d.services.cmdRegistry, adminSender, d.services.renderBridge, &d.services.entityRegistry,
                 &d.session.clientHandler->assignedEntityIdx, &d.session.clientHandler->assignedEntityGen,
-                &d.services.gameConsole->showPosRef(), &d.services.showPing);
+                &d.services.gameConsole->showPosRef(), &d.services.showPing, reloadContent);
             d.services.gmMapOverlay.setDeps({d.session.clientHandler.get(), &d.services.entityRegistry,
                                              d.services.p.gui.get(), adminSender}); // #861 (SP: needs a GM grant)
             d.services.screenMgr->setServerCmd(std::move(adminSender));
@@ -1514,6 +1544,7 @@ void Game::startGame(const std::string& mission) {
             // The server permission-checks every command; an ungranted, passwordless client is refused.
             auto adminSender = makeNetworkAdminSender(*d.session.clientNet, d.services.operatorPassword);
             ctx.serverCommand = adminSender;
+            ctx.reloadContent = reloadContent;
             registerConsoleCommands(d.services.cmdRegistry, ctx);
             // The game-master map (#861) sends its orders through the same admin channel.
             d.services.gmMapOverlay.setDeps(
@@ -1807,6 +1838,40 @@ void Game::run() {
 
     while (running && !d.services.p.window->shouldClose()) {
         d.services.p.window->pollEvents();
+
+        // Asset hot-reload (#152): poll the watcher and route changed assets to the GPU/prediction
+        // caches. No-op (and cheap) when the watcher is absent (FL_HOT_RELOAD not set).
+        if (d.services.p.filesystemWatcher && d.services.assets) {
+            fl::HotReloadReport rep = d.services.assets->processHotReload();
+            bool localeChanged = false;
+            for (const auto& c : rep.changed) {
+                switch (c.type) {
+                case fl::AssetType::Mesh:
+                    if (d.services.sceneRenderer)
+                        d.services.sceneRenderer->invalidateMesh(c.name);
+                    break;
+                case fl::AssetType::Texture:
+                    if (d.services.sceneRenderer)
+                        d.services.sceneRenderer->invalidateTexture(c.name);
+                    break;
+                case fl::AssetType::Livery:
+                    if (d.services.sceneRenderer)
+                        d.services.sceneRenderer->invalidateLiveries();
+                    break;
+                case fl::AssetType::FlightModel:
+                    d.services.prediction.invalidateModel(); // resolver cache self-invalidates on generation
+                    d.session.manualBuilt = false;           // the manual regenerates from the new model
+                    break;
+                default:
+                    break;
+                }
+            }
+            for (const auto& p : rep.unmatched)
+                if (p.find("locale/") != std::string::npos)
+                    localeChanged = true;
+            if (localeChanged && d.services.localization)
+                d.services.localization->reload();
+        }
 
         // Haptic: pause effects on focus loss.
         {

@@ -5544,7 +5544,8 @@ void WorldBroadcaster::runCrewedFire(ControlledEntity& ce, uint32_t idx, uint64_
 }
 
 void WorldBroadcaster::registerController(EntityId id, std::unique_ptr<IEntityController> controller,
-                                          std::shared_ptr<const FlightModelData> model, float initialAirspeed) {
+                                          std::shared_ptr<const FlightModelData> model, float initialAirspeed,
+                                          std::string aiScriptName) {
     // An AI aircraft flies ITS OWN aeroplane. When the caller does not hand us a model, resolve the
     // entity type's own flightModelAsset rather than silently defaulting to the builtin UFO -- which
     // is what every `spawn <type> --ai <behavior>` did, so an AI F-5E flew a UFO with an F-5E's mesh
@@ -5553,6 +5554,44 @@ void WorldBroadcaster::registerController(EntityId id, std::unique_ptr<IEntityCo
         model = resolveFlightModel(id); // logs and returns null if the id is unknown; builtin below
     // AI/scripted entities are decimatable — their sample() may be skipped under tick overrun (#514).
     addControlledEntity(id, std::move(controller), std::move(model), 0.f, /*decimatable=*/true, initialAirspeed);
+    // Tag the entity with the Lua script it was built from (#152), so a changed ai/*.lua rebuilds it.
+    if (!aiScriptName.empty()) {
+        if (auto it = m_controlledEntities.find(id.index); it != m_controlledEntities.end())
+            it->second.aiScriptName = std::move(aiScriptName);
+    }
+}
+
+void WorldBroadcaster::reloadFlightModels() {
+    for (auto& [idx, ce] : m_controlledEntities) {
+        if (!ce.sim)
+            continue;
+        std::shared_ptr<const FlightModelData> model = resolveFlightModel(ce.id);
+        if (!model)
+            continue; // empty/unknown flightModelAsset -> keep the current model (never fall to builtin here)
+        ce.sim->setFlightModel(model);
+        applyForceModelFor(*ce.sim, *model); // the model's force-model role may have changed
+    }
+}
+
+bool WorldBroadcaster::replaceController(EntityId id, std::unique_ptr<IEntityController> controller,
+                                         std::string aiScriptName) {
+    auto it = m_controlledEntities.find(id.index);
+    if (it == m_controlledEntities.end() || it->second.id.generation != id.generation)
+        return false;
+    it->second.controller = std::move(controller);
+    it->second.lastInputValid = false; // force a fresh sample next tick
+    it->second.aiScriptName = std::move(aiScriptName);
+    if (it->second.controller)
+        it->second.controller->setPlanetRadius(static_cast<double>(m_planetRadiusKm) * 1000.0);
+    return true;
+}
+
+std::vector<EntityId> WorldBroadcaster::entitiesUsingAiScript(std::string_view scriptName) const {
+    std::vector<EntityId> out;
+    for (const auto& [idx, ce] : m_controlledEntities)
+        if (ce.aiScriptName == scriptName)
+            out.push_back(ce.id);
+    return out;
 }
 
 bool WorldBroadcaster::setEntityLoadout(EntityId id, const std::vector<std::string>& stores,

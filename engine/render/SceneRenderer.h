@@ -8,6 +8,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -135,6 +136,22 @@ class SceneRenderer {
     // cockpit. Consumes EntityDef::cockpitMesh (#813), which nothing rendered until now.
     void setCockpitMesh(const std::string& meshName);
 
+    // ── Hot-reload invalidation (#152) ──────────────────────────────────────
+    // Drop this mesh's GPU handles (mesh + its cascaded material/textures, via IRenderer::destroyMesh)
+    // and cache entries — including a cached-invalid negative entry and every "<name>@@<livery>" livery
+    // variant — so the next frame re-uploads from the (changed) bytes. Call after
+    // AssetManager::processHotReload reports a Mesh change.
+    void invalidateMesh(std::string_view meshAssetName);
+    // A texture change re-uploads exactly the meshes that consumed it (textures are baked into a mesh's
+    // material at createMesh time), tracked per mesh at upload. Call on a Texture change.
+    void invalidateTexture(std::string_view textureAssetName);
+    // Drop the livery cache + every livery-variant mesh/material, so re-skins re-resolve. Call on a
+    // Livery change.
+    void invalidateLiveries();
+    // Drop every pack-derived mesh/material/livery/type-name cache entry (the console reload_content
+    // full reload). Builtin placeholders + the floor are untouched.
+    void invalidateAllAssets();
+
   private:
     // No-livery form: caches under the mesh asset name, no texture overrides.
     MeshHandle getOrUploadMesh(const std::string& name);
@@ -150,6 +167,10 @@ class SceneRenderer {
 
     // Upload builtin meshes and materials on first call; no-op thereafter.
     void ensureBuiltins();
+
+    // Evict one mesh/material cacheKey: destroy the GPU handle (cascades material+textures) and erase
+    // the mesh + material + texture-dep cache entries. Handles a cached-invalid (negative) entry.
+    void evictMeshCacheKey(const std::string& cacheKey);
 
     SimRenderBridge& m_bridge;
     MeshNameResolver m_resolver;
@@ -171,6 +192,9 @@ class SceneRenderer {
 
     std::unordered_map<std::string, MeshHandle> m_meshCache;
     std::unordered_map<std::string, MaterialHandle> m_materialCache;
+    // Per mesh cacheKey: the Texture asset names its material actually consumed at upload (#152), so a
+    // texture change invalidates exactly the meshes that referenced it.
+    std::unordered_map<std::string, std::vector<std::string>> m_meshTextureDeps;
     std::vector<RenderItem> m_items; // reused each frame; avoids per-frame allocation
 
     float m_drawDistanceSq{50000.0f * 50000.0f}; // squared cull distance in meters (default 50 km)

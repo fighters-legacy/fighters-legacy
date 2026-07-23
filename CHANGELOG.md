@@ -9,6 +9,20 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **content**: asset hot-reload (#152, Epic #836). Editing a mesh, texture, livery, flight model or
+  localization file on disk now updates the running game live, no restart — gated behind
+  `FL_HOT_RELOAD=1` (all build configs; the env var is inherited by the single-player fl-server
+  subprocess, so one variable lights up both halves). A new polling `StdFilesystemWatcher`
+  (`platform-stdfs`) is the one production `IFilesystemWatcher` backend (two-scan settle defeats
+  partial writes with no timers; rename = delete + create). `AssetManager` gains fine-grained
+  eviction (`processHotReload` reports exactly which assets changed via a shared
+  `engine/content/AssetPaths` reverse-map, watches asset subdirs not the giant terrain tree, and
+  bumps a `cacheGeneration`); `SceneRenderer` gains `invalidateMesh/Texture/Liveries/AllAssets` with
+  texture->mesh dependency tracking; `IRenderer::destroyMesh` now cascades to the mesh's material +
+  textures so a re-upload cannot leak GPU memory; `FlightIntegrator::setFlightModel` swaps the model
+  in place preserving flight state; `WorldBroadcaster` gains `reloadFlightModels`/`replaceController`.
+  The `reload_content` console/admin command (previously a stub) forces a full reload on both client
+  and server.
 - **tools**: `fl-viewer`, a standalone model preview on the game renderer, and the session-free
   preview bootstrap it shares (#666, Epic #836). A new `engine/render/PreviewScene` loads one entity
   def or a bare `.glb` through the real content stack + renderer, resolves its glTF PBR material

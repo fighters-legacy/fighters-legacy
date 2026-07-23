@@ -86,6 +86,7 @@
 #include <script/WorldApi.h>
 #include <stdfs/StdAsyncFilesystem.h>
 #include <stdfs/StdFilesystem.h>
+#include <stdfs/StdFilesystemWatcher.h>
 #include <weapon/Loadout.h>
 #include <weapon/WeaponRegistry.h>
 #include <weather/WeatherController.h>
@@ -1984,6 +1985,15 @@ int main(int argc, char** argv) {
         auto it = aiScriptCache.find(std::string(name));
         return (it != aiScriptCache.end()) ? it->second : std::pair<std::string, std::string>{};
     };
+    // reload_content (#152): evict the byte cache + the flight-model resolver cache, then re-resolve
+    // every live entity's flight model in place (mass/handling update mid-flight). Runs on the sim
+    // thread (the reload_content command enqueues this), where the resolver + m_controlledEntities are
+    // owned. Lua-controller live rebuild is a follow-on; flight models are the "feel new handling" case.
+    adminCtx.env.reloadContent = [&assets, fmCache, &broadcaster]() {
+        assets.evictAll();
+        fmCache->clear();
+        broadcaster.reloadFlightModels();
+    };
     adminCtx.bans.banlistPath = cfg.banlistPath.empty() ? nullptr : &cfg.banlistPath;
     adminCtx.bans.allowlistPath = cfg.allowlistPath.empty() ? nullptr : &cfg.allowlistPath;
     adminCtx.bans.saveBanlist = [&](const std::unordered_set<std::string>& b) {
@@ -2159,6 +2169,19 @@ int main(int argc, char** argv) {
         log->log(LogLevel::Info, __FILE__, __LINE__, mbuf);
     }
 
+    // Asset hot-reload (#152): the automatic server-side watcher. Opt-in via FL_HOT_RELOAD=1 (the
+    // client sets it and the LocalServer subprocess inherits it, so single-player lights up both
+    // ends). When a flight-model file changes, the authoritative sim re-resolves it onto every live
+    // entity in place — "edit the TOML, save, feel the new handling" with no console command. Mesh /
+    // texture / livery changes are the client's concern; the server holds no GPU caches.
+    std::unique_ptr<fl::StdFilesystemWatcher> contentWatcher;
+    if (const char* hr = std::getenv("FL_HOT_RELOAD"); hr && std::strcmp(hr, "1") == 0) {
+        contentWatcher = std::make_unique<fl::StdFilesystemWatcher>(assetsRoot, userDataRoot, /*pollIntervalMs=*/250,
+                                                                    /*maxFilesPerWatch=*/20000, log);
+        assets.enableHotReload(*contentWatcher);
+        log->log(LogLevel::Info, __FILE__, __LINE__, "hot-reload enabled (FL_HOT_RELOAD=1)");
+    }
+
     uint64_t lastDroppedTicks = 0; // for the sim-overrun drop-rate Warn (#514)
     // Baseline RSS captured once after all init, before the main loop; the soak leak gate tracks
     // the growth (rss_kb - rss_startup_kb) over the run (#707). 0 when unavailable on this platform.
@@ -2192,6 +2215,23 @@ int main(int argc, char** argv) {
             httpClient->service();
 
         p.asyncFilesystem->service();
+
+        // Hot-reload poll (#152): map events on this (main) thread, then apply on the sim thread. Only
+        // a flight-model change needs the authoritative live re-apply; ignore the rest (the server has
+        // no GPU caches). applyContentReload evicts + reloadFlightModels; it is the same lambda the
+        // reload_content admin command runs.
+        if (contentWatcher) {
+            auto events = contentWatcher->pollEvents();
+            if (!events.empty()) {
+                auto changed = assets.mapEventsToAssets(events);
+                const bool fmChanged = std::any_of(changed.begin(), changed.end(), [](const fl::ChangedAsset& c) {
+                    return c.type == fl::AssetType::FlightModel;
+                });
+                if (fmChanged && adminCtx.env.reloadContent)
+                    gameLoop.enqueueSimCallback([&adminCtx]() { adminCtx.env.reloadContent(); });
+            }
+        }
+
         // Follow the entity so terrain chunks are loaded at its current position.
         const double entityX = broadcaster.cachedEntityX();
         const double entityZ = broadcaster.cachedEntityZ();

@@ -1009,9 +1009,24 @@ void VkResourceManager::destroyMesh(MeshHandle h) {
         m_deferredBuffers.push_back({mesh.vertexBuffer, mesh.vertexAlloc, release});
     if (mesh.indexBuffer != VK_NULL_HANDLE)
         m_deferredBuffers.push_back({mesh.indexBuffer, mesh.indexAlloc, release});
-    mesh = {};
 
+    // Cascade: createMesh built the material + uploaded its textures as one package (#833), so the
+    // symmetric destructor frees them here (#152) — otherwise every hot-reload leaks a material +
+    // its textures. Safe because createTexture does not dedupe by name (no cross-mesh sharing), and
+    // terrain/builtin meshes have no material (invalid handle -> no-op).
+    const MaterialHandle mat = mesh.material;
+    mesh = {};
     m_freeMeshSlots.push_back(h.id - 1);
+
+    if (mat.valid() && mat.id <= m_materials.size()) {
+        const GpuMaterial& gm = m_materials[mat.id - 1];
+        if (gm.alive) {
+            destroyTexture(gm.baseColorTexture); // each guards the shared default textures
+            destroyTexture(gm.normalTexture);
+            destroyTexture(gm.ormTexture);
+        }
+        destroyMaterial(mat);
+    }
 }
 
 void VkResourceManager::destroyTexture(TextureHandle h) {

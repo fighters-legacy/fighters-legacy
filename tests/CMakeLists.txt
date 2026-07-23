@@ -27,6 +27,12 @@ target_link_libraries(test_scene_renderer PRIVATE Catch2::Catch2WithMain engine-
 target_include_directories(test_scene_renderer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_scene_renderer)
 
+# StdFilesystemWatcher (#152): the polling hot-reload backend.
+add_executable(test_std_filesystem_watcher test_std_filesystem_watcher.cpp)
+target_link_libraries(test_std_filesystem_watcher PRIVATE Catch2::Catch2WithMain platform-stdfs)
+target_include_directories(test_std_filesystem_watcher PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_std_filesystem_watcher)
+
 # PreviewScene (#666): the authoring-tools single-model preview bootstrap. engine-content is a PRIVATE
 # dep of engine-render, so link it explicitly for AssetManager in the test.
 add_executable(test_preview_scene test_preview_scene.cpp)

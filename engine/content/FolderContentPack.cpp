@@ -1,60 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "content/FolderContentPack.h"
 
+#include "content/AssetPaths.h" // the kAssetPaths table (single source of truth, #152/#836)
+
 #include "IFilesystem.h"
 #include "ILogger.h"
 
-#include <algorithm>
-#include <array>
-
 namespace fl {
-
-// Asset type → subdirectory, primary extension, fallback extension (empty = no fallback)
-struct AssetPathInfo {
-    const char* subdir;
-    const char* ext;
-    const char* extFallback;
-};
-
-static constexpr std::array<AssetPathInfo, static_cast<size_t>(AssetType::Count)> kAssetPaths = {{
-    {"aircraft", ".glb", ".gltf"}, // Mesh
-    {"textures", ".ktx2", ".png"}, // Texture
-    {"audio", ".ogg", ""},         // Audio
-    {"aircraft", ".toml", ""},     // FlightModel
-    {"missions", ".yaml", ""},     // Mission
-    {"terrain", ".json", ""},      // Terrain
-    {"ai", ".lua", ""},            // AIScript
-    {"entities", ".toml", ""},     // EntityDef
-    {"sensors", ".toml", ""},      // SensorDef
-    {"weapons", ".toml", ""},      // Weapon
-    {"manual", ".md", ""},         // Manual (prose only — the numbers are generated, never authored)
-    {"liveries", ".toml", ""},     // Livery (#845 — texture-set indirection by material slot)
-    {"airports", ".toml", ""},     // Airport (#699 — airport/runway definitions)
-    {"modes", ".toml", ""},        // GameMode (#521 — multiplayer game-mode definitions)
-}};
-
-// THE SIZE ASSERT BELOW IS TAUTOLOGICAL AND CANNOT FAIL. The array's length is *defined* as
-// AssetType::Count, so adding an enumerator without adding a row here does not shorten the array --
-// it leaves the new row VALUE-INITIALIZED, i.e. `subdir == nullptr`. The first listAssets() for that
-// type then does `m_modDir + "/" + nullptr` and segfaults. That is exactly what happened when
-// AssetType::Weapon was added: every unit test passed (they use mock packs, not FolderContentPack)
-// and fl-server crashed on the first real content pack.
-//
-// It is kept only for the case where someone changes the array's declared length. The check that
-// actually protects you is the next one.
-static_assert(kAssetPaths.size() == static_cast<size_t>(AssetType::Count),
-              "kAssetPaths out of sync with AssetType enum");
-
-// THIS is the guard that works: every row must name a directory and an extension. Add an AssetType
-// and forget the row, and the build stops here instead of the server dying on a content pack.
-static_assert(
-    [] {
-        for (const auto& info : kAssetPaths)
-            if (info.subdir == nullptr || info.ext == nullptr || info.extFallback == nullptr)
-                return false;
-        return true;
-    }(),
-    "kAssetPaths has a value-initialized row: an AssetType was added without a path entry");
 
 FolderContentPack::FolderContentPack(IFilesystem& fs, ILogger& logger, std::string modDir, Manifest manifest)
     : m_fs(fs), m_logger(logger), m_modDir(std::move(modDir)), m_manifest(std::move(manifest)) {}
@@ -68,7 +20,7 @@ bool FolderContentPack::configure(IWindow* /*window*/) {
 }
 
 std::string FolderContentPack::resolveAssetPath(const char* name, AssetType type) const {
-    const auto& info = kAssetPaths[static_cast<uint8_t>(type)];
+    const AssetPathInfo& info = assetPathInfo(type);
     std::string primary = m_modDir + "/" + info.subdir + "/" + name + info.ext;
     if (m_fs.fileExists(PathDomain::Assets, primary.c_str()))
         return primary;
@@ -184,7 +136,7 @@ std::optional<std::string> FolderContentPack::resolveTilePath(const char* terrai
 }
 
 std::vector<std::string> FolderContentPack::listAssets(AssetType type) const {
-    const auto& info = kAssetPaths[static_cast<uint8_t>(type)];
+    const AssetPathInfo& info = assetPathInfo(type);
     std::string dir = m_modDir + "/" + info.subdir;
 
     auto entries = m_fs.scanDirectory(PathDomain::Assets, dir.c_str());

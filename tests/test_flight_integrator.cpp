@@ -123,6 +123,42 @@ static std::shared_ptr<FlightModelData> makeData(const std::string& extra = "") 
     return std::make_shared<FlightModelData>(parseFlightModel(kBaseToml + extra));
 }
 
+TEST_CASE("Integrator: setFlightModel preserves state, clamps fuel, re-derives mass", "[integrator]") {
+    // Base model: mass 10000, fuel 4000.
+    FlightIntegrator integ(makeData());
+    FlightState s{};
+    s.vel_body[0] = 150.f;
+    s.pos_world[1] = 2000.f;
+    s.omega[1] = 0.3f;
+    s.fuel_kg = 3000.f;
+    s.mass_kg = 13000.f;
+    integ.reset(s);
+
+    // A heavier airframe with a smaller tank.
+    auto heavier = std::make_shared<FlightModelData>(*makeData());
+    const_cast<FlightModelData&>(*heavier).geometry.mass_kg = 20000.f;
+    const_cast<FlightModelData&>(*heavier).geometry.fuel_kg = 2000.f;
+
+    integ.setFlightModel(heavier);
+
+    // Flight state is model-independent -> preserved exactly.
+    CHECK(integ.state().vel_body[0] == Catch::Approx(150.f));
+    CHECK(integ.state().pos_world[1] == Catch::Approx(2000.f));
+    CHECK(integ.state().omega[1] == Catch::Approx(0.3f));
+    // Fuel clamped to the new (smaller) tank; mass = empty + fuel.
+    CHECK(integ.state().fuel_kg == Catch::Approx(2000.f));
+    CHECK(integ.state().mass_kg == Catch::Approx(22000.f));
+    // The model swapped.
+    CHECK(&integ.flightModel() == heavier.get());
+}
+
+TEST_CASE("Integrator: setFlightModel ignores a null model", "[integrator]") {
+    FlightIntegrator integ(makeData());
+    const FlightModelData* before = &integ.flightModel();
+    integ.setFlightModel(nullptr);
+    CHECK(&integ.flightModel() == before);
+}
+
 TEST_CASE("Integrator: single step changes state", "[integrator]") {
     FlightIntegrator integ(makeData());
     FlightState s{};
