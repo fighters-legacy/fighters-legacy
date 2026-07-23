@@ -550,7 +550,7 @@ void WorldBroadcaster::setOperatorPassword(std::string password) {
     m_operatorPassword = std::move(password);
 }
 
-void WorldBroadcaster::setAdminDispatch(std::function<std::string(std::string_view)> fn) {
+void WorldBroadcaster::setAdminDispatch(std::function<std::string(std::string_view, const CommandIssuer&)> fn) {
     m_adminDispatch = std::move(fn);
 }
 
@@ -695,6 +695,7 @@ void WorldBroadcaster::forEachPeer(std::function<void(const PeerInfo&)> fn) cons
             pi.sendRateHz = interval > 0u ? 60.f / static_cast<float>(interval) : 60.f;
             pi.effectiveBudget = ps.congestion.effectiveBudget(m_snapshotBudgetBytes.load(std::memory_order_relaxed));
             pi.packetLoss = m_net.getPeerLinkStats(peerId).packetLoss; // live ENet mean loss fraction
+            pi.caps = ps.authority.caps;                               // granted authority (#946)
         }
         fn(pi);
     }
@@ -1929,6 +1930,14 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         m_scoreboardDirty = false;
     }
 
+    // ~1 Hz aggregated world-state rebuild (#600 / #861). The bounded copy is the sim thread's only
+    // cost; the GM-map feed (#861) reads m_worldState, and Epic M's JSON/event-stream surface will
+    // serialize the same struct off-thread. Kept at ~1 Hz (agent/GM-map cadence), not the 60 Hz tick.
+    if (tickIndex % kWorldStateIntervalTicks == 0) {
+        rebuildWorldState(tickIndex);
+        broadcastGmWorldState(); // #861: feed the fresh aggregate to any game-master peers
+    }
+
     // Respawn (#648): deferred death teardown + fire any due respawns (humans on request, bots auto).
     processRespawns();
 
@@ -2544,6 +2553,116 @@ void WorldBroadcaster::setPeerRole(uint32_t peerId, PeerRole role) {
         }
         upsertRoster(peerId, rec);
     }
+}
+
+bool WorldBroadcaster::setPeerAuthority(uint32_t peerId, const PeerAuthority& authority) {
+    auto it = m_peerInputs.find(peerId);
+    if (it == m_peerInputs.end())
+        return false;
+    // Sanitize the mask against the known bits so an unknown future capability can never be granted.
+    it->second.authority.caps = authority.caps & kAllCaps;
+    it->second.authority.factionIndex = authority.factionIndex;
+
+    // Re-send MsgConnectAck so the client's granted-authority TLV (#949) updates and its GM/moderator/
+    // faction-leader UI appears or disappears. Only for an admitted peer (one that already received a
+    // first ConnectAck); the peer's current entity + role are unchanged (the client's handler applies
+    // the ack idempotently). The setPeerRole precedent — no new message type.
+    if (it->second.handshakeComplete) {
+        EntityId assigned{};
+        if (const auto eit = m_peerEntities.find(peerId); eit != m_peerEntities.end())
+            assigned = eit->second;
+        sendConnectAck(peerId, assigned, it->second.role);
+    }
+    return true;
+}
+
+PeerAuthority WorldBroadcaster::getPeerAuthority(uint32_t peerId) const {
+    auto it = m_peerInputs.find(peerId);
+    return (it != m_peerInputs.end()) ? it->second.authority : PeerAuthority{};
+}
+
+void WorldBroadcaster::rebuildWorldState(uint64_t tickIndex) {
+    // Gather the per-peer summary (the "peer picture"): every admitted peer, its role, faction, and
+    // latency class. Pilots and observers both appear (an observer has no entity but still holds a
+    // role + latency the GM view wants).
+    std::vector<WorldStatePeer> peers;
+    peers.reserve(m_peerInputs.size());
+    for (const auto& [peerId, ps] : m_peerInputs) {
+        if (!ps.handshakeComplete)
+            continue;
+        WorldStatePeer wp;
+        wp.peerId = peerId;
+        wp.role = static_cast<uint8_t>(ps.role);
+        wp.factionIndex = factionForPeer(peerId);
+        wp.delayTicks = static_cast<uint16_t>(std::min<uint32_t>(ps.estimatedDelayTicks, 0xFFFFu));
+        peers.push_back(wp);
+    }
+
+    uint8_t weatherPreset = 0;
+    float timeOfDay = 12.f;
+    if (m_weather) {
+        weatherPreset = static_cast<uint8_t>(m_weather->preset());
+        timeOfDay = m_weather->timeOfDay();
+    }
+
+    m_worldState = buildWorldStateSnapshot(tickIndex, m_entityManager, m_registry, &m_formations, std::move(peers),
+                                           weatherPreset, timeOfDay);
+}
+
+void WorldBroadcaster::broadcastGmWorldState() {
+    // Which peers get the feed: those holding GmMap. Cheap to check first so a server with no GM peers
+    // pays nothing beyond the (already-built) aggregate.
+    std::vector<uint32_t> gmPeers;
+    for (const auto& [peerId, ps] : m_peerInputs) {
+        if (ps.handshakeComplete && ps.authority.has(Capability::GmMap))
+            gmPeers.push_back(peerId);
+    }
+    if (gmPeers.empty())
+        return;
+
+    // Encode the record stream once (identical for every GM peer — the full-battlespace aggregate).
+    const auto& ents = m_worldState.entities;
+    std::vector<GmEntityRecord> records;
+    records.reserve(ents.size());
+    for (const auto& e : ents) {
+        GmEntityRecord r;
+        r.entityIdx = e.entityIdx;
+        r.gen = e.gen;
+        r.factionIndex = e.factionIndex;
+        r.typeIndex = e.typeIndex;
+        r.ownerPeerId = e.ownerPeerId;
+        r.formationId = e.formationId;
+        r.category = e.category;
+        r.damageLevel = e.damageLevel;
+        r.flags = e.flags;
+        r.hpPct = static_cast<uint8_t>(std::clamp(e.hpFrac, 0.f, 1.f) * 100.f + 0.5f);
+        r.pos[0] = static_cast<float>(e.pos[0]);
+        r.pos[1] = static_cast<float>(e.pos[1]);
+        r.pos[2] = static_cast<float>(e.pos[2]);
+        r.velXZ[0] = e.vel[0];
+        r.velXZ[1] = e.vel[2];
+        records.push_back(r);
+    }
+
+    // Chunk under the single-fragment MTU. Always send at least one (empty) packet so the client learns
+    // the tick advanced and clears a stale set. Reliable + ordered, so the client's per-tick
+    // double-buffer sees whole ticks.
+    const std::size_t total = records.size();
+    std::size_t sent = 0;
+    do {
+        const std::size_t n = std::min(total - sent, kMaxGmRecordsPerPacket);
+        std::vector<uint8_t> buf;
+        buf.reserve(sizeof(MsgGmWorldStateHeader) + n * sizeof(GmEntityRecord));
+        MsgGmWorldStateHeader hdr;
+        hdr.count = static_cast<uint16_t>(n);
+        hdr.tick = m_worldState.tick;
+        appendMsg(buf, hdr);
+        for (std::size_t i = 0; i < n; ++i)
+            appendMsg(buf, records[sent + i]);
+        for (const uint32_t peerId : gmPeers)
+            m_net.send(peerId, buf.data(), buf.size(), /*reliable=*/true);
+        sent += n;
+    } while (sent < total);
 }
 
 uint16_t WorldBroadcaster::factionForPeer(uint32_t peerId) const noexcept {
@@ -4024,8 +4143,11 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         }
         // else: degenerate viewAxis — retain previous good value
     } else if (msgId == static_cast<uint8_t>(MsgId::AdminCommand)) {
-        // Feature gates: both password and dispatcher must be configured.
-        if (m_operatorPassword.empty() || !m_adminDispatch)
+        // Feature gate: the dispatcher must be configured. Two authentication rungs then decide the
+        // issuer (#946): (1) the operator password grants Admin caps for this command; (2) an
+        // empty-token peer is authenticated by its GRANTED caps (the grant channel). With neither a
+        // password set nor any peer granted caps, the channel is effectively off.
+        if (!m_adminDispatch)
             return;
         if (size < sizeof(MsgAdminCommand))
             return;
@@ -4039,9 +4161,23 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         msg.command[sizeof(msg.command) - 1] = '\0';
         uint16_t const reqId = msg.reqId;
 
-        // Constant-time token comparison: XOR-accumulate the full fixed-size token field
-        // to avoid a length or early-exit timing oracle.
-        {
+        // A client with no operator password configured sends an all-NUL token; that is the signal to
+        // authenticate via granted caps instead of the password (a non-empty wrong token is a genuine
+        // auth-failure attempt and must still trip the lockout).
+        bool tokenAllZero = true;
+        for (std::size_t i = 0; i < sizeof(msg.token); ++i) {
+            if (msg.token[i] != '\0') {
+                tokenAllZero = false;
+                break;
+            }
+        }
+
+        CommandIssuer issuer;
+        bool authorized = false;
+
+        // Rung 1: operator password (constant-time compare, only meaningful when a password is set —
+        // an empty password must never match, or an empty token would authenticate everyone).
+        if (!m_operatorPassword.empty()) {
             const std::string& pw = m_operatorPassword;
             uint8_t diff = 0;
             for (std::size_t i = 0; i < sizeof(msg.token); ++i) {
@@ -4051,7 +4187,13 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
             }
             for (std::size_t i = sizeof(msg.token); i < pw.size(); ++i)
                 diff |= static_cast<uint8_t>(pw[i]);
-            if (diff != 0) {
+            if (diff == 0) {
+                issuer = CommandIssuer{peerId, kAdminCaps, factionForPeer(peerId)};
+                authorized = true;
+                if (!adminIp.empty())
+                    m_adminAuthTracker.recordSuccess(adminIp);
+            } else if (!tokenAllZero) {
+                // A non-empty wrong token is a brute-force attempt: log + lockout, exactly as before.
                 char lmsg[96];
                 std::snprintf(lmsg, sizeof(lmsg), "peer %u: MsgAdminCommand bad token — discarding", peerId);
                 m_logger.log(LogLevel::Warn, __FILE__, __LINE__, lmsg);
@@ -4064,17 +4206,51 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
                 }
                 return;
             }
+            // else: password set but token empty — fall through to the grant channel below.
+        }
+
+        // Rung 2: the grant channel. A peer that did not authenticate with the password reaches
+        // dispatch via its granted caps. A granted peer runs unthrottled (like an operator); a
+        // zero-cap peer is a permission refusal, NOT an auth failure (no lockout pollution, #947).
+        if (!authorized) {
+            auto pit = m_peerInputs.find(peerId);
+            PeerInputState* ps = (pit != m_peerInputs.end()) ? &pit->second : nullptr;
+
+            if (ps && ps->authority.any()) {
+                issuer = CommandIssuer{peerId, ps->authority.caps, ps->authority.factionIndex};
+                authorized = true;
+            } else {
+                // No password match and no granted caps. Rate-limit this refuse path (1 s window,
+                // wingman idiom) so it is not a free probe/amplification channel, then either refuse
+                // with a clear message (when a password is configured, i.e. the channel is on and the
+                // peer merely lacks a grant) or silently drop (no password set — the channel is off
+                // for an ungranted peer, preserving the "no admin without credentials" behavior).
+                if (ps) {
+                    const auto now = m_clock->now();
+                    if (now - ps->adminCmdWindowStart >= std::chrono::seconds(1)) {
+                        ps->adminCmdWindowStart = now;
+                        ps->adminCmdCount = 0;
+                    }
+                    if (++ps->adminCmdCount > kUnauthAdminCmdsPerSecond)
+                        return;
+                }
+                if (!m_operatorPassword.empty()) {
+                    sendAdminResponse(m_net, peerId, reqId,
+                                      "permission denied: the admin channel requires a granted role or the "
+                                      "operator password");
+                }
+                return;
+            }
         }
 
         std::string_view cmdView(msg.command);
         if (cmdView.empty())
             return;
 
-        // Dispatch on the sim thread (same as stdin admin loop).
+        // Dispatch on the sim thread (same as stdin admin loop). The registry permission-checks the
+        // command against issuer.caps and refuses with a clear message when insufficient.
         // Mutating commands enqueue via gameLoop.enqueueSimCallback() internally.
-        std::string result = m_adminDispatch(cmdView);
-        if (!adminIp.empty())
-            m_adminAuthTracker.recordSuccess(adminIp);
+        std::string result = m_adminDispatch(cmdView, issuer);
 
         {
             char lmsg[256];
@@ -5582,6 +5758,20 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned, PeerRo
         }
 
         appendMsg(buf, typeDef);
+    }
+
+    // Granted-authority TLV (#949): appended after the entity-type records when this peer holds caps,
+    // so the client can show/hide GM/moderator/faction-leader UI. Cosmetic only — the server remains
+    // the enforcement point. Old clients iterate the records by typeCount and skip the unknown tag.
+    // Re-sent on a mid-session grant/revoke (setPeerAuthority re-calls sendConnectAck). Payload is
+    // { uint64 caps LE, uint16 factionIndex LE }, 10 bytes, matching ExtTag::ConnectAckAuthority.
+    if (auto pit = m_peerInputs.find(peerId); pit != m_peerInputs.end() && pit->second.authority.any()) {
+        const PeerAuthority& auth = pit->second.authority;
+        uint8_t payload[sizeof(uint64_t) + sizeof(uint16_t)];
+        const uint64_t caps = auth.caps;
+        std::memcpy(payload, &caps, sizeof(caps));
+        std::memcpy(payload + sizeof(caps), &auth.factionIndex, sizeof(auth.factionIndex));
+        appendExtRaw(buf, static_cast<uint16_t>(ExtTag::ConnectAckAuthority), payload, sizeof(payload));
     }
 
     m_net.send(peerId, buf.data(), buf.size(), /*reliable=*/true);

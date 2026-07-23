@@ -83,6 +83,9 @@ enum class InputAction : uint32_t {
     // Night-vision goggles toggle (#210)
     NvgToggle,
 
+    // Game-master overview map toggle (#861) — opens the battlespace map for GM-capable peers
+    GmMap,
+
     Count
 };
 

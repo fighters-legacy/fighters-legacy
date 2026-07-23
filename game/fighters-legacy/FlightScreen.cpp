@@ -7,6 +7,7 @@
 #include "ClientPrediction.h"
 #include "CommsMenu.h"
 #include "FlightInputCollector.h"
+#include "GmMapOverlay.h"
 #include "HapticController.h"
 #include "IGui.h"
 #include "IInput.h"
@@ -25,6 +26,7 @@
 #include "flight/LocalFrame.h"         // bankOf on the local-level frame
 #include "input/BindingQuery.h"        // bindingJustPressed (autopilot toggles, #640)
 #include "input/InputBindings.h"
+#include "net/Capability.h"
 #include "render/CameraController.h"
 #include "render/FlightHud.h"
 #include "render/HudProjection.h" // designator box projection (#696)
@@ -191,6 +193,26 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     }
     const bool chatOpen = d.chat && d.chat->isInputOpen();
 
+    // Game-master overview map (#861). M toggles it for a GM-capable peer (typically an observer, so
+    // hijacking the arrow keys for pan costs no flight). Non-modal but map-focused: while open, flight
+    // input is suppressed via uiFocused. The map's "View from here" button hands a {idx,gen} back here
+    // to drive the entity-view camera (the #860 EntitySelector + Chase), and the overlay itself sends a
+    // `spectate` so the server re-centres interest on the target.
+    const bool gmCapable = d.clientNetHandler && d.clientNetHandler->hasCapability(fl::Capability::GmMap);
+    if (d.gmMap && gmCapable && !d.gameConsole->isOpen() && !menuWasOpen && !commsMenuWasOpen && !chatOpen) {
+        if (input.isKeyJustPressed(Key::M))
+            d.gmMap->toggle();
+        if (d.gmMap->isOpen()) {
+            d.gmMap->update(input, window);
+            if (auto v = d.gmMap->takeViewRequest()) {
+                m_selector.select(v->idx, v->gen);
+                if (d.cameraController)
+                    d.cameraController->setMode(fl::CameraMode::Chase);
+            }
+        }
+    }
+    const bool gmMapOpen = d.gmMap && d.gmMap->isOpen();
+
     // Crew seat picker (#975), non-modal like the radio menu. K cycles joinable seats across every
     // crewed aircraft the client knows; L joins the selected seat; U leaves the current seat. These keys
     // are NOT flight controls (avoiding J = ECM etc.), so no input is suppressed. Suppressed only while
@@ -260,7 +282,7 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
 
     const ControlsSettings cs = d.userConfig->controls();
     const bool uiFocused =
-        (d.wingmanMenu && d.wingmanMenu->isOpen()) || (d.commsMenu && d.commsMenu->isOpen()) || chatOpen;
+        (d.wingmanMenu && d.wingmanMenu->isOpen()) || (d.commsMenu && d.commsMenu->isOpen()) || chatOpen || gmMapOpen;
 
     // Planet radius (m) from the server's MsgConnectAck; drives the autopilot's local-level altitude/
     // heading as well as the HUD attitude/horizon below. Earth default until the ack arrives.

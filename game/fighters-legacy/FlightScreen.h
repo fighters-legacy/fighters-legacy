@@ -39,6 +39,7 @@ class WingmanMenu;
 class CommsMenu;
 class ManualOverlay;
 class ChatOverlay;
+class GmMapOverlay;
 class IGui;
 
 struct EnvironmentState;
@@ -74,6 +75,7 @@ struct FlightScreenDeps {
     CommsMenu* commsMenu{nullptr};                 // null = no ATC comms menu (#704)
     ManualOverlay* manual{nullptr};                // null = no in-flight aircraft manual (#821)
     ChatOverlay* chat{nullptr};                    // null = no in-match chat (#646)
+    GmMapOverlay* gmMap{nullptr};                  // null = no game-master overview map (#861)
     IGui* gui{nullptr};                            // null = no GUI backend (chat input box degrades off)
     uint32_t* assignedEntityIdx{nullptr};
     uint32_t* assignedEntityGen{nullptr};

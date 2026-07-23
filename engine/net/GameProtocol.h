@@ -118,6 +118,9 @@ enum class MsgId : uint8_t {
     TeamRequest = 0x1F,  // client->server, reliable: request a mid-match team/faction switch (#522).
     Chat = 0x20,         // client->server, reliable: a player chat line (channel + UTF-8 text) (#646).
     ChatEvent = 0x21,    // server->client, reliable: a routed chat line (sender + channel + text) (#646).
+    GmWorldState = 0x22, // server->client, reliable: the game-master overview-map aggregate (#861),
+                         // unicast at ~1 Hz to peers holding the GmMap capability. Whole-battlespace,
+                         // NOT per-camera interest. Chunked; see MsgGmWorldStateHeader/GmEntityRecord.
     // ENet message ids occupy 0x00-0x3F. The non-ENet (raw-UDP) boundary was raised from 0x20 to 0x40 in
     // #996 to make room for the Epic E ENet messages above (it was raised from 0x10 to 0x20 in #853). A
     // raw-UDP id lives at 0x40+ and is NEVER dispatched through the ENet onReceive path.
@@ -901,6 +904,47 @@ static_assert(offsetof(ScoreboardRow, factionIndex) == 14u, "ScoreboardRow::fact
 inline constexpr std::size_t kMaxScoreboardRowsPerPacket = 30; // 8 + 30*16 = 488 B
 
 // ---------------------------------------------------------------------------------------------
+// Game-master overview map feed (#861). Server->client reliable, unicast at ~1 Hz to peers holding
+// the GmMap capability. Carries the whole-battlespace aggregate (from the #600 WorldStateSnapshot),
+// NOT per-camera interest — a GM overseeing a 128-player map cannot use queryRadius. Chunked at
+// kMaxGmRecordsPerPacket to stay under the single-fragment MTU (like the scoreboard). The client
+// double-buffers by tick: a new tick's first chunk promotes the previous complete accumulation, so
+// the map always renders a whole tick.
+// ---------------------------------------------------------------------------------------------
+struct MsgGmWorldStateHeader {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::GmWorldState)}; // @0
+    uint8_t flags{0};                                         // @1 reserved (e.g. faction-filtered bit, #948)
+    uint16_t count{0};                                        // @2 GmEntityRecord records in THIS packet
+    uint32_t reserved{0};                                     // @4 pad so tick is 8-aligned
+    uint64_t tick{0};                                         // @8 sim tick the aggregate was built at
+}; // 16 bytes, align 8
+static_assert(sizeof(MsgGmWorldStateHeader) == 16u, "MsgGmWorldStateHeader wire size changed");
+static_assert(offsetof(MsgGmWorldStateHeader, count) == 2u, "MsgGmWorldStateHeader::count offset changed");
+static_assert(offsetof(MsgGmWorldStateHeader, tick) == 8u, "MsgGmWorldStateHeader::tick offset changed");
+
+struct GmEntityRecord {
+    uint32_t entityIdx{0};    // @0
+    uint16_t gen{0};          // @4  (with entityIdx a stable {idx,gen} handle the GM selects on)
+    uint16_t factionIndex{0}; // @6
+    uint32_t typeIndex{0};    // @8  labels the icon via the client's cached type defs
+    uint32_t ownerPeerId{0};  // @12 controlling peer; 0 = AI (labels a player icon via the roster)
+    uint16_t formationId{0};  // @16 kNoFormation (0) = not in a formation (gates the order buttons)
+    uint8_t category{0};      // @18 ObjectCategory ordinal (icon shape)
+    uint8_t damageLevel{0};   // @19
+    uint8_t flags{0};         // @20 WorldStateEntityFlag bits (playerOwned/ecm)
+    uint8_t hpPct{0};         // @21 hp/maxHp * 100, 0..100
+    uint16_t reserved{0};     // @22 pad so the floats are 4-aligned
+    float pos[3]{};           // @24 world position (float — map/icon precision, ULP ~0.5 m at planet scale)
+    float velXZ[2]{};         // @36 horizontal velocity, for the heading vector on the map
+}; // 44 bytes, align 4
+static_assert(sizeof(GmEntityRecord) == 44u, "GmEntityRecord wire size changed");
+static_assert(offsetof(GmEntityRecord, typeIndex) == 8u, "GmEntityRecord::typeIndex offset changed");
+static_assert(offsetof(GmEntityRecord, formationId) == 16u, "GmEntityRecord::formationId offset changed");
+static_assert(offsetof(GmEntityRecord, pos) == 24u, "GmEntityRecord::pos offset changed");
+static_assert(offsetof(GmEntityRecord, velXZ) == 36u, "GmEntityRecord::velXZ offset changed");
+inline constexpr std::size_t kMaxGmRecordsPerPacket = 25; // 16 + 25*44 = 1116 B, single-fragment
+
+// ---------------------------------------------------------------------------------------------
 // In-match text chat (#646)
 // ---------------------------------------------------------------------------------------------
 
@@ -1254,7 +1298,7 @@ static_assert(offsetof(MsgServerInfo, mission) == 120u, "MsgServerInfo::mission 
 // Senders include any subset; receivers skip unknown tags via their len field.
 // Range layout:
 //   0x0100–0x01FF  MsgWorldSnapshot extensions (appended after the quantized record bitstream)
-//   0x0200–0x02FF  MsgConnectAck extensions (reserved for future use)
+//   0x0200–0x02FF  MsgConnectAck extensions (0x0201 = ConnectAckAuthority #949)
 //   0x0300–0x03FF  MsgClientInput extensions (reserved for future use)
 //   0x0400–0x04FF  MsgWeatherState extensions (reserved for future use)
 //   0x0500–0x05FF  MsgConnectRequest extensions (0x0500 = ConnectSeatClaim #974; RFC #871 token reserved)
@@ -1286,6 +1330,15 @@ enum class ExtTag : uint16_t {
                            // (occupancy lives in the reliable MsgCrewRoster), so a world of only single-seat
                            // entities emits no SnapshotCrew TLV and its snapshot is byte-identical to pre-#972.
                            // Unreliable/interest-filtered: a dropped packet loses one tick of turret aim.
+
+    ConnectAckAuthority = 0x0201, // #949: granted-authority TLV appended to MsgConnectAck (after the
+                                  // entity-type records). Payload = { uint64 caps (LE), uint16
+                                  // factionIndex (LE) } (10 bytes, unaligned). Present only when the
+                                  // peer holds non-zero granted caps; re-sent on a mid-session
+                                  // grant/revoke. Lets the client show/hide GM/moderator/faction-leader
+                                  // UI affordances — cosmetic only; the server remains the enforcement
+                                  // point. Old clients skip the unknown tag. First tag in the reserved
+                                  // 0x0200-0x02FF MsgConnectAck range.
 
     ConnectSeatClaim = 0x0500,    // #974: join-at-connect seat claim in MsgConnectRequest's TLV block.
                                   // Payload = { uint32 entityIdx (LE), uint32 entityGen (LE), uint8 seatIndex }
