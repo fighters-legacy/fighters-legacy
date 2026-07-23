@@ -21,6 +21,7 @@ static constexpr std::array<AssetPathInfo, static_cast<size_t>(AssetType::Count)
     {"liveries", ".toml", ""},     // Livery (#845 — texture-set indirection by material slot)
     {"airports", ".toml", ""},     // Airport (#699 — airport/runway definitions)
     {"modes", ".toml", ""},        // GameMode (#521 — multiplayer game-mode definitions)
+    {"theaters", ".toml", ""},     // Theater (#847 — geographic theater manifests)
 }};
 
 // THE SIZE ASSERT BELOW IS TAUTOLOGICAL AND CANNOT FAIL. The array's length is *defined* as

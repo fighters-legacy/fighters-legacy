@@ -9,6 +9,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **tools**: `validate-campaign` (#847, Epic #836) — the campaign format's first validator, so a
+  campaign author's feedback loop is no longer "the engine failed to load it". It delegates the schema
+  to the engine's `parseCampaign` (anti-drift) and, with `--pack`, resolves every theater manifest,
+  story/template file, and frontline PNG raster (8-bit grayscale, dimensions == the theater's
+  `frontline_grid`) inside the pack. Theater manifests become real: a new `parseTheaterManifest`
+  (`theaters/<id>.toml` with geographic `bounds` + an optional `terrain`, default `"world"`), an
+  `AssetType::Theater`, an `IContentPack::loadPackFile` for raw pack-relative reads, and a hardened
+  8-bit-grayscale `FrontlinePng` codec (its own `engine-campaign-png` target). `parseCampaign` now
+  catches dangling `next.id`/`unlock`/`theater` references, duplicate ids, and warns on stories
+  unreachable from any trigger. fl-server finally consumes campaign rasters end-to-end: the previously
+  unset `FrontlineLoader` decodes them, and theater `bounds` map the raster onto real lat/lon.
 - **tools**: `fl-viewer` interactive model viewer (#838, Epic #836) — the DCS-Model-Viewer-shape tool
   every established sim ships. `fl-viewer --entity fl-base:f5e` (or a bare `.glb`) opens a window
   showing the aircraft exactly as the game draws it, with an orbit/pan/zoom camera, a glTF node-tree

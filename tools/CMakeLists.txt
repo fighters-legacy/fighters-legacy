@@ -240,6 +240,19 @@ target_include_directories(validate-mission-lib PUBLIC
 add_executable(validate-mission validate-mission/main.cpp)
 target_link_libraries(validate-mission PRIVATE validate-mission-lib)
 
+# validate-campaign (#847): campaign YAML + theater manifests + frontline PNG rasters. Shares the
+# engine's parseCampaign / parseTheaterManifest (anti-drift) and the FrontlinePng codec.
+add_library(validate-campaign-lib STATIC validate-campaign/campaign_validator.cpp)
+target_link_libraries(validate-campaign-lib
+    PUBLIC engine-campaign engine-campaign-png engine-content
+    PRIVATE platform-stdfs tomlplusplus::tomlplusplus)
+target_include_directories(validate-campaign-lib
+    PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/validate-campaign"
+    PRIVATE "${CMAKE_SOURCE_DIR}/platform/stdfs")
+
+add_executable(validate-campaign validate-campaign/main.cpp)
+target_link_libraries(validate-campaign PRIVATE validate-campaign-lib)
+
 # Game-mode validator (#521): shares the runtime parseGameModeToml so validator and engine agree.
 add_library(validate-mode-lib STATIC validate-mode/mode_validator.cpp)
 target_link_libraries(validate-mode-lib PRIVATE engine-match)
@@ -307,6 +320,7 @@ install(TARGETS
     validate-sensor
     validate-entity
     validate-mission
+    validate-campaign
     validate-mode
     validate-mesh
     validate-playlist

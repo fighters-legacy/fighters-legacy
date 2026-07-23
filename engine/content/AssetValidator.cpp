@@ -65,6 +65,8 @@ ValidationResult AssetValidator::validate(AssetType type, std::span<const uint8_
     case AssetType::Weapon:
     case AssetType::Livery:
     case AssetType::Airport:
+    case AssetType::GameMode:
+    case AssetType::Theater:
         // TOML — plain text, no magic bytes; size check only
         if (totalSize > m_limits.maxToml)
             return {false, "config: exceeds size limit"};

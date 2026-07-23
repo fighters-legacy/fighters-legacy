@@ -50,6 +50,8 @@
 #include <atc/AtcService.h>   // the deterministic ATC service (#706)
 #include <campaign/CampaignParser.h>
 #include <campaign/CampaignRunner.h>
+#include <campaign/FrontlinePng.h>
+#include <campaign/TheaterManifest.h>
 #include <config/ConfigFile.h>
 #include <console/CommandRegistry.h>
 #include <console/CommandShell.h>
@@ -1200,9 +1202,51 @@ int main(int argc, char** argv) {
                 for (const std::string& e : cp.errors)
                     log->log(LogLevel::Error, __FILE__, __LINE__, e.c_str());
             } else {
-                // Per-mission/template content resolves through the same loader single missions use.
+                // Theater geographic bounds from each theater manifest (#847). A theater whose manifest
+                // is missing/unparseable keeps zero bounds (a warning) — the campaign still runs.
+                for (auto& th : cp.campaign.theaters) {
+                    auto tf = assets.loadTheater(th.id.c_str());
+                    if (!tf || tf->bytes.empty()) {
+                        char b[160];
+                        std::snprintf(b, sizeof(b), "campaign: theater '%.64s' has no manifest — bounds unset",
+                                      th.id.c_str());
+                        log->log(LogLevel::Warn, __FILE__, __LINE__, b);
+                        continue;
+                    }
+                    auto tr = fl::parseTheaterManifest(
+                        std::string_view(reinterpret_cast<const char*>(tf->bytes.data()), tf->bytes.size()));
+                    if (tr.ok)
+                        th.bounds = fl::theaterGeoBounds(tr.theater);
+                    else
+                        log->log(LogLevel::Warn, __FILE__, __LINE__,
+                                 ("campaign: theater '" + th.id + "' manifest invalid — bounds unset").c_str());
+                }
+                // Per-mission/template content: the mission-YAML loader first (builtin id / stem), then a
+                // raw pack-relative read for the path-form file references formats.md documents (#847).
                 auto content = [&assets, log](const std::string& path) -> std::optional<std::string> {
-                    return fl::loadMissionYaml(path, &assets, *log);
+                    if (auto y = fl::loadMissionYaml(path, &assets, *log))
+                        return y;
+                    if (auto bytes = assets.loadPackFile(path.c_str()))
+                        return std::string(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+                    return std::nullopt;
+                };
+                // Frontline raster loader (#847): decode the pack-relative 8-bit-grayscale PNG into the
+                // pre-sized Frontline. Previously left unset, so campaigns never consumed rasters.
+                auto frontlineLoader = [&assets, log](const std::string& path, fl::Frontline& out) -> bool {
+                    auto bytes = assets.loadPackFile(path.c_str());
+                    if (!bytes) {
+                        log->log(LogLevel::Warn, __FILE__, __LINE__,
+                                 ("campaign: frontline '" + path + "' not found").c_str());
+                        return false;
+                    }
+                    int w = 0, h = 0;
+                    std::vector<uint8_t> pixels = fl::decodeFrontlinePng(bytes->data(), bytes->size(), &w, &h);
+                    if (pixels.empty() || w != out.cols() || h != out.rows()) {
+                        log->log(LogLevel::Warn, __FILE__, __LINE__,
+                                 ("campaign: frontline '" + path + "' decode/dimension mismatch").c_str());
+                        return false;
+                    }
+                    return out.setPixels(std::move(pixels));
                 };
                 uint64_t seed = 1469598103934665603ull; // FNV-1a of the campaign name — stable, replayable
                 for (unsigned char ch : cp.campaign.name)
@@ -1213,7 +1257,8 @@ int main(int argc, char** argv) {
                 std::error_code ec;
                 std::filesystem::create_directories("cache", ec); // the save dir must exist before writeConfigFile
                 campaignSavePath = "cache/campaign_" + sanitized + ".flsave";
-                campaignRunner = std::make_unique<fl::CampaignRunner>(std::move(cp.campaign), seed, content);
+                campaignRunner =
+                    std::make_unique<fl::CampaignRunner>(std::move(cp.campaign), seed, content, frontlineLoader);
                 if (std::ifstream in{campaignSavePath, std::ios::binary}) {
                     std::string blob((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
                     if (campaignRunner->restore(blob))

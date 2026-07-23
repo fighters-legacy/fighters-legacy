@@ -66,7 +66,12 @@ class AssetManager {
     std::shared_ptr<ManualProse> loadManualProse(const char* name);
     std::shared_ptr<LiveryData> loadLivery(const char* name);
     std::shared_ptr<AirportDefData> loadAirportDef(const char* name);
-    std::shared_ptr<GameModeData> loadGameMode(const char* name); // #521
+    std::shared_ptr<GameModeData> loadGameMode(const char* name);  // #521
+    std::shared_ptr<TheaterDefData> loadTheater(const char* name); // #847
+
+    // Raw pack-relative file bytes, first pack in priority order that provides it (#847). Uncached
+    // (like loadConfig). nullopt if no pack has it.
+    std::optional<std::vector<uint8_t>> loadPackFile(const char* relPath);
 
     // The highest-priority livery (#845) targeting the given aircraft DEF ID (e.g. "fl-base:f5e"),
     // or nullopt if none is installed. Walks the installed liveries in priority order and returns the

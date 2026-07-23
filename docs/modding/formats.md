@@ -1137,6 +1137,12 @@ layer  = "ukraine_clear"   # default weather/lighting layer for this theater
 | `name` | string | Display name |
 | `bounds` | table | Geographic bounding box in **degrees**: `min_lat`, `min_lon`, `max_lat`, `max_lon` |
 | `layer` | string | Default weather/lighting preset (references a layer definition) |
+| `terrain` | string | Terrain id this theater rides on (optional; default `"world"`, the global terrain) |
+
+Theater manifests, the campaign graph, and the frontline rasters are validated by `validate-campaign`
+(#847): run `validate-campaign --pack <pack-dir> <campaign.yaml>` to check that every theater id
+resolves to a manifest with valid `bounds`, every story/template file resolves, and every frontline
+PNG is 8-bit grayscale with dimensions equal to its theater's `frontline_grid`.
 
 **Bounds are geographic, not planar.** The world is a sphere (the cube-sphere terrain rewrite,
 #472), and the engine's world origin sits at the **north pole** in engine coordinates — so a

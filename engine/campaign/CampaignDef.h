@@ -6,8 +6,9 @@
 // sources: a dynamic generator driven by frontline state, and a story list fired by triggers. Produced
 // by parseCampaign() (CampaignParser.h) and consumed by CampaignEngine (the deterministic runtime).
 
+#include "campaign/Frontline.h" // GeoBounds
+
 #include <array>
-#include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
@@ -29,6 +30,9 @@ struct CampaignTheater {
     std::string initialFrontline; // frontline PNG applied at campaign start
     int frontlineCols{0};
     int frontlineRows{0};
+    // Geographic bounds (radians), filled by the host from the theater manifest (#847); zero until the
+    // manifest resolves. CampaignEngine passes them to Frontline so a raster maps onto real lat/lon.
+    GeoBounds bounds{};
     // Starting order of battle per side: side id -> (unit tag -> count). Free-form counters the
     // generator scales force composition from and decrements as missions resolve.
     std::map<std::string, std::map<std::string, int>> groundUnits;

@@ -773,6 +773,16 @@ target_link_libraries(test_validate_mesh
     PRIVATE Catch2::Catch2WithMain validate-mesh-lib)
 catch_discover_tests(test_validate_mesh)
 
+# validate-campaign (#847) + the frontline PNG codec.
+add_executable(test_frontline_png test_frontline_png.cpp)
+target_link_libraries(test_frontline_png PRIVATE Catch2::Catch2WithMain engine-campaign-png)
+catch_discover_tests(test_frontline_png)
+
+add_executable(test_validate_campaign test_validate_campaign.cpp)
+target_link_libraries(test_validate_campaign PRIVATE Catch2::Catch2WithMain validate-campaign-lib engine-campaign-png)
+target_include_directories(test_validate_campaign PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_validate_campaign)
+
 # Mesh node-tree description for the fl-viewer panel (#838).
 add_executable(test_mesh_node_tree test_mesh_node_tree.cpp)
 target_link_libraries(test_mesh_node_tree PRIVATE Catch2::Catch2WithMain validate-mesh-lib)

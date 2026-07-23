@@ -8,6 +8,8 @@
 #include "campaign/CampaignRunner.h"
 #include "campaign/Frontline.h"
 #include "campaign/MissionTemplate.h"
+#include "campaign/TemplateHeader.h"
+#include "campaign/TheaterManifest.h"
 #include "mission/MissionParser.h" // a generated sortie must round-trip through the real mission parser
 
 #include <catch2/catch_approx.hpp>
@@ -492,4 +494,54 @@ TEST_CASE("CampaignRunner: save/restore continues the campaign across a simulate
     auto next = b.nextMissionYaml(idB);
     REQUIRE(next.has_value());
     REQUIRE(parseMission(*next).ok); // the continuation mission still resolves + parses
+}
+
+// ── Theater manifest + template header (#847) ───────────────────────────────
+
+TEST_CASE("parseTheaterManifest: valid manifest, bounds to radians") {
+    auto r = fl::parseTheaterManifest("[theater]\nid = \"ukraine\"\nname = \"Ukraine\"\n"
+                                      "bounds = { min_lat = 44.0, min_lon = 22.0, max_lat = 52.0, max_lon = 40.0 }\n");
+    REQUIRE(r.ok);
+    CHECK(r.theater.id == "ukraine");
+    CHECK(r.theater.terrain == "world"); // default
+    auto b = fl::theaterGeoBounds(r.theater);
+    CHECK(b.minLat == Catch::Approx(44.0 * 3.14159265358979323846 / 180.0));
+}
+
+TEST_CASE("parseTheaterManifest: out-of-range and inverted bounds fail") {
+    auto r1 = fl::parseTheaterManifest("[theater]\nid = \"x\"\n"
+                                       "bounds = { min_lat = 44, min_lon = 22, max_lat = 200, max_lon = 40 }\n");
+    CHECK_FALSE(r1.ok); // max_lat 200 out of range
+    auto r2 = fl::parseTheaterManifest("[theater]\nid = \"x\"\n"
+                                       "bounds = { min_lat = 52, min_lon = 22, max_lat = 44, max_lon = 40 }\n");
+    CHECK_FALSE(r2.ok); // min_lat >= max_lat
+    auto r3 = fl::parseTheaterManifest("[theater]\nname = \"no id\"\n");
+    CHECK_FALSE(r3.ok); // missing id + bounds
+}
+
+TEST_CASE("parseTemplateHeader: role + fills sources") {
+    auto r = fl::parseTemplateHeader("template:\n"
+                                     "  role: intercept\n"
+                                     "  fills:\n"
+                                     "    - target_area: {from: frontline}\n"
+                                     "    - player_flight: {size: 2}\n"
+                                     "name: X\n");
+    REQUIRE(r.present);
+    CHECK(r.role == "intercept");
+    REQUIRE(r.fills.size() == 2);
+    CHECK(r.fills[0].name == "target_area");
+    CHECK(r.fills[0].from == "frontline");
+    CHECK(r.fills[1].name == "player_flight");
+    CHECK(r.fills[1].from.empty()); // a literal-parameter fill
+
+    auto none = fl::parseTemplateHeader("name: plain mission\n");
+    CHECK_FALSE(none.present);
+}
+
+TEST_CASE("parseCampaign: dangling next.id and unreachable story") {
+    auto r = fl::parseCampaign("name: C\nsides: [a, b]\npilot:\n  side: a\n"
+                               "story:\n"
+                               "  - id: s1\n    file: m.yaml\n    trigger: campaign_start\n"
+                               "    on_complete:\n      next:\n        id: ghost\n");
+    CHECK_FALSE(r.ok); // dangling next.id is an error
 }

@@ -163,6 +163,17 @@ std::shared_ptr<GameModeData> AssetManager::loadGameMode(const char* name) {
     return loadAsset<GameModeData>(AssetType::GameMode, name, &IContentPack::loadGameMode);
 }
 
+std::shared_ptr<TheaterDefData> AssetManager::loadTheater(const char* name) {
+    return loadAsset<TheaterDefData>(AssetType::Theater, name, &IContentPack::loadTheater);
+}
+
+std::optional<std::vector<uint8_t>> AssetManager::loadPackFile(const char* relPath) {
+    for (auto& pack : m_packs)
+        if (auto bytes = pack->loadPackFile(relPath))
+            return bytes;
+    return std::nullopt;
+}
+
 std::optional<LiveryDef> AssetManager::liveryForAircraft(const char* aircraftDefId) {
     if (!aircraftDefId || !*aircraftDefId)
         return std::nullopt;

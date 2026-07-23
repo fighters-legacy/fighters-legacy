@@ -99,6 +99,43 @@ std::optional<GameModeData> FolderContentPack::loadGameMode(const char* name) {
     return loadBytes<GameModeData>(name, AssetType::GameMode);
 }
 
+std::optional<TheaterDefData> FolderContentPack::loadTheater(const char* name) {
+    return loadBytes<TheaterDefData>(name, AssetType::Theater);
+}
+
+std::optional<std::vector<uint8_t>> FolderContentPack::loadPackFile(const char* relPath) const {
+    if (!relPath || !*relPath)
+        return std::nullopt;
+    // Sanitize: a pack-relative path only. Reject absolute paths, drive letters, backslashes, and any
+    // parent-directory component so a manifest/campaign cannot read outside its pack.
+    std::string_view p(relPath);
+    if (p.front() == '/' || p.find('\\') != std::string_view::npos)
+        return std::nullopt;
+    if (p.size() >= 2 && p[1] == ':') // Windows drive letter
+        return std::nullopt;
+    for (size_t i = 0; i < p.size();) {
+        size_t slash = p.find('/', i);
+        std::string_view seg = p.substr(i, slash == std::string_view::npos ? std::string_view::npos : slash - i);
+        if (seg == "..")
+            return std::nullopt;
+        if (slash == std::string_view::npos)
+            break;
+        i = slash + 1;
+    }
+    std::string path = m_modDir + "/" + std::string(p);
+    if (!m_fs.fileExists(PathDomain::Assets, path.c_str()))
+        return std::nullopt;
+    int handle = m_fs.openFile(PathDomain::Assets, path.c_str(), false);
+    if (handle < 0)
+        return std::nullopt;
+    std::size_t size = m_fs.getFileSize(handle);
+    std::vector<uint8_t> bytes(size);
+    if (size > 0)
+        m_fs.readFile(handle, bytes.data(), size);
+    m_fs.closeFile(handle);
+    return bytes;
+}
+
 std::optional<std::string> FolderContentPack::loadConfig(const char* name) const {
     std::string path = m_modDir + "/data/" + name;
     if (!m_fs.fileExists(PathDomain::Assets, path.c_str()))
