@@ -23,14 +23,14 @@ void CameraController::setPose(glm::dvec3 eye, glm::vec3 forward, glm::vec3 up) 
     m_up = up;
 }
 
-CameraView CameraController::view(float aspectRatio, float fovY, float near) const {
+CameraView makeCameraView(const glm::dvec3& eye, glm::vec3 forward, glm::vec3 up, float aspectRatio, float fovY,
+                          float near) {
     CameraView cv;
 
     // Camera-relative rendering: worldOrigin is subtracted from world positions before upload, so
     // the view matrix is built from the local origin looking along the pose's forward/up.
-    cv.worldOrigin = m_eye;
-    glm::vec3 fwd = m_forward;
-    glm::vec3 up = m_up;
+    cv.worldOrigin = eye;
+    glm::vec3 fwd = forward;
     if (glm::dot(fwd, fwd) < 1e-12f) // degenerate forward: fall back to -Z
         fwd = glm::vec3{0.0f, 0.0f, -1.0f};
     // Guard against forward ~parallel to up (otherwise lookAt produces NaNs).
@@ -47,6 +47,10 @@ CameraView CameraController::view(float aspectRatio, float fovY, float near) con
     cv.proj[3][2] = near;
 
     return cv;
+}
+
+CameraView CameraController::view(float aspectRatio, float fovY, float near) const {
+    return makeCameraView(m_eye, m_forward, m_up, aspectRatio, fovY, near);
 }
 
 } // namespace fl

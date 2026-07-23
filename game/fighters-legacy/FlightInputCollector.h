@@ -56,6 +56,17 @@ class FlightInputCollector {
         return m_selectedStation;
     }
 
+    // Master arm (#641): ARM/SAFE, toggled by V. When SAFE, poll() suppresses the gun and fire-store
+    // trigger bits — the safety is real, not a cosmetic HUD flag. Defaults to ARM.
+    [[nodiscard]] bool masterArm() const noexcept {
+        return m_masterArm;
+    }
+
+    // The radar mode last requested (#526/#528), for the MFD annunciation (#642). 255 = keep-server.
+    [[nodiscard]] uint8_t radarMode() const noexcept {
+        return m_radarMode;
+    }
+
     void setClock(const IClock& clock);
 
     // Apply a loaded InputBindings table so gamepad axis mapping is user-configurable.
@@ -80,6 +91,8 @@ class FlightInputCollector {
     // Electronic warfare (#529): E dispenses (level bit, server edge-detects), J toggles the jammer.
     bool m_ecmOn{false};
     bool m_prevEcmKey{false};
+    bool m_masterArm{true}; // #641: ARM by default; V toggles to SAFE (gates the fire bits)
+    bool m_prevArmKey{false};
     bool m_prevPadNext{false}; // and for the gamepad D-pad
     bool m_prevPadPrev{false};
     const IClock* m_clock{&SystemClock::instance()};

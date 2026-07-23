@@ -97,7 +97,8 @@ struct TonemapPush {
     uint32_t enableFxaa{0};    // 1 = apply FXAA on tonemapped output
     float bloomStrength{0.0f}; // bloom blend multiplier (0 = disabled)
     float aoStrength{0.0f};    // GTAO darkening strength (0 = AO disabled)
-    float _pad[3]{};           // 16-byte alignment → 32 bytes
+    float nvgIntensity{0.0f};  // night-vision green tint/gain (#210); 0 = off (consumes a pad slot)
+    float _pad[2]{};           // 16-byte alignment → 32 bytes
 };
 static_assert(sizeof(TonemapPush) == 32);
 static_assert(sizeof(TonemapPush) <= 128);
@@ -182,6 +183,9 @@ class VkRenderer : public IRenderer {
     void setConsoleElements(std::span<const HudElement> elements) override;
     bool captureScreenshot(const char* path) override;
     bool setCaptureSink(std::function<void(const CaptureFrame&)> sink) override;
+    void setNightVision(float intensity) override {
+        m_nvgIntensity = intensity < 0.0f ? 0.0f : (intensity > 1.0f ? 1.0f : intensity); // #210
+    }
 
     // ── Dear ImGui backend bridge (#156) ──────────────────────────────────────
     bool initGuiRenderBackend() override;
@@ -272,6 +276,12 @@ class VkRenderer : public IRenderer {
     bool createSyncObjects();
 
     void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex);
+
+    // Replay the opaque RenderItem draw loop (shadow-only items skipped) with the forward pipeline
+    // already bound. `set0` is the per-frame set 0 (main camera, or the inset camera for the #695
+    // secondary-viewport pass). Shared by the main forward-opaque pass and the inset pass so the
+    // per-item bind/push/draw logic exists once.
+    void drawOpaqueItems(VkCommandBuffer cmd, VkDescriptorSet set0);
 
     // ── Overlay pipeline ──────────────────────────────────────────────────
     bool createOverlayPipeline();
@@ -394,6 +404,14 @@ class VkRenderer : public IRenderer {
         VkDeviceMemory cameraMemory{VK_NULL_HANDLE};
         void* cameraMapped{nullptr};
 
+        // Secondary-camera inset (#695): a second CameraUBO + set-0 descriptor bound to the SAME
+        // per-frame layout as descriptorSet. Only binding 0 (camera) differs — light/shadow UBOs and
+        // the shadow map are shared with the main set. Written + drawn only when scene.insetEnabled.
+        VkBuffer insetCameraBuffer{VK_NULL_HANDLE};
+        VkDeviceMemory insetCameraMemory{VK_NULL_HANDLE};
+        void* insetCameraMapped{nullptr};
+        VkDescriptorSet insetDescriptorSet{VK_NULL_HANDLE};
+
         VkBuffer lightBuffer{VK_NULL_HANDLE};
         VkDeviceMemory lightMemory{VK_NULL_HANDLE};
         void* lightMapped{nullptr};
@@ -415,6 +433,7 @@ class VkRenderer : public IRenderer {
 
     // ── Settings ──────────────────────────────────────────────────────────
     RendererSettings m_settings{};
+    float m_nvgIntensity{0.0f}; // #210 night-vision goggles gain (0 = off); set via setNightVision()
 
     // Runtime shadow / particle parameters (derived from m_settings at init and on applySettings).
     uint32_t m_shadowRes{kShadowRes};

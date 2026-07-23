@@ -18,6 +18,7 @@ layout(push_constant) uniform TonemapPush {
     uint  enableFxaa;   // 1 = apply FXAA
     float bloomStrength; // 0 = no bloom
     float aoStrength;    // 0 = AO disabled
+    float nvgIntensity;  // 0 = off; night-vision green tint/gain (#210)
 } push;
 
 // ---------------------------------------------------------------------------
@@ -55,6 +56,14 @@ vec3 sampleAndTonemap(vec2 uv) {
     }
     if (push.bloomStrength > 0.0)
         hdr += texture(bloomBuffer, uv).rgb * push.bloomStrength;
+    // Night-vision goggles (#210): a photocathode-style green channel. Amplify scene luminance through a
+    // soft knee and paint it P43 phosphor green, so dim starlit terrain reads and bright sources bloom.
+    // Runs before the PBR-neutral tonemapper is skipped; bloom above becomes the NVG halo for free.
+    if (push.nvgIntensity > 0.0) {
+        float lum = dot(hdr, vec3(0.2126, 0.7152, 0.0722));
+        float amp = 1.0 - exp(-lum * 40.0 * push.nvgIntensity);
+        return vec3(0.10, 1.0, 0.15) * amp;
+    }
     return khronosPbrNeutral(hdr);
 }
 

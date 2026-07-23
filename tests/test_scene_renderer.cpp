@@ -247,6 +247,8 @@ TEST_CASE("SceneRenderer with no snapshot submits empty scene once") {
 
     CHECK(renderer.setSceneCount == 1);
     CHECK(renderer.lastScene.renderItems.empty());
+    // Secondary-camera inset (#695) is off by default: the disabled path must be bit-identical to today.
+    CHECK_FALSE(renderer.lastScene.insetEnabled);
 }
 
 // ---------------------------------------------------------------------------

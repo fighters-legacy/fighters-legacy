@@ -10,6 +10,7 @@
 #include "net/GameProtocol.h"      // PeerRole, PackManifestEntry (connect handshake #853)
 #include "render/RadarView.h"      // RadarView / RadarTrack / RwrStrobe (datalink picture #528)
 #include "render/RenderSnapshot.h" // EntityRenderEntry (stored by value in the retention cache)
+#include "world/FactionDef.h"      // areFactionsHostile — client friend/foe fallback (#688)
 
 #include <algorithm>
 #include <atomic>
@@ -95,6 +96,40 @@ struct ClientNetEventHandler : INetworkEventHandler {
     std::string factionName(uint16_t factionIndex) const {
         const auto it = m_factionNames.find(factionIndex);
         return it != m_factionNames.end() ? it->second : std::string{};
+    }
+
+    // ── client-side IFF (#688) ──────────────────────────────────────────────
+    // This client's own faction index. The server never sends it as a dedicated field, so derive it:
+    // prefer the assigned aircraft's cached faction (gen-checked), fall back to the self roster entry,
+    // and return 0 (neutral) until either is known. Faction 0 has no friends and no foes.
+    [[nodiscard]] uint16_t ownFactionIndex() const noexcept {
+        if (assignedEntityGen != 0) {
+            const auto it = m_knownEntities.find(assignedEntityIdx);
+            if (it != m_knownEntities.end() && it->second.gen == static_cast<uint16_t>(assignedEntityGen))
+                return it->second.factionIndex;
+        }
+        const auto rit = m_roster.find(m_selfPeerId);
+        if (rit != m_roster.end())
+            return rit->second.factionIndex;
+        return 0;
+    }
+
+    // Client-side friend/foe for an ARBITRARY snapshot entity (not just datalink contacts), returning a
+    // kIff* ordinal (RadarView.h). The client has no faction relationship matrix — it is Lua-mutable at
+    // runtime and never crosses the wire — so this is a three-step fallback, honest about what it knows:
+    //   1. same non-zero faction as ownship            -> Friend
+    //   2. the entity is on a live datalink track       -> the server-computed track ident (authoritative)
+    //   3. else the affiliation rule (areFactionsHostile) -> Foe / Unknown
+    // Step 2 is what lets an identified contact read Friend/Foe correctly even across a coalition the
+    // affiliation rule would miscall; step 3 only orders unsensed entities for the target-cycle list.
+    [[nodiscard]] uint8_t identForEntity(uint32_t entityIdx, uint32_t entityGen, uint16_t factionIndex) const noexcept {
+        const uint16_t own = ownFactionIndex();
+        if (own != 0 && factionIndex != 0 && factionIndex == own)
+            return kIffFriend;
+        const auto it = m_trackIdentByEntity.find(entityIdx);
+        if (it != m_trackIdentByEntity.end() && it->second.gen == static_cast<uint16_t>(entityGen))
+            return it->second.ident;
+        return areFactionsHostile(own, factionIndex) ? kIffFoe : kIffUnknown;
     }
 
     // ── match roster (#996) ─────────────────────────────────────────────────
@@ -453,6 +488,14 @@ struct ClientNetEventHandler : INetworkEventHandler {
     std::vector<RadarTrack> m_radarTracks;
     std::vector<RwrStrobe> m_rwrStrobes;
     bool m_haveDatalink{false};
+
+    // entityIdx -> {gen, ident} for the current datalink tracks (#688). Rebuilt with each MsgDatalink
+    // so identForEntity() can return the server-computed IFF for an entity that is on a live track.
+    struct TrackIdent {
+        uint16_t gen;
+        uint8_t ident;
+    };
+    std::unordered_map<uint32_t, TrackIdent> m_trackIdentByEntity;
 
     // Crew roster + live turret pose (#972). m_crewRosters is the reliable per-entity seat roster from
     // MsgCrewRoster (keyed by entity index); m_crewTurretPoses is the per-tick mount-frame turret pose

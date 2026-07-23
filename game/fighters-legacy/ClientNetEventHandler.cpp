@@ -913,6 +913,12 @@ void ClientNetEventHandler::handleDatalink(const void* data, std::size_t size) {
     m_radarTracks = std::move(tracks);
     m_rwrStrobes = std::move(strobes);
     m_haveDatalink = true;
+
+    // Rebuild the entityIdx -> {gen, ident} lookup so identForEntity() (#688) can answer friend/foe for
+    // an arbitrary snapshot entity that happens to be on a live track.
+    m_trackIdentByEntity.clear();
+    for (const RadarTrack& t : m_radarTracks)
+        m_trackIdentByEntity[t.entityIdx] = TrackIdent{t.entityGen, t.ident};
 }
 
 void ClientNetEventHandler::sendHeartbeatIfNeeded() {

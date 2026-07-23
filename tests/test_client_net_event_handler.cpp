@@ -43,9 +43,10 @@ struct TestRec {
     uint32_t idx{0};
     uint32_t gen{0};
     uint32_t typeIndex{0};
-    bool isFull{false};   // full record: carries typeIndex + gen
-    bool sendGen{false};  // force the genPresent bit on a delta (e.g. to test the stale-gen guard)
-    bool hasOmega{false}; // own-entity omega
+    uint16_t factionIndex{0}; // carried on full records (#860); cached into m_knownEntities
+    bool isFull{false};       // full record: carries typeIndex + gen
+    bool sendGen{false};      // force the genPresent bit on a delta (e.g. to test the stale-gen guard)
+    bool hasOmega{false};     // own-entity omega
     double pos[3]{};
     float vel[3]{};
     float quat[4]{0.f, 0.f, 0.f, 1.f};
@@ -69,6 +70,7 @@ inline std::vector<uint8_t> buildSnapshotPkt(uint64_t tick, const std::vector<Te
         qe.idx = rrec.idx;
         qe.gen = rrec.gen;
         qe.typeIndex = rrec.typeIndex;
+        qe.factionIndex = rrec.factionIndex;
         qe.isFull = rrec.isFull;
         qe.hasOmega = rrec.hasOmega;
         for (int i = 0; i < 3; ++i) {
@@ -418,6 +420,107 @@ TEST_CASE("ClientNetEventHandler: MsgConnectAck captures own peer id (#996)", "[
     handler.onReceive(0u, &ack, sizeof(ack));
     CHECK(handler.selfPeerId() == 7u);
     CHECK(handler.gotConnectAck());
+}
+
+namespace {
+// Build a MsgDatalink packet from a list of tracks (no threats needed for the ident tests).
+std::vector<uint8_t> buildDatalinkPkt(const std::vector<fl::DatalinkTrack>& tracks,
+                                      std::array<double, 3> origin = {0.0, 0.0, 0.0}) {
+    fl::MsgDatalinkHeader hdr{};
+    hdr.trackCount = static_cast<uint16_t>(tracks.size());
+    hdr.origin[0] = origin[0];
+    hdr.origin[1] = origin[1];
+    hdr.origin[2] = origin[2];
+    std::vector<uint8_t> pkt;
+    fl::appendMsg(pkt, hdr);
+    for (const auto& t : tracks)
+        fl::appendMsg(pkt, t);
+    return pkt;
+}
+} // namespace
+
+TEST_CASE("ClientNetEventHandler: ownFactionIndex prefers the assigned entity, falls back to roster (#688)",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    // Before any ack: neutral.
+    CHECK(handler.ownFactionIndex() == 0u);
+
+    // ConnectAck assigns entity {idx=5, gen=2} and self peer id 7.
+    fl::MsgConnectAck ack{};
+    ack.typeCount = 0;
+    ack.assignedEntityIdx = 5;
+    ack.assignedEntityGen = 2;
+    ack.peerId = 7;
+    handler.onReceive(0u, &ack, sizeof(ack));
+
+    // Roster says self (peer 7) is faction 9. With no cached entity yet, ownFaction reads the roster.
+    fl::MsgPlayerRosterHeader rhdr{};
+    rhdr.count = 1;
+    fl::PlayerRosterEntry me{};
+    me.participantId = 7;
+    me.factionIndex = 9;
+    std::snprintf(me.callsign, sizeof(me.callsign), "%s", "Me");
+    std::vector<uint8_t> rpkt;
+    fl::appendMsg(rpkt, rhdr);
+    fl::appendMsg(rpkt, me);
+    handler.onReceive(0u, rpkt.data(), rpkt.size());
+    CHECK(handler.ownFactionIndex() == 9u);
+
+    // A full snapshot record for the assigned entity carries faction 3 — the entity path now wins.
+    auto spkt = buildSnapshotPkt(1u, {TestRec{/*idx=*/5, /*gen=*/2, /*typeIndex=*/0, /*factionIndex=*/3,
+                                              /*isFull=*/true}});
+    handler.onReceive(0u, spkt.data(), spkt.size());
+    CHECK(handler.ownFactionIndex() == 3u);
+}
+
+TEST_CASE("ClientNetEventHandler: identForEntity precedence - faction, then track, then affiliation (#688)",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    // Ownship is faction 1 (via roster; peer id 7).
+    fl::MsgConnectAck ack{};
+    ack.peerId = 7;
+    handler.onReceive(0u, &ack, sizeof(ack));
+    fl::MsgPlayerRosterHeader rhdr{};
+    rhdr.count = 1;
+    fl::PlayerRosterEntry me{};
+    me.participantId = 7;
+    me.factionIndex = 1;
+    std::vector<uint8_t> rpkt;
+    fl::appendMsg(rpkt, rhdr);
+    fl::appendMsg(rpkt, me);
+    handler.onReceive(0u, rpkt.data(), rpkt.size());
+
+    // 1. Same faction as ownship -> Friend, regardless of any track.
+    CHECK(handler.identForEntity(/*idx=*/10, /*gen=*/1, /*faction=*/1) == kIffFriend);
+
+    // 2. A datalink track supplies the server-computed ident: entity 20 (faction 2) is flagged Friend
+    //    by the server (e.g. a coalition ally) — the track wins over the affiliation rule.
+    fl::DatalinkTrack tr{};
+    tr.targetIdx = 20;
+    tr.targetGen = 4;
+    tr.factionIndex = 2;
+    tr.ident = kIffFriend;
+    auto dpkt = buildDatalinkPkt({tr});
+    handler.onReceive(0u, dpkt.data(), dpkt.size());
+    CHECK(handler.identForEntity(20, 4, 2) == kIffFriend);
+    // A stale generation on the track match falls through to the affiliation rule (faction 2 != own 1).
+    CHECK(handler.identForEntity(20, 99, 2) == kIffFoe);
+
+    // 3. No track, different non-zero faction -> Foe; faction 0 -> Unknown.
+    CHECK(handler.identForEntity(30, 1, 2) == kIffFoe);
+    CHECK(handler.identForEntity(31, 1, 0) == kIffUnknown);
 }
 
 TEST_CASE("ClientNetEventHandler: MsgMotd single-line text shown in notice", "[client_net_event_handler]") {

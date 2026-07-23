@@ -19,13 +19,44 @@ The game opens to the main menu. Select **Sandbox (Instant Action)** to start a 
 
 ## Camera modes
 
-| Key | Action |
-|---|---|
-| F1 | Cockpit — camera locked to player entity |
-| F2 | Chase — orbit behind player entity |
-| F4 | Free (default) — freely movable pivot camera |
-| F3 | Cycle performance overlay (Off → Compact → Full) |
-| `` ` `` | Toggle game console |
+The camera-mode keys are now rebindable `InputAction`s (`CameraCockpit`/`CameraChase`/`CameraFree`, #689) resolved through `config/bindings.toml`, and work from a gamepad; the defaults below preserve the old behaviour. The console toggle (`` ` ``) and the performance overlay (F3) stay raw — they are not bound actions.
+
+| Key | Action | Binding |
+|---|---|---|
+| F1 | Cockpit — camera locked to player entity | `CameraCockpit` |
+| F2 | Chase — orbit behind player entity | `CameraChase` |
+| F4 | Free (default) — freely movable pivot camera | `CameraFree` |
+| F5 | Padlock — slew to keep the designated target centered; auto-picks best-in-cone if nothing is designated, breaks lock with a `PADLOCK — BREAK` cue when terrain or the airframe masks the target, and reverts to Cockpit after a 4 s reacquire window (#697) | `PadlockToggle` (gamepad: RightStick click) |
+| F6 | Toggle the target-slaved inset view (#698) | `TargetInsetToggle` |
+| F7 | Toggle night-vision goggles — a green photocathode gain applied at the tonemap stage; brightens dim night scenes (#210) | `NvgToggle` |
+| N / P | Cycle to the next / previous target (#696) | `NextTarget` / `PrevTarget` (gamepad: DpadUp = next) |
+| PageUp / PageDown / ← / → | Pan the cockpit view (keyboard alternative to RMB drag; Cockpit/Padlock only) | `ViewUp` / `ViewDown` / `ViewLeft` / `ViewRight` |
+| F3 | Cycle performance overlay (Off → Compact → Full) | raw |
+| `` ` `` | Toggle game console | raw |
+
+> Note (#689): the default `ViewLeft`/`ViewRight` keys (← / →) also drive the legacy raw aileron in `FlightInputCollector`, so in Cockpit view an arrow both rolls the aircraft and pans the view. RMB drag is the primary look control; rebind `ViewLeft`/`ViewRight` in `config/bindings.toml` if the double duty is unwanted.
+
+### Autopilot (#640)
+
+Client-side hold modes, shaped over your input before it is sent (the server stays authoritative). Toggle in Cockpit/Padlock view with no menu or console open; any stick input past a small threshold disengages the attitude holds, and moving the throttle disengages speed hold. The engaged holds and their captured targets are annunciated on the HUD (`AP ALT… HDG… SPD…`).
+
+| Key | Action | Binding |
+|---|---|---|
+| F9 | Altitude hold (captures current altitude) | `AutopilotAltHold` |
+| F10 | Heading hold (captures current heading) | `AutopilotHdgHold` |
+| F11 | Speed hold (captures current airspeed) | `AutopilotSpdHold` |
+
+### Combat HUD (#641)
+
+The combat symbology renders in Cockpit/Padlock view against the designated target (#696): an IFF-coloured designator box with range + closure, a gun pipper with ballistic lead when a gun station is selected, a CCIP impact cross + fall line for bombs, and a lower-right weapon-status block. **V** toggles master arm — SAFE really suppresses the fire triggers (not just a HUD label).
+
+| Key | Action | Binding |
+|---|---|---|
+| V | Master arm (ARM / SAFE) | `MasterArm` |
+| O | Cycle radar MFD page (Off → PPI → B-scope → RWR) | `MfdPage` |
+| 3 | Cycle radar MFD range (10 / 20 / 40 / 80 nm) | `MfdRange` |
+
+The MFD (lower-left) presents the fused datalink picture (#528): the PPI is a 360° plan view (ownship centred, nose up), the B-scope plots azimuth (±60°) vs range, and the RWR page is a dedicated threat-warning ring. All are IFF-coloured (friend green / foe red / unknown amber) and annunciate the requested radar mode (SIL/SRCH/TWS/STT, cycled with **R**). An RWR `RWR LAUNCH` / `RWR LOCK` caption shows on **every** page, including Off.
 
 ### Free camera (F4)
 

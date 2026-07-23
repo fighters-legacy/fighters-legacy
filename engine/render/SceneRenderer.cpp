@@ -89,6 +89,13 @@ void SceneRenderer::setHiddenEntity(uint32_t entityIdx, uint32_t entityGen) noex
     m_hiddenEntityGen = entityGen;
 }
 
+void SceneRenderer::setInsetView(const CameraView* view, glm::vec4 rect) noexcept {
+    m_insetEnabled = (view != nullptr);
+    if (view)
+        m_insetCamera = *view;
+    m_insetRect = rect;
+}
+
 void SceneRenderer::setCockpitMesh(const std::string& meshName) {
     m_cockpitMesh = meshName;
 }
@@ -396,6 +403,15 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
     scene.environment = env;
     scene.particleEmitters = emitters;
     scene.subtitles = m_subtitleEntries;
+    if (m_insetEnabled) {
+        scene.insetEnabled = true;
+        scene.insetCamera = m_insetCamera;
+        scene.insetCamera.planetCenter = planetCenterWorld; // same planet frame as the main camera
+        scene.insetRect[0] = m_insetRect.x;
+        scene.insetRect[1] = m_insetRect.y;
+        scene.insetRect[2] = m_insetRect.z;
+        scene.insetRect[3] = m_insetRect.w;
+    }
     m_renderer.setScene(scene);
 }
 

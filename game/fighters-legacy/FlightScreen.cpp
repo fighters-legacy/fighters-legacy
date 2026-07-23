@@ -12,17 +12,24 @@
 #include "IInput.h"
 #include "INetwork.h"
 #include "IWindow.h"
+#include "InsetViewMath.h" // target-slaved inset camera math (#698)
 #include "ManualOverlay.h"
+#include "TargetDesignation.h" // designated-target cycling (#696)
 #include "config/ControlsSettings.h"
 #include "config/UserConfig.h"
 #include "console/GameConsole.h"
 #include "entity/EntityDef.h"          // EntityDef::name/id for the observer picker label (#860)
 #include "entity/EntityTypeRegistry.h" // byIndex
+#include "flight/FlightIntegrator.h"   // FlightState (autopilot input, #640)
 #include "flight/Geodetic.h"           // kEarthRadiusM
 #include "flight/LocalFrame.h"         // bankOf on the local-level frame
+#include "input/BindingQuery.h"        // bindingJustPressed (autopilot toggles, #640)
+#include "input/InputBindings.h"
 #include "render/CameraController.h"
 #include "render/FlightHud.h"
+#include "render/HudProjection.h" // designator box projection (#696)
 #include "render/IHud.h"
+#include "render/SceneRenderer.h" // setInsetView (#698)
 #include "render/SimRenderBridge.h"
 #include "render/TerrainStreamer.h"
 #include "render/WindshieldRain.h"
@@ -71,7 +78,7 @@ FlightScreen::~FlightScreen() {
         m_deps.clientNetHandler->snapshotCallback = nullptr;
 }
 
-Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
+Screen FlightScreen::update(IInput& input, IWindow& window) {
     auto& d = m_deps;
 
     uint32_t idx = d.assignedEntityIdx ? *d.assignedEntityIdx : 0;
@@ -123,8 +130,15 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
             d.cameraController->setMode(fl::CameraMode::Free);
     }
 
+    // Head tracking (#927): drain the opentrack UDP stream and feed the smoothed pose to the cockpit
+    // look before the camera pose is computed.
+    if (d.headTracker && d.userConfig) {
+        d.headTracker->poll(1.0f / 60.0f, d.userConfig->headTracking());
+        d.camInput->setHeadPose(&d.headTracker->pose());
+    }
+
     d.camInput->pollModeKeys(*d.cameraController, *d.gameConsole, input, viewEntry);
-    d.camInput->update(*d.cameraController, viewEntry, *d.gameConsole, *d.terrainStreamer);
+    d.camInput->update(*d.cameraController, viewEntry, *d.gameConsole, *d.terrainStreamer, input);
 
     // Radio menu (#610). Non-modal: the aircraft keeps flying while it is open (see WingmanMenu.h),
     // so only the discrete keys it consumes are suppressed, via FlightInputCollector's uiFocused.
@@ -247,8 +261,123 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
     const ControlsSettings cs = d.userConfig->controls();
     const bool uiFocused =
         (d.wingmanMenu && d.wingmanMenu->isOpen()) || (d.commsMenu && d.commsMenu->isOpen()) || chatOpen;
+
+    // Planet radius (m) from the server's MsgConnectAck; drives the autopilot's local-level altitude/
+    // heading as well as the HUD attitude/horizon below. Earth default until the ack arrives.
+    const double radiusM =
+        d.clientNetHandler ? static_cast<double>(d.clientNetHandler->planetRadiusKm()) * 1000.0 : fl::kEarthRadiusM;
+
+    // Player autopilot (#640): edge-detect the hold toggles (Cockpit/Padlock, no overlay/console
+    // focus) and disengage everything when there is no predicted ownship state (observer / dead peer).
+    const fl::FlightState* fs = d.prediction ? d.prediction->predictedState() : nullptr;
+    if (fs && d.inputBindings && !uiFocused && !d.gameConsole->isOpen()) {
+        if (bindingJustPressed(input, d.inputBindings->get(fl::InputAction::AutopilotAltHold)))
+            m_autopilot.toggleAltHold(*fs, radiusM);
+        if (bindingJustPressed(input, d.inputBindings->get(fl::InputAction::AutopilotHdgHold)))
+            m_autopilot.toggleHdgHold(*fs, radiusM);
+        if (bindingJustPressed(input, d.inputBindings->get(fl::InputAction::AutopilotSpdHold)))
+            m_autopilot.toggleSpdHold(*fs);
+    } else if (!fs) {
+        m_autopilot.disengageAll();
+    }
+
+    // Target designation cycling (#696): Cockpit/Padlock, no overlay/console focus. Build the candidate
+    // context from the snapshot + the client's category/IFF seams (#688) and cycle on the action edge.
+    const bool designateAllowed = d.targetDesignation && d.inputBindings && !uiFocused && !d.gameConsole->isOpen();
+    if (designateAllowed && viewEntry && d.renderBridge->hasSnapshot()) {
+        // Shared candidate context: category via the type registry, IFF via the #688 client helper.
+        auto makeCtx = [&]() {
+            fl::DesignationContext dctx;
+            dctx.snap = &d.renderBridge->current();
+            dctx.ownIdx = viewEntry->entityIdx;
+            dctx.ownGen = viewEntry->entityGen;
+            dctx.ownPos = viewEntry->position;
+            dctx.ownForward = viewEntry->orientation * glm::vec3{1.f, 0.f, 0.f};
+            if (d.entityRegistry) {
+                fl::EntityTypeRegistry* reg = d.entityRegistry;
+                dctx.categoryOf = [reg](uint32_t ti) -> uint8_t {
+                    const fl::EntityDef* def = reg->byIndex(ti);
+                    return def ? static_cast<uint8_t>(def->category) : 0u;
+                };
+            }
+            if (d.clientNetHandler) {
+                fl::ClientNetEventHandler* h = d.clientNetHandler;
+                dctx.identOf = [h](const fl::EntityRenderEntry& e) -> uint8_t {
+                    return h->identForEntity(e.entityIdx, e.entityGen, e.factionIndex);
+                };
+            }
+            return dctx;
+        };
+
+        const bool next = bindingJustPressed(input, d.inputBindings->get(fl::InputAction::NextTarget));
+        const bool prev = bindingJustPressed(input, d.inputBindings->get(fl::InputAction::PrevTarget));
+        if (next || prev)
+            d.targetDesignation->cycle(next ? +1 : -1, makeCtx());
+
+        // Padlock toggle (#697): F5 enters padlock (auto-designating best-in-cone when nothing is
+        // designated) and exits back to Cockpit; the tracker is seeded from the current view so it
+        // never pops. All the slew/lock math lives in CameraInput's Padlock case.
+        if (bindingJustPressed(input, d.inputBindings->get(fl::InputAction::PadlockToggle))) {
+            if (d.cameraController->mode() == fl::CameraMode::Padlock) {
+                d.cameraController->setMode(fl::CameraMode::Cockpit);
+            } else {
+                constexpr float kDesignateHalfAngleRad = 0.2618f; // 15 deg
+                if (!d.targetDesignation->resolve(d.renderBridge->current()))
+                    d.targetDesignation->designateBest(makeCtx(), kDesignateHalfAngleRad);
+                if (d.targetDesignation->designated() && d.camInput) {
+                    d.camInput->enterPadlock();
+                    d.cameraController->setMode(fl::CameraMode::Padlock);
+                }
+            }
+        }
+
+        // Target-slaved inset toggle (#698).
+        if (bindingJustPressed(input, d.inputBindings->get(fl::InputAction::TargetInsetToggle)))
+            m_insetOn = !m_insetOn;
+
+        // Radar MFD page / range cycling (#642).
+        if (bindingJustPressed(input, d.inputBindings->get(fl::InputAction::MfdPage)))
+            m_mfd.cyclePage();
+        if (bindingJustPressed(input, d.inputBindings->get(fl::InputAction::MfdRange)))
+            m_mfd.cycleRange();
+
+        // Night-vision goggles toggle (#210).
+        if (bindingJustPressed(input, d.inputBindings->get(fl::InputAction::NvgToggle)))
+            m_nvgOn = !m_nvgOn;
+    }
+
+    // Feed the padlock view its target each frame (resolve auto-clears on despawn/death). Stored for
+    // the HUD box + PADLOCK cue below; also drives CameraInput's Padlock slew next frame.
+    m_designatedTarget = (d.targetDesignation && d.renderBridge->hasSnapshot())
+                             ? d.targetDesignation->resolve(d.renderBridge->current())
+                             : nullptr;
+    if (d.camInput)
+        d.camInput->setPadlockTarget(m_designatedTarget);
+
     if (auto msg = d.flightInput->poll(*d.renderBridge, *d.camInput, *d.gameConsole, input, d.joystick, cs, uiFocused,
                                        /*textEntry=*/chatOpen)) {
+        // Shape the input with the autopilot BEFORE prediction+send, so the client predicts exactly what
+        // the server receives. A player stick/throttle input past threshold disengages the relevant holds.
+        if (fs && m_autopilot.modes() != 0) {
+            const float rawThrottle = msg->throttle;
+            const bool throttleTouched = std::abs(rawThrottle - m_lastRawThrottle) > 0.02f;
+            m_autopilot.notePlayerInput(msg->elevator, msg->aileron, msg->rudder, throttleTouched);
+            const fl::AutopilotCommand ap = m_autopilot.compute(*fs, 1.0f / 60.0f, radiusM);
+            if (ap.hasPitch)
+                msg->elevator = ap.elevator;
+            if (ap.hasRoll) {
+                msg->aileron = ap.aileron;
+                msg->rudder = ap.rudder;
+            }
+            if (ap.hasThrottle) {
+                msg->throttle = ap.throttle;
+                d.camInput->setThrottle(ap.throttle); // keep the persistent throttle in sync (no snap-back)
+            }
+            m_lastRawThrottle = msg->throttle;
+        } else {
+            m_lastRawThrottle = msg->throttle;
+        }
+
         // Stamp the snapshot ack (tickIndex + selective-ack mask, #566) from the net handler — the single
         // ack authority — before prediction and send, so the outgoing input carries a consistent ack.
         if (d.clientNetHandler)
@@ -264,7 +393,9 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
     // Terrain elevation above the datum along the radial through the entity (heightAt(dvec3));
     // the HUD/haptics derive radial AGL from it against the geodetic altitude (#477).
     const float terrainElev = viewEntry ? static_cast<float>(d.terrainStreamer->heightAt(viewEntry->position)) : 0.f;
-    const bool cockpit = (d.cameraController->mode() == fl::CameraMode::Cockpit);
+    // Padlock (#697) is a cockpit-eye view: the HUD shows and the ownship is hidden, exactly like Cockpit.
+    const fl::CameraMode camMode = d.cameraController->mode();
+    const bool cockpit = (camMode == fl::CameraMode::Cockpit || camMode == fl::CameraMode::Padlock);
 
     // Observer picker label (#860): name + faction of the entity being viewed, shown top-centre. Built
     // here where the registry (type name) and the net handler (faction name) are both reachable.
@@ -288,10 +419,7 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
     const bool showLat = d.userConfig->hud().showLatency && d.clientNetHandler &&
                          d.clientNetHandler->hasSnapshotLatency() && latencyMs >= kMinLatencyDisplayMs;
 
-    // Planet radius (m) from the server's MsgConnectAck; drives the local-level HUD attitude/horizon
-    // and windshield lean. Earth default until the ack arrives.
-    const double radiusM =
-        d.clientNetHandler ? static_cast<double>(d.clientNetHandler->planetRadiusKm()) * 1000.0 : fl::kEarthRadiusM;
+    // radiusM (planet radius, from MsgConnectAck) was computed above the poll block for the autopilot.
 
     // Ground-crew scene + landing detection (#55), own aircraft only. The airborne→landed edge
     // scores the touchdown from last frame's sink rate into the logbook (PilotLogbook::recordLanding
@@ -338,8 +466,60 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
     // Datalink track picture + RWR (#528) for the HUD radar scope — only when this peer flies its own
     // aircraft (a spectator following another entity has no datalink of its own to draw).
     const fl::RadarView radar = (cockpit && d.clientNetHandler) ? d.clientNetHandler->radarView() : fl::RadarView{};
-    (*d.activeHud)
-        ->update(cockpit ? viewEntry : nullptr, d.env->timeOfDay, terrainElev, latencyMs, showLat, radiusM, radar);
+
+    // Build the HUD input bundle (#438). The camera pose is current (CameraInput::update just ran), so
+    // computing the frame's CameraView here is exact — D1 seam: FlightScreen owns the view the HUD's
+    // world->screen symbology projects against. m_frameCam is cached for buildElements()-time cues.
+    const float aspect = static_cast<float>(window.width()) / static_cast<float>(std::max(1, window.height()));
+    m_frameCam = d.cameraController->view(aspect);
+    fl::HudFrameInput hin;
+    hin.ownship = cockpit ? viewEntry : nullptr;
+    hin.camera = m_frameCam;
+    hin.cameraValid = cockpit;
+    hin.timeOfDay = d.env->timeOfDay;
+    hin.terrainElevation = terrainElev;
+    hin.latencyMs = latencyMs;
+    hin.showLatency = showLat;
+    hin.planetRadiusM = radiusM;
+    hin.radar = radar;
+    // Radar MFD page state (#642); annunciate the requested radar mode from the collector.
+    m_mfd.radarMode = d.flightInput ? d.flightInput->radarMode() : 2;
+    hin.mfd = m_mfd;
+    // Night-vision goggles (#210): cockpit-only. Publishes the gain to the render loop and the HUD cue.
+    const bool nvg = m_nvgOn && cockpit;
+    hin.nvgActive = nvg;
+    if (d.nvgIntensity)
+        *d.nvgIntensity = nvg ? 1.0f : 0.0f;
+    // Autopilot annunciation (#640).
+    hin.apModes = m_autopilot.modes();
+    hin.apTargetAltM = m_autopilot.targetAltM();
+    hin.apTargetHeadingDeg = glm::degrees(m_autopilot.targetHeadingRad());
+    hin.apTargetSpeedMps = m_autopilot.targetSpeedMps();
+    // Designated target (#696): resolved above (auto-clears on despawn/death). Only shown in cockpit.
+    hin.designatedTarget = cockpit ? m_designatedTarget : nullptr;
+    hin.masterArm = d.flightInput ? d.flightInput->masterArm() : true; // #641
+    hin.terrainHeightAt = [ts = d.terrainStreamer](const glm::dvec3& p) {
+        return ts ? ts->heightAt(p) : 0.0; // #641 CCIP fall solution
+    };
+    (*d.activeHud)->update(hin);
+
+    // Target-slaved inset view (#698): a live 3D repeater of the designated target, framed bottom-centre.
+    // Built here where the frame's camera + resolved target are available; the renderer draws it via the
+    // #695 secondary-camera pass. Auto-hides when the designation clears.
+    m_insetActive = false;
+    if (d.sceneRenderer) {
+        if (m_insetOn && m_designatedTarget) {
+            m_insetRect = fl::insetRectFor(aspect);
+            const glm::vec3 up = fl::radialUp(m_frameCam.worldOrigin, radiusM);
+            const fl::CameraView insetCam = fl::buildTargetInsetView(
+                m_designatedTarget->position, m_designatedTarget->velocity, /*renderAlpha=*/0.f, m_frameCam.worldOrigin,
+                up, /*rectAspect=*/1.0f, /*standoffM=*/30.0);
+            d.sceneRenderer->setInsetView(&insetCam, m_insetRect);
+            m_insetActive = true;
+        } else {
+            d.sceneRenderer->setInsetView(nullptr, glm::vec4{0.f});
+        }
+    }
     d.windshieldRain->update(cockpit ? (1.f / 60.f) : 0.f, cockpit ? *d.env : EnvironmentState{},
                              cockpit ? rollAngleRad(viewEntry, radiusM) : 0.f);
     // Haptics only for a real ownship — an observer viewing another entity should not feel its hits.
@@ -388,6 +568,121 @@ std::span<const HudElement> FlightScreen::buildElements() {
             break;
         m_elements[static_cast<std::size_t>(m_elementCount++)] = e;
     }
+
+    // Designated-target box + TGT line (#696). Projected against the frame's camera; tracks the target
+    // at 60 Hz using its extrapolated position, and disappears when off-screen or the designation clears
+    // (the combat HUD #641 enriches this with IFF colour + closure). Minimal cue here.
+    if (m_designatedTarget && m_playerEntry) {
+        const glm::dvec3 tpos = m_designatedTarget->position + glm::dvec3(m_designatedTarget->velocity * (1.f / 60.f));
+        if (auto p = fl::worldToHud(m_frameCam, tpos);
+            p && p->x > 0.02f && p->x < 0.98f && p->y > 0.02f && p->y < 0.98f && m_elementCount + 5 <= kMaxElements) {
+            // IFF colour (#641): friend green, foe red, unknown amber — via the #688 client helper.
+            float br = 0.9f, bg = 0.9f, bb = 0.2f;
+            if (m_deps.clientNetHandler) {
+                const uint8_t ident = m_deps.clientNetHandler->identForEntity(
+                    m_designatedTarget->entityIdx, m_designatedTarget->entityGen, m_designatedTarget->factionIndex);
+                if (ident == fl::kIffFriend) {
+                    br = 0.2f;
+                    bg = 1.0f;
+                    bb = 0.4f;
+                } else if (ident == fl::kIffFoe) {
+                    br = 1.0f;
+                    bg = 0.2f;
+                    bb = 0.2f;
+                }
+            }
+            const auto box = fl::hudBox(*p, glm::vec2{0.03f, 0.03f}, br, bg, bb, 1.0f, 1.5f);
+            for (const auto& e : box)
+                m_elements[static_cast<std::size_t>(m_elementCount++)] = e;
+            // Range + closure (Vc = -d(range)/dt along the LOS, kt): positive = closing.
+            const glm::dvec3 los = m_designatedTarget->position - m_playerEntry->position;
+            const double rngM = glm::length(los);
+            const double rngKm = rngM / 1000.0;
+            float closureKt = 0.f;
+            if (rngM > 1.0) {
+                const glm::vec3 relVel = m_designatedTarget->velocity - m_playerEntry->velocity;
+                const float rangeRate = glm::dot(relVel, glm::vec3(los / rngM)); // +opening
+                closureKt = -rangeRate * 1.94384f;
+            }
+            const char* typeName = "TGT";
+            if (m_deps.entityRegistry) {
+                if (const fl::EntityDef* def = m_deps.entityRegistry->byIndex(m_designatedTarget->typeIndex))
+                    typeName = def->name.empty() ? def->id.c_str() : def->name.c_str();
+            }
+            std::snprintf(m_tgtLabel, sizeof(m_tgtLabel), "TGT %s  %.1f km  %+.0f kt", typeName, rngKm, closureKt);
+            HudElement& el = m_elements[static_cast<std::size_t>(m_elementCount++)];
+            el = {};
+            el.type = HudElement::Type::Text;
+            el.x = std::clamp(p->x, 0.05f, 0.95f);
+            el.y = std::clamp(p->y + 0.05f, 0.05f, 0.95f);
+            el.align = HudAlign::Center;
+            el.r = br;
+            el.g = bg;
+            el.b = bb;
+            el.a = 1.0f;
+            el.scale = 1.f;
+            el.text = m_tgtLabel;
+        }
+    }
+
+    // Target-slaved inset border (#698): frame the live 3D repeater the renderer draws. Four Lines
+    // around the same normalized rect the inset camera renders into.
+    if (m_insetActive && m_elementCount + 4 <= kMaxElements) {
+        const float x0 = m_insetRect.x, y0 = m_insetRect.y;
+        const float x1 = m_insetRect.x + m_insetRect.z, y1 = m_insetRect.y + m_insetRect.w;
+        auto border = [&](float ax, float ay, float bx, float by) {
+            HudElement& el = m_elements[static_cast<std::size_t>(m_elementCount++)];
+            el = {};
+            el.type = HudElement::Type::Line;
+            el.x = ax;
+            el.y = ay;
+            el.x2 = bx;
+            el.y2 = by;
+            el.strokeWidth = 1.5f;
+            el.r = 0.f;
+            el.g = 1.f;
+            el.b = 0.f;
+            el.a = 1.f;
+        };
+        border(x0, y0, x1, y0);
+        border(x1, y0, x1, y1);
+        border(x1, y1, x0, y1);
+        border(x0, y1, x0, y0);
+    }
+
+    // Padlock lock-state cue (#697): PADLOCK / PADLOCK — BREAK / REACQ, top-centre under the lubber.
+    if (m_deps.camInput && m_deps.cameraController && m_deps.cameraController->mode() == fl::CameraMode::Padlock &&
+        m_elementCount < kMaxElements) {
+        const char* cue = nullptr;
+        switch (m_deps.camInput->padlockState()) {
+        case fl::PadlockState::Locked:
+            cue = "PADLOCK";
+            break;
+        case fl::PadlockState::Breaking:
+            cue = "PADLOCK -- BREAK";
+            break;
+        case fl::PadlockState::Reacquire:
+            cue = "REACQ";
+            break;
+        case fl::PadlockState::Off:
+            break;
+        }
+        if (cue) {
+            HudElement& el = m_elements[static_cast<std::size_t>(m_elementCount++)];
+            el = {};
+            el.type = HudElement::Type::Text;
+            el.x = 0.5f;
+            el.y = 0.13f;
+            el.align = HudAlign::Center;
+            el.r = 0.9f;
+            el.g = 0.9f;
+            el.b = 0.2f;
+            el.a = 1.0f;
+            el.scale = 1.f;
+            el.text = cue;
+        }
+    }
+
     if (m_deps.wingmanMenu) {
         for (const auto& e : m_deps.wingmanMenu->buildElements()) {
             if (m_elementCount >= kMaxElements)

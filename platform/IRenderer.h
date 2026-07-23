@@ -140,6 +140,12 @@ class IRenderer {
         return false;
     }
 
+    // ── Night-vision goggles (#210) ───────────────────────────────────────────
+    // Night-vision post-process intensity [0, 1]; 0 = off. Applied at the tonemap stage (green
+    // photocathode gain). Non-pure no-op default so a backend/mock without NVG (and every test mock)
+    // needs no change. Set each frame; the game gates it on cockpit view + a client-local toggle.
+    virtual void setNightVision(float /*intensity*/) {}
+
     // ── Frame capture sink (#912) ─────────────────────────────────────────────
     // A per-frame pixel sink for the cinematic recorder (#909). When set, the renderer delivers every
     // rendered frame's pixels to `sink` at the end of endFrame(). The CaptureFrame::pixels buffer is

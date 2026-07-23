@@ -47,6 +47,60 @@ target_link_libraries(test_entity PRIVATE Catch2::Catch2WithMain engine-entity e
 target_include_directories(test_entity PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_entity)
 
+# Terrain line-of-sight segment query (#687): header-only, pure engine-spatial (no glm).
+add_executable(test_los test_los.cpp)
+target_link_libraries(test_los PRIVATE Catch2::Catch2WithMain engine-spatial)
+target_include_directories(test_los PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_los)
+
+# World-to-HUD projection helper (#692): pure math, checked against CameraController::view().
+add_executable(test_hud_projection test_hud_projection.cpp)
+target_link_libraries(test_hud_projection PRIVATE Catch2::Catch2WithMain engine-render)
+target_include_directories(test_hud_projection PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_hud_projection)
+
+# Player autopilot (#640): pure hold-controller + closed-loop convergence through the integrator.
+add_executable(test_autopilot test_autopilot.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/Autopilot.cpp")
+target_link_libraries(test_autopilot PRIVATE Catch2::Catch2WithMain engine-flight engine-ai)
+target_include_directories(test_autopilot PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_autopilot)
+
+# Client-side target designation (#696): pure snapshot cycling / filtering / best-in-cone.
+add_executable(test_target_designation test_target_designation.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/TargetDesignation.cpp")
+target_link_libraries(test_target_designation PRIVATE Catch2::Catch2WithMain engine-render engine-entity)
+target_include_directories(test_target_designation PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_target_designation)
+
+# Padlock tracker (#697): pure aim + lock state machine, scripted trajectories.
+add_executable(test_padlock_tracker test_padlock_tracker.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/PadlockTracker.cpp")
+target_link_libraries(test_padlock_tracker PRIVATE Catch2::Catch2WithMain engine-spatial platform-hal)
+target_include_directories(test_padlock_tracker PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_padlock_tracker)
+
+# Target-slaved inset camera math (#698): pure standoff / look-at / rect layout.
+add_executable(test_inset_view test_inset_view.cpp)
+target_link_libraries(test_inset_view PRIVATE Catch2::Catch2WithMain engine-render)
+target_include_directories(test_inset_view PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_inset_view)
+
+# Head tracking (#927): pure opentrack parse + EMA/freshness filter (socketless).
+add_executable(test_head_tracker test_head_tracker.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HeadTracker.cpp")
+target_link_libraries(test_head_tracker PRIVATE Catch2::Catch2WithMain engine-config platform-hal)
+target_include_directories(test_head_tracker PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" ${CMAKE_CURRENT_SOURCE_DIR})
+if(WIN32)
+    target_link_libraries(test_head_tracker PRIVATE ws2_32)
+endif()
+catch_discover_tests(test_head_tracker)
+
 # Ejection / pilot survival model (#672): pure envelope + territory -> outcome logic (header-only).
 add_executable(test_ejection test_ejection.cpp)
 target_link_libraries(test_ejection PRIVATE Catch2::Catch2WithMain engine-entity)
@@ -920,6 +974,7 @@ catch_discover_tests(test_precipitation_controller)
 
 add_executable(test_flight_input_collector test_flight_input_collector.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightInputCollector.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/PadlockTracker.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/CameraInput.cpp")
 target_link_libraries(test_flight_input_collector PRIVATE
     Catch2::Catch2WithMain
@@ -927,6 +982,7 @@ target_link_libraries(test_flight_input_collector PRIVATE
     platform-sdl3
     SDL3::SDL3
     engine-render
+    engine-spatial
     engine-console
     engine-config
     engine-input
@@ -1039,13 +1095,21 @@ add_executable(test_screen_manager test_screen_manager.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/CommsMenu.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ManualOverlay.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientPrediction.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/Autopilot.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/TargetDesignation.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/PadlockTracker.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HeadTracker.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/CameraInput.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightInputCollector.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp")
 target_link_libraries(test_screen_manager PRIVATE
-    Catch2::Catch2WithMain engine-config engine-render engine-sandbox engine-content engine-console engine-input engine-net engine-entity engine-weather engine-flight engine-manual engine-audio engine-i18n platform-sdl3 platform-hal SDL3::SDL3)
+    Catch2::Catch2WithMain engine-config engine-render engine-sandbox engine-content engine-console engine-input engine-net engine-entity engine-weather engine-flight engine-manual engine-audio engine-i18n engine-ai engine-spatial platform-sdl3 platform-hal SDL3::SDL3)
 target_include_directories(test_screen_manager PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
+if(WIN32)
+    # HeadTracker.cpp uses Winsock; engine-net does not pull a transport backend (layering rule).
+    target_link_libraries(test_screen_manager PRIVATE ws2_32)
+endif()
 catch_discover_tests(test_screen_manager)
 
 add_executable(test_connect_args test_connect_args.cpp)

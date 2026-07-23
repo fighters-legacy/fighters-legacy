@@ -94,6 +94,11 @@ void SDL3Joystick::onSDLEvent(const SDL_Event& ev) {
         js.buttons.assign(static_cast<size_t>(numButtons > 0 ? numButtons : 0), false);
         js.justPressed.assign(static_cast<size_t>(numButtons > 0 ? numButtons : 0), false);
 
+        // Force feedback (#928): open the haptic device if the stick supports it (a plain gamepad or a
+        // non-FFB stick simply reports no haptic — the effects then no-op).
+        if (SDL_IsJoystickHaptic(handle))
+            js.haptic = SDL_OpenHapticFromJoystick(handle);
+
         m_joysticks.push_back(std::move(js));
 
         if (m_eventHandler) {
@@ -109,7 +114,14 @@ void SDL3Joystick::onSDLEvent(const SDL_Event& ev) {
             break;
         if (m_eventHandler)
             m_eventHandler->onJoystickRemoved(idx);
-        SDL_CloseJoystick(m_joysticks[static_cast<size_t>(idx)].handle);
+        JoystickState& dead = m_joysticks[static_cast<size_t>(idx)];
+        if (dead.haptic) {
+            for (int s = 0; s < IJoystick::kFfbSlotCount; ++s)
+                if (dead.ffbEffectId[s] >= 0)
+                    SDL_DestroyHapticEffect(dead.haptic, dead.ffbEffectId[s]);
+            SDL_CloseHaptic(dead.haptic);
+        }
+        SDL_CloseJoystick(dead.handle);
         m_joysticks.erase(m_joysticks.begin() + idx);
         break;
     }
@@ -269,6 +281,68 @@ void SDL3Joystick::flush() {
 
 const char* SDL3Joystick::getLastError() const {
     return m_lastError.empty() ? nullptr : m_lastError.c_str();
+}
+
+// ---------------------------------------------------------------------------
+// IJoystick — force feedback (#928)
+// ---------------------------------------------------------------------------
+
+bool SDL3Joystick::supportsForceFeedback(int joystickId) const {
+    const JoystickState* js = joystickAt(joystickId);
+    return js && js->haptic != nullptr;
+}
+
+bool SDL3Joystick::playFfbEffect(int joystickId, int slot, const FfbEffect& effect) {
+    JoystickState* js = joystickAt(joystickId);
+    if (!js || !js->haptic || slot < 0 || slot >= IJoystick::kFfbSlotCount)
+        return false;
+
+    // Zero-init the union carefully, then fill the active member.
+    SDL_HapticEffect eff;
+    SDL_memset(&eff, 0, sizeof(eff));
+    const Sint16 level = static_cast<Sint16>(std::clamp(effect.magnitude, 0.0f, 1.0f) * 32767.0f);
+    const Uint32 length = effect.durationMs == 0 ? SDL_HAPTIC_INFINITY : effect.durationMs;
+    if (effect.kind == FfbEffectKind::ConstantForce) {
+        eff.type = SDL_HAPTIC_CONSTANT;
+        eff.constant.direction.type = SDL_HAPTIC_POLAR;
+        eff.constant.direction.dir[0] = static_cast<Sint32>(effect.directionDeg * 100.0f);
+        eff.constant.level = level;
+        eff.constant.length = length;
+    } else {
+        eff.type = SDL_HAPTIC_SINE;
+        eff.periodic.direction.type = SDL_HAPTIC_POLAR;
+        eff.periodic.direction.dir[0] = static_cast<Sint32>(effect.directionDeg * 100.0f);
+        eff.periodic.period = static_cast<Uint16>(effect.periodMs);
+        eff.periodic.magnitude = level;
+        eff.periodic.length = length;
+    }
+    if (!SDL_HapticEffectSupported(js->haptic, &eff))
+        return false;
+
+    // Same kind on this slot -> update in place (smooth amplitude tracking); else replace.
+    if (js->ffbEffectId[slot] >= 0 && js->ffbSlotKind[slot] == effect.kind) {
+        SDL_UpdateHapticEffect(js->haptic, js->ffbEffectId[slot], &eff);
+    } else {
+        if (js->ffbEffectId[slot] >= 0)
+            SDL_DestroyHapticEffect(js->haptic, js->ffbEffectId[slot]);
+        js->ffbEffectId[slot] = SDL_CreateHapticEffect(js->haptic, &eff);
+        js->ffbSlotKind[slot] = effect.kind;
+        if (js->ffbEffectId[slot] < 0)
+            return false;
+    }
+    return SDL_RunHapticEffect(js->haptic, js->ffbEffectId[slot], 1);
+}
+
+void SDL3Joystick::stopFfbEffect(int joystickId, int slot) {
+    JoystickState* js = joystickAt(joystickId);
+    if (js && js->haptic && slot >= 0 && slot < IJoystick::kFfbSlotCount && js->ffbEffectId[slot] >= 0)
+        SDL_StopHapticEffect(js->haptic, js->ffbEffectId[slot]);
+}
+
+void SDL3Joystick::stopAllFfbEffects(int joystickId) {
+    JoystickState* js = joystickAt(joystickId);
+    if (js && js->haptic)
+        SDL_StopHapticEffects(js->haptic);
 }
 
 } // namespace fl

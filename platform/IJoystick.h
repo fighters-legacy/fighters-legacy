@@ -85,6 +85,34 @@ class IJoystick {
     virtual void flush() = 0;
 
     virtual const char* getLastError() const = 0;
+
+    // --- Force feedback (FFB sticks, #928) ---
+    // A cueing layer, NOT a control-loading sim: these are canned haptic effects (stall buffet, ground
+    // rumble, gun-fire kick), not modelled stick forces. The methods are NON-pure with capability-
+    // negative no-op defaults, so gamepad-only backends and test mocks need no changes.
+    static constexpr int kFfbSlotCount = 4;
+
+    // Effect kinds: a steady push (ConstantForce) or an oscillation (Sine, for buffet / rumble).
+    enum class FfbEffectKind : uint8_t { ConstantForce, Sine };
+
+    struct FfbEffect {
+        FfbEffectKind kind{FfbEffectKind::Sine};
+        float directionDeg{0.0f}; // polar direction (SDL polar); 0 = away from the user
+        float magnitude{0.0f};    // [0, 1]
+        float periodMs{50.0f};    // Sine only
+        uint32_t durationMs{0};   // 0 = run until stopped / updated
+    };
+
+    virtual bool supportsForceFeedback(int /*joystickId*/) const {
+        return false;
+    }
+    // Re-playing a slot with the same kind updates the running effect in place (e.g. buffet amplitude
+    // tracking); a different kind replaces it. Returns false when unsupported. slot in [0, kFfbSlotCount).
+    virtual bool playFfbEffect(int /*joystickId*/, int /*slot*/, const FfbEffect& /*effect*/) {
+        return false;
+    }
+    virtual void stopFfbEffect(int /*joystickId*/, int /*slot*/) {}
+    virtual void stopAllFfbEffects(int /*joystickId*/) {}
 };
 
 } // namespace fl

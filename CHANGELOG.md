@@ -21,6 +21,161 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **platform/game**: force-feedback joystick effects via SDL3 haptics (#928, Epic #587). `IJoystick`
+  gains a force-feedback surface as non-pure, no-op-default virtuals (`supportsForceFeedback`,
+  `playFfbEffect(slot, FfbEffect{ConstantForce|Sine, direction, magnitude, period, duration})`,
+  `stopFfbEffect`, `stopAllFfbEffects`; `kFfbSlotCount = 4`) — gamepad-only backends and test mocks
+  compile unchanged. `SDL3Joystick` opens a haptic device per FFB stick (`SDL_INIT_HAPTIC` +
+  `SDL_OpenHapticFromJoystick`) and creates/updates/runs `SDL_HAPTIC_CONSTANT`/`SDL_HAPTIC_SINE`
+  effects; `HapticController` drives stall buffet (slot 0), ground roll (slot 1), and a gun-fire kick
+  (slot 2) alongside the existing rumble, capability-guarded and off without a device. Explicitly a
+  cueing layer, not control loading (no trim/spring forces). Config `[controls] ffb_enabled` /
+  `ffb_strength`; `docs/haptics.md` extended. Covered by a `TrackingJoystick` in
+  `tests/test_haptic_controller.cpp`.
+
+- **game**: head tracking via the opentrack UDP protocol (#927, Epic #587). A new `fl::HeadTracker`
+  (game layer) opens a non-blocking localhost UDP socket and reads the opentrack 6-double datagram
+  (x/y/z cm + yaw/pitch/roll deg); the parse and an EMA + freshness `HeadPoseFilter` are pure functions
+  in the header (unit-tested socketless). `CameraInput::setHeadPose` composes the smoothed pose
+  additively with the RMB cockpit look — head roll tilts the horizon, a body-frame eye offset lets the
+  pilot lean (clamped ±0.5 m). New `[headtracking]` `UserConfig` section (enabled/port/scales/inverts/
+  smoothing); the tracker starts per session when enabled and closes on teardown. Covered by
+  `tests/test_head_tracker.cpp` (datagram size validation, deg→rad/cm→m mapping, scale/invert/clamp,
+  EMA convergence, freshness timeout).
+
+- **renderer/game**: NVG cockpit overlay (#210, Epic #587). Night-vision goggles as a tonemap-stage
+  green photocathode gain rather than a flat overlay: `TonemapPush` gains an `nvgIntensity` field
+  (consuming a pad slot, size unchanged) and `tonemap.frag` a soft-knee luminance amplification painted
+  P43 phosphor green, so dim starlit terrain reads and bright sources bloom through the existing bloom
+  path. New non-pure `IRenderer::setNightVision(float)` (no-op default — mocks unchanged) with a
+  `VkRenderer` override. Toggled with the new `NvgToggle` action (F7), cockpit-only, driving the render
+  loop each frame and an `NVG` HUD annunciator. There is no client-side visibility penalty to suppress —
+  the brightening is the mechanic. Mocks compile untouched; the `TonemapPush` size asserts and the
+  input-default test cover the ABI + binding.
+
+- **game**: radar MFD and RWR display pages (#642, Epic #587). The datalink scope (#528) becomes a
+  cyclable MFD: `HudMfdState` (owned by `FlightScreen`, cycled with the new `MfdPage`/`MfdRange` actions
+  on O/3) selects an Off page, the 360° PPI, a B-scope (azimuth ±60° vs range), or a dedicated RWR
+  threat-warning ring, with IFF-coloured contacts, a range caption, and a SIL/SRCH/TWS/STT radar-mode
+  annunciation from the requested mode. The `RWR LAUNCH`/`RWR LOCK` threat caption is never page-gated
+  (shows even on the Off page). Rendered entirely through the existing `HudElement` overlay path
+  (IGui-independent). Covered by new cases in `tests/test_flight_hud.cpp` (page/range cycling, the
+  never-gated caption, B-scope geometry).
+
+- **game**: combat HUD modes — target box, pipper, CCIP, weapon status, master arm (#641, Epic #587).
+  `FlightHud::drawCombat` renders the gun pipper (ballistic lead via `computeBallisticLead`, gravity
+  from the local radial up), the CCIP bomb-release cross + fall line + time-of-fall (`computeCcip`
+  against the terrain height query, capped at 30 s), and a lower-right multi-station weapon-status
+  block (selected station bracketed with its live round count; unselected stations show `x--` pending
+  the per-station-ammo wire follow-up). The designator box (drawn by `FlightScreen`) gains IFF colour
+  via the #688 helper plus range + closure. Master arm is a real V-key toggle in `FlightInputCollector`
+  that suppresses the gun + fire-store trigger bits and `wasWeaponFired` when SAFE (new `MasterArm`
+  input action, default V). Pipper/CCIP are gated by master arm and the selected station's weapon kind
+  (from `HudStationInfo`). Covered by new cases in `tests/test_flight_hud.cpp` and
+  `tests/test_flight_input_collector.cpp`.
+
+- **game**: target-slaved inset view on the HUD (#698, Epic #587). A small live 3D repeater of the
+  designated target, toggled with `TargetInsetToggle` (F6) and framed bottom-centre. `CameraView`
+  construction is extracted into a shared `makeCameraView()` free function (`CameraController::view()`
+  delegates to it) so the inset cannot diverge from the main projection conventions; a pure
+  `game/fighters-legacy/InsetViewMath.h` builds the inset camera (eye on the target→ownship line at a
+  30 m stand-off, look-at the extrapolated target, degenerate-safe) and the square-pixel bottom-centre
+  rect. `SceneRenderer::setInsetView` writes the #695 `FrameScene` inset fields; `FlightScreen` toggles
+  it, feeds the camera, and draws the border, auto-hiding when the designation clears. Works alongside
+  padlock. Covered by `tests/test_inset_view.cpp`.
+
+- **game**: padlock camera mode with LOS lock-break and re-acquisition (#697, Epic #587). New
+  `CameraMode::Padlock` (F5): the camera stays at the cockpit eye and slews to keep the designated
+  target centred. All the math is a pure `fl::PadlockTracker` — a continuous world-space aim slewed
+  toward the extrapolated target with a damped, rate-limited (240°/s) approach and an elevation clamp
+  (overhead crossings resolve smoothly, never a 2π jump), a cockpit visibility envelope, and a
+  Locked → Breaking (0.4 s grace) → Reacquire (4 s) → Off state machine. `CameraInput` drives it,
+  latching terrain LOS (#687) at ~15 Hz; `FlightScreen` toggles it (auto-designating best-in-cone via
+  #696 when nothing is designated), shows the `PADLOCK`/`PADLOCK — BREAK`/`REACQ` cue, and treats
+  Padlock like Cockpit for ownship-hiding + HUD gating. Frame-rate-independent by construction; covered
+  by `tests/test_padlock_tracker.cpp` (overhead-pass continuity, 60-vs-240-fps equivalence, grace
+  hysteresis, reacquire expiry, break-slew return, envelope masking).
+
+- **renderer**: secondary-camera inset viewport via `FrameScene` (#695, Epic #587). `FrameScene` gains
+  POD `insetEnabled`/`insetCamera`/`insetRect` fields (no new `IRenderer` pure virtuals — mocks and every
+  `setScene` consumer compile unchanged), and `VkRenderer` renders the same scene a second time from the
+  inset camera into a scissored sub-rect of the HDR target with its own per-frame camera UBO/descriptor
+  set. The camera-relative rebase invariant is preserved by composing the inset view with
+  `translate(mainOrigin − insetOrigin)` in double precision. The disabled path is bit-identical to
+  before (default-off asserted in `tests/test_scene_renderer.cpp`); sky/transparents/per-inset GTAO are
+  v1 out-of-scope. Backs the #698 target-slaved inset.
+
+- **game**: client-side target designation with next/prev cycling (#696, Epic #587). A new
+  `fl::TargetDesignation` (game layer) is the single client-side source of truth for the designated
+  target: cycle with the `NextTarget`/`PrevTarget` actions (N/P), resolve auto-clears on despawn /
+  generation mismatch / death, and a pluggable candidate provider (the #526 sensor-track upgrade seam)
+  defaults to a snapshot scan that filters out projectiles/effects/self/destroyed and orders hostile-
+  first then by range, plus `designateBest` (best-in-forward-cone with nearest fallback) for padlock's
+  toggle-on. Wired into `FlightScreen` with a minimal designator box + `TGT <type> <range>` cue
+  projected via `HudProjection`; operates purely on `RenderSnapshot`, so replay inherits it. Also
+  raises `FlightScreen`'s element cap to match the redesigned HUD. Covered by
+  `tests/test_target_designation.cpp`.
+
+- **game**: player autopilot modes — altitude / heading / speed hold (#640, Epic #587). A new pure
+  `fl::Autopilot` (game layer) shapes the client's input before it is sent, so the server stays
+  authoritative and dumb: each hold captures its target on engage, `compute()` drives elevator/aileron/
+  rudder/throttle via the engine's P-controller primitives (`Guidance.h`/`LocalFrame.h`, the same laws
+  the AI flies), and any stick input past a threshold disengages the attitude holds while a throttle
+  touch drops speed hold. Wired into `FlightScreen::update` after `poll()` and before prediction+send
+  (so the client predicts exactly what the server receives), toggled by new `AutopilotAltHold/HdgHold/
+  SpdHold` actions (F9/F10/F11 — A/D/S collide with the active roll/pitch bindings), and annunciated on
+  the HUD via the `HudFrameInput` autopilot fields. Covered by `tests/test_autopilot.cpp` (sign checks,
+  disengage matrix, and a closed-loop run through the real `FlightIntegrator`).
+
+- **renderer**: redesigned FlightHud to a tactical fighter HUD layout (#438, Epic #587). The minimal
+  text HUD is replaced by an F-14/F-16/F-18-style layout built entirely from `HudElement`: a velocity
+  ladder (knots) on the left, an altitude tape (feet) + radar-altitude on the right, dual heading
+  tapes with cardinal labels and a lubber line, a velocity-vector flight-path marker (projected via
+  `HudProjection` #692) with the radial artificial horizon, lower AoA/Mach/G/fuel and weapon/master-arm
+  blocks, and an octagonal combiner frame — plus the relocated datalink radar/RWR MFD. `IHud::update`
+  now takes a single `HudFrameInput` bundle (changed once here; the combat/MFD/autopilot consumers add
+  defaulted fields rather than re-churning the signature), and `FlightHud::setStationInfo` replaces
+  `setStationLabels`, carrying muzzle velocity + weapon kind for the coming pipper. Element/string caps
+  raised with an `overflowed()` silent-truncation guard. Draw code split into
+  `FlightHud`/`FlightHudCombat`/`FlightHudMfd`. `FlightScreen` computes the frame's `CameraView` for the
+  HUD (D1 seam). Covered by a rewritten `tests/test_flight_hud.cpp`.
+
+- **engine**: world-to-HUD projection helper (#692, Epic #587). New `engine/render/HudProjection.h/.cpp`
+  — `worldToHud(CameraView, dvec3)` rebases in double, transforms through the live projection, rejects
+  behind-camera points via `clip.w <= 0` (the correct test for the infinite reverse-Z projection), and
+  maps to normalized top-left-origin HUD coordinates with the Vulkan Y-flip already baked in; plus
+  `hudBox` (four `Line`s — the #641 designator) and `hudAspect` (recovers the viewport aspect, retiring
+  hard-coded 16/9). Serves padlock cues, the combat-HUD symbology, and target labels. Covered by
+  `tests/test_hud_projection.cpp` with golden values built from `CameraController::view()`.
+
+- **engine/game**: padlock/target-cycle input actions and camera-key unification (#689, Epic #587).
+  New `InputAction`s `CameraCockpit`/`CameraChase`/`CameraFree` (default F1/F2/F4), `PadlockToggle`
+  (F5, gamepad RightStick), `TargetInsetToggle` (F6), `NextTarget`/`PrevTarget` (N/P, gamepad DpadUp),
+  and defaults for the previously-unbound `View*` cockpit-pan actions (PageUp/PageDown/←/→). A new
+  header-only `engine/input/BindingQuery.h` (`bindingDown`/`bindingJustPressed`) resolves any `Binding`
+  source against `IInput`. `CameraInput` now switches camera modes through `InputBindings` (rebindable,
+  gamepad-capable) instead of raw SDL scancodes and pans the cockpit view from the `View*` actions;
+  the console-toggle and F3 overlay stay raw. `keyName`/`keyFromName` gained the missing `Minus`/`Equals`
+  entries. Keymap documented in `docs/sandbox.md`; covered by new cases in `tests/test_input.cpp`.
+
+- **game**: client-side IFF for arbitrary snapshot entities (#688, Epic #587). `ClientNetEventHandler`
+  gains `ownFactionIndex()` (derived from the assigned aircraft's cached faction, roster fallback) and
+  `identForEntity(idx, gen, factionIndex)` — a three-step friend/foe resolution (same faction → Friend;
+  a live datalink track's server-computed `ident`; else the `areFactionsHostile` affiliation rule).
+  Serves the #641 combat-HUD target box and #696 target cycling. No wire change: the faction
+  relationship matrix is Lua-mutable and stays server-side, per the `RadarView` `ident` doctrine.
+  Covered by new cases in `tests/test_client_net_event_handler.cpp`.
+
+- **engine**: terrain line-of-sight segment query (#687, Epic #587 padlock family). New header-only
+  `engine/spatial/LineOfSight.h` — `terrainLos(a, b, heightFn, readyFn, planetRadiusM, stepM,
+  clearanceM)` returns `LosResult::{Clear, Blocked, Unknown}` by marching the segment with an
+  adaptive, clearance-margin-bounded step (densifies at grazing tangents, stretches over valleys, no
+  heap). The heightfield is an injected callable so both the client (`TerrainStreamer::heightAt`) and
+  the server share one utility; `Unknown` surfaces when a tile is unloaded mid-segment and is left to
+  caller policy (padlock treats it as Clear). `engine-spatial` stays glm-free/pure-stdlib. Covered by
+  `tests/test_los.cpp` (ridge/valley/bowl, grazing tangents, step-size independence, Unknown
+  propagation, endpoints/zero-length/vertical).
+
 - **network**: fl-lobby registration client and in-game server browser (#143, Epic E #497). The HTTP HAL
   gains a `request()` primitive with POST/PUT/DELETE methods + body/content-type (`get()` forwards to it);
   `LobbyRegistration` heartbeats a dedicated server to an `fl-lobby` service (`POST /v1/servers` on an

@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "input/AxisConfig.h"
+#include "input/BindingQuery.h"
 #include "input/InputBindings.h"
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+
+#include "mock_hal.h" // MockInput (engine-input links platform-hal, so the platform headers resolve)
 
 using namespace fl;
 
@@ -491,4 +494,84 @@ TEST_CASE("AxisConfigTable deserialize with axis name not in section continues",
     REQUIRE(t.deserialize("[axis_config]\nLeftX = { deadzone = 0.20 }\n"));
     CHECK(t.get(GamepadAxis::LeftX).deadzone == Catch::Approx(0.20f));
     CHECK(t.get(GamepadAxis::RightX).deadzone == Catch::Approx(0.1f)); // default
+}
+
+// ---------------------------------------------------------------------------
+// Camera/view-family action defaults + BindingQuery (#689)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("InputBindings: camera + view-family actions have their #689 defaults", "[bindings]") {
+    InputBindings b;
+    CHECK(b.get(InputAction::CameraCockpit).source == BindingSource::Keyboard);
+    CHECK(b.get(InputAction::CameraCockpit).id == static_cast<uint32_t>(Key::F1));
+    CHECK(b.get(InputAction::CameraChase).id == static_cast<uint32_t>(Key::F2));
+    CHECK(b.get(InputAction::CameraFree).id == static_cast<uint32_t>(Key::F4));
+    CHECK(b.get(InputAction::PadlockToggle).id == static_cast<uint32_t>(Key::F5));
+    CHECK(b.get(InputAction::TargetInsetToggle).id == static_cast<uint32_t>(Key::F6));
+    CHECK(b.get(InputAction::NextTarget).id == static_cast<uint32_t>(Key::N));
+    CHECK(b.get(InputAction::PrevTarget).id == static_cast<uint32_t>(Key::P));
+    // Later epic-587 actions keep their reserved defaults.
+    CHECK(b.get(InputAction::MasterArm).id == static_cast<uint32_t>(Key::V));
+    CHECK(b.get(InputAction::MfdPage).id == static_cast<uint32_t>(Key::O));
+    CHECK(b.get(InputAction::MfdRange).id == static_cast<uint32_t>(Key::Num3));
+    CHECK(b.get(InputAction::NvgToggle).id == static_cast<uint32_t>(Key::F7));
+    CHECK(b.get(InputAction::AutopilotAltHold).id == static_cast<uint32_t>(Key::F9));
+    // View* now have cockpit-pan defaults instead of being unbound.
+    CHECK(b.get(InputAction::ViewLeft).id == static_cast<uint32_t>(Key::ArrowLeft));
+    CHECK(b.get(InputAction::ViewRight).id == static_cast<uint32_t>(Key::ArrowRight));
+    CHECK(b.get(InputAction::ViewUp).id == static_cast<uint32_t>(Key::PageUp));
+    CHECK(b.get(InputAction::ViewDown).id == static_cast<uint32_t>(Key::PageDown));
+    // Gamepad alt: padlock on the right stick click, next-target on the d-pad up.
+    CHECK(b.get(InputAction::PadlockToggle, /*alt=*/true).source == BindingSource::GamepadButton);
+    CHECK(b.get(InputAction::PadlockToggle, true).id == static_cast<uint32_t>(GamepadButton::RightStick));
+    CHECK(b.get(InputAction::NextTarget, true).id == static_cast<uint32_t>(GamepadButton::DpadUp));
+    // The target-cycle defaults deliberately avoid T (comms) and Y (ChatAll).
+    CHECK(b.get(InputAction::NextTarget).id != static_cast<uint32_t>(Key::T));
+    CHECK(b.get(InputAction::PrevTarget).id != static_cast<uint32_t>(Key::Y));
+}
+
+TEST_CASE("InputBindings: Minus/Equals now serialize round-trip (#689)", "[bindings]") {
+    InputBindings b;
+    b.set(InputAction::ViewUp, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Minus), false});
+    b.set(InputAction::ViewDown, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Equals), false});
+    InputBindings b2;
+    REQUIRE(b2.deserialize(b.serialize()));
+    CHECK(b2.get(InputAction::ViewUp).id == static_cast<uint32_t>(Key::Minus));
+    CHECK(b2.get(InputAction::ViewDown).id == static_cast<uint32_t>(Key::Equals));
+}
+
+TEST_CASE("bindingJustPressed/bindingDown resolve every Binding source (#689)", "[bindings]") {
+    MockInput in;
+
+    // Keyboard: F5 padlock toggle (edge) — just-pressed only, not held.
+    const Binding kb{BindingSource::Keyboard, static_cast<uint32_t>(Key::F5), false};
+    CHECK_FALSE(bindingJustPressed(in, kb));
+    in.justPressed.insert(Key::F5);
+    in.held.insert(Key::F5);
+    CHECK(bindingJustPressed(in, kb));
+    CHECK(bindingDown(in, kb));
+
+    // Gamepad button.
+    const Binding gb{BindingSource::GamepadButton, static_cast<uint32_t>(GamepadButton::RightStick), false};
+    CHECK_FALSE(bindingDown(in, gb));
+    in.gpDown.insert({0, GamepadButton::RightStick});
+    in.gpJustPressed.insert({0, GamepadButton::RightStick});
+    CHECK(bindingDown(in, gb));
+    CHECK(bindingJustPressed(in, gb));
+
+    // Gamepad axis: Down past the ±0.5 threshold; no rising edge.
+    const Binding axPos{BindingSource::GamepadAxis, static_cast<uint32_t>(GamepadAxis::RightY), false};
+    in.axisValues[{0, GamepadAxis::RightY}] = 0.7f;
+    CHECK(bindingDown(in, axPos));
+    CHECK_FALSE(bindingJustPressed(in, axPos)); // analog axes have no discrete edge
+    in.axisValues[{0, GamepadAxis::RightY}] = 0.3f;
+    CHECK_FALSE(bindingDown(in, axPos)); // below threshold
+    // Negative-direction binding on the same axis.
+    const Binding axNeg{BindingSource::GamepadAxis, static_cast<uint32_t>(GamepadAxis::RightY), true};
+    in.axisValues[{0, GamepadAxis::RightY}] = -0.7f;
+    CHECK(bindingDown(in, axNeg));
+
+    // A None binding is always inert.
+    CHECK_FALSE(bindingDown(in, Binding{}));
+    CHECK_FALSE(bindingJustPressed(in, Binding{}));
 }
