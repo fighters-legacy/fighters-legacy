@@ -1,46 +1,77 @@
 # Texture Authoring Guide
 
-This guide covers the texture pipeline for fl-base-pack content: how to author source textures,
-choose the right compression format, and produce GPU-ready KTX2 files using `tex-compress`.
+This guide covers the texture pipeline for fl-base-pack content: how to author and commit source
+textures, choose the right compression format, and produce the GPU-ready KTX2 files a release ships
+using `tex-compress`.
 
 ---
 
-## Overview
+## Source vs. artifact — what you commit
 
-The engine's GPU-ready texture format is **KTX2** with BC block compression and a full mipmap
-chain. Source assets are **PNG** files authored in Blender, Substance Painter, or any raster
-editor. The `tex-compress` tool converts PNG → KTX2 and is run once at pack build time; the
-resulting `.ktx2` files are what gets committed to fl-base-pack.
+The industry pattern is unambiguous, and this project follows it: **PNG masters are the source and
+are committed; KTX2 is a build artifact, produced by `tex-compress`, and is NOT committed.**
 
-Do not commit source `.png` files — they are large and reproducible from the same source art.
+- **Source, committed** — the PNG masters, under the aircraft's own directory:
+  `aircraft/<id>/textures-src/<id>_diffuse.png`, `<id>_orm.png`, `<id>_normal.png`,
+  `<id>_emissive.png`. This is "the preferred form of modification" a CC-BY content pack is supposed
+  to ship: anyone can repaint from it, and the compression settings can be revisited later
+  (ETC1S vs UASTC, per-map tuning) without re-authoring.
+- **Artifact, NOT committed** — the `.ktx2` files. A KTX2 is a lossy, block-compressed, transcoded
+  output; committing only it loses the source. `.ktx2` is git-ignored, produced by `tex-compress` in
+  the pack's release workflow, and shipped in the release archive under `textures/`.
+
+The engine loads `.ktx2` at runtime (with a `.png` fallback — see *Local-dev fallback* below), so a
+release archive still contains `textures/<name>.ktx2`; your repository does not.
 
 ---
 
 ## Naming conventions
 
-Lowercase snake_case, matching the mesh asset ID:
+Lowercase snake_case, matching the mesh asset ID. Source masters live beside the aircraft; the built
+KTX2 lands in the pack-level `textures/` directory (the runtime layout, next section):
 
 ```
-fa18c_diffuse.png       →  fa18c_diffuse.ktx2
-fa18c_normal.png        →  fa18c_normal.ktx2
-fa18c_orm.png           →  fa18c_orm.ktx2
-fa18c_emissive.png      →  fa18c_emissive.ktx2
+aircraft/fa18c/textures-src/     ← committed PNG masters (source)
+    fa18c_diffuse.png
+    fa18c_normal.png
+    fa18c_orm.png
+    fa18c_emissive.png
+    fa18c_uv_layout.png          ← optional UV-layout template for painters
+
+textures/                        ← built KTX2, shipped in the release archive (git-ignored)
+    fa18c_diffuse.ktx2
+    fa18c_normal.ktx2
+    ...
 ```
 
-Place texture files in the pack's top-level `textures/` directory — **not** alongside the mesh.
-This is the asset directory the engine resolves `AssetType::Texture` to (`textures/<name>.ktx2`,
-with a `.png` fallback); a file placed beside the `.glb` will not be found.
+(The `_uv_layout.png` painter template is a convention; fl-base-pack does not ship one yet.)
+
+---
+
+## Runtime layout
+
+At runtime the engine resolves `AssetType::Texture` to the pack-level **`textures/`** directory —
+`textures/<name>.ktx2`, with a `.png` fallback — **not** to a file beside the `.glb`. A texture placed
+next to the mesh will not be found. This is the layout a release archive ships:
 
 ```
 textures/
     fa18c_diffuse.ktx2
-    fa18c_normal.ktx2
     fa18c_orm.ktx2
-    fa18c_emissive.ktx2
 aircraft/fa18c/
     fa18c.glb        (references ../../textures/fa18c_diffuse.ktx2)
     fa18c.toml
 ```
+
+---
+
+## Local-dev fallback (no compressor needed)
+
+You do not need `toktx` installed to iterate. The engine tries `textures/<name>.ktx2` first and
+falls back to `textures/<name>.png`, so during development you can drop a PNG straight into
+`textures/` and the mesh renders with it — no compression step. Releases ship the `.ktx2`; your
+local checkout can use the `.png`. (The `fl-viewer` tool and hot-reload both honour this fallback,
+so an author can preview and iterate on textures with nothing but PNGs.)
 
 ---
 
@@ -208,14 +239,27 @@ directory is not in PATH.
 
 ## Workflow summary
 
-1. Author source art in Blender / Substance Painter
-2. Export each map as PNG (see channel layout table above)
-3. Run `tex-compress` to produce `.ktx2` files into the pack's `textures/` directory
-4. Verify with `validate-mesh` that the `.glb` references `../../textures/<name>.ktx2` URIs (not
-   embedded PNG data)
+1. Author source art in Blender / Substance Painter.
+2. Export each map as PNG (see channel layout table above) and **commit it** under
+   `aircraft/<id>/textures-src/`.
+3. For local testing, drop the PNGs into `textures/` and iterate — the engine's `.png` fallback
+   renders them with no compression step (see *Local-dev fallback*).
+4. In the pack's **release workflow**, run `tex-compress` over the committed masters to produce
+   `.ktx2` into `textures/` (git-ignored), e.g.:
 
-`.ktx2` files are build outputs of `tex-compress`, reproducible from the source art; treat them as
-you would any generated artifact.
+   ```bash
+   for src in aircraft/*/textures-src/*.png; do
+       out="textures/$(basename "${src%.png}").ktx2"
+       # pick --type from the map suffix (diffuse/normal/orm/emissive)
+       tex-compress --type diffuse "$src" -o "$out"
+   done
+   ```
+
+5. Verify with `validate-mesh` that the `.glb` references `../../textures/<name>.ktx2` URIs (not
+   embedded PNG data), and with `validate-mod` that the whole pack is consistent.
+
+`.ktx2` files are build outputs of `tex-compress`, reproducible from the committed PNG masters;
+treat them as you would any generated artifact — git-ignore them, ship them in the release archive.
 
 ---
 

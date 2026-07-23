@@ -68,6 +68,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   WxH` (headless resolution) and a `screenshot [path]` console command. A lavapipe headless snapshot
   smoke runs in CI so the epic's render bootstrap is gated on every PR.
 
+### Changed
+
+- **docs**: rewrite `docs/modding/textures.md` around the source-vs-artifact split (#846, Epic #836).
+  The guide previously told authors to commit `.ktx2` and discard the source `.png` — backwards, and
+  self-contradicted by its own later sections. It now states the industry pattern plainly: **PNG
+  masters are the committed source** (under `aircraft/<id>/textures-src/`, the preferred-form-of-
+  modification a CC-BY pack must ship), and **`.ktx2` is a git-ignored build artifact** produced by
+  `tex-compress` in the pack's release workflow and shipped under `textures/`. A new local-dev section
+  documents the engine's `.png` fallback (`textures/<name>.ktx2` → `.png`), so an author can preview
+  and iterate — in-game and in `fl-viewer` — with no compressor installed. Straggler fixes: the
+  `3d-models.md` example URI depth (`../textures/` → `../../textures/`), and the "ships `.ktx2`" lines
+  in `formats.md` / `liveries.md` now say "built from committed PNG masters".
+
 ## [0.3.9] - 2026-07-23
 
 ### Fixed
