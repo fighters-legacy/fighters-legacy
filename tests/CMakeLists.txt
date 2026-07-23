@@ -784,6 +784,11 @@ add_executable(test_ack_window test_ack_window.cpp)
 target_link_libraries(test_ack_window PRIVATE Catch2::Catch2WithMain engine-protocol)
 catch_discover_tests(test_ack_window)
 
+# Server capability vocabulary + role presets (#945; header-only, stdlib).
+add_executable(test_capability test_capability.cpp)
+target_link_libraries(test_capability PRIVATE Catch2::Catch2WithMain engine-protocol)
+catch_discover_tests(test_capability)
+
 # Engine-layer snapshot payload codec (#775; zstd wrapper in engine-compress).
 add_executable(test_snapshot_compression test_snapshot_compression.cpp)
 target_link_libraries(test_snapshot_compression PRIVATE Catch2::Catch2WithMain engine-compress)

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "AuthTracker.h"
+#include "Capability.h" // per-peer granted authority (#945/#944)
 #include "CongestionController.h"
 #include "CrewState.h" // per-seat crew control frame (#966/#969)
 #include "GameProtocol.h"
@@ -138,6 +139,11 @@ struct PeerInputState {
     // delivery -- it is not admitted until it sends a request.
     PeerRole role{PeerRole::Pilot};
     bool handshakeComplete{false}; // false until MsgConnectRequest processed; guards duplicate requests
+    // Granted authority (#945/#944). Orthogonal to `role` (embodiment): default zero caps (no
+    // authority), set by the grant command / an identity-bound table (#950), erased with the peer on
+    // disconnect. A successful operator_password auth grants Admin caps for that command WITHOUT
+    // touching this field (rung 1); this field is the grant channel (rung 2, empty-token dispatch).
+    PeerAuthority authority{};
     // Interest center for an ENTITY-LESS observer (#857): a pilot centers interest on its aircraft, an
     // observer (or a dead peer) on this point. Seeded at admit time from the spawn/last-aircraft
     // position, then driven by the client's camera eye each frame (#858, set in onReceive from

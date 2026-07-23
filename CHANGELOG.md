@@ -21,6 +21,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network**: server capability vocabulary and per-peer authority (#945, epic #944). A new
+  stdlib-only `engine/net/Capability.h` (the `WingmanCommand.h` pattern — engine, fl-server, and the
+  game client include it with no link dependency) defines `enum class Capability` (bit positions:
+  `kick_ban`, `mute`, `server_config`, `spawn_any`, `spawn_faction`, `command_any_ai`,
+  `command_faction_ai`, `faction_posture`, `gm_map`, `gm_map_faction`, `spectate_any`, `grant_roles`),
+  a `CapabilityMask` (uint64), the `Admin`/`Moderator`/`GameMaster`/`FactionLeader` role presets,
+  `parseRolePreset`, capability-name/missing-name helpers, and a `PeerAuthority {caps, factionIndex}`
+  added to `PeerInputState` — orthogonal to `PeerRole` (embodiment), default zero caps, erased with the
+  peer on disconnect. Foundation only: zero behavior change (nothing reads the field yet). Covered by
+  `tests/test_capability.cpp`.
+
 - **platform/game**: force-feedback joystick effects via SDL3 haptics (#928, Epic #587). `IJoystick`
   gains a force-feedback surface as non-pure, no-op-default virtuals (`supportsForceFeedback`,
   `playFfbEffect(slot, FfbEffect{ConstantForce|Sine, direction, magnitude, period, duration})`,
