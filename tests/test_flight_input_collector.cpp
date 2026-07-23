@@ -73,6 +73,48 @@ TEST_CASE("FlightInputCollector wasWeaponFired resets on rate-limited poll", "[f
     CHECK_FALSE(fic.wasWeaponFired());
 }
 
+TEST_CASE("FlightInputCollector master arm gates the fire triggers (#641)", "[flight_input]") {
+    MockLogger log;
+    CommandRegistry reg;
+    GameConsole console(log, reg);
+    MockInput inp;
+    inp.held.insert(Key::Space); // gun trigger
+    CameraInput cam;
+    fl::SimRenderBridge bridge;
+    FlightInputCollector fic;
+    fl::ManualClock t;
+    fic.setClock(t);
+
+    // Default is ARM: the trigger fires.
+    auto r1 = fic.poll(bridge, cam, console, inp, nullptr, {});
+    REQUIRE(r1.has_value());
+    CHECK(fic.masterArm());
+    CHECK((r1->buttons & 1u) != 0u);
+    CHECK(fic.wasWeaponFired());
+
+    // Press V to go SAFE (edge-detected).
+    inp.held.insert(Key::V);
+    t.advance(std::chrono::milliseconds(17));
+    auto r2 = fic.poll(bridge, cam, console, inp, nullptr, {});
+    REQUIRE(r2.has_value());
+    CHECK_FALSE(fic.masterArm());
+    // SAFE suppresses the gun trigger (bit 0) and the fire-store (bit 2), and clears wasWeaponFired.
+    CHECK((r2->buttons & 1u) == 0u);
+    CHECK((r2->buttons & 0x04u) == 0u);
+    CHECK_FALSE(fic.wasWeaponFired());
+
+    // Release V, press it again -> back to ARM.
+    inp.held.erase(Key::V);
+    t.advance(std::chrono::milliseconds(17));
+    fic.poll(bridge, cam, console, inp, nullptr, {});
+    inp.held.insert(Key::V);
+    t.advance(std::chrono::milliseconds(17));
+    auto r4 = fic.poll(bridge, cam, console, inp, nullptr, {});
+    REQUIRE(r4.has_value());
+    CHECK(fic.masterArm());
+    CHECK((r4->buttons & 1u) != 0u);
+}
+
 TEST_CASE("FlightInputCollector advancing clock past gate returns value", "[flight_input]") {
     MockLogger log;
     CommandRegistry reg;

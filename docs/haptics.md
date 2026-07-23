@@ -75,3 +75,33 @@ Routing: `LuaController` → the host `WorldApi` seam (`engine/script/WorldApi.h
 broadcasts `MsgHaptic` (0x17) → the client plays it via `IInput` on gamepad 0. On a headless server
 with no clients (or a null-input mock), the whole path is a clean no-op. Full API reference:
 [`docs/modding/ai.md`](modding/ai.md).
+
+## Force feedback (FFB sticks, #928)
+
+Distinct from gamepad rumble: an FFB HOTAS stick renders **directional canned effects** through the
+SDL3 haptic API (`SDL_INIT_HAPTIC` + `SDL_OpenHapticFromJoystick`). This is a **cueing** layer, not a
+control-loading sim — the effects are canned buffet/rumble/kick, not modelled stick forces.
+
+The surface is on `IJoystick` as **non-pure, no-op-default** virtuals (a gamepad-only backend or a
+non-FFB stick simply reports no capability, so nothing changes for them):
+
+| Method | Effect |
+|---|---|
+| `supportsForceFeedback(joy)` | true when the stick opened a haptic device |
+| `playFfbEffect(joy, slot, FfbEffect)` | play / **update in place** if the slot holds the same kind |
+| `stopFfbEffect(joy, slot)` | stop one slot |
+| `stopAllFfbEffects(joy)` | stop all (called on pause / focus loss) |
+
+`FfbEffect` = `{kind: ConstantForce | Sine, directionDeg, magnitude [0,1], periodMs, durationMs}`;
+`kFfbSlotCount = 4`. `HapticController` (device 0) drives three slots:
+
+| Slot | Effect | Trigger |
+|---|---|---|
+| 0 | Stall buffet (Sine, ~55 ms) | AoA past the stall angle; amplitude grows with AoA; stops on recovery |
+| 1 | Ground roll (Sine, ~18 ms) | on the deck (AGL < 3 m) rolling faster than 2 m/s; amplitude scales with speed |
+| 2 | Gun-fire kick (ConstantForce, 60 ms) | one-shot per `weaponFired` frame |
+
+**Non-goals** (deliberately out of scope): trim forces, spring/centering, and any modelled control
+loading. Config: `[controls] ffb_enabled` (default true) + `ffb_strength` (0–1). Capability-guarded —
+a clean no-op without an FFB device. Covered by `tests/test_haptic_controller.cpp` (a `TrackingJoystick`
+recording effect calls).

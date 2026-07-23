@@ -4,8 +4,10 @@
 #include "IScreen.h"
 #include "RenderTypes.h"
 
+#include "Autopilot.h"      // player autopilot holds (#640)
 #include "CrewSeatMenu.h"   // crew seat picker (#975)
 #include "EntitySelector.h" // observer entity picker (#860)
+#include "render/IHud.h"    // HudMfdState (#642)
 #include "render/RenderSnapshot.h"
 
 #include <array>
@@ -27,6 +29,7 @@ class SandboxInspector;
 
 class CameraController;
 class ClientPrediction;
+class SceneRenderer;
 class IHud;
 class ManualOverlay;
 class SimRenderBridge;
@@ -39,6 +42,9 @@ class ChatOverlay;
 class IGui;
 
 struct EnvironmentState;
+class InputBindings;
+class TargetDesignation;
+class HeadTracker;
 
 // All dependencies FlightScreen needs; set by Game before transitioning to Flight.
 struct FlightScreenDeps {
@@ -57,13 +63,18 @@ struct FlightScreenDeps {
     EntityTypeRegistry* entityRegistry{nullptr};      // for the observer picker's type-name label (#860)
     IJoystick* joystick{nullptr};
     UserConfig* userConfig{nullptr};
-    SandboxInspector* inspector{nullptr};  // null = no inspector
-    ClientPrediction* prediction{nullptr}; // null = no prediction
-    WingmanMenu* wingmanMenu{nullptr};     // null = no radio menu (#610)
-    CommsMenu* commsMenu{nullptr};         // null = no ATC comms menu (#704)
-    ManualOverlay* manual{nullptr};        // null = no in-flight aircraft manual (#821)
-    ChatOverlay* chat{nullptr};            // null = no in-match chat (#646)
-    IGui* gui{nullptr};                    // null = no GUI backend (chat input box degrades off)
+    SandboxInspector* inspector{nullptr};          // null = no inspector
+    ClientPrediction* prediction{nullptr};         // null = no prediction
+    const InputBindings* inputBindings{nullptr};   // for edge-detecting autopilot/target actions (#640/#696)
+    TargetDesignation* targetDesignation{nullptr}; // client-side designated target (#696); null = disabled
+    SceneRenderer* sceneRenderer{nullptr};         // for the target-slaved inset view (#698); null = disabled
+    float* nvgIntensity{nullptr};                  // NVG gain sink read by Game.cpp -> setNightVision (#210)
+    HeadTracker* headTracker{nullptr};             // opentrack head tracking (#927); null = disabled
+    WingmanMenu* wingmanMenu{nullptr};             // null = no radio menu (#610)
+    CommsMenu* commsMenu{nullptr};                 // null = no ATC comms menu (#704)
+    ManualOverlay* manual{nullptr};                // null = no in-flight aircraft manual (#821)
+    ChatOverlay* chat{nullptr};                    // null = no in-match chat (#646)
+    IGui* gui{nullptr};                            // null = no GUI backend (chat input box degrades off)
     uint32_t* assignedEntityIdx{nullptr};
     uint32_t* assignedEntityGen{nullptr};
 };
@@ -83,6 +94,33 @@ class FlightScreen : public IScreen {
     FlightScreenDeps m_deps;
     const EntityRenderEntry* m_playerEntry{nullptr};
     bool m_weaponFired{false};
+
+    // The frame's camera view (#438 D1 seam). Computed in update() right after CameraInput sets the
+    // pose, cached so buildElements()-time world->screen cues (#696/#698) project against the same
+    // matrix the HUD used.
+    CameraView m_frameCam{};
+
+    // Player autopilot (#640): altitude / heading / speed hold shaped over the client input before it
+    // is sent. Reset at session start; disengaged when there is no predicted ownship state.
+    Autopilot m_autopilot;
+    float m_lastRawThrottle{0.0f}; // to detect a throttle touch (disengages speed hold)
+
+    // The resolved designated target this frame (#696), snapshot-lifetime — copy fields, never retain.
+    // Used by the designator cue in buildElements(). Null = no valid designation.
+    const EntityRenderEntry* m_designatedTarget{nullptr};
+    char m_tgtLabel[64]{}; // "TGT F-16C  4.2 km" rebuilt each frame (HudElement::text is non-owning)
+
+    // Target-slaved inset view (#698): toggled by TargetInsetToggle; the border rect is remembered so
+    // buildElements() frames the live 3D inset the renderer draws.
+    bool m_insetOn{false};
+    glm::vec4 m_insetRect{0.0f};
+    bool m_insetActive{false}; // inset shown this frame (on + a target resolved)
+
+    // Radar MFD page state (#642): client UI, cycled with MfdPage/MfdRange; fed to the HUD each frame.
+    HudMfdState m_mfd{};
+
+    // Night-vision goggles (#210): client-local toggle, applied only in cockpit view.
+    bool m_nvgOn{false};
 
     // Ground-crew scene (#55): landed-and-stopped detection on the OWN aircraft. The airborne→landed
     // edge records a landing score into the logbook (the #674 sink that had no producer); holding
@@ -113,11 +151,10 @@ class FlightScreen : public IScreen {
     char m_seatResultLine[80]{}; // last MsgSeatResult, surfaced to the player
     char m_seatPickerLine[96]{}; // the picker's current selection, rebuilt each frame (HUD text is non-owning)
 
-    // HUD (max 16) + rain (max 48) + slack
-    // HUD (<=16) + windshield rain (<=48) + the radio menu (<=10) + slack.
-    // Sized for the worst case: cockpit HUD + 48 windshield-rain streaks + the radio menu + the
-    // in-flight manual (#821), which is a full page of text.
-    static constexpr int kMaxElements = 176;
+    // Sized for the worst case: the redesigned cockpit HUD (<=320 elements, #438) + 48 windshield-rain
+    // streaks + the target designator box (#696) + the radio/comms menu + the in-flight manual (#821),
+    // which is a full page of text. Must stay >= the FlightHud element cap or HUD symbology is truncated.
+    static constexpr int kMaxElements = 480;
     std::array<HudElement, kMaxElements> m_elements{};
     int m_elementCount{0};
 };

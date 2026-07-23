@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "HeadTracker.h"     // HeadPose (#927 head tracking)
+#include "PadlockTracker.h"  // padlock aim + lock state machine (#697)
 #include "flight/Geodetic.h" // kEarthRadiusM (default planet radius)
 
 #include <chrono>
@@ -10,6 +12,7 @@ namespace fl {
 
 class GameConsole;
 class IInput;
+class InputBindings;
 
 class CameraController;
 class TerrainStreamer;
@@ -27,16 +30,46 @@ enum class CameraMode : uint8_t;
 // Every mode resolves to a single CameraController::setPose() call.
 class CameraInput {
   public:
-    // Detect F1/F2/F4 camera mode switches and backtick console toggle.
-    // Call once per frame before update().
+    // Detect camera mode switches (CameraCockpit/Chase/Free actions, #689) and the backtick console
+    // toggle. Call once per frame before update(). Mode keys resolve through InputBindings (rebindable,
+    // gamepad-capable) via setBindings(); the console toggle stays a raw scancode (not a bound action).
     void pollModeKeys(CameraController& ctrl, GameConsole& console, IInput& input, const EntityRenderEntry* player);
 
     // Compute and apply the camera pose for the current mode from SDL keyboard/mouse state.
     // console is queried to suppress camera movement when the console is open.
     // terrain is used to keep the free-fly camera above the ground.
+    // input drives the View* cockpit-look pan (#689) — a keyboard/d-pad alternative to RMB drag.
     void update(CameraController& ctrl,
                 const EntityRenderEntry* player, // nullptr = no snapshot yet
-                const GameConsole& console, TerrainStreamer& terrain);
+                const GameConsole& console, TerrainStreamer& terrain, IInput& input);
+
+    // Provide the binding table used to resolve camera-mode + cockpit-pan actions (#689). Not owned;
+    // set once on entering Flight. Null = mode switching / pan disabled (defensive).
+    void setBindings(const InputBindings* bindings) noexcept {
+        m_bindings = bindings;
+    }
+
+    // Padlock (#697): the designated target the padlock view slews to keep centred, set each frame by
+    // FlightScreen (null = no target; the padlock view falls back to the airframe forward and exits).
+    void setPadlockTarget(const EntityRenderEntry* target) noexcept {
+        m_padlockTarget = target;
+    }
+    // Seed the padlock tracker from the current view so entering padlock never pops, and report its
+    // lock state for the HUD cue. Called by FlightScreen on the PadlockToggle edge.
+    void enterPadlock() noexcept {
+        m_padlock.enter(m_lastForward, m_lastUp);
+        m_losAccumS = 0.f;
+        m_latchedLos = LosResult::Clear;
+    }
+    [[nodiscard]] PadlockState padlockState() const noexcept {
+        return m_padlock.state();
+    }
+
+    // Head tracking (#927): the smoothed head pose composed into the cockpit look each frame. Not owned;
+    // set each frame by FlightScreen. Null / !fresh = ignored (mouse look still works).
+    void setHeadPose(const HeadPose* pose) noexcept {
+        m_headPose = pose;
+    }
 
     // Persistent throttle [0,1] shared between camera and flight input.
     float throttle() const {
@@ -130,10 +163,21 @@ class CameraInput {
     // Planet radius (m) for the radial camera "up"; Earth default until MsgConnectAck arrives.
     double m_planetRadiusM{kEarthRadiusM};
 
-    // Mode-key edge detection.
-    bool m_f1Prev{false};
-    bool m_f2Prev{false};
-    bool m_f4Prev{false};
+    // Binding table for camera-mode + cockpit-pan actions (#689); not owned, set via setBindings().
+    const InputBindings* m_bindings{nullptr};
+
+    // Padlock view state (#697): the tracker, the designated target (not owned, set each frame), the
+    // last applied forward/up (to seed the tracker on entry without a pop), and the ~15 Hz terrain-LOS
+    // latch (a full march every query would be wasteful at 60 Hz).
+    PadlockTracker m_padlock;
+    const HeadPose* m_headPose{nullptr}; // #927 head tracking; not owned
+    const EntityRenderEntry* m_padlockTarget{nullptr};
+    glm::vec3 m_lastForward{1.f, 0.f, 0.f};
+    glm::vec3 m_lastUp{0.f, 1.f, 0.f};
+    float m_losAccumS{0.f};
+    LosResult m_latchedLos{LosResult::Clear};
+
+    // Console-toggle edge detection (the grave key is not a bound action, so it stays raw).
     bool m_gravePrev{false};
 };
 

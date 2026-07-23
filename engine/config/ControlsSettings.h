@@ -18,6 +18,10 @@ struct ControlsSettings {
     bool hotasInvertRoll{false};
     bool hotasInvertRudder{false};
     bool hotasInvertThrottle{false};
+
+    // Force feedback (#928): cueing effects on an FFB stick (stall buffet / ground roll / gun kick).
+    bool ffbEnabled{true};
+    float ffbStrength{1.0f}; // [0, 1]
 };
 
 } // namespace fl

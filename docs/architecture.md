@@ -218,6 +218,45 @@ revised by a dated decision record instead of a full RFC, provided the change is
 with its rationale. This keeps the velocity of pre-1.0 architecture work without leaving the
 locked table silently stale.
 
+**2026-07-22 — secondary render views extend `FrameScene` as POD fields, never new `IRenderer` pure
+virtuals (#695, Epic #587).** The renderer was strictly one `CameraView` per frame; the target-slaved
+inset (#698) needs the frame's scene rendered a second time from another camera into a sub-rect.
+Rather than add an `IRenderer` method (which every backend + `MockRenderer` would have to implement),
+`FrameScene` gains three POD fields — `insetEnabled`, `insetCamera`, `insetRect[4]` — so mocks and
+every `setScene` consumer compile unchanged and the disabled path is bit-identical to before.
+`VkRenderer` renders the inset as a scissored second forward pass into the HDR target (after the
+transparent pass, before the HDR→sampled barrier) with its own per-frame camera UBO/descriptor set.
+The camera-relative rebase invariant is preserved by composing the inset view with
+`translate(mainOrigin − insetOrigin)` in double precision — `RenderItem` transforms stay
+main-origin-relative, so `planetCenter` in the inset UBO is the MAIN camera's rebased value. Sky,
+transparents, and a per-inset GTAO recompute are v1 out-of-scope (documented in code). This is the
+generic capability; rear-view / missile-cam / MFD repeaters reuse it.
+
+**2026-07-22 — client-side IFF stays client-side; the faction relationship matrix never crosses
+the wire (#688, Epic #587).** The client already receives an entity's `factionIndex` (#860) and a
+datalink track's server-computed `ident` (#528), but had no way to answer friend/foe for an
+*arbitrary* snapshot entity (needed for the #641 combat-HUD target box and #696 target cycling).
+Rather than send the `FactionRegistry` relationship matrix — it is Lua-mutable at runtime, so any
+wire snapshot goes stale, and `RadarView`'s doctrine already says the display-safe fact is `ident`,
+not raw faction — the client derives IFF locally: `ClientNetEventHandler::identForEntity` compares
+the entity's faction to `ownFactionIndex()` (same → Friend), else uses a live datalink track's
+`ident` (authoritative, catches coalitions), else the affiliation-rule fallback
+`areFactionsHostile` (`engine/world/FactionDef.h`). No wire change; `kProtocolVersion` stays 1.
+
+**2026-07-22 — terrain line-of-sight is a shared `engine/spatial` utility, decoupled from the
+collision phase (#687, Epic #587 padlock family).** Nothing ray- or LOS-shaped existed in the
+engine; the padlock lock-break (#697, client) and server-side AI sensing terrain gates (#670) both
+need the same "can A see B over the terrain?" answer. Rather than fold it into the #630 collision
+broadphase (whose scope is SpatialIndex range queries for ramming damage — no ray path), LOS lands
+as a standalone header-only `engine/spatial/LineOfSight.h`: `terrainLos(a, b, heightFn, readyFn,
+R, stepM, clearanceM) -> {Clear, Blocked, Unknown}`. The heightfield is an **injected callable**
+(template, not `std::function`), so the client passes `TerrainStreamer::heightAt` and the server its
+own heightfield — `engine-spatial` keeps its pure-stdlib, glm-free, dependency-free discipline
+(endpoints are `double[3]` like SpatialIndex's positions; glm callers bridge with `glm::value_ptr`).
+An adaptive, margin-bounded march densifies at grazing tangents and stretches over valleys without
+tunnelling thin ridges; `Unknown` (returned when a tile is unloaded mid-segment) is caller policy —
+padlock treats it as Clear so unloaded terrain never false-breaks a lock.
+
 **2026-07-19 — ATC as a deterministic `engine-atc` library + a shared radio channel (Epic #673).**
 Airports build *geometry* (#486/#487); ATC adds *behaviour*: runway sequencing, clearances, and a
 player comms menu. The core decisions: **(1)** ATC is a new **`engine-atc`** static library

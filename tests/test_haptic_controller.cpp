@@ -609,3 +609,135 @@ TEST_CASE("no rumble calls when controller has no haptic support") {
     CHECK(inp.rumbleCalls.empty());
     CHECK(inp.triggerCalls.empty());
 }
+
+// ===========================================================================
+// Force feedback (#928)
+// ===========================================================================
+namespace {
+// Records every FFB call; MockJoystick's other methods keep their base no-ops (proves the non-pure
+// default contract — a mock does not implement the new virtuals unless it wants to).
+struct TrackingJoystick : MockJoystick {
+    struct FfbCall {
+        int slot;
+        IJoystick::FfbEffect effect;
+    };
+    std::vector<FfbCall> played;
+    std::vector<int> stopped;
+    int stopAllCount{0};
+    bool ffbSupported{true};
+
+    bool supportsForceFeedback(int) const override {
+        return ffbSupported;
+    }
+    bool playFfbEffect(int, int slot, const FfbEffect& e) override {
+        played.push_back({slot, e});
+        return true;
+    }
+    void stopFfbEffect(int, int slot) override {
+        stopped.push_back(slot);
+    }
+    void stopAllFfbEffects(int) override {
+        ++stopAllCount;
+    }
+};
+
+int countSlot(const TrackingJoystick& j, int slot) {
+    int n = 0;
+    for (const auto& c : j.played)
+        if (c.slot == slot)
+            ++n;
+    return n;
+}
+} // namespace
+
+TEST_CASE("FFB: gun kick plays exactly once per weaponFired frame on slot 2 (#928)") {
+    TrackingInput inp;
+    TrackingJoystick joy;
+    HapticController hc(inp, &joy);
+    hc.setFfbConfig(true, 1.0f);
+    auto e = makeEntry();
+    hc.update(&e, /*weaponFired=*/true, 0.0f, kDt);
+    CHECK(countSlot(joy, 2) == 1);
+    for (const auto& c : joy.played)
+        if (c.slot == 2)
+            CHECK(c.effect.durationMs > 0u); // a one-shot, not infinite
+    // Not firing -> no new kick.
+    joy.played.clear();
+    hc.update(&e, /*weaponFired=*/false, 0.0f, kDt);
+    CHECK(countSlot(joy, 2) == 0);
+}
+
+TEST_CASE("FFB: stall buffet starts above stall AoA and stops on recovery (#928)") {
+    TrackingInput inp;
+    TrackingJoystick joy;
+    HapticController hc(inp, &joy);
+    hc.setFfbConfig(true, 1.0f);
+    // Velocity mostly downward relative to the nose -> high AoA (nose way above the flight path).
+    auto stalled = makeEntry(50, 0, glm::vec3{40.f, -120.f, 0.f});
+    hc.update(&stalled, false, 0.0f, kDt);
+    CHECK(countSlot(joy, 0) >= 1); // buffet on slot 0
+
+    // Recover: velocity along the nose -> low AoA. The buffet stops.
+    auto level = makeEntry(50, 0, glm::vec3{120.f, 0.f, 0.f});
+    joy.stopped.clear();
+    hc.update(&level, false, 0.0f, kDt);
+    bool stoppedSlot0 = false;
+    for (int s : joy.stopped)
+        if (s == 0)
+            stoppedSlot0 = true;
+    CHECK(stoppedSlot0);
+}
+
+TEST_CASE("FFB: ground roll runs on the runway, gated by AGL + speed (#928)") {
+    TrackingInput inp;
+    TrackingJoystick joy;
+    HapticController hc(inp, &joy);
+    hc.setFfbConfig(true, 1.0f);
+    // On the deck (AGL ~0), rolling fast.
+    auto rolling = makeEntry(50, 0, glm::vec3{40.f, 0.f, 0.f});
+    rolling.position = {0.0, 1.0, 0.0};
+    hc.update(&rolling, false, /*terrainElev=*/0.0f, kDt);
+    CHECK(countSlot(joy, 1) >= 1);
+
+    // Airborne -> ground roll stops.
+    auto airborne = makeEntry(50, 0, glm::vec3{40.f, 0.f, 0.f});
+    airborne.position = {0.0, 500.0, 0.0};
+    joy.stopped.clear();
+    hc.update(&airborne, false, 0.0f, kDt);
+    bool stoppedSlot1 = false;
+    for (int s : joy.stopped)
+        if (s == 1)
+            stoppedSlot1 = true;
+    CHECK(stoppedSlot1);
+}
+
+TEST_CASE("FFB: no effects when unsupported or disabled; onPause stops all (#928)") {
+    TrackingInput inp;
+    auto e = makeEntry();
+
+    // Disabled config -> no FFB calls.
+    {
+        TrackingJoystick joy;
+        HapticController hc(inp, &joy);
+        hc.setFfbConfig(false, 1.0f);
+        hc.update(&e, true, 0.0f, kDt);
+        CHECK(joy.played.empty());
+    }
+    // Device reports no FFB -> no calls even when enabled.
+    {
+        TrackingJoystick joy;
+        joy.ffbSupported = false;
+        HapticController hc(inp, &joy);
+        hc.setFfbConfig(true, 1.0f);
+        hc.update(&e, true, 0.0f, kDt);
+        CHECK(joy.played.empty());
+    }
+    // onPause stops all effects.
+    {
+        TrackingJoystick joy;
+        HapticController hc(inp, &joy);
+        hc.setFfbConfig(true, 1.0f);
+        hc.onPause(0);
+        CHECK(joy.stopAllCount == 1);
+    }
+}

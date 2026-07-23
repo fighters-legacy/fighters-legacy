@@ -21,6 +21,9 @@ bool SDL3Window::init(const char* title, int width, int height) {
         m_lastError = SDL_GetError();
         return false;
     }
+    // Force-feedback support (#928) — a separate, optional subsystem: a haptic-init failure must never
+    // kill the window (most machines have no FFB device), so it is not folded into the main SDL_Init.
+    SDL_InitSubSystem(SDL_INIT_HAPTIC);
 
     m_window = SDL_CreateWindow(title, width, height,
                                 SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);

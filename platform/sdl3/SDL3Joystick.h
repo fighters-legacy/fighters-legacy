@@ -7,6 +7,7 @@
 #include <vector>
 
 struct SDL_Joystick;
+struct SDL_Haptic;
 typedef uint32_t SDL_JoystickID;
 
 namespace fl {
@@ -28,6 +29,12 @@ class SDL3Joystick : public IJoystick, public ISDL3EventSink {
     void flush() override;
     const char* getLastError() const override;
 
+    // --- Force feedback (#928) ---
+    bool supportsForceFeedback(int joystickId) const override;
+    bool playFfbEffect(int joystickId, int slot, const FfbEffect& effect) override;
+    void stopFfbEffect(int joystickId, int slot) override;
+    void stopAllFfbEffects(int joystickId) override;
+
     // --- ISDL3EventSink ---
     void onSDLEvent(const SDL_Event& ev) override;
 
@@ -41,6 +48,10 @@ class SDL3Joystick : public IJoystick, public ISDL3EventSink {
         std::vector<HatPosition> hats;
         std::vector<bool> buttons;
         std::vector<bool> justPressed;
+        // Force feedback (#928): the opened haptic device + per-slot effect id/kind.
+        SDL_Haptic* haptic{nullptr};
+        int ffbEffectId[IJoystick::kFfbSlotCount]{-1, -1, -1, -1};
+        FfbEffectKind ffbSlotKind[IJoystick::kFfbSlotCount]{};
     };
 
     std::vector<JoystickState> m_joysticks;

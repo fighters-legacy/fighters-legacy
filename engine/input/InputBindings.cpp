@@ -10,10 +10,52 @@ namespace fl {
 // ---------------------------------------------------------------------------
 
 static constexpr const char* kActionNames[] = {
-    "PitchAxis",  "RollAxis",   "YawAxis",     "ThrottleAxis", "PitchUp",  "PitchDown",   "RollLeft",    "RollRight",
-    "YawLeft",    "YawRight",   "ThrottleUp",  "ThrottleDown", "Airbrake", "Afterburner", "FireWeapon",  "FireMissile",
-    "NextWeapon", "PrevWeapon", "ViewUp",      "ViewDown",     "ViewLeft", "ViewRight",   "LandingGear", "Flaps",
-    "Pause",      "Menu",       "WingmanMenu", "Eject",        "Respawn",  "Scoreboard",  "ChatAll",     "ChatTeam",
+    "PitchAxis",
+    "RollAxis",
+    "YawAxis",
+    "ThrottleAxis",
+    "PitchUp",
+    "PitchDown",
+    "RollLeft",
+    "RollRight",
+    "YawLeft",
+    "YawRight",
+    "ThrottleUp",
+    "ThrottleDown",
+    "Airbrake",
+    "Afterburner",
+    "FireWeapon",
+    "FireMissile",
+    "NextWeapon",
+    "PrevWeapon",
+    "ViewUp",
+    "ViewDown",
+    "ViewLeft",
+    "ViewRight",
+    "LandingGear",
+    "Flaps",
+    "Pause",
+    "Menu",
+    "WingmanMenu",
+    "Eject",
+    "Respawn",
+    "Scoreboard",
+    "ChatAll",
+    "ChatTeam",
+    "CameraCockpit",
+    "CameraChase",
+    "CameraFree",
+    "PadlockToggle",
+    "NextTarget",
+    "PrevTarget",
+    "TargetInsetToggle",
+    "AutopilotAltHold",
+    "AutopilotHdgHold",
+    "AutopilotSpdHold",
+    "MasterArm",
+    "MfdPage",
+    "MfdRange",
+    "NvgToggle",
 };
 static_assert(std::size(kActionNames) == static_cast<size_t>(InputAction::Count),
               "kActionNames must have one entry per InputAction");
@@ -153,6 +195,10 @@ static const char* keyName(Key k) {
         return "PageDown";
     case Key::Insert:
         return "Insert";
+    case Key::Minus:
+        return "Minus";
+    case Key::Equals:
+        return "Equals";
     case Key::F1:
         return "F1";
     case Key::F2:
@@ -297,6 +343,10 @@ static Key keyFromName(const std::string& n) {
         return Key::PageDown;
     if (n == "Insert")
         return Key::Insert;
+    if (n == "Minus")
+        return Key::Minus;
+    if (n == "Equals")
+        return Key::Equals;
     if (n == "F1")
         return Key::F1;
     if (n == "F2")
@@ -606,6 +656,38 @@ void InputBindings::applyDefaults() {
     m_primary[static_cast<int>(InputAction::ChatTeam)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::H),
                                                           false};
 
+    // Camera modes (#689). F1/F2/F4 preserve the old raw-scancode behavior, now rebindable + gamepad-
+    // capable. F3 is the perf overlay and F5 the padlock, so Chase stays on F2 and Free on F4.
+    m_primary[static_cast<int>(InputAction::CameraCockpit)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::F1),
+                                                               false};
+    m_primary[static_cast<int>(InputAction::CameraChase)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::F2),
+                                                             false};
+    m_primary[static_cast<int>(InputAction::CameraFree)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::F4),
+                                                            false};
+
+    // Padlock + target designation (#671/#689). F5 padlock (F3 = perf overlay), F6 target inset. N/P
+    // cycle targets — T is the comms menu and Y is ChatAll, so those were rejected; N/P are free and
+    // mnemonic (next / prev). The cockpit-view pan (View*) fills PageUp/PageDown/Arrow{Left,Right}.
+    m_primary[static_cast<int>(InputAction::PadlockToggle)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::F5),
+                                                               false};
+    m_primary[static_cast<int>(InputAction::TargetInsetToggle)] = {BindingSource::Keyboard,
+                                                                   static_cast<uint32_t>(Key::F6), false};
+    m_primary[static_cast<int>(InputAction::NextTarget)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::N),
+                                                            false};
+    m_primary[static_cast<int>(InputAction::PrevTarget)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::P),
+                                                            false};
+
+    // Cockpit look pan (#689) — a keyboard/d-pad alternative to RMB drag. Arrow keys still drive the
+    // legacy raw elevator/aileron path in FlightInputCollector; View* only pans in Cockpit/Padlock mode.
+    m_primary[static_cast<int>(InputAction::ViewUp)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::PageUp),
+                                                        false};
+    m_primary[static_cast<int>(InputAction::ViewDown)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::PageDown),
+                                                          false};
+    m_primary[static_cast<int>(InputAction::ViewLeft)] = {BindingSource::Keyboard,
+                                                          static_cast<uint32_t>(Key::ArrowLeft), false};
+    m_primary[static_cast<int>(InputAction::ViewRight)] = {BindingSource::Keyboard,
+                                                           static_cast<uint32_t>(Key::ArrowRight), false};
+
     // Gamepad alt defaults
     m_alt[static_cast<int>(InputAction::PitchAxis)] = {BindingSource::GamepadAxis,
                                                        static_cast<uint32_t>(GamepadAxis::RightY), false};
@@ -635,6 +717,36 @@ void InputBindings::applyDefaults() {
                                                    static_cast<uint32_t>(GamepadButton::Start), false};
     m_alt[static_cast<int>(InputAction::Menu)] = {BindingSource::GamepadButton,
                                                   static_cast<uint32_t>(GamepadButton::Back), false};
+
+    // Padlock + target cycle on the gamepad (#689). RightStick click toggles padlock; DpadUp cycles the
+    // next target (DpadLeft/Right/Down are already weapon-cycle / gear, #625). PrevTarget/inset have no
+    // gamepad default — they are rebindable and the pad user cycles forward with DpadUp.
+    m_alt[static_cast<int>(InputAction::PadlockToggle)] = {BindingSource::GamepadButton,
+                                                           static_cast<uint32_t>(GamepadButton::RightStick), false};
+    m_alt[static_cast<int>(InputAction::NextTarget)] = {BindingSource::GamepadButton,
+                                                        static_cast<uint32_t>(GamepadButton::DpadUp), false};
+
+    // Autopilot holds (#640) on F9/F10/F11. A/D/S were rejected: they are the primary roll/pitch flight
+    // bindings, active in the same cockpit context, so a shared key would both fly and toggle a hold.
+    m_primary[static_cast<int>(InputAction::AutopilotAltHold)] = {BindingSource::Keyboard,
+                                                                  static_cast<uint32_t>(Key::F9), false};
+    m_primary[static_cast<int>(InputAction::AutopilotHdgHold)] = {BindingSource::Keyboard,
+                                                                  static_cast<uint32_t>(Key::F10), false};
+    m_primary[static_cast<int>(InputAction::AutopilotSpdHold)] = {BindingSource::Keyboard,
+                                                                  static_cast<uint32_t>(Key::F11), false};
+
+    // Master arm (#641): V toggles ARM/SAFE. Free key, off the flight cluster.
+    m_primary[static_cast<int>(InputAction::MasterArm)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::V),
+                                                           false};
+
+    // Radar MFD (#642): O cycles the page, Num3 the range scale. Free keys.
+    m_primary[static_cast<int>(InputAction::MfdPage)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::O), false};
+    m_primary[static_cast<int>(InputAction::MfdRange)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::Num3),
+                                                          false};
+
+    // Night-vision goggles (#210): F7 toggles.
+    m_primary[static_cast<int>(InputAction::NvgToggle)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::F7),
+                                                           false};
 }
 
 // ---------------------------------------------------------------------------

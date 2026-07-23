@@ -98,6 +98,7 @@
 #include "ClientPrediction.h"
 #include "ConnectArgs.h"
 #include "ManualOverlay.h"
+#include "TargetDesignation.h" // client-side target designation (#696)
 #include "console/ConsoleCommands.h"
 #include "content/ContentBootstrap.h"
 #include "content/ContentIndex.h"
@@ -304,9 +305,10 @@ static void updatePerfOverlay(GameConsole& console, IRenderer& renderer, Perform
 
     // Append live camera + entity readouts (so the underground/aim issues are visible in real time).
     if (overlay.mode() != OverlayMode::Off) {
-        const char* modeStr = camMode == fl::CameraMode::Cockpit ? "COCKPIT"
-                              : camMode == fl::CameraMode::Chase ? "CHASE"
-                                                                 : "FREE";
+        const char* modeStr = camMode == fl::CameraMode::Cockpit   ? "COCKPIT"
+                              : camMode == fl::CameraMode::Chase   ? "CHASE"
+                              : camMode == fl::CameraMode::Padlock ? "PADLOCK"
+                                                                   : "FREE";
         const double planetR = terrain ? terrain->planetRadiusM() : fl::kEarthRadiusM;
         const double terrCam = terrain ? terrain->heightAt(cam.worldOrigin) : 0.0;
         const double terrEnt = (terrain && playerEntry) ? terrain->heightAt(playerEntry->position) : 0.0;
@@ -458,6 +460,7 @@ struct GameServices {
 
     // Per-frame state
     CameraInput camInput;
+    HeadTracker headTracker; // #927 opentrack UDP head tracking (started per session when enabled)
     PerformanceOverlay perfOverlay;
     bool showPing{false}; // toggled by the show_ping console command
     FlightInputCollector flightInput;
@@ -470,6 +473,14 @@ struct GameServices {
 
     // Client-side prediction — persists across sessions; reset() on stopGame().
     ClientPrediction prediction;
+
+    // Client-side target designation (#696) — the single source of truth for the designated target,
+    // consumed by the padlock camera (#697), the target inset (#698), and the combat HUD (#641).
+    TargetDesignation targetDesignation;
+
+    // Night-vision goggles gain (#210): FlightScreen writes it (cockpit + toggle); the render loop
+    // applies it via IRenderer::setNightVision each frame.
+    float nvgIntensity{0.0f};
 };
 
 // Per-session objects — created in startGame(), torn down in stopGame(). Hold pointers/refs into
@@ -749,6 +760,8 @@ bool Game::initPlatform(int argc, char** argv) {
         d.services.axisConfigTable.deserialize(content);
         d.services.flightInput.setBindings(d.services.inputBindings);
         d.services.flightInput.setAxisConfig(d.services.axisConfigTable);
+        // Camera-mode + cockpit-pan actions resolve through the same table (#689).
+        d.services.camInput.setBindings(&d.services.inputBindings);
     }
 
     for (int i = 1; i < argc - 1; ++i) {
@@ -1036,14 +1049,39 @@ void Game::buildManualFor(uint32_t typeIndex) {
     // stationCount 0: cycling is off and the HUD line stays blank, by design.
     d.services.flightInput.setStationCount(static_cast<uint8_t>(std::min<std::size_t>(fullDef.hardpoints.size(), 254)));
     {
-        std::vector<std::string> labels;
-        labels.reserve(fullDef.hardpoints.size());
+        // Per-station facts (#438/#641): the label names the ARM line, muzzle velocity + kind drive
+        // the #641 gun pipper / CCIP. Resolved from the pack WeaponDef here, the one place the client
+        // owns the full def of the aircraft it flies.
+        std::vector<fl::HudStationInfo> stations;
+        stations.reserve(fullDef.hardpoints.size());
         for (const fl::Hardpoint& hpt : fullDef.hardpoints) {
             const fl::WeaponDef* w =
                 hpt.defaultWeapon.empty() ? nullptr : d.services.weapons.findById(hpt.defaultWeapon.c_str());
-            labels.push_back(w ? w->name : hpt.defaultWeapon); // unresolved id shown verbatim; empty = empty
+            fl::HudStationInfo info;
+            info.label = w ? w->name : hpt.defaultWeapon; // unresolved id shown verbatim; empty = empty
+            if (w) {
+                info.muzzleVelMps = w->performance.maxSpeedMps;
+                switch (w->type) {
+                case fl::WeaponType::Gun:
+                    info.kind = 1;
+                    break;
+                case fl::WeaponType::Missile:
+                    info.kind = 2;
+                    break;
+                case fl::WeaponType::Bomb:
+                    info.kind = 3;
+                    break;
+                case fl::WeaponType::Rocket:
+                    info.kind = 4;
+                    break;
+                default:
+                    info.kind = 0;
+                    break;
+                }
+            }
+            stations.push_back(std::move(info));
         }
-        d.services.flightHud.setStationLabels(std::move(labels));
+        d.services.flightHud.setStationInfo(std::move(stations));
     }
 
     // The flight model: the same one prediction flies, resolved the same way.
@@ -1283,6 +1321,9 @@ void Game::startGame(const std::string& mission) {
     d.services.renderBridge.reset();
     d.services.entityRegistry.clear();
     d.services.camInput.startSession();
+    // Head tracking (#927): open the opentrack UDP listener for this session when enabled.
+    if (d.services.userConfig && d.services.userConfig->headTracking().enabled)
+        d.services.headTracker.start(static_cast<uint16_t>(d.services.userConfig->headTracking().port));
     d.services.env = EnvironmentState{};
     d.session.serverReady.store(false, std::memory_order_relaxed);
     d.session.sessionFailure.store(SessionFailure::None, std::memory_order_relaxed);
@@ -1343,7 +1384,11 @@ void Game::startGame(const std::string& mission) {
     // onConnect is called by LoadingScreen once serverReady fires.
     auto onConnect = [&d, isMultiplayer]() {
         d.services.activeHud = &d.services.flightHud;
-        d.session.hapticController.emplace(*d.services.p.input);
+        d.session.hapticController.emplace(*d.services.p.input, d.services.p.joystick.get());
+        if (d.services.userConfig) {
+            const auto cs = d.services.userConfig->controls(); // #928 FFB config
+            d.session.hapticController->setFfbConfig(cs.ffbEnabled, cs.ffbStrength);
+        }
         d.services.effectRouter.setHaptics(&*d.session.hapticController); // own-ship launch/release feedback (#631)
 
         // Single-player uses enet6 to match the embedded LocalServer (spawned with --transport enet);
@@ -1480,6 +1525,11 @@ void Game::startGame(const std::string& mission) {
         fsd.userConfig = &*d.services.userConfig;
         fsd.inspector = d.session.inspector ? &*d.session.inspector : nullptr;
         fsd.prediction = &d.services.prediction;
+        fsd.inputBindings = &d.services.inputBindings;         // autopilot/target-cycle edge detection (#640/#696)
+        fsd.targetDesignation = &d.services.targetDesignation; // designated target (#696)
+        fsd.sceneRenderer = d.services.sceneRenderer.get();    // target-slaved inset (#698)
+        fsd.nvgIntensity = &d.services.nvgIntensity;           // night-vision goggles (#210)
+        fsd.headTracker = &d.services.headTracker;             // opentrack head tracking (#927)
         fsd.wingmanMenu = &d.services.wingmanMenu;
         fsd.commsMenu = &d.services.commsMenu;
         fsd.manual = &d.services.manual;
@@ -1543,6 +1593,8 @@ void Game::stopGame() {
     // Join background server thread before touching any session objects.
     if (d.session.serverThread.joinable())
         d.session.serverThread.join();
+
+    d.services.headTracker.stop(); // #927 close the head-tracking socket
 
     if (d.session.hapticController)
         d.session.hapticController->onPause(0);
@@ -2090,7 +2142,8 @@ void Game::run() {
             // In cockpit view the camera sits at the player entity, so render that entity
             // shadow-only — you should not see your own aircraft from inside it, but its shadow
             // on the ground should remain. External views (Chase/Free) show it normally.
-            const bool cockpit = d.services.cameraController.mode() == fl::CameraMode::Cockpit;
+            const fl::CameraMode cm = d.services.cameraController.mode();
+            const bool cockpit = (cm == fl::CameraMode::Cockpit || cm == fl::CameraMode::Padlock); // #697
             if (cockpit && playerEntry) {
                 d.services.sceneRenderer->setHiddenEntity(d.session.clientHandler->assignedEntityIdx,
                                                           d.session.clientHandler->assignedEntityGen);
@@ -2110,6 +2163,8 @@ void Game::run() {
             emitters.insert(emitters.end(), precip.begin(), precip.end());
             const auto fx = d.services.effectRouter.buildEmitters(d.services.particleSystem, 1.f / 60.f);
             emitters.insert(emitters.end(), fx.begin(), fx.end());
+            if (d.services.p.renderer)
+                d.services.p.renderer->setNightVision(d.services.nvgIntensity); // #210
             d.services.sceneRenderer->renderFrame(alpha, cam, d.services.env, emitters);
         }
 

@@ -789,6 +789,9 @@ bool UserConfig::load() {
     m_controls.hotasInvertRoll = tbl["controls"]["hotas_invert_roll"].value_or(false);
     m_controls.hotasInvertRudder = tbl["controls"]["hotas_invert_rudder"].value_or(false);
     m_controls.hotasInvertThrottle = tbl["controls"]["hotas_invert_throttle"].value_or(false);
+    m_controls.ffbEnabled = tbl["controls"]["ffb_enabled"].value_or(true); // #928
+    if (auto v = tbl["controls"]["ffb_strength"].value<double>())
+        m_controls.ffbStrength = std::clamp(static_cast<float>(*v), 0.f, 1.f);
 
     // [debug]
     if (auto v = tomlInt(tbl["debug"]["overlay_mode"])) {
@@ -898,6 +901,23 @@ bool UserConfig::load() {
     if (auto v = tbl["prediction"]["blend_rate"].value<double>())
         m_prediction.blendRate = std::clamp(static_cast<float>(*v), 0.f, 1.f);
 
+    // [headtracking] (#927)
+    m_headTracking.enabled = tbl["headtracking"]["enabled"].value_or(false);
+    m_headTracking.port = std::clamp(static_cast<int>(tbl["headtracking"]["port"].value_or(4242)), 1, 65535);
+    if (auto v = tbl["headtracking"]["yaw_scale"].value<double>())
+        m_headTracking.yawScale = std::clamp(static_cast<float>(*v), 0.f, 8.f);
+    if (auto v = tbl["headtracking"]["pitch_scale"].value<double>())
+        m_headTracking.pitchScale = std::clamp(static_cast<float>(*v), 0.f, 8.f);
+    if (auto v = tbl["headtracking"]["roll_scale"].value<double>())
+        m_headTracking.rollScale = std::clamp(static_cast<float>(*v), 0.f, 8.f);
+    if (auto v = tbl["headtracking"]["positional_scale"].value<double>())
+        m_headTracking.positionalScale = std::clamp(static_cast<float>(*v), 0.f, 8.f);
+    m_headTracking.invertYaw = tbl["headtracking"]["invert_yaw"].value_or(false);
+    m_headTracking.invertPitch = tbl["headtracking"]["invert_pitch"].value_or(false);
+    m_headTracking.invertRoll = tbl["headtracking"]["invert_roll"].value_or(false);
+    if (auto v = tbl["headtracking"]["smoothing"].value<double>())
+        m_headTracking.smoothing = std::clamp(static_cast<float>(*v), 0.f, 0.95f);
+
     return true;
 }
 
@@ -972,6 +992,8 @@ bool UserConfig::save() {
     controls.insert_or_assign("hotas_invert_roll", m_controls.hotasInvertRoll);
     controls.insert_or_assign("hotas_invert_rudder", m_controls.hotasInvertRudder);
     controls.insert_or_assign("hotas_invert_throttle", m_controls.hotasInvertThrottle);
+    controls.insert_or_assign("ffb_enabled", m_controls.ffbEnabled); // #928
+    controls.insert_or_assign("ffb_strength", static_cast<double>(m_controls.ffbStrength));
 
     toml::table client;
     client.insert_or_assign("motd_display_s", static_cast<int64_t>(m_client.motdDisplayS));
@@ -988,6 +1010,18 @@ bool UserConfig::save() {
     prediction.insert_or_assign("enabled", m_prediction.enabled);
     prediction.insert_or_assign("snap_threshold_m", static_cast<double>(m_prediction.snapThresholdM));
     prediction.insert_or_assign("blend_rate", static_cast<double>(m_prediction.blendRate));
+
+    toml::table headtracking; // #927
+    headtracking.insert_or_assign("enabled", m_headTracking.enabled);
+    headtracking.insert_or_assign("port", static_cast<int64_t>(m_headTracking.port));
+    headtracking.insert_or_assign("yaw_scale", static_cast<double>(m_headTracking.yawScale));
+    headtracking.insert_or_assign("pitch_scale", static_cast<double>(m_headTracking.pitchScale));
+    headtracking.insert_or_assign("roll_scale", static_cast<double>(m_headTracking.rollScale));
+    headtracking.insert_or_assign("positional_scale", static_cast<double>(m_headTracking.positionalScale));
+    headtracking.insert_or_assign("invert_yaw", m_headTracking.invertYaw);
+    headtracking.insert_or_assign("invert_pitch", m_headTracking.invertPitch);
+    headtracking.insert_or_assign("invert_roll", m_headTracking.invertRoll);
+    headtracking.insert_or_assign("smoothing", static_cast<double>(m_headTracking.smoothing));
 
     toml::table debug;
     debug.insert_or_assign("overlay_mode", static_cast<int64_t>(m_debug.overlayMode));
@@ -1052,6 +1086,7 @@ bool UserConfig::save() {
     root.insert_or_assign("client", std::move(client));
     root.insert_or_assign("hud", std::move(hud));
     root.insert_or_assign("prediction", std::move(prediction));
+    root.insert_or_assign("headtracking", std::move(headtracking));
     root.insert_or_assign("debug", std::move(debug));
     root.insert_or_assign("pilot", std::move(pilot));
 
@@ -1157,6 +1192,13 @@ PredictionSettings UserConfig::prediction() const {
 }
 void UserConfig::setPrediction(const PredictionSettings& ps) {
     m_prediction = ps;
+}
+
+HeadTrackingSettings UserConfig::headTracking() const {
+    return m_headTracking;
+}
+void UserConfig::setHeadTracking(const HeadTrackingSettings& hts) {
+    m_headTracking = hts;
 }
 
 } // namespace fl

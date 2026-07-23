@@ -11,9 +11,19 @@
 
 namespace fl {
 
+class IJoystick;
+
 class HapticController {
   public:
-    explicit HapticController(IInput& input);
+    // joystick (#928) is optional — when present and FFB-capable, stall buffet / ground roll / gun kick
+    // are also driven as force-feedback effects on it. Null keeps rumble-only behaviour.
+    explicit HapticController(IInput& input, IJoystick* joystick = nullptr);
+
+    // Force feedback (#928): enable + strength [0,1]. Off by default until configured.
+    void setFfbConfig(bool enabled, float strength) noexcept {
+        m_ffbEnabled = enabled;
+        m_ffbStrength = strength < 0.0f ? 0.0f : (strength > 1.0f ? 1.0f : strength);
+    }
 
     // Called every frame. terrainElev is the terrain RADIAL elevation above the datum
     // (TerrainStreamer::heightAt(dvec3)); AGL is derived as the geodetic altitude minus it, so it
@@ -50,6 +60,11 @@ class HapticController {
     static constexpr CsPulse kCsPulses[4] = {{0.04f, 30}, {0.065f, 30}, {0.05f, 30}, {0.08f, 30}};
 
     IInput& m_input;
+    IJoystick* m_joystick{nullptr}; // #928 FFB device (device 0 convention); null = rumble only
+    bool m_ffbEnabled{false};
+    float m_ffbStrength{1.0f};
+    bool m_ffbStallOn{false};  // FFB slot 0 (stall buffet) currently running
+    bool m_ffbGroundOn{false}; // FFB slot 1 (ground roll) currently running
 
     bool m_firstFrame{true};
     glm::vec3 m_prevVelocity{};

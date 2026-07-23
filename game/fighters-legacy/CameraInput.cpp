@@ -3,7 +3,9 @@
 
 #include "IInput.h"
 #include "console/GameConsole.h"
-#include "flight/LocalFrame.h" // radialUp: camera "up" = radial direction on a spherical planet
+#include "flight/LocalFrame.h"   // radialUp: camera "up" = radial direction on a spherical planet
+#include "input/BindingQuery.h"  // bindingJustPressed / bindingDown (#689)
+#include "input/InputBindings.h" // camera-mode + View* pan bindings (#689)
 #include "render/CameraController.h"
 #include "render/RenderSnapshot.h"
 #include "render/TerrainStreamer.h"
@@ -56,23 +58,22 @@ void CameraInput::pollModeKeys(fl::CameraController& ctrl, GameConsole& console,
     }
     m_gravePrev = graveNow;
 
-    if (!console.isOpen()) {
-        if (keys[SDL_SCANCODE_F1] && !m_f1Prev) {
+    if (!console.isOpen() && m_bindings) {
+        // Camera-mode switches route through InputBindings (#689): rebindable and gamepad-capable, with
+        // the edge detection provided by IInput::isKeyJustPressed via bindingJustPressed.
+        if (bindingJustPressed(input, m_bindings->get(fl::InputAction::CameraCockpit))) {
             ctrl.setMode(fl::CameraMode::Cockpit);
             onModeSwitch(fl::CameraMode::Cockpit, player);
         }
-        if (keys[SDL_SCANCODE_F2] && !m_f2Prev) {
+        if (bindingJustPressed(input, m_bindings->get(fl::InputAction::CameraChase))) {
             ctrl.setMode(fl::CameraMode::Chase);
             onModeSwitch(fl::CameraMode::Chase, player);
         }
-        if (keys[SDL_SCANCODE_F4] && !m_f4Prev) {
+        if (bindingJustPressed(input, m_bindings->get(fl::InputAction::CameraFree))) {
             ctrl.setMode(fl::CameraMode::Free);
             onModeSwitch(fl::CameraMode::Free, player);
         }
     }
-    m_f1Prev = keys[SDL_SCANCODE_F1] != 0;
-    m_f2Prev = keys[SDL_SCANCODE_F2] != 0;
-    m_f4Prev = keys[SDL_SCANCODE_F4] != 0;
 }
 
 void CameraInput::startSession() noexcept {
@@ -120,7 +121,7 @@ void CameraInput::onModeSwitch(fl::CameraMode newMode, const fl::EntityRenderEnt
 }
 
 void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry* player, const GameConsole& console,
-                         fl::TerrainStreamer& terrain) {
+                         fl::TerrainStreamer& terrain, IInput& input) {
     float mx = 0.f, my = 0.f;
     const SDL_MouseButtonFlags mb = SDL_GetMouseState(&mx, &my);
     const bool* keys = SDL_GetKeyboardState(nullptr);
@@ -221,7 +222,7 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
         if (player) {
             // Locked inside the entity, looking along its forward axis (+ RMB look offset). The
             // origin is the ground-contact point, so raise the eye to the body centre.
-            const glm::dvec3 eye =
+            glm::dvec3 eye =
                 player->position + glm::dvec3(player->velocity * (m_renderAlpha * kTickDt)) +
                 glm::dvec3(player->orientation * glm::vec3{0.f, static_cast<float>(kEntityCentreHeightM), 0.f});
             if (!m_firstFrame && (mb & SDL_BUTTON_RMASK)) {
@@ -229,11 +230,90 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
                 m_cockpitPitch += (my - m_lastMy) * 0.25f;
                 m_cockpitPitch = std::clamp(m_cockpitPitch, -80.0f, 80.0f);
             }
-            const glm::quat lookRot = glm::angleAxis(glm::radians(m_cockpitYaw), glm::vec3{0.f, 1.f, 0.f}) *
-                                      glm::angleAxis(glm::radians(m_cockpitPitch), glm::vec3{0.f, 0.f, 1.f});
+            // Head tracking (#927): compose the head pose additively with the RMB look. Head roll tilts
+            // the camera up (about the body forward); a body-frame eye offset lets the pilot lean.
+            const bool headFresh = m_headPose && m_headPose->fresh;
+            const float hYaw = headFresh ? glm::degrees(m_headPose->yawRad) : 0.f;
+            const float hPitch = headFresh ? glm::degrees(m_headPose->pitchRad) : 0.f;
+            const float hRoll = headFresh ? m_headPose->rollRad : 0.f;
+            if (headFresh)
+                eye += glm::dvec3(player->orientation * m_headPose->offsetM);
+            // Keyboard / d-pad look pan (#689) — composes additively with the RMB drag above. Gated on
+            // the console being closed, matching the free-fly movement cluster.
+            if (!consoleOpen && m_bindings) {
+                constexpr float kPanDegPerS = 90.f;
+                const float panStep = kPanDegPerS * dt;
+                if (bindingDown(input, m_bindings->get(fl::InputAction::ViewLeft)))
+                    m_cockpitYaw += panStep;
+                if (bindingDown(input, m_bindings->get(fl::InputAction::ViewRight)))
+                    m_cockpitYaw -= panStep;
+                if (bindingDown(input, m_bindings->get(fl::InputAction::ViewUp)))
+                    m_cockpitPitch += panStep;
+                if (bindingDown(input, m_bindings->get(fl::InputAction::ViewDown)))
+                    m_cockpitPitch -= panStep;
+                m_cockpitPitch = std::clamp(m_cockpitPitch, -80.0f, 80.0f);
+            }
+            const float lookPitch = std::clamp(m_cockpitPitch + hPitch, -80.0f, 80.0f);
+            const glm::quat lookRot = glm::angleAxis(glm::radians(m_cockpitYaw + hYaw), glm::vec3{0.f, 1.f, 0.f}) *
+                                      glm::angleAxis(glm::radians(lookPitch), glm::vec3{0.f, 0.f, 1.f});
             const glm::vec3 forward = player->orientation * lookRot * glm::vec3{1.f, 0.f, 0.f};
-            const glm::vec3 up = player->orientation * glm::vec3{0.f, 1.f, 0.f};
+            // Head roll tilts the view up about the body forward axis (0 = the unchanged body-up).
+            const glm::vec3 up =
+                player->orientation * glm::angleAxis(hRoll, glm::vec3{1.f, 0.f, 0.f}) * glm::vec3{0.f, 1.f, 0.f};
             ctrl.setPose(eye, forward, up);
+            m_lastForward = forward; // seed for a subsequent padlock entry (#697)
+            m_lastUp = up;
+        }
+        break;
+    case CameraMode::Padlock:
+        if (player) {
+            // Eye identical to Cockpit; forward/up come from the padlock tracker slewing to the target.
+            const glm::dvec3 eye =
+                player->position + glm::dvec3(player->velocity * (m_renderAlpha * kTickDt)) +
+                glm::dvec3(player->orientation * glm::vec3{0.f, static_cast<float>(kEntityCentreHeightM), 0.f});
+            const glm::vec3 worldUp = radialUp(eye, m_planetRadiusM);
+            if (!m_padlockTarget) {
+                // No target: hold the airframe forward; FlightScreen reverts to Cockpit.
+                const glm::vec3 fwd = player->orientation * glm::vec3{1.f, 0.f, 0.f};
+                ctrl.setPose(eye, fwd, worldUp);
+                m_lastForward = fwd;
+                m_lastUp = worldUp;
+                m_lastEye = eye;
+                break;
+            }
+            const glm::dvec3 tgt =
+                m_padlockTarget->position + glm::dvec3(m_padlockTarget->velocity * (m_renderAlpha * kTickDt));
+
+            // Terrain LOS latched at ~15 Hz — a full segment march every 60 Hz frame is wasteful.
+            m_losAccumS += dt;
+            if (m_losAccumS >= 1.0f / 15.0f) {
+                m_losAccumS = 0.f;
+                auto hfn = [&](double x, double y, double z) {
+                    return static_cast<double>(terrain.heightAt(glm::dvec3{x, y, z}));
+                };
+                auto rfn = [&](double x, double y, double z) { return terrain.heightReadyAt(glm::dvec3{x, y, z}); };
+                const double a[3] = {eye.x, eye.y, eye.z};
+                const double b[3] = {tgt.x, tgt.y, tgt.z};
+                m_latchedLos = terrainLos(a, b, hfn, rfn, m_planetRadiusM);
+            }
+
+            PadlockInputs pin;
+            pin.dt = dt;
+            pin.ownPos = eye;
+            pin.ownOrient = player->orientation;
+            pin.targetPos = tgt;
+            pin.terrainLos = m_latchedLos; // Unknown treated as Clear inside the tracker
+            pin.worldUp = worldUp;
+            const PadlockPose pose = m_padlock.update(pin);
+            if (pose.exitToCockpit) {
+                ctrl.setMode(fl::CameraMode::Cockpit);
+                onModeSwitch(fl::CameraMode::Cockpit, player);
+            } else {
+                ctrl.setPose(eye, pose.forward, pose.up);
+            }
+            m_lastForward = pose.forward;
+            m_lastUp = pose.up;
+            m_lastEye = eye;
         }
         break;
     }

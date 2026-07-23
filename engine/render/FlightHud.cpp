@@ -1,272 +1,379 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "render/FlightHud.h"
 
-#include "flight/Atmosphere.h" // calibratedAirspeed / machNumber for IAS vs Mach (#480)
-#include "flight/LocalFrame.h" // headingOf / pitchOf / bankOf on the local-level frame
-#include "nav/MagneticModel.h" // WMM2025 declination for magnetic heading (#483)
+#include "flight/Atmosphere.h"    // calibratedAirspeed / machNumber (IAS vs Mach, #480)
+#include "flight/LocalFrame.h"    // pitchOf / bankOf / headingOf / enuBasis / radialUp
+#include "render/HudProjection.h" // worldToHud / hudAspect (#692) for the flight-path marker
 
 #include <algorithm>
 #include <cmath>
+#include <cstdarg>
 #include <cstdio>
+#include <cstring>
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 namespace fl {
 
 // Default HUD phosphor color — bright military green.
-// Will be a user-configurable option in a later phase.
 static constexpr float kHudR = 0.0f;
 static constexpr float kHudG = 1.0f;
 static constexpr float kHudB = 0.0f;
 
-void FlightHud::update(const EntityRenderEntry* e, float timeOfDay, float terrainElevation, uint32_t latencyMs,
-                       bool showLatency, double planetRadiusM, const RadarView& radar) {
+// Conversions.
+static constexpr float kMps2Kt = 1.94384f;
+static constexpr float kM2Ft = 3.28084f;
+static constexpr float kG0 = 9.80665f;
+
+// ── appenders ────────────────────────────────────────────────────────────────
+bool FlightHud::pushText(HudAlign align, float x, float y, float r, float g, float b, const char* fmt, ...) {
+    if (m_elementCount >= kMaxElements || m_stringCount >= kMaxStrings) {
+        m_overflowed = true;
+        return false;
+    }
+    char buf[64];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    m_strings[m_stringCount] = buf;
+    HudElement el;
+    el.type = HudElement::Type::Text;
+    el.x = x;
+    el.y = y;
+    el.align = align;
+    el.r = r;
+    el.g = g;
+    el.b = b;
+    el.a = 1.0f;
+    el.text = m_strings[m_stringCount];
+    m_elements[m_elementCount++] = el;
+    ++m_stringCount;
+    return true;
+}
+
+bool FlightHud::pushLine(float x0, float y0, float x1, float y1, float thick, float r, float g, float b, float a) {
+    if (m_elementCount >= kMaxElements) {
+        m_overflowed = true;
+        return false;
+    }
+    HudElement el;
+    el.type = HudElement::Type::Line;
+    el.x = x0;
+    el.y = y0;
+    el.x2 = x1;
+    el.y2 = y1;
+    el.strokeWidth = thick;
+    el.r = r;
+    el.g = g;
+    el.b = b;
+    el.a = a;
+    m_elements[m_elementCount++] = el;
+    return true;
+}
+
+bool FlightHud::pushRect(float x0, float y0, float x1, float y1, float r, float g, float b, float a) {
+    if (m_elementCount >= kMaxElements) {
+        m_overflowed = true;
+        return false;
+    }
+    HudElement el;
+    el.type = HudElement::Type::Rect;
+    el.x = x0;
+    el.y = y0;
+    el.x2 = x1;
+    el.y2 = y1;
+    el.r = r;
+    el.g = g;
+    el.b = b;
+    el.a = a;
+    m_elements[m_elementCount++] = el;
+    return true;
+}
+
+// ── dispatcher ───────────────────────────────────────────────────────────────
+void FlightHud::update(const HudFrameInput& in) {
     m_elementCount = 0;
     m_stringCount = 0;
+    m_overflowed = false;
+    const EntityRenderEntry* e = in.ownship;
     if (!e)
         return;
 
-    auto pushText = [&](HudAlign align, float x, float y, float r, float g, float b, const char* fmt, auto... args) {
-        if (m_elementCount >= kMaxElements || m_stringCount >= kMaxStrings)
-            return;
-        char buf[64];
-        std::snprintf(buf, sizeof(buf), fmt, args...);
-        m_strings[m_stringCount] = buf;
-        HudElement el;
-        el.type = HudElement::Type::Text;
-        el.x = x;
-        el.align = align;
-        el.y = y;
-        el.r = r;
-        el.g = g;
-        el.b = b;
-        el.a = 1.f;
-        el.text = m_strings[m_stringCount];
-        m_elements[m_elementCount++] = el;
-        ++m_stringCount;
-    };
-
-    auto pushLine = [&](float x0, float y0, float x1, float y1, float thick, float r, float g, float b) {
-        if (m_elementCount >= kMaxElements)
-            return;
-        HudElement el;
-        el.type = HudElement::Type::Line;
-        el.x = x0;
-        el.y = y0;
-        el.x2 = x1;
-        el.y2 = y1;
-        el.strokeWidth = thick;
-        el.r = r;
-        el.g = g;
-        el.b = b;
-        el.a = 1.f;
-        m_elements[m_elementCount++] = el;
-    };
-
-    // Airspeed (left side, vertically centered). Three distinct speeds diverge with altitude (#480):
-    // the wire carries only world-frame velocity, so |velocity| is groundspeed and — absent wind on
-    // the wire — the best available estimate of true airspeed (TAS). From TAS + the local atmosphere
-    // we derive the two readouts a pilot actually flies: IAS (calibrated/indicated, dynamic-pressure)
-    // and Mach (TAS ÷ local speed of sound). The old code labelled raw groundspeed "IAS", which read
-    // high by the whole density lapse at altitude. 1 m/s = 1.94384 kts.
-    const float altMsl =
-        static_cast<float>(geodeticAltitude(e->position.x, e->position.y, e->position.z, planetRadiusM));
-    const AtmosphereState atmos = computeAtmosphere(altMsl);
-    const float tasMps =
-        std::sqrt(e->velocity.x * e->velocity.x + e->velocity.y * e->velocity.y + e->velocity.z * e->velocity.z);
-    const float iasKts = calibratedAirspeed(tasMps, atmos) * 1.94384f;
-    const float mach = machNumber(tasMps, atmos.speed_of_sound_m_s);
-    pushText(HudAlign::Left, 0.03f, 0.46f, kHudR, kHudG, kHudB, "IAS %5.0fkts", iasKts);
-
-    // Altitude MSL and AGL (left side, below airspeed). Both radial: ALT is the geodetic (MSL)
-    // altitude above the datum and AGL subtracts the terrain radial elevation — correct planet-wide,
-    // not just where world-Y aliases altitude near the origin (#477). terrainElevation is the terrain
-    // radial elevation (heightAt(dvec3)) supplied by the caller.
-    pushText(HudAlign::Left, 0.03f, 0.50f, kHudR, kHudG, kHudB, "ALT %5.0fm", altMsl);
-    const float agl = altMsl - terrainElevation;
-    pushText(HudAlign::Left, 0.03f, 0.54f, kHudR, kHudG, kHudB, "AGL %5.0fm", agl);
-
-    // Mach number (left column, below AGL) — reads increasingly higher than IAS-implied Mach as the
-    // aircraft climbs, the key high-altitude distinction the flat "IAS" readout hid.
-    pushText(HudAlign::Left, 0.03f, 0.58f, kHudR, kHudG, kHudB, "M %4.2f", mach);
-
-    // Attitude on the LOCAL-LEVEL frame at the entity position (radial up on a spherical planet).
-    // These reduce to the world-frame values near the origin but stay correct planet-wide (#479).
+    const double R = in.planetRadiusM;
     const float q[4] = {e->orientation.x, e->orientation.y, e->orientation.z, e->orientation.w};
-    const float pitchRad = pitchOf(q, e->position, planetRadiusM);
-    const float bankRad = bankOf(q, e->position, planetRadiusM);
+    const float altMsl = static_cast<float>(geodeticAltitude(e->position.x, e->position.y, e->position.z, R));
+    const AtmosphereState atmos = computeAtmosphere(altMsl);
+    const float tas =
+        std::sqrt(e->velocity.x * e->velocity.x + e->velocity.y * e->velocity.y + e->velocity.z * e->velocity.z);
 
-    // Pitch readout (left column, above airspeed)
-    pushText(HudAlign::Left, 0.03f, 0.42f, kHudR, kHudG, kHudB, "PTCH %+03.0f", glm::degrees(pitchRad));
+    // Angle of attack: velocity into the body frame (nose = +X, up = +Y). AoA is the pitch of the
+    // relative wind below the nose, so positive AoA = wind coming from below.
+    const glm::vec3 vBody = glm::conjugate(e->orientation) * e->velocity;
+    const float aoa = (tas > 1.0f) ? std::atan2(-vBody.y, vBody.x) : 0.0f;
 
-    // Heading (bottom-center) — TRUE compass bearing of the nose in the local tangent plane
-    // (0 = N, 90 = E). Kept as the primary readout because it is stable everywhere, including near
-    // the world origin (the geographic north pole), where magnetic heading is intrinsically ill-defined.
-    const float hdgRad = headingOf(q, e->position, planetRadiusM);
-    float hdg = std::fmod(glm::degrees(hdgRad) + 360.f, 360.f);
-    pushText(HudAlign::Center, 0.5f, 0.94f, kHudR, kHudG, kHudB, "HDG %3.0f", hdg);
+    // Load factor from the specific force felt: a_body (centripetal, omega x v) minus gravity in the
+    // body frame, over g0. Level flight with no rotation reads exactly 1 g.
+    const glm::vec3 omega = e->omega;
+    const glm::vec3 aCentripetal = glm::cross(omega, vBody);
+    const glm::vec3 upWorld = radialUp(e->position, R);
+    const glm::vec3 gWorld = -kG0 * upWorld;
+    const glm::vec3 gBody = glm::conjugate(e->orientation) * gWorld;
+    const float loadG = glm::length(aCentripetal - gBody) / kG0;
 
-    // Magnetic heading (#483): TRUE − declination (east declination positive), from the WMM2025 model
-    // at this position. Declination changes ~0.1°/yr, so evaluating at the model epoch is plenty for a
-    // compass. Shown alongside the true heading — real avionics fly magnetic.
-    {
-        const LatLonAlt lla = worldToGeodetic(e->position.x, e->position.y, e->position.z, planetRadiusM);
-        const double decl = MagneticModel::wmm2025().declinationDeg(lla, MagneticModel::wmm2025().epochYear());
-        const float mag = std::fmod(static_cast<float>(glm::degrees(hdgRad) - decl) + 720.f, 360.f);
-        pushText(HudAlign::Left, 0.03f, 0.62f, kHudR, kHudG, kHudB, "MAG %3.0f", mag);
+    Ctx c{in,
+          *e,
+          {q[0], q[1], q[2], q[3]},
+          altMsl,
+          calibratedAirspeed(tas, atmos) * kMps2Kt,
+          tas,
+          machNumber(tas, atmos.speed_of_sound_m_s),
+          pitchOf(q, e->position, R),
+          bankOf(q, e->position, R),
+          std::fmod(glm::degrees(headingOf(q, e->position, R)) + 360.0f, 360.0f),
+          glm::degrees(aoa),
+          loadG,
+          in.cameraValid ? hudAspect(in.camera) : 16.0f / 9.0f};
+
+    drawFrame(c);
+    drawSpeedLadder(c);
+    drawAltTape(c);
+    drawHeadingTapes(c);
+    drawFpmAndHorizon(c);
+    drawDataBlocks(c);
+    drawMfd(c);
+    drawCombat(c);
+}
+
+// ── octagon combiner frame + boresight + clock + latency ─────────────────────
+void FlightHud::drawFrame(Ctx& c) {
+    // An octagonal HUD combiner outline centred on the screen. Eight line segments over the box
+    // [0.30,0.70] x [0.22,0.78] with the corners cut.
+    constexpr float l = 0.30f, r = 0.70f, t = 0.22f, b = 0.78f, cut = 0.06f;
+    const float dim = 0.7f;
+    const float g = kHudG * dim;
+    pushLine(l + cut, t, r - cut, t, 1.0f, kHudR, g, kHudB); // top
+    pushLine(r - cut, t, r, t + cut, 1.0f, kHudR, g, kHudB); // top-right cut
+    pushLine(r, t + cut, r, b - cut, 1.0f, kHudR, g, kHudB); // right
+    pushLine(r, b - cut, r - cut, b, 1.0f, kHudR, g, kHudB); // bottom-right cut
+    pushLine(r - cut, b, l + cut, b, 1.0f, kHudR, g, kHudB); // bottom
+    pushLine(l + cut, b, l, b - cut, 1.0f, kHudR, g, kHudB); // bottom-left cut
+    pushLine(l, b - cut, l, t + cut, 1.0f, kHudR, g, kHudB); // left
+    pushLine(l, t + cut, l + cut, t, 1.0f, kHudR, g, kHudB); // top-left cut
+
+    // Boresight cross (gun cross) at the screen centre — the fixed aircraft-datum reference.
+    constexpr float cx = 0.5f, cy = 0.5f, s = 0.012f;
+    pushLine(cx - s / c.aspect, cy, cx + s / c.aspect, cy, 1.5f, kHudR, kHudG, kHudB);
+    pushLine(cx, cy - s, cx, cy + s, 1.5f, kHudR, kHudG, kHudB);
+
+    // Time-of-day clock (top-right, HH:MM) + optional latency indicator.
+    const int hr = static_cast<int>(c.in.timeOfDay) % 24;
+    const int mn =
+        static_cast<int>((c.in.timeOfDay - static_cast<float>(static_cast<int>(c.in.timeOfDay))) * 60.0f) % 60;
+    pushText(HudAlign::Right, 0.98f, 0.05f, kHudR, kHudG, kHudB, "%02d:%02d", hr, mn);
+    if (c.in.showLatency && c.in.latencyMs > 0)
+        pushText(HudAlign::Right, 0.98f, 0.09f, kHudR, kHudG, kHudB, "%u ms", c.in.latencyMs);
+    if (c.in.nvgActive)
+        pushText(HudAlign::Left, 0.02f, 0.05f, 0.2f, 1.0f, 0.3f, "%s", "NVG");
+
+    // Damage warning (centre) in red.
+    if (c.e.damageLevel > 0)
+        pushText(HudAlign::Center, 0.5f, 0.30f, 1.0f, 0.2f, 0.2f, "%s", "*** DAMAGE ***");
+}
+
+// ── velocity ladder (left, knots) ────────────────────────────────────────────
+void FlightHud::drawSpeedLadder(Ctx& c) {
+    constexpr float x = 0.18f;                 // ladder column
+    constexpr float halfSpan = 0.18f;          // vertical extent above/below centre
+    constexpr float perKt = halfSpan / 100.0f; // 100 kt spans the half-height
+    const float ias = c.iasKts;
+
+    // Vertical scale line + a boxed current-IAS readout at centre.
+    pushLine(x, 0.5f - halfSpan, x, 0.5f + halfSpan, 1.0f, kHudR, kHudG, kHudB);
+    pushRect(x - 0.055f, 0.485f, x - 0.002f, 0.515f, kHudR, kHudG, kHudB, 0.15f);
+    pushText(HudAlign::Right, x - 0.006f, 0.492f, kHudR, kHudG, kHudB, "%d", static_cast<int>(std::lround(ias)));
+    pushText(HudAlign::Center, x, 0.5f - halfSpan - 0.03f, kHudR, kHudG, kHudB, "%s", "IAS");
+
+    // Tick marks every 10 kt (minor) and 50 kt (major, labelled), scrolling with speed.
+    const int base = static_cast<int>(std::floor(ias / 10.0f)) * 10;
+    for (int kt = base - 100; kt <= base + 100; kt += 10) {
+        if (kt < 0)
+            continue;
+        const float y = 0.5f - (static_cast<float>(kt) - ias) * perKt;
+        if (y < 0.5f - halfSpan || y > 0.5f + halfSpan)
+            continue;
+        const bool major = (kt % 50 == 0);
+        pushLine(x, y, x + (major ? 0.03f : 0.017f), y, 1.0f, kHudR, kHudG, kHudB);
+        if (major)
+            pushText(HudAlign::Left, x + 0.035f, y - 0.012f, kHudR, kHudG, kHudB, "%d", kt);
     }
+}
 
-    // Heading tape underline
-    pushLine(0.35f, 0.97f, 0.65f, 0.97f, 1.f, kHudR, kHudG, kHudB);
+// ── altitude tape (right, feet) ──────────────────────────────────────────────
+void FlightHud::drawAltTape(Ctx& c) {
+    constexpr float x = 0.82f;
+    constexpr float halfSpan = 0.18f;
+    const float altFt = c.altMsl * kM2Ft;
+    constexpr float perFt = halfSpan / 2500.0f; // 2500 ft spans the half-height
 
-    // Artificial horizon line: displaced vertically by pitch, tilted by bank relative to local up.
-    // Screen y grows downward, so nose-up (positive pitch) pushes the horizon below centre.
-    // The bank tilt is applied in normalized space with a nominal aspect so the slope reads as a
-    // physical roll; the exact look is manual-flight verified.
+    pushLine(x, 0.5f - halfSpan, x, 0.5f + halfSpan, 1.0f, kHudR, kHudG, kHudB);
+    pushRect(x + 0.002f, 0.485f, x + 0.075f, 0.515f, kHudR, kHudG, kHudB, 0.15f);
+    pushText(HudAlign::Left, x + 0.006f, 0.492f, kHudR, kHudG, kHudB, "%d", static_cast<int>(std::lround(altFt)));
+    pushText(HudAlign::Center, x, 0.5f - halfSpan - 0.03f, kHudR, kHudG, kHudB, "%s", "ALT");
+
+    // Radar altitude (AGL) below the box — the terrain-relative height a pilot flies low by. Falls
+    // back to MSL when terrain is not loaded (terrainElevation == 0).
+    const float aglFt = (c.altMsl - c.in.terrainElevation) * kM2Ft;
+    pushText(HudAlign::Left, x + 0.006f, 0.53f, kHudR, kHudG, kHudB, "AGL %d", static_cast<int>(std::lround(aglFt)));
+
+    const int base = static_cast<int>(std::floor(altFt / 500.0f)) * 500;
+    for (int ft = base - 2500; ft <= base + 2500; ft += 500) {
+        const float y = 0.5f - (static_cast<float>(ft) - altFt) * perFt;
+        if (y < 0.5f - halfSpan || y > 0.5f + halfSpan)
+            continue;
+        const bool major = (ft % 1000 == 0);
+        pushLine(x - (major ? 0.03f : 0.017f), y, x, y, 1.0f, kHudR, kHudG, kHudB);
+        if (major)
+            pushText(HudAlign::Right, x - 0.035f, y - 0.012f, kHudR, kHudG, kHudB, "%d", ft);
+    }
+}
+
+// ── heading tapes (top + bottom) ─────────────────────────────────────────────
+void FlightHud::drawHeadingTapes(Ctx& c) {
+    const float hdg = c.hdgDeg;
+    // Cardinal / intercardinal labels every 45 degrees.
+    auto cardinal = [](int deg) -> const char* {
+        switch (((deg % 360) + 360) % 360) {
+        case 0:
+            return "N";
+        case 45:
+            return "NE";
+        case 90:
+            return "E";
+        case 135:
+            return "SE";
+        case 180:
+            return "S";
+        case 225:
+            return "SW";
+        case 270:
+            return "W";
+        case 315:
+            return "NW";
+        default:
+            return nullptr;
+        }
+    };
+
+    for (float tapeY : {0.09f, 0.91f}) {
+        constexpr float halfSpan = 0.22f;
+        constexpr float perDeg = halfSpan / 45.0f; // ±45° visible either side of the lubber
+        pushLine(0.5f - halfSpan, tapeY, 0.5f + halfSpan, tapeY, 1.0f, kHudR, kHudG, kHudB);
+        // Decade-aligned ticks so 0/90/180/270 (the cardinal marks) are always hit; ±40° visible.
+        const int base = static_cast<int>(std::lround(hdg / 10.0f)) * 10;
+        for (int d = base - 40; d <= base + 40; d += 10) {
+            const float x = 0.5f + (static_cast<float>(d) - hdg) * perDeg;
+            if (x < 0.5f - halfSpan || x > 0.5f + halfSpan)
+                continue;
+            const bool major = (d % 30 == 0);
+            const float tickTop = (tapeY < 0.5f) ? tapeY : tapeY - (major ? 0.02f : 0.012f);
+            const float tickBot = (tapeY < 0.5f) ? tapeY + (major ? 0.02f : 0.012f) : tapeY;
+            pushLine(x, tickTop, x, tickBot, 1.0f, kHudR, kHudG, kHudB);
+            if (const char* lbl = cardinal(d))
+                pushText(HudAlign::Center, x, (tapeY < 0.5f) ? tapeY + 0.025f : tapeY - 0.04f, kHudR, kHudG, kHudB,
+                         "%s", lbl);
+        }
+    }
+    // Lubber line (a downward caret at the top tape) + the boxed numeric heading above it.
+    pushLine(0.5f, 0.09f, 0.49f, 0.07f, 1.5f, kHudR, kHudG, kHudB);
+    pushLine(0.5f, 0.09f, 0.51f, 0.07f, 1.5f, kHudR, kHudG, kHudB);
+    pushText(HudAlign::Center, 0.5f, 0.03f, kHudR, kHudG, kHudB, "HDG %03d", static_cast<int>(std::lround(hdg)) % 360);
+}
+
+// ── flight-path marker + radial artificial horizon ───────────────────────────
+void FlightHud::drawFpmAndHorizon(Ctx& c) {
+    // Artificial horizon: a bar displaced by pitch and tilted by bank on the local-level frame (#479),
+    // so it reads correctly planet-wide. Screen y grows downward, so nose-up pushes it below centre.
     {
-        constexpr float kPitchGain = 0.35f; // screen fraction per radian of pitch
-        constexpr float kHalfWidth = 0.20f; // half-length of the horizon bar (normalized x)
-        constexpr float kHudAspect = 16.f / 9.f;
-        const float yc = std::clamp(0.5f + pitchRad * kPitchGain, 0.12f, 0.88f);
-        const float dx = kHalfWidth * std::cos(bankRad);
-        const float dy = kHalfWidth * std::sin(bankRad) / kHudAspect;
-        // Right bank raises the right side of the outside horizon relative to the aircraft frame.
+        constexpr float kPitchGain = 0.35f;
+        constexpr float kHalfWidth = 0.20f;
+        const float yc = std::clamp(0.5f + c.pitchRad * kPitchGain, 0.24f, 0.76f);
+        const float dx = kHalfWidth * std::cos(c.bankRad);
+        const float dy = kHalfWidth * std::sin(c.bankRad) / c.aspect;
         pushLine(0.5f - dx, yc + dy, 0.5f + dx, yc - dy, 1.5f, kHudR, kHudG, kHudB);
     }
 
-    // Throttle + fuel (right side, vertically centered)
-    pushText(HudAlign::Left, 0.80f, 0.46f, kHudR, kHudG, kHudB, "THR %3d%%", static_cast<int>(e->throttle));
-    pushText(HudAlign::Left, 0.80f, 0.50f, kHudR, kHudG, kHudB, "FUEL %3d%%", static_cast<int>(e->fuelPct));
-
-    // Selected weapon (#440), right column below THR/FUEL: "ARM <name> x<rounds>". The numbers are
-    // the server's own-record loadout block (#625); the name is a client-side label — "STA n" when
-    // the client has no def to name it from. No loadout block on the wire yet = no line.
-    if (e->hasLoadout && e->selectedStation != 255) {
-        const std::size_t sel = e->selectedStation;
-        if (sel < m_stationLabels.size() && !m_stationLabels[sel].empty())
-            pushText(HudAlign::Left, 0.80f, 0.58f, kHudR, kHudG, kHudB, "ARM %s x%u", m_stationLabels[sel].c_str(),
-                     static_cast<unsigned>(e->stationRounds));
-        else
-            pushText(HudAlign::Left, 0.80f, 0.58f, kHudR, kHudG, kHudB, "ARM STA%u x%u", static_cast<unsigned>(sel + 1),
-                     static_cast<unsigned>(e->stationRounds));
+    // Flight-path marker: project a point 1000 m along the velocity vector. Below ~15 m/s the velocity
+    // direction is meaningless (on the runway), so pin it to the boresight.
+    glm::vec2 fpm{0.5f, 0.5f};
+    bool haveFpm = false;
+    if (c.in.cameraValid && c.tasMps > 15.0f) {
+        const glm::dvec3 dir = glm::normalize(glm::dvec3(c.e.velocity));
+        if (auto p = worldToHud(c.in.camera, c.e.position + dir * 1000.0)) {
+            fpm = *p;
+            haveFpm = true;
+        }
     }
+    if (!haveFpm)
+        return; // no valid FPM this frame (stationary or off-screen) — boresight cross already drawn
 
-    // Seeker LOCK annunciator (#628) — the pre-launch growl, replicated from the own-record
-    // weaponFlags bit 0: the server says the selected seeker sees the designated target right now.
-    if (e->hasLoadout && (e->weaponFlags & 0x01u))
-        pushText(HudAlign::Center, 0.5f, 0.42f, kHudR, kHudG, kHudB, "%s", "LOCK");
+    // Circle (8-segment) + three wings: left, right, and top stub.
+    constexpr float rad = 0.012f;
+    glm::vec2 prev{fpm.x + rad / c.aspect, fpm.y};
+    for (int i = 1; i <= 8; ++i) {
+        const float a = static_cast<float>(i) * (2.0f * 3.14159265f / 8.0f);
+        const glm::vec2 cur{fpm.x + std::cos(a) * rad / c.aspect, fpm.y + std::sin(a) * rad};
+        pushLine(prev.x, prev.y, cur.x, cur.y, 1.0f, kHudR, kHudG, kHudB);
+        prev = cur;
+    }
+    pushLine(fpm.x - rad / c.aspect, fpm.y, fpm.x - 0.03f / c.aspect, fpm.y, 1.0f, kHudR, kHudG, kHudB); // left wing
+    pushLine(fpm.x + rad / c.aspect, fpm.y, fpm.x + 0.03f / c.aspect, fpm.y, 1.0f, kHudR, kHudG, kHudB); // right wing
+    pushLine(fpm.x, fpm.y - rad, fpm.x, fpm.y - 0.02f, 1.0f, kHudR, kHudG, kHudB);                       // top stub
+}
 
-    // Damage warning in red (center screen)
-    if (e->damageLevel > 0)
-        pushText(HudAlign::Center, 0.5f, 0.48f, 1.f, 0.2f, 0.2f, "%s", "*** DAMAGE ***");
+// ── lower data blocks ────────────────────────────────────────────────────────
+void FlightHud::drawDataBlocks(Ctx& c) {
+    // Lower-left: AoA / Mach / G / fuel, stacked.
+    constexpr float lx = 0.05f;
+    pushText(HudAlign::Left, lx, 0.62f, kHudR, kHudG, kHudB, "a %+4.1f", c.aoaDeg);
+    pushText(HudAlign::Left, lx, 0.66f, kHudR, kHudG, kHudB, "M %4.2f", c.mach);
+    pushText(HudAlign::Left, lx, 0.70f, kHudR, kHudG, kHudB, "G %4.1f", c.loadG);
+    pushText(HudAlign::Left, lx, 0.74f, kHudR, kHudG, kHudB, "FUEL %3d", static_cast<int>(c.e.fuelPct));
 
-    // Time of day clock (top-right) — HH:MM, purely ASCII
-    int hr = static_cast<int>(timeOfDay) % 24;
-    int min = static_cast<int>((timeOfDay - static_cast<float>(static_cast<int>(timeOfDay))) * 60.f) % 60;
-    pushText(HudAlign::Right, 0.98f, 0.38f, kHudR, kHudG, kHudB, "%02d:%02d", hr, min);
+    // Lower-right: master-arm / throttle / nav placeholder. The per-station weapon block is drawn by
+    // drawCombat (#641).
+    constexpr float rx = 0.70f;
+    pushText(HudAlign::Left, rx, 0.55f, kHudR, kHudG, kHudB, "%s", c.in.masterArm ? "ARM" : "SAFE");
+    pushText(HudAlign::Left, rx, 0.59f, kHudR, kHudG, kHudB, "THR %3d%%", static_cast<int>(c.e.throttle));
+    pushText(HudAlign::Left, rx, 0.63f, kHudR, kHudG, kHudB, "%s", "TCN ---");
 
-    // Per-peer latency indicator (right column, below fuel) — e.g. "42 ms"
-    if (showLatency && latencyMs > 0)
-        pushText(HudAlign::Left, 0.80f, 0.54f, kHudR, kHudG, kHudB, "%u ms", latencyMs);
+    // Seeker LOCK annunciator (#628) from the own-record weaponFlags bit 0.
+    if (c.e.hasLoadout && (c.e.weaponFlags & 0x01u))
+        pushText(HudAlign::Center, 0.5f, 0.40f, kHudR, kHudG, kHudB, "%s", "LOCK");
 
-    // ── Datalink radar scope + RWR (#528) ────────────────────────────────────
-    // A 360° PPI in the lower-left: ownship at centre, nose up, the fused TEAM picture plotted by
-    // bearing and range, coloured by IFF (green friend / red foe / amber unknown). RWR strobes ring
-    // the scope edge at the emitter bearing. Everything here is the honest datalink — a track your
-    // wingman found but you never did shows as datalink-only (dimmer), never a ground-truth blip.
-    if (radar.valid) {
-        constexpr float kCx = 0.135f, kCy = 0.80f, kR = 0.11f;
-        constexpr float kAspect = 16.f / 9.f;   // normalized x is "narrower" than y — undo it so the PPI reads round
-        constexpr float kScopeRangeM = 74080.f; // 40 nm
-        const float dimHud = 0.55f;             // scope frame phosphor, dimmer than the instruments
-
-        // Scope frame (a box) + a nose tick at the top so "up = ahead" is unambiguous.
-        pushLine(kCx - kR / kAspect, kCy - kR, kCx + kR / kAspect, kCy - kR, 1.f, kHudR, kHudG * dimHud, kHudB);
-        pushLine(kCx - kR / kAspect, kCy + kR, kCx + kR / kAspect, kCy + kR, 1.f, kHudR, kHudG * dimHud, kHudB);
-        pushLine(kCx - kR / kAspect, kCy - kR, kCx - kR / kAspect, kCy + kR, 1.f, kHudR, kHudG * dimHud, kHudB);
-        pushLine(kCx + kR / kAspect, kCy - kR, kCx + kR / kAspect, kCy + kR, 1.f, kHudR, kHudG * dimHud, kHudB);
-        pushLine(kCx, kCy - kR, kCx, kCy - kR + 0.02f, 1.5f, kHudR, kHudG, kHudB); // nose tick (ownship faces up)
-
-        const glm::mat3 enu = enuBasis(e->position, planetRadiusM);
-        const glm::dvec3 east = glm::dvec3(enu[0]);
-        const glm::dvec3 north = glm::dvec3(enu[1]);
-        const float ownHdg = headingOf(q, e->position, planetRadiusM); // nose compass bearing (rad)
-
-        // Plot one mark at (scope) for a world position, returns false if beyond scope range.
-        auto plot = [&](const glm::dvec3& worldPos, float& outX, float& outY) -> bool {
-            const glm::dvec3 d = worldPos - glm::dvec3(e->position.x, e->position.y, e->position.z);
-            const double eC = glm::dot(d, east);
-            const double nC = glm::dot(d, north);
-            const double rng = std::sqrt(eC * eC + nC * nC);
-            if (rng > kScopeRangeM)
-                return false;
-            const float bearing = std::atan2(static_cast<float>(eC), static_cast<float>(nC)); // 0 = N
-            const float rel = bearing - ownHdg; // relative to the nose (up)
-            const float rN = static_cast<float>(rng / kScopeRangeM);
-            outX = kCx + std::sin(rel) * rN * (kR / kAspect);
-            outY = kCy - std::cos(rel) * rN * kR; // screen y grows downward; forward = up
-            return true;
-        };
-
-        int drawn = 0;
-        for (const RadarTrack& t : radar.tracks) {
-            if (drawn >= kScopeMaxTracks)
-                break;
-            float px, py;
-            if (!plot(glm::dvec3(t.pos[0], t.pos[1], t.pos[2]), px, py))
-                continue;
-            // IFF colour — the whole point of the picture being honest.
-            float r = 1.f, g = 1.f, b = 0.3f; // Unknown = amber
-            if (t.ident == kIffFriend) {
-                r = 0.2f;
-                g = 1.f;
-                b = 0.4f;
-            } else if (t.ident == kIffFoe) {
-                r = 1.f;
-                g = 0.2f;
-                b = 0.2f;
+    // Autopilot annunciation (#640): a single line naming the engaged holds. Built with bounded
+    // snprintf appends tracking the write offset (portable — strncat trips MSVC's C4996).
+    if (c.in.apModes != 0) {
+        char buf[48] = "AP";
+        int len = 2;
+        auto append = [&](const char* fmt, int value) {
+            if (len < static_cast<int>(sizeof(buf)) - 1) {
+                const int n = std::snprintf(buf + len, sizeof(buf) - static_cast<std::size_t>(len), fmt, value);
+                if (n > 0)
+                    len += n;
             }
-            const float alpha = t.ownSensor ? 1.f : 0.6f; // datalink-only contacts are dimmer
-            const float half = (t.firingQuality ? 0.008f : 0.005f);
-            HudElement el;
-            el.type = HudElement::Type::Rect;
-            el.x = px - half / kAspect;
-            el.y = py - half;
-            el.x2 = px + half / kAspect;
-            el.y2 = py + half;
-            el.r = r;
-            el.g = g;
-            el.b = b;
-            el.a = alpha;
-            if (m_elementCount < kMaxElements)
-                m_elements[m_elementCount++] = el;
-            ++drawn;
-        }
-
-        // RWR: strobes ring the scope edge at the emitter bearing. Scans amber, lock/launch red; a
-        // launch (a guided missile inbound, #960) is the worst and wins the caption over a bare lock.
-        bool anyLock = false;
-        bool anyLaunch = false;
-        for (const RwrStrobe& s : radar.strobes) {
-            const glm::dvec3 d = glm::dvec3(s.emitterPos[0], s.emitterPos[1], s.emitterPos[2]) -
-                                 glm::dvec3(e->position.x, e->position.y, e->position.z);
-            const double eC = glm::dot(d, east);
-            const double nC = glm::dot(d, north);
-            const float bearing = std::atan2(static_cast<float>(eC), static_cast<float>(nC));
-            const float rel = bearing - ownHdg;
-            const float ex = kCx + std::sin(rel) * (kR / kAspect);
-            const float ey = kCy - std::cos(rel) * kR;
-            const bool lock = (s.level >= kThreatLock); // lock or launch
-            anyLock = anyLock || lock;
-            anyLaunch = anyLaunch || (s.level == kThreatLaunch);
-            pushLine(ex - 0.006f / kAspect, ey, ex + 0.006f / kAspect, ey, 2.f, 1.f, lock ? 0.1f : 0.8f,
-                     lock ? 0.1f : 0.2f);
-        }
-        if (anyLaunch)
-            pushText(HudAlign::Center, kCx, kCy + kR + 0.03f, 1.f, 0.1f, 0.1f, "%s", "RWR LAUNCH");
-        else if (anyLock)
-            pushText(HudAlign::Center, kCx, kCy + kR + 0.03f, 1.f, 0.1f, 0.1f, "%s", "RWR LOCK");
+        };
+        if (c.in.apModes & 0x1u)
+            append(" ALT%d", static_cast<int>(std::lround(c.in.apTargetAltM * kM2Ft)));
+        if (c.in.apModes & 0x2u)
+            append(" HDG%03d", static_cast<int>(std::lround(c.in.apTargetHeadingDeg)) % 360);
+        if (c.in.apModes & 0x4u)
+            append(" SPD%d", static_cast<int>(std::lround(c.in.apTargetSpeedMps * kMps2Kt)));
+        pushText(HudAlign::Center, 0.5f, 0.20f, kHudR, kHudG, kHudB, "%s", buf);
     }
 }
+
+// drawCombat (#641) and drawMfd (#642) live in FlightHudCombat.cpp / FlightHudMfd.cpp.
 
 std::span<const HudElement> FlightHud::elements() const {
     return {m_elements.data(), m_elementCount};

@@ -57,6 +57,32 @@ enum class InputAction : uint32_t {
     ChatAll,
     ChatTeam,
 
+    // Camera modes (#689) — rebindable, gamepad-capable replacements for the old raw F1/F2/F4 reads.
+    CameraCockpit,
+    CameraChase,
+    CameraFree,
+
+    // Target designation + padlock/inset view family (#671/#689)
+    PadlockToggle,
+    NextTarget,
+    PrevTarget,
+    TargetInsetToggle,
+
+    // Player autopilot holds (#640) — altitude / heading / speed hold toggles
+    AutopilotAltHold,
+    AutopilotHdgHold,
+    AutopilotSpdHold,
+
+    // Master arm toggle (#641) — ARM/SAFE; SAFE gates the fire triggers
+    MasterArm,
+
+    // Radar MFD (#642) — cycle the display page / the range scale
+    MfdPage,
+    MfdRange,
+
+    // Night-vision goggles toggle (#210)
+    NvgToggle,
+
     Count
 };
 
