@@ -1933,8 +1933,10 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     // ~1 Hz aggregated world-state rebuild (#600 / #861). The bounded copy is the sim thread's only
     // cost; the GM-map feed (#861) reads m_worldState, and Epic M's JSON/event-stream surface will
     // serialize the same struct off-thread. Kept at ~1 Hz (agent/GM-map cadence), not the 60 Hz tick.
-    if (tickIndex % kWorldStateIntervalTicks == 0)
+    if (tickIndex % kWorldStateIntervalTicks == 0) {
         rebuildWorldState(tickIndex);
+        broadcastGmWorldState(); // #861: feed the fresh aggregate to any game-master peers
+    }
 
     // Respawn (#648): deferred death teardown + fire any due respawns (humans on request, bots auto).
     processRespawns();
@@ -2605,6 +2607,62 @@ void WorldBroadcaster::rebuildWorldState(uint64_t tickIndex) {
 
     m_worldState = buildWorldStateSnapshot(tickIndex, m_entityManager, m_registry, &m_formations, std::move(peers),
                                            weatherPreset, timeOfDay);
+}
+
+void WorldBroadcaster::broadcastGmWorldState() {
+    // Which peers get the feed: those holding GmMap. Cheap to check first so a server with no GM peers
+    // pays nothing beyond the (already-built) aggregate.
+    std::vector<uint32_t> gmPeers;
+    for (const auto& [peerId, ps] : m_peerInputs) {
+        if (ps.handshakeComplete && ps.authority.has(Capability::GmMap))
+            gmPeers.push_back(peerId);
+    }
+    if (gmPeers.empty())
+        return;
+
+    // Encode the record stream once (identical for every GM peer — the full-battlespace aggregate).
+    const auto& ents = m_worldState.entities;
+    std::vector<GmEntityRecord> records;
+    records.reserve(ents.size());
+    for (const auto& e : ents) {
+        GmEntityRecord r;
+        r.entityIdx = e.entityIdx;
+        r.gen = e.gen;
+        r.factionIndex = e.factionIndex;
+        r.typeIndex = e.typeIndex;
+        r.ownerPeerId = e.ownerPeerId;
+        r.formationId = e.formationId;
+        r.category = e.category;
+        r.damageLevel = e.damageLevel;
+        r.flags = e.flags;
+        r.hpPct = static_cast<uint8_t>(std::clamp(e.hpFrac, 0.f, 1.f) * 100.f + 0.5f);
+        r.pos[0] = static_cast<float>(e.pos[0]);
+        r.pos[1] = static_cast<float>(e.pos[1]);
+        r.pos[2] = static_cast<float>(e.pos[2]);
+        r.velXZ[0] = e.vel[0];
+        r.velXZ[1] = e.vel[2];
+        records.push_back(r);
+    }
+
+    // Chunk under the single-fragment MTU. Always send at least one (empty) packet so the client learns
+    // the tick advanced and clears a stale set. Reliable + ordered, so the client's per-tick
+    // double-buffer sees whole ticks.
+    const std::size_t total = records.size();
+    std::size_t sent = 0;
+    do {
+        const std::size_t n = std::min(total - sent, kMaxGmRecordsPerPacket);
+        std::vector<uint8_t> buf;
+        buf.reserve(sizeof(MsgGmWorldStateHeader) + n * sizeof(GmEntityRecord));
+        MsgGmWorldStateHeader hdr;
+        hdr.count = static_cast<uint16_t>(n);
+        hdr.tick = m_worldState.tick;
+        appendMsg(buf, hdr);
+        for (std::size_t i = 0; i < n; ++i)
+            appendMsg(buf, records[sent + i]);
+        for (const uint32_t peerId : gmPeers)
+            m_net.send(peerId, buf.data(), buf.size(), /*reliable=*/true);
+        sent += n;
+    } while (sent < total);
 }
 
 uint16_t WorldBroadcaster::factionForPeer(uint32_t peerId) const noexcept {

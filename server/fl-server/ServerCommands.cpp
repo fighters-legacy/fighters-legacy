@@ -1581,7 +1581,8 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
     registry.registerCommand(
         "flight",
         "flight list | create <anchorIdx> [--commander <peerId>] [--parent <id>] [--callsign <name>]\n"
-        "       | add <id> <entityIdx> [slot] | order <id> <command> [--member <idx>] [--cascade]\n"
+        "       | add <id> <entityIdx> [slot] | order <id> <command> [--member <idx>] [--target <idx>] "
+        "[--cascade]\n"
         "       | disband <id>   -- formations and the chain of command; `order` commands are the six "
         "wingman commands (attack_my_target, engage_bandits, rejoin, cover_me, hold_fire, return_to_base)",
         capBit(Capability::CommandAnyAi), [ctx](std::span<std::string_view> args) -> std::string {
@@ -1725,7 +1726,8 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
 
             if (sub == "order") {
                 if (args.size() < 3)
-                    return "usage: flight order <flightId> <command> [--member <entityIdx>] [--cascade]";
+                    return "usage: flight order <flightId> <command> [--member <entityIdx>] [--target "
+                           "<entityIdx>] [--cascade]";
                 uint32_t fid = 0;
                 if (!parseU32(args[1], fid))
                     return "flight order: invalid flight id";
@@ -1735,24 +1737,35 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                            "hold_fire, return_to_base)";
 
                 uint32_t memberIdx = fl::kFlightAll;
+                uint32_t targetIdx = fl::kFlightAll; // #861: --target designates for attack_my_target
                 bool cascade = false;
                 for (std::size_t i = 3; i < args.size(); ++i) {
                     if (args[i] == "--cascade")
                         cascade = true;
                     else if (args[i] == "--member" && i + 1 < args.size())
                         (void)parseU32(args[++i], memberIdx);
+                    else if (args[i] == "--target" && i + 1 < args.size())
+                        (void)parseU32(args[++i], targetIdx);
                 }
 
-                // The game master has no boresight, so attack_my_target cannot designate through this
-                // path. Say so rather than silently degrading the order to "hold station".
-                if (*cmd == fl::ai::WingmanCommand::AttackMyTarget)
-                    return "flight order: attack_my_target needs a commander's boresight, which the console does not "
-                           "have -- use `spawn --ai pursuit <idx>` to point an AI at a specific entity";
+                // attack_my_target normally needs a commander's boresight, which the console lacks. The
+                // game master supplies the target explicitly via --target (an entity picked on the #861
+                // map). Without one, refuse rather than silently degrading to "hold station".
+                if (*cmd == fl::ai::WingmanCommand::AttackMyTarget && targetIdx == fl::kFlightAll)
+                    return "flight order: attack_my_target needs a target -- pass --target <entityIdx> (the GM map "
+                           "supplies it), or use `spawn --ai pursuit <idx>`";
 
                 const auto ordinal = static_cast<uint8_t>(*cmd);
-                ctx.sim.gameLoop->enqueueSimCallback([ctx, fid, ordinal, memberIdx, cascade]() {
+                ctx.sim.gameLoop->enqueueSimCallback([ctx, fid, ordinal, memberIdx, cascade, targetIdx]() {
+                    // Resolve --target (an entity index picked on the GM map) to a live EntityId; an
+                    // unresolvable index designates nothing (the order then refuses honestly).
+                    fl::EntityId designated{};
+                    if (targetIdx != fl::kFlightAll && ctx.sim.entityManager) {
+                        if (const fl::EntityState* ts = ctx.sim.entityManager->getByIndex(targetIdx))
+                            designated = ts->id;
+                    }
                     const auto rep = ctx.sim.broadcaster->applyFlightOrder(static_cast<fl::FormationId>(fid), ordinal,
-                                                                           memberIdx, cascade);
+                                                                           memberIdx, cascade, designated);
                     char m[192];
                     std::snprintf(m, sizeof(m), "[admin] flight %u ordered %s: %d AI retasked, %d relayed to players%s",
                                   fid, std::string(fl::ai::kWingmanCommandNames[ordinal]).c_str(), rep.aiRetasked,

@@ -180,6 +180,19 @@ struct ClientNetEventHandler : INetworkEventHandler {
         return m_awaitingRespawn;
     }
 
+    // ── game-master overview map feed (#861) ─────────────────────────────────
+    // The most recent complete-tick GM aggregate, reassembled from the chunked MsgGmWorldState stream
+    // (reliable+ordered, so all chunks of a tick arrive contiguously and are applied in one service
+    // pass). `valid` is false until the first feed arrives. Read on the main thread by GmMapOverlay.
+    struct GmWorldStateView {
+        bool valid{false};
+        uint64_t tick{0};
+        std::vector<fl::GmEntityRecord> entities;
+    };
+    const GmWorldStateView& gmWorldState() const noexcept {
+        return m_gmWorldState;
+    }
+
     // ── match state + scoreboard (#647/#523) ─────────────────────────────────
     // Decoded MsgMatchState: phase + limits + per-team scores. `valid` is false until the first
     // MsgMatchState arrives. Read on the main thread by the scoreboard overlay and the debrief.
@@ -428,6 +441,7 @@ struct ClientNetEventHandler : INetworkEventHandler {
     bool m_awaitingRespawn{false};                      // #403: own aircraft dead, awaiting respawn ack
     std::unordered_map<uint32_t, RosterEntry> m_roster; // participant id -> display record (#996)
     MatchStateView m_matchState;                        // #647/#523 — from MsgMatchState
+    GmWorldStateView m_gmWorldState;                    // #861 — reassembled from MsgGmWorldState chunks
     std::unordered_map<uint32_t, ScoreboardEntry> m_scoreboard; // #647/#523 — from MsgScoreboard (upsert)
     float m_planetRadiusKm{6371.f};
     SessionCombatStats m_sessionStats{}; // #626 — fed by CombatEvent Stats records

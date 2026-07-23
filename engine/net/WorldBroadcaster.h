@@ -1449,6 +1449,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     static constexpr uint64_t kWorldStateIntervalTicks = 60;
     WorldStateSnapshot m_worldState;
     void rebuildWorldState(uint64_t tickIndex); // gather peers + weather, call buildWorldStateSnapshot
+    void broadcastGmWorldState();               // #861: chunked GM-map feed to peers holding GmMap
     void broadcastMatchState();                 // send m_matchState to every handshake-complete peer
     void sendMatchStateTo(uint32_t peerId);     // unicast to one peer (late joiner)
     void broadcastScoreboard();                 // build + send MsgScoreboard (chunked) to all peers

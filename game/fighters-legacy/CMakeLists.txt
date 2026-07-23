@@ -32,6 +32,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         DebriefScreen.cpp
         ScoreboardOverlay.cpp
         ChatOverlay.cpp
+        GmMapOverlay.cpp
     )
     target_link_libraries(fighters-legacy PRIVATE
         engine-crash

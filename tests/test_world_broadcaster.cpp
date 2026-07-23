@@ -4956,6 +4956,82 @@ TEST_CASE("WorldBroadcaster: grant re-sends ConnectAck with the authority TLV (#
     CHECK(sawAck);
 }
 
+// Count GmWorldState packets sent to a peer, and total records across them.
+static void gmFeedFor(const MockNetwork& net, uint32_t peerId, std::size_t& packets, std::size_t& records) {
+    packets = 0;
+    records = 0;
+    for (const auto& [pid, pkt] : net.perPeerSends) {
+        if (pid != peerId || pkt.empty() || pkt[0] != static_cast<uint8_t>(fl::MsgId::GmWorldState))
+            continue;
+        REQUIRE(pkt.size() >= sizeof(fl::MsgGmWorldStateHeader));
+        fl::MsgGmWorldStateHeader hdr{};
+        std::memcpy(&hdr, pkt.data(), sizeof(hdr));
+        ++packets;
+        records += hdr.count;
+        CHECK(pkt.size() == sizeof(fl::MsgGmWorldStateHeader) + std::size_t(hdr.count) * sizeof(fl::GmEntityRecord));
+    }
+}
+
+TEST_CASE("WorldBroadcaster: GM world-state feed goes only to GmMap-capable peers (#861)",
+          "[world_broadcaster][gm_map]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.0.0.1:1";
+    net.peerAddresses[1] = "1.0.0.2:2";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    for (int i = 0; i < 5; ++i) {
+        fl::EntityTransform t{};
+        t.pos[0] = static_cast<double>(i * 100);
+        t.pos[1] = 500.0;
+        em.spawn("builtin:debug-entity", t);
+    }
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    connectPilotPeer(broadcaster, net, 0u); // GM peer
+    connectPilotPeer(broadcaster, net, 1u); // ordinary peer
+    REQUIRE(broadcaster.setPeerAuthority(0u, fl::PeerAuthority{fl::kGameMasterCaps, 0xFFFFu}));
+
+    net.perPeerSends.clear();
+    broadcaster.onTick(1.0 / 60.0, 0u); // rebuild + GM broadcast tick
+
+    std::size_t gmPackets = 0, gmRecords = 0;
+    gmFeedFor(net, 0u, gmPackets, gmRecords);
+    CHECK(gmPackets >= 1u);
+    CHECK(gmRecords == 7u); // 5 spawned + 2 pilots
+
+    std::size_t otherPackets = 0, otherRecords = 0;
+    gmFeedFor(net, 1u, otherPackets, otherRecords);
+    CHECK(otherPackets == 0u); // the non-GM peer gets no feed
+}
+
+TEST_CASE("WorldBroadcaster: GM feed chunks large entity sets under the MTU (#861)", "[world_broadcaster][gm_map]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.0.0.1:1";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    // More than kMaxGmRecordsPerPacket entities -> multiple chunks.
+    const int kSpawn = static_cast<int>(fl::kMaxGmRecordsPerPacket) * 2 + 3;
+    for (int i = 0; i < kSpawn; ++i) {
+        fl::EntityTransform t{};
+        t.pos[1] = 500.0;
+        em.spawn("builtin:debug-entity", t);
+    }
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    connectPilotPeer(broadcaster, net, 0u);
+    REQUIRE(broadcaster.setPeerAuthority(0u, fl::PeerAuthority{fl::kGameMasterCaps, 0xFFFFu}));
+
+    net.perPeerSends.clear();
+    broadcaster.onTick(1.0 / 60.0, 0u);
+
+    std::size_t packets = 0, records = 0;
+    gmFeedFor(net, 0u, packets, records);
+    CHECK(packets >= 3u);                       // 25 + 25 + rest
+    CHECK(records == std::size_t(kSpawn) + 1u); // + the pilot entity
+}
+
 TEST_CASE("WorldBroadcaster: worldState aggregate is rebuilt at ~1 Hz and lists live entities (#600)",
           "[world_broadcaster][world_state]") {
     MockLogger log;

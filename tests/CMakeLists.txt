@@ -1032,6 +1032,24 @@ target_include_directories(test_client_net_event_handler PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_client_net_event_handler)
 
+# Game-master overview map overlay (#861): drives the overlay against NullGui + a ClientNetEventHandler
+# fed a GM feed. Same link set as the handler test plus the game IGui HAL header.
+add_executable(test_gm_map_overlay test_gm_map_overlay.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/GmMapOverlay.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientEffectRouter.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/WingmanMenu.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ChatOverlay.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ManualOverlay.cpp")
+target_link_libraries(test_gm_map_overlay PRIVATE
+    Catch2::Catch2WithMain engine-net engine-render engine-entity engine-console engine-weather engine-audio
+    engine-config platform-hal)
+target_include_directories(test_gm_map_overlay PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
+    "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_gm_map_overlay)
+
 # ---------------------------------------------------------------------------
 # Screen / ScreenManager tests
 # ---------------------------------------------------------------------------
@@ -1099,6 +1117,7 @@ add_executable(test_screen_manager test_screen_manager.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/DebriefScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ChatOverlay.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/GmMapOverlay.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientEffectRouter.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/WingmanMenu.cpp"
@@ -1135,6 +1154,13 @@ target_link_libraries(test_entity_selector PRIVATE Catch2::Catch2WithMain engine
 target_include_directories(test_entity_selector PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy")
 catch_discover_tests(test_entity_selector)
+
+# Game-master map plan-view transform (#861; pure logic, glm-only).
+add_executable(test_gm_map_view test_gm_map_view.cpp)
+target_link_libraries(test_gm_map_view PRIVATE Catch2::Catch2WithMain engine-protocol platform-hal)
+target_include_directories(test_gm_map_view PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy")
+catch_discover_tests(test_gm_map_view)
 
 # The in-flight comms menu (#704, ATC epic #673): pure page-navigation/command-emission logic over
 # IInput; compiles the game source directly, no SDL/rendering.

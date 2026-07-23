@@ -56,6 +56,7 @@ static constexpr const char* kActionNames[] = {
     "MfdPage",
     "MfdRange",
     "NvgToggle",
+    "GmMap",
 };
 static_assert(std::size(kActionNames) == static_cast<size_t>(InputAction::Count),
               "kActionNames must have one entry per InputAction");
@@ -747,6 +748,9 @@ void InputBindings::applyDefaults() {
     // Night-vision goggles (#210): F7 toggles.
     m_primary[static_cast<int>(InputAction::NvgToggle)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::F7),
                                                            false};
+    // Game-master overview map (#861) — M. Only functional for a GM-capable peer; an ordinary player
+    // pressing it opens the map dimmed with no orders (discoverability), matching the wingman-menu idiom.
+    m_primary[static_cast<int>(InputAction::GmMap)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::M), false};
 }
 
 // ---------------------------------------------------------------------------

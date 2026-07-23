@@ -3051,3 +3051,56 @@ TEST_CASE("ClientNetEventHandler: a revoke re-ack clears the granted caps (#949)
     CHECK(handler.grantedCaps() == 0u);
     CHECK_FALSE(handler.hasCapability(fl::Capability::Mute));
 }
+
+// Build a MsgGmWorldState chunk: header + records.
+static std::vector<uint8_t> makeGmChunk(uint64_t tick, const std::vector<fl::GmEntityRecord>& recs) {
+    fl::MsgGmWorldStateHeader hdr{};
+    hdr.tick = tick;
+    hdr.count = static_cast<uint16_t>(recs.size());
+    std::vector<uint8_t> pkt;
+    fl::appendMsg(pkt, hdr);
+    for (const auto& r : recs)
+        fl::appendMsg(pkt, r);
+    return pkt;
+}
+
+static fl::GmEntityRecord gmRec(uint32_t idx, float x, float z, uint16_t faction) {
+    fl::GmEntityRecord r{};
+    r.entityIdx = idx;
+    r.gen = 1;
+    r.factionIndex = faction;
+    r.pos[0] = x;
+    r.pos[2] = z;
+    return r;
+}
+
+TEST_CASE("ClientNetEventHandler: GmWorldState reassembles chunks into one tick (#861)",
+          "[client_net_event_handler][gm_map]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    CHECK_FALSE(handler.gmWorldState().valid);
+
+    // Two chunks of the same tick accumulate.
+    auto c1 = makeGmChunk(100, {gmRec(1, 0.f, 0.f, 1), gmRec(2, 10.f, 20.f, 2)});
+    handler.onReceive(0u, c1.data(), c1.size());
+    auto c2 = makeGmChunk(100, {gmRec(3, -5.f, 5.f, 1)});
+    handler.onReceive(0u, c2.data(), c2.size());
+
+    REQUIRE(handler.gmWorldState().valid);
+    CHECK(handler.gmWorldState().tick == 100u);
+    REQUIRE(handler.gmWorldState().entities.size() == 3u);
+    CHECK(handler.gmWorldState().entities[0].entityIdx == 1u);
+    CHECK(handler.gmWorldState().entities[2].entityIdx == 3u);
+
+    // A new tick clears the accumulation and starts fresh.
+    auto c3 = makeGmChunk(160, {gmRec(9, 1.f, 1.f, 2)});
+    handler.onReceive(0u, c3.data(), c3.size());
+    CHECK(handler.gmWorldState().tick == 160u);
+    REQUIRE(handler.gmWorldState().entities.size() == 1u);
+    CHECK(handler.gmWorldState().entities[0].entityIdx == 9u);
+}

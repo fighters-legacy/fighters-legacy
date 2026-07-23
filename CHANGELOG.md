@@ -21,6 +21,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **game**: game-master overview map and entity orders (#861, completing Epic #851). A new in-flight
+  overlay (`GmMapOverlay`, toggled with **M**, gated on the `gm_map` capability) draws the whole
+  battlespace top-down from a new `MsgGmWorldState` wire feed — unicast at ~1 Hz only to `gm_map`-capable
+  peers from the #600 aggregate, so the map scales to 128 players without per-camera interest. The GM
+  clicks to select an entity, issues the six-command flight grammar / forms a flight / kills it through
+  the permission-checked admin channel, and drops into any entity's chase view (reusing the #860
+  `EntitySelector` plus a `spectate` that re-centres server interest). Map projection and picking live in
+  the pure `GmMapView`; `flight order` gains `--target <entityIdx>` so a GM can designate for
+  `attack_my_target` from a clicked entity. New rebindable `InputAction::GmMap` (default M). Covered by
+  `test_gm_map_view`, `test_gm_map_overlay`, and GM-feed cases in `test_world_broadcaster` /
+  `test_client_net_event_handler`.
+
 - **server**: aggregated world-state surface core (part of #600, Epic M #589). New
   `engine/net/WorldState.{h,cpp}` — a plain-data `WorldStateSnapshot` (entities with
   id/gen/faction/type/owner/formation/category/damage/pos/vel/hp, a per-peer summary, weather, time)

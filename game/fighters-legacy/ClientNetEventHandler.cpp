@@ -743,6 +743,27 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             e.pingMs = row.pingMs;
             e.factionIndex = row.factionIndex;
         }
+    } else if (msgId == static_cast<uint8_t>(fl::MsgId::GmWorldState)) {
+        // Game-master overview aggregate (#861), chunked. Reliable+ordered delivery means every chunk
+        // of a tick arrives before the next tick's first chunk, all in one service() pass — so a new
+        // tick clears the accumulation and each chunk appends. The map thus renders a whole tick.
+        fl::MsgGmWorldStateHeader hdr;
+        if (!fl::readMsg(data, size, hdr))
+            return;
+        if (!m_gmWorldState.valid || hdr.tick != m_gmWorldState.tick) {
+            m_gmWorldState.entities.clear();
+            m_gmWorldState.tick = hdr.tick;
+            m_gmWorldState.valid = true;
+        }
+        // Cap the accumulated set so a hostile server cannot balloon client memory.
+        constexpr std::size_t kMaxGmEntities = 8192;
+        for (uint16_t i = 0; i < hdr.count; ++i) {
+            fl::GmEntityRecord rec;
+            if (!fl::readRecordAt(data, size, sizeof(hdr) + std::size_t(i) * sizeof(rec), rec))
+                break;
+            if (m_gmWorldState.entities.size() < kMaxGmEntities)
+                m_gmWorldState.entities.push_back(rec);
+        }
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::ChatEvent)) {
         // A routed chat line (#646): header + NUL-terminated UTF-8 text at offset 8. Resolve the sender
         // callsign from the roster; senderPeerId == kNoOwningPeer is a system line (no name).

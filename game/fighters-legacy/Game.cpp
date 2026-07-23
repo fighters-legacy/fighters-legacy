@@ -15,6 +15,7 @@
 #include "FileLogger.h"
 #include "FlightInputCollector.h"
 #include "FlightScreen.h"
+#include "GmMapOverlay.h"
 #include "HapticController.h"
 #include "HeadlessHal.h"
 #include "IWindowEventHandler.h"
@@ -450,6 +451,7 @@ struct GameServices {
     KillFeed killFeed;                   // multiplayer kill feed, fed from the CombatEvent Kill branch (#647)
     ScoreboardOverlay scoreboardOverlay; // multiplayer scoreboard IGui table (#647)
     ChatOverlay chatOverlay;             // in-match chat display + input (#646)
+    GmMapOverlay gmMapOverlay;           // game-master overview map (#861)
     ManualOverlay manual;                // the in-flight aircraft manual, generated from the flight model (#821)
     WeaponRegistry weapons;              // the client's copy of the pack's stores, for the manual's loadout section
     ContentIndex contentIndex;           // id -> asset name, so the client can resolve def cross-references (#810)
@@ -1481,6 +1483,8 @@ void Game::startGame(const std::string& mission) {
                 d.services.cmdRegistry, adminSender, d.services.renderBridge, &d.services.entityRegistry,
                 &d.session.clientHandler->assignedEntityIdx, &d.session.clientHandler->assignedEntityGen,
                 &d.services.gameConsole->showPosRef(), &d.services.showPing);
+            d.services.gmMapOverlay.setDeps({d.session.clientHandler.get(), &d.services.entityRegistry,
+                                             d.services.p.gui.get(), adminSender}); // #861 (SP: needs a GM grant)
             d.services.screenMgr->setServerCmd(std::move(adminSender));
 
             d.session.discoveryListener.emplace(static_cast<uint16_t>(4778), *d.services.rawLogger);
@@ -1503,6 +1507,9 @@ void Game::startGame(const std::string& mission) {
             auto adminSender = makeNetworkAdminSender(*d.session.clientNet, d.services.operatorPassword);
             ctx.serverCommand = adminSender;
             registerConsoleCommands(d.services.cmdRegistry, ctx);
+            // The game-master map (#861) sends its orders through the same admin channel.
+            d.services.gmMapOverlay.setDeps(
+                {d.session.clientHandler.get(), &d.services.entityRegistry, d.services.p.gui.get(), adminSender});
             d.services.screenMgr->setServerCmd(std::move(adminSender));
         }
 
@@ -1533,8 +1540,9 @@ void Game::startGame(const std::string& mission) {
         fsd.wingmanMenu = &d.services.wingmanMenu;
         fsd.commsMenu = &d.services.commsMenu;
         fsd.manual = &d.services.manual;
-        fsd.chat = &d.services.chatOverlay; // in-match chat (#646)
-        fsd.gui = d.services.p.gui.get();   // chat input box (null-safe)
+        fsd.chat = &d.services.chatOverlay;   // in-match chat (#646)
+        fsd.gmMap = &d.services.gmMapOverlay; // game-master overview map (#861)
+        fsd.gui = d.services.p.gui.get();     // chat input box (null-safe)
         fsd.assignedEntityIdx = &d.session.clientHandler->assignedEntityIdx;
         fsd.assignedEntityGen = &d.session.clientHandler->assignedEntityGen;
 
@@ -2179,6 +2187,10 @@ void Game::run() {
             d.services.subtitleOverlay.build(d.services.subtitleQueue));                   // radio/ATC callouts (#704)
         d.services.p.renderer->submitOverlayElements(d.services.killFeed.buildElements()); // #647
         d.services.p.renderer->submitOverlayElements(d.services.chatOverlay.buildElements()); // #646
+        // Game-master overview map (#861): the map canvas HudElements when open (the IGui order panel is
+        // emitted from FlightScreen::update, inside the newFrame/render bracket).
+        if (d.services.gmMapOverlay.isOpen())
+            d.services.p.renderer->submitOverlayElements(d.services.gmMapOverlay.buildElements());
         d.services.p.renderer->setConsoleElements(d.services.gameConsole->elements());
 
         // Scoreboard (#647): an IGui table shown in Flight while the Scoreboard key is held, and auto-shown

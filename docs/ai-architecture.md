@@ -78,6 +78,13 @@ A structured, read-only, out-of-band surface:
 - Consumers: MCP tools (below), `fl-director`, `fl-ops`, and the replay recorder (epic #588
   captures the same events, making agent behaviour reviewable offline).
 
+> **Status (2026-07-23):** the aggregation *core* landed with the game-master map (#861): a
+> deterministic, plain-data `WorldStateSnapshot` (`engine/net/WorldState.h`) built once per ~1 Hz from
+> a bounded sim-thread copy in `WorldBroadcaster`'s Serialize phase — the first realization of "the
+> surface designed once for both the GM map and the agent read API." The GM map is its first consumer
+> (via the `MsgGmWorldState` wire feed). The JSON serialization, the append-only event stream, and the
+> out-of-band socket surface remain to build on top of this struct (#600 stays open).
+
 ## 4. MCP surface (Epic M, #601)
 
 `fl-server` exposes a **Model Context Protocol** server — a **first-class operator and modding
