@@ -8,6 +8,7 @@
 #include "IRenderer.h"
 #include "VkRendererFactory.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <filesystem>
 

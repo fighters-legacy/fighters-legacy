@@ -5,6 +5,7 @@
 #include "campaign_validator.h"
 #include "temp_path.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <string>

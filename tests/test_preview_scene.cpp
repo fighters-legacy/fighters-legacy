@@ -13,6 +13,7 @@
 #include "mock_hal.h"
 
 #include <cmath>
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>
 #include <optional>

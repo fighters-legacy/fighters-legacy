@@ -3,6 +3,9 @@
 
 #include <array>
 #include <cctype>
+#include <cstdint>
+#include <optional>
+#include <string>
 
 namespace fl {
 

@@ -2,6 +2,8 @@
 #include "content/ModManifest.h"
 
 #include <cctype>
+#include <cstdint>
+#include <string>
 #include <toml++/toml.hpp>
 
 namespace fl {

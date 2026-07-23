@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "campaign/TemplateHeader.h"
 
+#include <string>
 #include <yaml-cpp/yaml.h>
 
 namespace fl {

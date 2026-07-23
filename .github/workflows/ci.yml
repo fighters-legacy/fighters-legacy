@@ -228,13 +228,23 @@ jobs:
       - name: Headless snapshot smoke (lavapipe, Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
+          set -e
           sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
-          DISPLAY= VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
-            ./build/debug/tools/fl-viewer --snapshot /tmp/flv-smoke.png --size 320x180
+          # Do NOT hardcode the lavapipe ICD path — the mesa package's manifest filename varies across
+          # releases (lvp_icd.x86_64.json vs lvp_icd.json), and a wrong VK_ICD_FILENAMES makes the
+          # loader report "Found no drivers" (#836 CI). Discover it; fall back to loader auto-discovery.
+          echo "ICD manifests present:"; ls -la /usr/share/vulkan/icd.d/ || true
+          LVP_ICD="$(ls /usr/share/vulkan/icd.d/lvp_icd*.json 2>/dev/null | head -n1 || true)"
+          if [ -n "$LVP_ICD" ]; then
+            echo "using lavapipe ICD: $LVP_ICD"
+            export VK_ICD_FILENAMES="$LVP_ICD"
+          else
+            echo "no lvp_icd*.json found — relying on Vulkan loader auto-discovery"
+          fi
+          DISPLAY= ./build/debug/tools/fl-viewer --snapshot /tmp/flv-smoke.png --size 320x180
           test -s /tmp/flv-smoke.png
           # Exercise the LINE pipeline + fillModeNonSolid enable (#838) on lavapipe too.
-          DISPLAY= VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
-            ./build/debug/tools/fl-viewer --snapshot /tmp/flv-wire.png --size 320x180 --view wireframe
+          DISPLAY= ./build/debug/tools/fl-viewer --snapshot /tmp/flv-wire.png --size 320x180 --view wireframe
           test -s /tmp/flv-wire.png
           ./build/debug/tools/terrain-chunk-io --version
           # --transport enet: net_check is an enet6 client, so the smoke server must speak enet6

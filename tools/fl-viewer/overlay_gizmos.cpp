@@ -4,6 +4,7 @@
 #include "render/HudProjection.h"
 
 #include <cmath>
+#include <vector>
 
 namespace fl {
 

@@ -12,11 +12,15 @@
 #include "IRenderer.h"
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <fstream>
 #include <glm/gtc/matrix_transform.hpp> // glm::translate
 #include <iterator>
 #include <memory>
+#include <span>
+#include <string>
+#include <vector>
 
 namespace fl {
 

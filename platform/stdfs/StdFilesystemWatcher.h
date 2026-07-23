@@ -5,6 +5,7 @@
 #include "ILogger.h"
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <unordered_map>

@@ -14,7 +14,9 @@
 
 #include "campaign/FrontlinePng.h"
 
+#include <cstdint>
 #include <cstring>
+#include <vector>
 
 namespace fl {
 

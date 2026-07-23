@@ -3,7 +3,9 @@
 
 #include "content/IContentPack.h"
 #include "content/TrustLevel.h"
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace fl {
 

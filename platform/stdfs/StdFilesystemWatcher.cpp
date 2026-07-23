@@ -2,8 +2,12 @@
 #include "StdFilesystemWatcher.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
+#include <string>
 #include <system_error>
+#include <unordered_map>
+#include <vector>
 
 namespace fs = std::filesystem;
 
