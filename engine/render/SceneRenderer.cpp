@@ -3,6 +3,7 @@
 #include "render/AirportRenderer.h"
 #include "render/BuiltinGeometry.h"
 #include "render/BuiltinTextures.h"
+#include "render/MeshTextureResolver.h"
 #include "render/ParticleSystem.h"
 #include "render/RenderSnapshot.h"
 #include "render/SimRenderBridge.h"
@@ -21,37 +22,6 @@
 #include <cstdio>    // std::snprintf
 
 namespace fl {
-
-// Map a glTF image URI to a Texture asset name (#833). See the declaration in SceneRenderer.h for the
-// convention; takes the path after the last "textures/" segment (or the bare basename), strips the
-// extension.
-std::string textureAssetNameFromUri(std::string_view uri) {
-    constexpr std::string_view kDir = "textures/";
-    if (auto pos = uri.rfind(kDir); pos != std::string_view::npos)
-        uri.remove_prefix(pos + kDir.size());
-    else if (auto slash = uri.find_last_of("/\\"); slash != std::string_view::npos)
-        uri.remove_prefix(slash + 1);
-    if (auto dot = uri.find_last_of('.'); dot != std::string_view::npos)
-        uri = uri.substr(0, dot);
-    return std::string(uri);
-}
-
-namespace {
-// Map a base Texture asset name (`<slot>_<map>`) to a livery slot-map key (`<slot>.<map>`), or empty
-// when the name carries no recognised map suffix (#845). The map vocabulary matches the livery TOML:
-// diffuse (baseColor), orm, normal.
-std::string liveryKeyFromBaseAsset(std::string_view baseAsset) {
-    static constexpr std::string_view kMaps[] = {"diffuse", "orm", "normal"};
-    for (std::string_view m : kMaps) {
-        if (baseAsset.size() > m.size() + 1 && baseAsset.substr(baseAsset.size() - m.size()) == m &&
-            baseAsset[baseAsset.size() - m.size() - 1] == '_') {
-            const std::string_view slot = baseAsset.substr(0, baseAsset.size() - m.size() - 1);
-            return std::string(slot) + "." + std::string(m);
-        }
-    }
-    return {};
-}
-} // namespace
 
 SceneRenderer::SceneRenderer(SimRenderBridge& bridge, MeshNameResolver resolver, AssetManager& assets,
                              IRenderer& renderer)
@@ -451,28 +421,11 @@ MeshHandle SceneRenderer::getOrUploadMesh(const std::string& meshAssetName, cons
     // URI → asset-name → file mapping is a content-pack concern, not a GPU-backend one.
     //
     // Livery override (#845): a re-skin swaps the TEXTURE the material's map resolves to, never the
-    // geometry/UVs. We derive the base texture's "<slot>.<map>" key and, if the livery re-skins it,
-    // load the replacement asset. A missing key OR a broken override both fall back to the base
-    // texture (per-map fallback to base) — so a partial or broken livery degrades, never fails.
-    // `liveryOverrides` outlives this call (owned by the caller / m_liveryCache) and the resolver is
-    // invoked synchronously inside createMesh below, so capturing by reference is safe.
-    desc.textureResolver = [this, &liveryOverrides](std::string_view uri) -> std::vector<uint8_t> {
-        const std::string baseAsset = textureAssetNameFromUri(uri);
-        std::string chosen = baseAsset;
-        if (!liveryOverrides.empty()) {
-            const std::string key = liveryKeyFromBaseAsset(baseAsset);
-            if (!key.empty()) {
-                if (auto ov = liveryOverrides.find(key); ov != liveryOverrides.end())
-                    chosen = ov->second;
-            }
-        }
-        auto tex = m_assets.loadTexture(chosen.c_str());
-        if ((!tex || tex->bytes.empty()) && chosen != baseAsset)
-            tex = m_assets.loadTexture(baseAsset.c_str()); // livery override missing/broken → base
-        if (!tex || tex->bytes.empty())
-            return {};
-        return tex->bytes;
-    };
+    // geometry/UVs. The shared resolver (MeshTextureResolver.h) derives each URI's base texture, applies
+    // the "<slot>.<map>" override with per-map fallback to base, and loads the bytes — a partial/broken
+    // livery degrades, never fails. `liveryOverrides` outlives this call (owned by the caller /
+    // m_liveryCache) and the resolver is invoked synchronously inside createMesh below.
+    desc.textureResolver = makeMeshTextureResolver(m_assets, liveryOverrides);
     MeshHandle h = m_renderer.createMesh(desc);
     if (!h.valid() && m_logger) {
         char buf[176];

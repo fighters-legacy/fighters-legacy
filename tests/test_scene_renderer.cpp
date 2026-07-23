@@ -5,6 +5,7 @@
 #include "render/BuiltinGeometry.h"
 #include "render/BuiltinTextures.h"
 #include "render/CameraController.h"
+#include "render/MeshTextureResolver.h"
 #include "render/RenderSnapshot.h"
 #include "render/SceneRenderer.h"
 #include "render/SimRenderBridge.h"

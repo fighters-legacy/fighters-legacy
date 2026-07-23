@@ -586,6 +586,8 @@ MeshHandle VkResourceManager::createMesh(const MeshUploadDesc& desc) {
     };
 
     std::vector<Vertex> vertices(vertexCount);
+    glm::vec3 bMin(std::numeric_limits<float>::max());
+    glm::vec3 bMax(std::numeric_limits<float>::lowest());
     for (uint32_t i = 0; i < vertexCount; ++i) {
         vertices[i].position = stridedVec3(posPtr, posIdx, i);
         vertices[i].normal = nrmPtr ? stridedVec3(nrmPtr, nrmIdx, i) : glm::vec3(0, 1, 0);
@@ -601,6 +603,10 @@ MeshHandle VkResourceManager::createMesh(const MeshUploadDesc& desc) {
             const glm::vec3 t = contentForwardToBody(glm::vec3(vertices[i].tangent));
             vertices[i].tangent = glm::vec4(t, vertices[i].tangent.w);
         }
+
+        // Accumulate the body-frame AABB for camera framing (#836) on the already-oriented position.
+        bMin = glm::min(bMin, vertices[i].position);
+        bMax = glm::max(bMax, vertices[i].position);
     }
 
     // ── Extract index data ───────────────────────────────────────────────
@@ -655,6 +661,10 @@ MeshHandle VkResourceManager::createMesh(const MeshUploadDesc& desc) {
     }
 
     mesh.indexCount = static_cast<uint32_t>(indices.size());
+    if (vertexCount > 0) {
+        mesh.boundsMin = bMin;
+        mesh.boundsMax = bMax;
+    }
     mesh.alive = true;
 
     // ── Material (#833) ──────────────────────────────────────────────────
@@ -1063,6 +1073,15 @@ const GpuMaterial* VkResourceManager::getMaterial(MaterialHandle h) const {
 MaterialHandle VkResourceManager::getMeshMaterial(MeshHandle h) const {
     const GpuMesh* m = getMesh(h);
     return m ? m->material : MaterialHandle{};
+}
+
+bool VkResourceManager::getMeshBounds(MeshHandle h, glm::vec3& outMin, glm::vec3& outMax) const {
+    const GpuMesh* m = getMesh(h);
+    if (!m)
+        return false;
+    outMin = m->boundsMin;
+    outMax = m->boundsMax;
+    return true;
 }
 
 } // namespace fl

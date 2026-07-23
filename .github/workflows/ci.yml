@@ -179,7 +179,7 @@ jobs:
           cmake --install build/debug --prefix /tmp/dist --component runtime
           cmake --install build/debug --prefix /tmp/dist --component tools
           missing=0
-          for f in fighters-legacy fl-server validate-flight-model validate-weapon validate-sensor \
+          for f in fighters-legacy fl-server fl-viewer validate-flight-model validate-weapon validate-sensor \
                    validate-entity validate-mission validate-mode validate-mesh validate-playlist \
                    validate-licenses validate-livery tex-compress fm-trim; do
             if [ ! -f "/tmp/dist/$f" ]; then echo "MISSING from the release archive: $f"; missing=1; fi
@@ -218,6 +218,18 @@ jobs:
           ./build/debug/tools/tex-compress --version
           ./build/debug/tools/validate-licenses --version
           ./build/debug/tools/validate-playlist --version
+          ./build/debug/tools/fl-viewer --version
+
+      # The whole authoring-tools epic (#836) hangs off fl-viewer's headless render bootstrap (#666);
+      # exercise it on lavapipe so a broken headless path fails here, not only in the opt-in
+      # demo-videos run. No packs -> the builtin placeholder; just prove a non-empty PNG comes out.
+      - name: Headless snapshot smoke (lavapipe, Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
+          DISPLAY= VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
+            ./build/debug/tools/fl-viewer --snapshot /tmp/flv-smoke.png --size 320x180
+          test -s /tmp/flv-smoke.png
           ./build/debug/tools/terrain-chunk-io --version
           # --transport enet: net_check is an enet6 client, so the smoke server must speak enet6
           # (fl-server defaults to GNS when built with FL_ENABLE_GNS).
@@ -292,6 +304,7 @@ jobs:
           .\build\debug-msvc\tools\validate-licenses.exe --version
           .\build\debug-msvc\tools\validate-playlist.exe --version
           .\build\debug-msvc\tools\terrain-chunk-io.exe --version
+          .\build\debug-msvc\tools\fl-viewer.exe --version
         shell: pwsh
 
       - name: Verify static linking (Linux)

@@ -1052,6 +1052,9 @@ MaterialHandle VkRenderer::createMaterial(const MaterialDesc& d) {
 MaterialHandle VkRenderer::getMeshMaterial(MeshHandle h) const {
     return m_resources.getMeshMaterial(h);
 }
+bool VkRenderer::getMeshBounds(MeshHandle h, glm::vec3& outMin, glm::vec3& outMax) const {
+    return m_resources.getMeshBounds(h, outMin, outMax);
+}
 void VkRenderer::destroyMesh(MeshHandle h) {
     m_resources.destroyMesh(h);
 }

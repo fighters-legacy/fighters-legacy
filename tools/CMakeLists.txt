@@ -40,6 +40,32 @@ target_include_directories(validate-playlist-lib PUBLIC
 add_executable(validate-playlist validate-playlist/main.cpp)
 target_link_libraries(validate-playlist PRIVATE validate-playlist-lib)
 
+# fl-viewer: standalone model preview on the game renderer (#836). Snapshot mode (#666) is windowless
+# (headless Vulkan), so it needs platform-vulkan but NOT SDL3; the interactive window (#838) adds
+# platform-sdl3 + platform-gui. The pure option-parsing + entity-resolution live in a lib so they are
+# unit-testable without a GPU.
+if(TARGET platform-vulkan)
+    add_library(fl-viewer-lib STATIC
+        fl-viewer/viewer_options.cpp
+        fl-viewer/entity_resolve.cpp)
+    target_link_libraries(fl-viewer-lib PUBLIC engine-render engine-content engine-entity platform-hal)
+    target_include_directories(fl-viewer-lib PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/fl-viewer"
+        "${CMAKE_SOURCE_DIR}/platform/stdfs")
+
+    add_executable(fl-viewer fl-viewer/main.cpp fl-viewer/snapshot.cpp)
+    target_link_libraries(fl-viewer PRIVATE fl-viewer-lib platform-stdfs platform-vulkan Vulkan::Vulkan)
+    target_include_directories(fl-viewer PRIVATE
+        "${CMAKE_SOURCE_DIR}/platform/vulkan"
+        "${CMAKE_BINARY_DIR}/engine")   # generated Version.h
+    if(MSVC)
+        target_compile_definitions(fl-viewer PRIVATE _CRT_SECURE_NO_WARNINGS)
+    endif()
+    # Conditional install (like the game's Vulkan-gated install): CI legs that configure without
+    # Vulkan simply don't build or ship fl-viewer.
+    install(TARGETS fl-viewer RUNTIME DESTINATION . COMPONENT tools)
+endif()
+
 if(TARGET platform-enet)
     add_executable(net_check net_check/main.cpp)
     # engine-protocol PUBLIC-exposes the engine/ include root (NetStats.h -> perf/Stats.h) without

@@ -164,6 +164,7 @@ class VkRenderer : public IRenderer {
     void setTerrainBiomeTextures(TextureHandle colorArray, TextureHandle normalOrmArray, uint32_t layerCount) override;
     MaterialHandle createMaterial(const MaterialDesc& desc) override;
     MaterialHandle getMeshMaterial(MeshHandle h) const override;
+    bool getMeshBounds(MeshHandle h, glm::vec3& outMin, glm::vec3& outMax) const override;
     void destroyMesh(MeshHandle h) override;
     void destroyTexture(TextureHandle h) override;
     void destroyMaterial(MaterialHandle h) override;

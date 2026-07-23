@@ -7,6 +7,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **tools**: `fl-viewer`, a standalone model preview on the game renderer, and the session-free
+  preview bootstrap it shares (#666, Epic #836). A new `engine/render/PreviewScene` loads one entity
+  def or a bare `.glb` through the real content stack + renderer, resolves its glTF PBR material
+  through the same resolver `SceneRenderer` uses (the extracted `render/MeshTextureResolver.h`, so the
+  two cannot drift), computes the model bounds (`IRenderer::getMeshBounds`) and frames a camera on
+  them. This commit ships `fl-viewer`'s **headless snapshot** mode — `fl-viewer [--entity fl-base:f5e
+  | model.glb] [--assets <root>] --snapshot out.png [--size WxH] [--frames N] [--damaged] [--view
+  shaded|facecolor] [--require-content]` renders offscreen (no window, no server, no session — the
+  gap the game's full-session `--screenshot` left) and writes a PNG, the golden-image CLI pack CI
+  needs; run without `--snapshot` it points at the interactive window (#838). The game gains `--size
+  WxH` (headless resolution) and a `screenshot [path]` console command. A lavapipe headless snapshot
+  smoke runs in CI so the epic's render bootstrap is gated on every PR.
+
 ## [0.3.9] - 2026-07-23
 
 ### Fixed

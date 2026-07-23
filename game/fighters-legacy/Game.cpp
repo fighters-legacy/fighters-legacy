@@ -779,7 +779,15 @@ bool Game::initPlatform(int argc, char** argv) {
             d.services.screenshotPath = argv[i + 1];
         else if (std::strcmp(argv[i], "--screenshot-frames") == 0)
             d.services.screenshotFrames = std::atoi(argv[i + 1]);
-        else if (std::strcmp(argv[i], "--mission") == 0) {
+        else if (std::strcmp(argv[i], "--size") == 0) {
+            // Headless render resolution (#666). Mirrors --record-res; windowed mode ignores it (the
+            // window's own size wins). Malformed values keep the 1280x720 default.
+            int w = 0, h = 0;
+            if (std::sscanf(argv[i + 1], "%dx%d", &w, &h) == 2 && w > 0 && h > 0) {
+                d.services.headlessW = w;
+                d.services.headlessH = h;
+            }
+        } else if (std::strcmp(argv[i], "--mission") == 0) {
             // Launch straight into a single-player session with this mission — the id is
             // forwarded to the embedded fl-server exactly as Instant Action passes builtin:sandbox.
             d.services.autoStartMission = argv[i + 1];
@@ -1512,6 +1520,30 @@ void Game::startGame(const std::string& mission) {
                 {d.session.clientHandler.get(), &d.services.entityRegistry, d.services.p.gui.get(), adminSender});
             d.services.screenMgr->setServerCmd(std::move(adminSender));
         }
+
+        // screenshot [path] (#666): client-local, available in both single- and multi-player. Lives
+        // in the game layer (not engine-console) because it touches the renderer; it captures the
+        // current frame to a PNG (written at the next endFrame, the --screenshot mechanism). Default
+        // path = a timestamped file under <userdata>/screenshots/.
+        d.services.cmdRegistry.registerCommand(
+            "screenshot", "screenshot [path]  -- capture the current frame to a PNG",
+            [renderer = d.services.p.renderer.get(),
+             userDir = d.services.userDataDir](std::span<std::string_view> args) -> std::string {
+                if (!renderer)
+                    return "screenshot: not available (no renderer)";
+                fs::path out;
+                if (!args.empty() && !args[0].empty()) {
+                    out = fs::path(std::string(args[0]));
+                } else {
+                    const fs::path dir = userDir / "screenshots";
+                    std::error_code ec;
+                    fs::create_directories(dir, ec);
+                    out = dir / ("screenshot-" + std::to_string(static_cast<long long>(std::time(nullptr))) + ".png");
+                }
+                if (!renderer->captureScreenshot(out.string().c_str()))
+                    return "screenshot: capture request refused";
+                return "screenshot: writing " + out.string();
+            });
 
         // Build FlightScreenDeps now that all session objects exist.
         FlightScreenDeps fsd;

@@ -27,6 +27,21 @@ target_link_libraries(test_scene_renderer PRIVATE Catch2::Catch2WithMain engine-
 target_include_directories(test_scene_renderer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_scene_renderer)
 
+# PreviewScene (#666): the authoring-tools single-model preview bootstrap. engine-content is a PRIVATE
+# dep of engine-render, so link it explicitly for AssetManager in the test.
+add_executable(test_preview_scene test_preview_scene.cpp)
+target_link_libraries(test_preview_scene PRIVATE Catch2::Catch2WithMain engine-render engine-content)
+target_include_directories(test_preview_scene PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_preview_scene)
+
+# fl-viewer option parsing (#666) — only when the tool (and its lib) is built (needs platform-vulkan).
+if(TARGET fl-viewer-lib)
+    add_executable(test_viewer_options test_viewer_options.cpp)
+    target_link_libraries(test_viewer_options PRIVATE Catch2::Catch2WithMain fl-viewer-lib)
+    target_include_directories(test_viewer_options PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    catch_discover_tests(test_viewer_options)
+endif()
+
 add_executable(test_flight_hud test_flight_hud.cpp)
 target_link_libraries(test_flight_hud PRIVATE Catch2::Catch2WithMain engine-render)
 target_include_directories(test_flight_hud PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

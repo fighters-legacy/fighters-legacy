@@ -94,6 +94,8 @@ add_library(engine-render STATIC
     render/SimRenderBridge.cpp
     render/CameraController.cpp
     render/SceneRenderer.cpp
+    render/MeshTextureResolver.cpp
+    render/PreviewScene.cpp
     render/ParticleSystem.cpp
     render/BuiltinGeometry.cpp
     render/BuiltinTextures.cpp

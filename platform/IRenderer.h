@@ -91,6 +91,18 @@ class IRenderer {
     // material or no resolver — the caller then falls back to a flat colour.
     virtual MaterialHandle getMeshMaterial(MeshHandle h) const = 0;
 
+    // Object-space axis-aligned bounds of the mesh's parsed primitive, in the ENGINE BODY frame (after
+    // any contentForward orientation, #906) — exactly the frame RenderItem transforms live in, so a
+    // caller can frame the model with a camera (the authoring-tools PreviewScene, #836). Returns true
+    // and fills outMin/outMax on success. Non-pure with a false default so a backend/mock without
+    // bounds (and every test mock) needs no change; VkRenderer overrides it.
+    virtual bool getMeshBounds(MeshHandle h, glm::vec3& outMin, glm::vec3& outMax) const {
+        (void)h;
+        (void)outMin;
+        (void)outMax;
+        return false;
+    }
+
     // ── Resource destruction ───────────────────────────────────────────────
     virtual void destroyMesh(MeshHandle h) = 0;
     virtual void destroyTexture(TextureHandle h) = 0;
