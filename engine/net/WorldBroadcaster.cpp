@@ -2554,6 +2554,17 @@ bool WorldBroadcaster::setPeerAuthority(uint32_t peerId, const PeerAuthority& au
     // Sanitize the mask against the known bits so an unknown future capability can never be granted.
     it->second.authority.caps = authority.caps & kAllCaps;
     it->second.authority.factionIndex = authority.factionIndex;
+
+    // Re-send MsgConnectAck so the client's granted-authority TLV (#949) updates and its GM/moderator/
+    // faction-leader UI appears or disappears. Only for an admitted peer (one that already received a
+    // first ConnectAck); the peer's current entity + role are unchanged (the client's handler applies
+    // the ack idempotently). The setPeerRole precedent — no new message type.
+    if (it->second.handshakeComplete) {
+        EntityId assigned{};
+        if (const auto eit = m_peerEntities.find(peerId); eit != m_peerEntities.end())
+            assigned = eit->second;
+        sendConnectAck(peerId, assigned, it->second.role);
+    }
     return true;
 }
 
@@ -5655,6 +5666,20 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned, PeerRo
         }
 
         appendMsg(buf, typeDef);
+    }
+
+    // Granted-authority TLV (#949): appended after the entity-type records when this peer holds caps,
+    // so the client can show/hide GM/moderator/faction-leader UI. Cosmetic only — the server remains
+    // the enforcement point. Old clients iterate the records by typeCount and skip the unknown tag.
+    // Re-sent on a mid-session grant/revoke (setPeerAuthority re-calls sendConnectAck). Payload is
+    // { uint64 caps LE, uint16 factionIndex LE }, 10 bytes, matching ExtTag::ConnectAckAuthority.
+    if (auto pit = m_peerInputs.find(peerId); pit != m_peerInputs.end() && pit->second.authority.any()) {
+        const PeerAuthority& auth = pit->second.authority;
+        uint8_t payload[sizeof(uint64_t) + sizeof(uint16_t)];
+        const uint64_t caps = auth.caps;
+        std::memcpy(payload, &caps, sizeof(caps));
+        std::memcpy(payload + sizeof(caps), &auth.factionIndex, sizeof(auth.factionIndex));
+        appendExtRaw(buf, static_cast<uint16_t>(ExtTag::ConnectAckAuthority), payload, sizeof(payload));
     }
 
     m_net.send(peerId, buf.data(), buf.size(), /*reliable=*/true);

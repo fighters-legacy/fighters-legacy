@@ -7,6 +7,7 @@
 #include "RenderTypes.h"
 #include "SessionStatus.h"
 #include "WingmanMenu.h"
+#include "net/Capability.h"        // CapabilityMask / Capability — granted-authority UI gating (#949)
 #include "net/GameProtocol.h"      // PeerRole, PackManifestEntry (connect handshake #853)
 #include "render/RadarView.h"      // RadarView / RadarTrack / RwrStrobe (datalink picture #528)
 #include "render/RenderSnapshot.h" // EntityRenderEntry (stored by value in the retention cache)
@@ -89,6 +90,20 @@ struct ClientNetEventHandler : INetworkEventHandler {
     }
     bool gotConnectAck() const noexcept {
         return m_gotConnectAck;
+    }
+
+    // Granted authority (#949), from the MsgConnectAck ConnectAckAuthority TLV. Zero caps until a
+    // granted ack arrives; re-parsed on every ConnectAck (a mid-session grant/revoke re-sends one), so
+    // this reflects the current grant. UI-gating only — the server is the enforcement point.
+    fl::CapabilityMask grantedCaps() const noexcept {
+        return m_grantedCaps;
+    }
+    uint16_t grantedFactionIndex() const noexcept {
+        return m_grantedFactionIndex;
+    }
+    // Convenience: does the client hold a given capability (e.g. to show the GM map affordance)?
+    bool hasCapability(fl::Capability c) const noexcept {
+        return (m_grantedCaps & fl::capBit(c)) != 0;
     }
 
     // Display name for a faction index (#860), from the MsgFactionDef table. Empty string if the
@@ -406,6 +421,8 @@ struct ClientNetEventHandler : INetworkEventHandler {
 
     bool m_connected{false};
     PeerRole m_grantedRole{PeerRole::Pilot};            // role granted by MsgConnectAck (#857)
+    fl::CapabilityMask m_grantedCaps{0};                // granted authority from the ConnectAck TLV (#949)
+    uint16_t m_grantedFactionIndex{0xFFFFu};            // faction binding for a faction-scoped grant (#949)
     bool m_gotConnectAck{false};                        // true once a MsgConnectAck arrives; "was I admitted?" (#853)
     uint32_t m_selfPeerId{0};                           // this client's own participant id, from MsgConnectAck (#996)
     bool m_awaitingRespawn{false};                      // #403: own aircraft dead, awaiting respawn ack

@@ -2963,3 +2963,91 @@ TEST_CASE("ClientNetEventHandler: seat request/result plumbing (#975)", "[client
     CHECK_FALSE(handler.inCrewSeat());
     CHECK(handler.lastSeatResult().code == static_cast<uint8_t>(fl::SeatResultCode::SeatOccupiedByHuman));
 }
+
+// Build a MsgConnectAck packet: the fixed struct + `typeCount` entity-type records + an optional
+// granted-authority TLV (#949). Mirrors WorldBroadcaster::sendConnectAck.
+static std::vector<uint8_t> makeConnectAckPkt(uint16_t typeCount, bool withAuthTlv, uint64_t caps,
+                                              uint16_t factionIndex) {
+    fl::MsgConnectAck ack{};
+    ack.typeCount = typeCount;
+    ack.assignedEntityIdx = 5;
+    ack.assignedEntityGen = 1;
+    ack.grantedRole = static_cast<uint8_t>(fl::PeerRole::Observer);
+    ack.peerId = 7;
+    std::vector<uint8_t> pkt;
+    fl::appendMsg(pkt, ack);
+    for (uint16_t i = 0; i < typeCount; ++i) {
+        fl::MsgEntityTypeDef td{};
+        td.typeIndex = i;
+        std::snprintf(td.id, sizeof(td.id), "type%u", i);
+        fl::appendMsg(pkt, td);
+    }
+    if (withAuthTlv) {
+        uint8_t payload[sizeof(uint64_t) + sizeof(uint16_t)];
+        std::memcpy(payload, &caps, sizeof(caps));
+        std::memcpy(payload + sizeof(caps), &factionIndex, sizeof(factionIndex));
+        fl::appendExtRaw(pkt, static_cast<uint16_t>(fl::ExtTag::ConnectAckAuthority), payload, sizeof(payload));
+    }
+    return pkt;
+}
+
+TEST_CASE("ClientNetEventHandler: ConnectAck without authority TLV leaves zero caps (#949)",
+          "[client_net_event_handler][permission]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    auto pkt = makeConnectAckPkt(/*typeCount=*/2, /*withAuthTlv=*/false, 0, 0);
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    CHECK(handler.gotConnectAck());
+    CHECK(handler.grantedCaps() == 0u);
+    CHECK_FALSE(handler.hasCapability(fl::Capability::GmMap));
+    // The records were still parsed past the (absent) TLV.
+    CHECK(registry.findById("type0") != nullptr);
+    CHECK(registry.findById("type1") != nullptr);
+}
+
+TEST_CASE("ClientNetEventHandler: ConnectAck authority TLV exposes granted caps (#949)",
+          "[client_net_event_handler][permission]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    auto pkt = makeConnectAckPkt(/*typeCount=*/3, /*withAuthTlv=*/true, fl::kGameMasterCaps, 4);
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    CHECK(handler.grantedCaps() == fl::kGameMasterCaps);
+    CHECK(handler.grantedFactionIndex() == 4u);
+    CHECK(handler.hasCapability(fl::Capability::GmMap));
+    CHECK(handler.hasCapability(fl::Capability::SpawnAny));
+    CHECK_FALSE(handler.hasCapability(fl::Capability::GrantRoles));
+    // The three type records still registered (TLV tail did not disturb the record loop).
+    CHECK(registry.findById("type2") != nullptr);
+}
+
+TEST_CASE("ClientNetEventHandler: a revoke re-ack clears the granted caps (#949)",
+          "[client_net_event_handler][permission]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    // Grant, then a second ConnectAck with no TLV (the revoke re-send) must reset caps to zero.
+    auto grantPkt = makeConnectAckPkt(1, true, fl::kModeratorCaps, 0xFFFFu);
+    handler.onReceive(0u, grantPkt.data(), grantPkt.size());
+    CHECK(handler.grantedCaps() == fl::kModeratorCaps);
+
+    auto revokePkt = makeConnectAckPkt(1, false, 0, 0);
+    handler.onReceive(0u, revokePkt.data(), revokePkt.size());
+    CHECK(handler.grantedCaps() == 0u);
+    CHECK_FALSE(handler.hasCapability(fl::Capability::Mute));
+}

@@ -1254,7 +1254,7 @@ static_assert(offsetof(MsgServerInfo, mission) == 120u, "MsgServerInfo::mission 
 // Senders include any subset; receivers skip unknown tags via their len field.
 // Range layout:
 //   0x0100–0x01FF  MsgWorldSnapshot extensions (appended after the quantized record bitstream)
-//   0x0200–0x02FF  MsgConnectAck extensions (reserved for future use)
+//   0x0200–0x02FF  MsgConnectAck extensions (0x0201 = ConnectAckAuthority #949)
 //   0x0300–0x03FF  MsgClientInput extensions (reserved for future use)
 //   0x0400–0x04FF  MsgWeatherState extensions (reserved for future use)
 //   0x0500–0x05FF  MsgConnectRequest extensions (0x0500 = ConnectSeatClaim #974; RFC #871 token reserved)
@@ -1286,6 +1286,15 @@ enum class ExtTag : uint16_t {
                            // (occupancy lives in the reliable MsgCrewRoster), so a world of only single-seat
                            // entities emits no SnapshotCrew TLV and its snapshot is byte-identical to pre-#972.
                            // Unreliable/interest-filtered: a dropped packet loses one tick of turret aim.
+
+    ConnectAckAuthority = 0x0201, // #949: granted-authority TLV appended to MsgConnectAck (after the
+                                  // entity-type records). Payload = { uint64 caps (LE), uint16
+                                  // factionIndex (LE) } (10 bytes, unaligned). Present only when the
+                                  // peer holds non-zero granted caps; re-sent on a mid-session
+                                  // grant/revoke. Lets the client show/hide GM/moderator/faction-leader
+                                  // UI affordances — cosmetic only; the server remains the enforcement
+                                  // point. Old clients skip the unknown tag. First tag in the reserved
+                                  // 0x0200-0x02FF MsgConnectAck range.
 
     ConnectSeatClaim = 0x0500,    // #974: join-at-connect seat claim in MsgConnectRequest's TLV block.
                                   // Payload = { uint32 entityIdx (LE), uint32 entityGen (LE), uint8 seatIndex }

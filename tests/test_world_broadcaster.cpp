@@ -4898,6 +4898,64 @@ TEST_CASE("WorldBroadcaster: empty-token admin command dispatches with granted c
     CHECK(std::string(resp.text) == "ok");
 }
 
+// Scan sends for a ConnectAck packet and parse its granted-authority TLV (#949). Returns true if a
+// ConnectAck carrying ConnectAckAuthority was found, filling caps/faction.
+static bool findConnectAckAuthority(const MockNetwork& net, uint64_t& caps, uint16_t& faction) {
+    for (const auto& pkt : net.sends) {
+        if (pkt.size() < sizeof(fl::MsgConnectAck) || pkt[0] != static_cast<uint8_t>(fl::MsgId::ConnectAck))
+            continue;
+        fl::MsgConnectAck ack{};
+        std::memcpy(&ack, pkt.data(), sizeof(ack));
+        const std::size_t off = sizeof(fl::MsgConnectAck) + std::size_t(ack.typeCount) * sizeof(fl::MsgEntityTypeDef);
+        if (off > pkt.size())
+            continue;
+        uint16_t valueLen = 0;
+        const uint8_t* p = fl::findExt(pkt.data() + off, pkt.size() - off,
+                                       static_cast<uint16_t>(fl::ExtTag::ConnectAckAuthority), valueLen);
+        if (p && valueLen >= sizeof(uint64_t) + sizeof(uint16_t)) {
+            std::memcpy(&caps, p, sizeof(caps));
+            std::memcpy(&faction, p + sizeof(caps), sizeof(faction));
+            return true;
+        }
+    }
+    return false;
+}
+
+TEST_CASE("WorldBroadcaster: grant re-sends ConnectAck with the authority TLV (#949)",
+          "[world_broadcaster][admin_command][permission]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+
+    connectPilotPeer(broadcaster, net, 0u);
+    net.sends.clear();
+
+    // A grant re-sends ConnectAck carrying the TLV so the client can show GM UI.
+    REQUIRE(broadcaster.setPeerAuthority(0u, fl::PeerAuthority{fl::kGameMasterCaps, 4}));
+    uint64_t caps = 0;
+    uint16_t faction = 0xFFFFu;
+    REQUIRE(findConnectAckAuthority(net, caps, faction));
+    CHECK(caps == fl::kGameMasterCaps);
+    CHECK(faction == 4u);
+
+    // A revoke re-sends ConnectAck with NO TLV (caps back to zero).
+    net.sends.clear();
+    REQUIRE(broadcaster.setPeerAuthority(0u, fl::PeerAuthority{}));
+    uint64_t caps2 = 0;
+    uint16_t faction2 = 0;
+    CHECK_FALSE(findConnectAckAuthority(net, caps2, faction2)); // no TLV on the revoke ack
+    // But a ConnectAck WAS re-sent (so the client re-parses and clears its caps).
+    bool sawAck = false;
+    for (const auto& pkt : net.sends)
+        if (!pkt.empty() && pkt[0] == static_cast<uint8_t>(fl::MsgId::ConnectAck))
+            sawAck = true;
+    CHECK(sawAck);
+}
+
 TEST_CASE("WorldBroadcaster: password auth grants Admin caps (rung 1 unchanged, #946)",
           "[world_broadcaster][admin_command][permission]") {
     MockLogger log;

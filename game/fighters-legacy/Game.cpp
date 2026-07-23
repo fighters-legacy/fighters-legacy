@@ -1496,14 +1496,14 @@ void Game::startGame(const std::string& mission) {
             ctx.playerEntityGen = &d.session.clientHandler->assignedEntityGen;
             ctx.showPos = &d.services.gameConsole->showPosRef();
             ctx.showPing = &d.services.showPing;
-            if (!d.services.operatorPassword.empty()) {
-                auto adminSender = makeNetworkAdminSender(*d.session.clientNet, d.services.operatorPassword);
-                ctx.serverCommand = adminSender;
-                registerConsoleCommands(d.services.cmdRegistry, ctx);
-                d.services.screenMgr->setServerCmd(std::move(adminSender));
-            } else {
-                registerConsoleCommands(d.services.cmdRegistry, ctx);
-            }
+            // Wire the admin sender unconditionally (#949): with an operator password it authenticates
+            // as Admin (token filled in), and with none it sends an empty token — the grant channel, so
+            // a peer granted GM/moderator/faction-leader authority can issue orders it is permitted for.
+            // The server permission-checks every command; an ungranted, passwordless client is refused.
+            auto adminSender = makeNetworkAdminSender(*d.session.clientNet, d.services.operatorPassword);
+            ctx.serverCommand = adminSender;
+            registerConsoleCommands(d.services.cmdRegistry, ctx);
+            d.services.screenMgr->setServerCmd(std::move(adminSender));
         }
 
         // Build FlightScreenDeps now that all session objects exist.

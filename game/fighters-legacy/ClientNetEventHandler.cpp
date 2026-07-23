@@ -174,6 +174,24 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             def.maxHp = 100.0f;
             registry.registerType(std::move(def));
         }
+        // Granted-authority TLV (#949): the block after the entity-type records. Re-parsed on every
+        // ConnectAck (a grant/revoke re-sends one), so caps reset to zero when the tag is absent —
+        // a revoke removes the affordance. Cosmetic only; the server enforces.
+        m_grantedCaps = 0;
+        m_grantedFactionIndex = 0xFFFFu;
+        if (off <= size) {
+            const uint8_t* ext = static_cast<const uint8_t*>(data) + off;
+            const std::size_t extSize = size - off;
+            uint16_t valueLen = 0;
+            if (const uint8_t* p =
+                    fl::findExt(ext, extSize, static_cast<uint16_t>(fl::ExtTag::ConnectAckAuthority), valueLen);
+                p && valueLen >= sizeof(uint64_t) + sizeof(uint16_t)) {
+                uint64_t caps = 0;
+                std::memcpy(&caps, p, sizeof(caps));
+                std::memcpy(&m_grantedFactionIndex, p + sizeof(caps), sizeof(m_grantedFactionIndex));
+                m_grantedCaps = caps & fl::kAllCaps; // sanitize unknown bits
+            }
+        }
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::WorldSnapshot)) {
         fl::MsgWorldSnapshotHeader hdr;
         if (!fl::readMsg(data, size, hdr))

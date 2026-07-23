@@ -21,6 +21,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **netcode**: granted-authority ConnectAck extension and client affordance gating (#949, epic #944).
+  New `ExtTag::ConnectAckAuthority = 0x0201` (first tag in the reserved `0x0200–0x02FF` MsgConnectAck
+  range): a `{u64 caps, u16 factionIndex}` TLV appended after the entity-type records when a peer holds
+  granted capabilities, re-sent on a mid-session grant/revoke (`setPeerAuthority` re-calls
+  `sendConnectAck`). Additive — no `kProtocolVersion` bump; old clients skip the unknown tag.
+  `ClientNetEventHandler` parses it and exposes `grantedCaps()` / `grantedFactionIndex()` /
+  `hasCapability()` for UI gating (the server remains the enforcement point). The multiplayer client now
+  wires its admin-command sender unconditionally, so a granted-but-passwordless peer can issue the
+  commands its capabilities permit through the empty-token grant channel. `docs/network-protocol.md`
+  documents the tag and the future requested-authority claim. Covered by round-trip tests in
+  `test_client_net_event_handler` and `test_world_broadcaster`.
+
 - **server**: runtime `grant` / `revoke` admin commands (part of #947, rung 2 of the #944 grant
   ladder). `grant <peerId> <admin|moderator|gm|faction_leader> [factionIndex]` and `revoke <peerId>`
   (both require `grant_roles`) set/clear a peer's `PeerAuthority` via `enqueueSimCallback` with a
