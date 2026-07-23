@@ -711,6 +711,54 @@ TEST_CASE("AdminConsole wb: set_role validates and queues with a synchronous ack
     CHECK(ok.find("observer") != std::string::npos);
 }
 
+TEST_CASE("AdminConsole wb: grant validates and queues with a synchronous ack (#947)",
+          "[admin_console][wb][permission]") {
+    WbFixture f;
+    auto reg = makeRegistry(f.ctx);
+    CHECK(reg.dispatch("grant").find("usage") != std::string::npos);
+    CHECK(reg.dispatch("grant 0").find("usage") != std::string::npos);
+    CHECK(reg.dispatch("grant x gm").find("invalid peer ID") != std::string::npos);
+    CHECK(reg.dispatch("grant 0 superuser").find("role must be") != std::string::npos);
+    CHECK(reg.dispatch("grant 0 faction_leader nope").find("invalid faction") != std::string::npos);
+    std::string ok = reg.dispatch("grant 3 gm");
+    CHECK(ok.find("queued peer 3") != std::string::npos);
+    CHECK(ok.find("gm") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole wb: revoke validates and queues with a synchronous ack (#947)",
+          "[admin_console][wb][permission]") {
+    WbFixture f;
+    auto reg = makeRegistry(f.ctx);
+    CHECK(reg.dispatch("revoke").find("usage") != std::string::npos);
+    CHECK(reg.dispatch("revoke x").find("invalid peer ID") != std::string::npos);
+    CHECK(reg.dispatch("revoke 7").find("queued peer 7") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole wb: grant -> act -> revoke -> refused end to end (#947)", "[admin_console][wb][permission]") {
+    WbFixture f;
+    f.registry.registerType(makeWbEntityDef());
+    f.broadcaster.onConnect(0u); // creates the peer's input slot so authority can be set
+    auto reg = makeRegistry(f.ctx);
+
+    // Grant game-master caps directly (the enqueued callback body is what `grant` runs on the loop).
+    REQUIRE(f.broadcaster.setPeerAuthority(
+        0u, fl::PeerAuthority{fl::kGameMasterCaps, fl::PeerAuthority::kNoFactionBinding}));
+    fl::PeerAuthority a = f.broadcaster.getPeerAuthority(0u);
+    CHECK(a.caps == fl::kGameMasterCaps);
+
+    // The granted peer, dispatched with its issuer, may spawn (SpawnAny) but not config (ServerConfig).
+    const fl::CommandIssuer granted{0u, a.caps, a.factionIndex};
+    CHECK(reg.dispatch("spawn x 0 0 0", granted).find("permission denied") == std::string::npos);
+    CHECK(reg.dispatch("set_weather storm", granted).find("permission denied") != std::string::npos);
+
+    // Revoke, and the same peer is now refused everything privileged.
+    REQUIRE(f.broadcaster.setPeerAuthority(0u, fl::PeerAuthority{}));
+    const fl::PeerAuthority after = f.broadcaster.getPeerAuthority(0u);
+    CHECK(after.caps == 0);
+    const fl::CommandIssuer revoked{0u, after.caps, after.factionIndex};
+    CHECK(reg.dispatch("spawn x 0 0 0", revoked).find("permission denied") != std::string::npos);
+}
+
 TEST_CASE("AdminConsole wb: peers with null gameLoop returns not available", "[admin_console][wb]") {
     WbFixture f;
     f.ctx.sim.gameLoop = nullptr;

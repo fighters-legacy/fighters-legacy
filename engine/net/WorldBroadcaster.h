@@ -183,6 +183,7 @@ struct PeerInfo {
     float sendRateHz{};         // current adaptive snapshot send rate (60 / congestion send interval)
     uint32_t effectiveBudget{}; // current congestion-scaled per-snapshot byte budget (0 = unlimited)
     float packetLoss{};         // last sampled ENet mean loss fraction (0..1)
+    CapabilityMask caps{};      // granted authority mask (#946); 0 = no grant (ordinary peer)
 };
 
 // One simulated entity together with its control source. The registry is EntityId-keyed (not peer-

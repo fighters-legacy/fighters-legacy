@@ -695,6 +695,7 @@ void WorldBroadcaster::forEachPeer(std::function<void(const PeerInfo&)> fn) cons
             pi.sendRateHz = interval > 0u ? 60.f / static_cast<float>(interval) : 60.f;
             pi.effectiveBudget = ps.congestion.effectiveBudget(m_snapshotBudgetBytes.load(std::memory_order_relaxed));
             pi.packetLoss = m_net.getPeerLinkStats(peerId).packetLoss; // live ENet mean loss fraction
+            pi.caps = ps.authority.caps;                               // granted authority (#946)
         }
         fn(pi);
     }

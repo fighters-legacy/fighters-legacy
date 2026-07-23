@@ -21,6 +21,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **server**: runtime `grant` / `revoke` admin commands (part of #947, rung 2 of the #944 grant
+  ladder). `grant <peerId> <admin|moderator|gm|faction_leader> [factionIndex]` and `revoke <peerId>`
+  (both require `grant_roles`) set/clear a peer's `PeerAuthority` via `enqueueSimCallback` with a
+  synchronous ack (the `set_role` pattern); grants are ephemeral (lost on disconnect — persistence is
+  the identity-bound issue #950). The `peers` listing gains a `role=` column showing a granted peer's
+  preset. A granted peer authenticates on the admin channel with an empty token and is permission-
+  checked against its caps; a moderator cannot self-elevate (it lacks `grant_roles`). Covered by
+  grant/revoke and grant→act→revoke→refused cases in `test_admin_console`.
+
 - **network**: permission-checked admin command dispatch with issuer context (#946, epic #944).
   `CommandRegistry::registerCommand` gains a required-capability mask (an unannotated command defaults
   to Admin-only, preserving today's semantics) and a new `dispatch(line, CommandIssuer)` overload that

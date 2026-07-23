@@ -264,15 +264,20 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                                  ctx.sim.gameLoop->enqueueSimCallback([ctx]() {
                                      int count = 0;
                                      ctx.sim.broadcaster->forEachPeer([&](const fl::PeerInfo& pi) {
-                                         char m[384];
+                                         char m[416];
+                                         const std::string_view roleName = fl::rolePresetName(pi.caps);
+                                         char roleCol[32] = "";
+                                         if (!roleName.empty())
+                                             std::snprintf(roleCol, sizeof(roleCol), "  role=%.*s",
+                                                           static_cast<int>(roleName.size()), roleName.data());
                                          std::snprintf(
                                              m, sizeof(m),
                                              "[admin] peer %u  %s  entity=%u/%u  delay=%ut (~%ums)"
-                                             "  ewma=%.1ft  jitter=%.1ft  buf=%u/%u  rate=%.0fHz  loss=%.1f%%",
+                                             "  ewma=%.1ft  jitter=%.1ft  buf=%u/%u  rate=%.0fHz  loss=%.1f%%%s",
                                              pi.peerId, pi.addr.c_str(), pi.eid.index, pi.eid.generation, pi.delayTicks,
                                              (pi.delayTicks * 1000u + 30u) / 60u, pi.ewmaDelayTicks, pi.ewmaJitterTicks,
                                              pi.queueDepth, pi.bufferMaxDepth, static_cast<double>(pi.sendRateHz),
-                                             static_cast<double>(pi.packetLoss) * 100.0);
+                                             static_cast<double>(pi.packetLoss) * 100.0, roleCol);
                                          std::printf("%s\n", m);
                                          if (ctx.rcon.shell)
                                              ctx.rcon.shell->print(m);
@@ -427,6 +432,86 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
             char buf[80];
             std::snprintf(buf, sizeof(buf), "set_role: queued peer %u -> %s", peerId,
                           role == fl::PeerRole::Observer ? "observer" : "pilot");
+            return std::string(buf);
+        });
+
+    // grant <peerId> <admin|moderator|gm|faction_leader> [factionIndex]  -- grant a peer authority (#947,
+    // rung 2 of the #944 grant ladder). Ephemeral (lost on disconnect); requires grant_roles. Re-sends
+    // MsgConnectAck so the client's granted-authority TLV updates and GM/mod UI appears (#949).
+    registry.registerCommand(
+        "grant",
+        "grant <peerId> <admin|moderator|gm|faction_leader> [factionIndex]  -- grant a peer a role's "
+        "capabilities (ephemeral; lost on disconnect)",
+        capBit(Capability::GrantRoles), [ctx](std::span<std::string_view> args) -> std::string {
+            if (args.size() < 2)
+                return "usage: grant <peerId> <admin|moderator|gm|faction_leader> [factionIndex]";
+            if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
+                return "grant: not available";
+            std::string idArg(args[0]);
+            if (!isNumeric(idArg))
+                return "grant: invalid peer ID";
+            uint32_t peerId = 0;
+            if (auto [p, ec] = std::from_chars(idArg.data(), idArg.data() + idArg.size(), peerId); ec != std::errc{})
+                return "grant: invalid peer ID";
+            const auto preset = fl::parseRolePreset(args[1]);
+            if (!preset)
+                return "grant: role must be one of admin, moderator, gm, faction_leader";
+            uint16_t faction = fl::PeerAuthority::kNoFactionBinding;
+            if (args.size() >= 3) {
+                std::string facArg(args[2]);
+                unsigned f = 0;
+                if (auto [p, ec] = std::from_chars(facArg.data(), facArg.data() + facArg.size(), f);
+                    ec != std::errc{} || f > 0xFFFFu)
+                    return "grant: invalid faction index";
+                faction = static_cast<uint16_t>(f);
+            }
+            const fl::PeerAuthority authority{*preset, faction};
+            std::string roleName(args[1]);
+            ctx.sim.gameLoop->enqueueSimCallback([ctx, peerId, authority, roleName]() {
+                const bool ok = ctx.sim.broadcaster->setPeerAuthority(peerId, authority);
+                char m[96];
+                if (ok)
+                    std::snprintf(m, sizeof(m), "[admin] granted peer %u role %s", peerId, roleName.c_str());
+                else
+                    std::snprintf(m, sizeof(m), "[admin] grant failed: peer %u not found", peerId);
+                std::printf("%s\n", m);
+                if (ctx.rcon.shell)
+                    ctx.rcon.shell->print(m);
+                std::fflush(stdout);
+            });
+            char buf[96];
+            std::snprintf(buf, sizeof(buf), "grant: queued peer %u -> %s", peerId, roleName.c_str());
+            return std::string(buf);
+        });
+
+    // revoke <peerId>  -- clear a peer's granted authority (#947). Requires grant_roles.
+    registry.registerCommand(
+        "revoke", "revoke <peerId>  -- clear a peer's granted authority", capBit(Capability::GrantRoles),
+        [ctx](std::span<std::string_view> args) -> std::string {
+            if (args.empty())
+                return "usage: revoke <peerId>";
+            if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
+                return "revoke: not available";
+            std::string idArg(args[0]);
+            if (!isNumeric(idArg))
+                return "revoke: invalid peer ID";
+            uint32_t peerId = 0;
+            if (auto [p, ec] = std::from_chars(idArg.data(), idArg.data() + idArg.size(), peerId); ec != std::errc{})
+                return "revoke: invalid peer ID";
+            ctx.sim.gameLoop->enqueueSimCallback([ctx, peerId]() {
+                const bool ok = ctx.sim.broadcaster->setPeerAuthority(peerId, fl::PeerAuthority{});
+                char m[96];
+                if (ok)
+                    std::snprintf(m, sizeof(m), "[admin] revoked peer %u authority", peerId);
+                else
+                    std::snprintf(m, sizeof(m), "[admin] revoke failed: peer %u not found", peerId);
+                std::printf("%s\n", m);
+                if (ctx.rcon.shell)
+                    ctx.rcon.shell->print(m);
+                std::fflush(stdout);
+            });
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "revoke: queued peer %u", peerId);
             return std::string(buf);
         });
 

@@ -154,6 +154,22 @@ inline constexpr CapabilityMask kGameMasterCaps = capBit(Capability::GmMap) | ca
     return std::nullopt;
 }
 
+// The display name of a capability mask that matches a known preset exactly, for the `peers` role
+// column and grant confirmations. "" for zero caps; "custom" for a granted-but-non-preset mask.
+[[nodiscard]] inline constexpr std::string_view rolePresetName(CapabilityMask caps) noexcept {
+    if (caps == 0)
+        return "";
+    if (caps == kAdminCaps)
+        return "admin";
+    if (caps == kModeratorCaps)
+        return "moderator";
+    if (caps == kGameMasterCaps)
+        return "gm";
+    if (caps == factionLeaderCaps())
+        return "faction_leader";
+    return "custom";
+}
+
 // Per-peer granted authority. Orthogonal to PeerRole: stored beside role/handshakeComplete on
 // PeerInputState, default zero caps (no authority) for every peer. factionIndex binds a faction-scoped
 // grant (kNoFactionBinding = unbound / any-faction admin). Ephemeral — erased with the peer on
