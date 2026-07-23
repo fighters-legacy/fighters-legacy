@@ -53,6 +53,11 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
     target_include_directories(fl-viewer-lib PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/fl-viewer"
         "${CMAKE_SOURCE_DIR}/platform/stdfs")
+    if(MSVC)
+        # viewer_options.cpp uses std::sscanf and entity_resolve.cpp std::getenv; MSVC flags both as
+        # C4996 "unsafe" (warnings-as-errors). Same treatment as the exe below and the other tools.
+        target_compile_definitions(fl-viewer-lib PRIVATE _CRT_SECURE_NO_WARNINGS)
+    endif()
 
     add_executable(fl-viewer fl-viewer/main.cpp fl-viewer/snapshot.cpp fl-viewer/viewer_app.cpp)
     target_link_libraries(fl-viewer PRIVATE fl-viewer-lib validate-mesh-lib
