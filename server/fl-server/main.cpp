@@ -2019,7 +2019,12 @@ int main(int argc, char** argv) {
     // MOTD and operator password were applied via applyConfig() above; the admin dispatcher needs
     // adminRegistry (built just above) so it is wired here.
     if (!cfg.operatorPassword.empty()) {
-        broadcaster.setAdminDispatch([&adminRegistry](std::string_view cmd) { return adminRegistry.dispatch(cmd); });
+        broadcaster.setAdminDispatch([&adminRegistry](std::string_view cmd, const fl::CommandIssuer& issuer) {
+            // Permission-check the command against the issuer's granted capabilities (#946). A
+            // password-authenticated peer arrives with Admin caps and runs everything (the CI
+            // path); a grant-channel peer runs only what its caps allow.
+            return adminRegistry.dispatch(cmd, issuer);
+        });
         broadcaster.setAdminShell([&adminShell]() { return adminShell.mark(); },
                                   [&adminShell](int m) { return adminShell.drainSince(m); });
         log->log(LogLevel::Info, __FILE__, __LINE__, "network admin commands: enabled");

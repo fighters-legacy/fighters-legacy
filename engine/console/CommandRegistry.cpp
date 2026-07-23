@@ -7,8 +7,14 @@
 
 namespace fl {
 
+void CommandRegistry::registerCommand(std::string name, std::string helpText, CapabilityMask required,
+                                      CommandHandler handler) {
+    m_entries.push_back({std::move(name), std::move(helpText), required, std::move(handler)});
+}
+
 void CommandRegistry::registerCommand(std::string name, std::string helpText, CommandHandler handler) {
-    m_entries.push_back({std::move(name), std::move(helpText), std::move(handler)});
+    // Unannotated = Admin-only (pre-#946 semantics preserved for any command without an explicit mask).
+    registerCommand(std::move(name), std::move(helpText), kAdminCaps, std::move(handler));
 }
 
 std::string CommandRegistry::dispatch(std::string_view line) const {
@@ -25,6 +31,35 @@ std::string CommandRegistry::dispatch(std::string_view line) const {
     }
 
     return "unknown command: " + std::string(cmd) + "  (type 'help' for list)";
+}
+
+std::string CommandRegistry::dispatch(std::string_view line, const CommandIssuer& issuer) const {
+    auto tokens = tokenize(line);
+    if (tokens.empty())
+        return {};
+
+    std::string_view cmd = tokens[0];
+    auto args = std::span<std::string_view>(tokens).subspan(1);
+
+    for (const auto& e : m_entries) {
+        if (e.name != cmd)
+            continue;
+        if (!hasCaps(issuer.caps, e.required)) {
+            const std::string_view missing = firstMissingCapabilityName(issuer.caps, e.required);
+            return "permission denied: " + std::string(cmd) + " requires " + std::string(missing);
+        }
+        return e.handler(args);
+    }
+
+    return "unknown command: " + std::string(cmd) + "  (type 'help' for list)";
+}
+
+CapabilityMask CommandRegistry::requiredCaps(std::string_view name) const {
+    for (const auto& e : m_entries) {
+        if (e.name == name)
+            return e.required;
+    }
+    return 0;
 }
 
 std::string CommandRegistry::helpText() const {

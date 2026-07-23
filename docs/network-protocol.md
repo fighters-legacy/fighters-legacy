@@ -883,17 +883,26 @@ Helpers: `fl::findExt`, `fl::readExtValue<T>`, `fl::appendExt<T>`, `fl::appendEx
 | `SnapshotLastAckedSeqNum` | `0x0105` | `uint32_t` | `MsgWorldSnapshot` | The `seqNum` of the last `MsgClientInput` the server **drained from the jitter buffer and applied** for the receiving peer (#427). Lets `ClientPrediction` replay *exactly* the inputs the server has not yet reflected (history `seqNum > this`), rather than approximating the replay window from `SnapshotPeerDelayTicks` — exact under high delay variance, where the tick count over- or under-replays. Absent until the server has applied one of the peer's inputs (its first snapshots); the client falls back to the delay-ticks approximation when absent. |
 | `SnapshotCrew` | `0x0106` | `uint8 count` + records | `MsgWorldSnapshot` | Live **crew turret pose** (#972) for the CREWED aircraft in the receiving peer's interest set. Payload: `uint8 entryCount`, then per entry `{ uint32 entityIdx (LE), uint8 turretCount, turretCount × { int16 azQ (LE), int16 elQ (LE) } }`. Azimuth is quantized over `[-π, π]` and elevation over `[-π/2, π/2]` to `int16` (mount frame). **Single-seat aircraft never appear** — occupancy lives in the reliable `MsgCrewRoster`, so a world of only single-seat entities emits no `SnapshotCrew` TLV and its snapshot is byte-identical to pre-#972. Unreliable/interest-filtered: a dropped packet loses one tick of turret aim. Little-endian, unaligned; read per-field via memcpy. |
 
+| `ConnectAckAuthority` | `0x0201` | `{u64 caps, u16 factionIndex}` (10 B) | `MsgConnectAck` | Granted authority (#949), appended after the entity-type records. Present only when the peer holds non-zero granted capabilities (`CapabilityMask`, `engine/net/Capability.h`); re-sent on a mid-session grant/revoke so the client can show/hide game-master, moderator, and faction-leader UI affordances. **Cosmetic/UX only — the server remains the enforcement point.** Old clients iterate the type records by `typeCount` and skip the unknown tag. Little-endian, unaligned. Parsed by `ClientNetEventHandler::grantedCaps()` / `grantedFactionIndex()`. |
 | `WeatherWindProfile` | `0x0400` | `uint8 count` + `count × {f32 altM, f32 windX, f32 windZ}` (12 B each) | `MsgWeatherState` | Altitude wind profile (#489), appended after the 32-byte fixed struct. Knots ascending by altitude, absolute world-frame wind (m/s) at each. The client interpolates it by altitude (`WindProfile.h`) in parity with the server's per-entity wind. Omitted when no profile is set; old clients read the 32-byte struct and ignore the tail, keeping the datum-level `windX/windZ`. Little-endian, unaligned; read per-record via memcpy. |
 | `ConnectSeatClaim` | `0x0500` | `{u32 entityIdx, u32 entityGen, u8 seatIndex}` (9 B) | `MsgConnectRequest` | Join-at-connect seat claim (#974): the client asks to occupy a non-fly seat of an existing crewed aircraft instead of spawning its own. The server binds the seat when it is joinable and falls back to a normal pilot spawn otherwise (so a pilot always gets in). Appended after the pack manifest. Little-endian, unaligned. |
 
 **Reserved ranges:**
 - `0x0000`: reserved
 - `0x0100–0x01FF`: `MsgWorldSnapshot` extensions
-- `0x0200–0x02FF`: `MsgConnectAck` extensions (reserved for future use)
+- `0x0200–0x02FF`: `MsgConnectAck` extensions (`0x0201` = `ConnectAckAuthority`)
 - `0x0300–0x03FF`: `MsgClientInput` extensions (`0x0400` used by `WeatherWindProfile`)
 - `0x0400–0x04FF`: `MsgWeatherState` extensions (`0x0400` = `WeatherWindProfile`)
 - `0x0500–0x05FF`: `MsgConnectRequest` extensions (`0x0500` = `ConnectSeatClaim`)
 - All other values: reserved; must not be sent
+
+**Future: requested-authority claim.** A client will later be able to *request* authority at connect
+time by riding a signed, offline-verifiable entitlement token in the `0x0500–0x05FF`
+`MsgConnectRequest` extension range (alongside RFC #871's token and Epic C's identity binding, #950) —
+the same shape as the identity-bound role table. This is **not implemented**: today authority is
+granted only server-side (operator console / RCON `grant` command, rung 2 of the #944 grant ladder),
+and `ConnectAckAuthority` merely reports the result to the client. The requested-authority claim is
+documented here so the reserved range is not reused.
 
 ---
 

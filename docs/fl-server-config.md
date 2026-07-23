@@ -1546,8 +1546,22 @@ process.
 
 #### Command reference
 
+**Permission model (#944).** Every command carries a required capability. A peer authenticating with the
+`operator_password` is granted **Admin** (all capabilities) — the default, byte-for-byte the pre-#944
+behavior, and the CI-tested path. The `grant` command hands a peer a role preset's capabilities
+(**Moderator** = kick/ban/mute/spectate; **GameMaster** = the #861 map + spawn + AI orders + faction
+posture + spectate; **FactionLeader** = the faction-scoped subset), after which that peer runs admin
+commands over the ENet channel with an *empty* token (authenticated by its granted caps instead of the
+password); a command it lacks the capability for is refused with a clear "permission denied: <cmd>
+requires <cap>" message. Grants are **ephemeral** — lost on disconnect (persistence across reconnect is
+planned, #950). The stdin console, RCON, and single-player `--admin-token` sessions are always
+implicit-Admin. Public commands (`help`/`status`/`peers`/`tickstats`/`mutes`/`seats`/`atc_status`) run
+for any authenticated caller.
+
 | Command | Args | Description |
 |---|---|---|
+| `grant` | `<peerId> <admin\|moderator\|gm\|faction_leader> [factionIndex]` | Grant a peer a role preset's capabilities (#947; requires `grant_roles`). Ephemeral (lost on disconnect); re-sends `MsgConnectAck` so the client's GM/moderator UI appears. A `gm` grant unlocks the #861 overview map for that peer. |
+| `revoke` | `<peerId>` | Clear a peer's granted authority (requires `grant_roles`). |
 | `help` | `[command]` | List all commands, or show usage for a specific one |
 | `status` | — | Show uptime, peer count, entity count, the real tick rate (Hz + mean/p99 ms), and the overrun-governor load (`load: NN%`, `[DEGRADED]` when shedding) |
 | `tickstats` | — | Per-phase sim tick budget (integrate/ai/collision/serialize/total; ms mean/p95/p99/max), actual tick Hz, and the overrun-governor state (`load`, effective snapshot Hz, AI stride) |
@@ -1561,7 +1575,7 @@ process.
 | `detonate` | `<x> <y> <z> <radius_m> <damage> [--nuclear]` | AoE warhead at a world position (#356); `--nuclear` adds the EMP ring at 4× the blast radius |
 | `set_time` | `<0–24>` | Set in-game time of day (float, hours) |
 | `spawn` | `<type> <x> <y> <z> [--ai <behavior> [args...]]` | Spawn a registered entity type at the given world position; optionally attach an AI controller. C++ behaviors: `loiter [cx cy cz [radius_m [alt_m [throttle [cw\|ccw]]]]]`, `dynamic_loiter <entityIdx> [radius_m [throttle [cw\|ccw]]]` (orbits a **moving** entity — the escort primitive the fixed-centre loiter cannot provide), `waypoint x y z [x y z ...] [--loop]`, `formation <anchorIdx> [slot] [lateralM] [aftM]` (holds tight station on a **moving** anchor; `escort` orbits the moving asset at standoff), `wingman <anchorIdx> <command> [slot]`, `pursuit <entityIdx>`, `evade <entityIdx>`, `break <entityIdx> [rollDuration]`, `lead <entityIdx> [navGain]`, `lag <entityIdx> [lagFraction]`, `immelmann [pullDur] [rollDur]`, `split_s [rollDur] [pullDur]`, `high_yo_yo <entityIdx> [climbDur] [reacquireDur]`, `low_yo_yo <entityIdx> [diveDur] [pullDur]`, `guns <entityIdx> [muzzleVel] [lethalRadius]` (ballistic-lead gunnery with trigger discipline), `ballistic <tx> <ty> <tz> [mirvCount [spreadM]]` (#355 — boost-phase steering to an impact point; MIRV past apogee). Lua behavior: `lua <script_name>` (loads `ai/<script_name>.lua` from content packs; see `docs/modding/ai.md`). If the entity type's TOML sets `ai_script`, that script is attached automatically when `--ai` is omitted. |
-| `flight` | `list \| create <anchorIdx> [--commander <peerId>] [--parent <id>] [--callsign <name>] \| add <id> <entityIdx> [slot] \| order <id> <command> [--member <idx>] [--cascade] \| disband <id>` | The formation / command-hierarchy surface (#610) — the **game-master and AWACS path**. Build formations (including all-AI flights and nested strike packages) and order them. `order` takes the six wingman commands (`attack_my_target`, `engage_bandits`, `rejoin`, `cover_me`, `hold_fire`, `return_to_base`); `--cascade` applies it to every sub-formation beneath the addressed one. Dispatches through the **same** code as the network order path, so a console order and a radio order cannot behave differently. `attack_my_target` is **refused** here — it needs a commander's boresight, which the console does not have; use `spawn --ai pursuit <idx>` to point an AI at a specific entity. |
+| `flight` | `list \| create <anchorIdx> [--commander <peerId>] [--parent <id>] [--callsign <name>] \| add <id> <entityIdx> [slot] \| order <id> <command> [--member <idx>] [--target <entityIdx>] [--cascade] \| disband <id>` | The formation / command-hierarchy surface (#610) — the **game-master and AWACS path** (requires `command_any_ai`). Build formations (including all-AI flights and nested strike packages) and order them. `order` takes the six wingman commands (`attack_my_target`, `engage_bandits`, `rejoin`, `cover_me`, `hold_fire`, `return_to_base`); `--cascade` applies it to every sub-formation beneath the addressed one. Dispatches through the **same** code as the network order path, so a console order and a radio order cannot behave differently. `attack_my_target` needs a designated target: pass **`--target <entityIdx>`** (the #861 game-master map supplies it from a clicked entity), or use `spawn --ai pursuit <idx>`. |
 | `kill` | `<idx>` | Remove a live entity by pool index (see `peers` output) |
 | `tp` | `<idx> <x> <y> <z>` | Teleport entity `<idx>` to world position; also used by the game client's game console to teleport the player entity |
 | `seats` | `<entityIdx>` | Show a crewed aircraft's seat roster and occupancy (#974): per seat the role, occupancy (`human peer=N` / `bot` / `empty`), and the Fly-seat marker. Reports an error for a single-seat / unknown entity |

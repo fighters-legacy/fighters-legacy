@@ -387,6 +387,7 @@ add_library(engine-net STATIC
     net/SnapshotScheduler.cpp
     net/CongestionController.cpp
     net/TickGovernor.cpp
+    net/WorldState.cpp
     net/LobbyListClient.cpp
     net/LobbyRegistration.cpp
     net/ServerBrowserModel.cpp

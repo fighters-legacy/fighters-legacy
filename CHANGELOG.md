@@ -21,6 +21,76 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **game**: game-master overview map and entity orders (#861, completing Epic #851). A new in-flight
+  overlay (`GmMapOverlay`, toggled with **M**, gated on the `gm_map` capability) draws the whole
+  battlespace top-down from a new `MsgGmWorldState` wire feed — unicast at ~1 Hz only to `gm_map`-capable
+  peers from the #600 aggregate, so the map scales to 128 players without per-camera interest. The GM
+  clicks to select an entity, issues the six-command flight grammar / forms a flight / kills it through
+  the permission-checked admin channel, and drops into any entity's chase view (reusing the #860
+  `EntitySelector` plus a `spectate` that re-centres server interest). Map projection and picking live in
+  the pure `GmMapView`; `flight order` gains `--target <entityIdx>` so a GM can designate for
+  `attack_my_target` from a clicked entity. New rebindable `InputAction::GmMap` (default M). Covered by
+  `test_gm_map_view`, `test_gm_map_overlay`, and GM-feed cases in `test_world_broadcaster` /
+  `test_client_net_event_handler`.
+
+- **server**: aggregated world-state surface core (part of #600, Epic M #589). New
+  `engine/net/WorldState.{h,cpp}` — a plain-data `WorldStateSnapshot` (entities with
+  id/gen/faction/type/owner/formation/category/damage/pos/vel/hp, a per-peer summary, weather, time)
+  and a pure, deterministic `buildWorldStateSnapshot` builder (SDL/ENet-free, golden-testable) that
+  iterates `EntityManager::forEach` in ascending pool order. `WorldBroadcaster` rebuilds it in the
+  Serialize phase every ~1 Hz (a bounded sim-thread copy) and exposes `worldState()`. This is the
+  single surface designed once for both the Epic M agentic-AI read API (JSON/socket built on top
+  later) and the #861 game-master overview map (its first consumer — a 128-player map cannot use
+  per-camera interest). Covered by `tests/test_world_state.cpp` and a cadence case in
+  `test_world_broadcaster`.
+
+- **netcode**: granted-authority ConnectAck extension and client affordance gating (#949, epic #944).
+  New `ExtTag::ConnectAckAuthority = 0x0201` (first tag in the reserved `0x0200–0x02FF` MsgConnectAck
+  range): a `{u64 caps, u16 factionIndex}` TLV appended after the entity-type records when a peer holds
+  granted capabilities, re-sent on a mid-session grant/revoke (`setPeerAuthority` re-calls
+  `sendConnectAck`). Additive — no `kProtocolVersion` bump; old clients skip the unknown tag.
+  `ClientNetEventHandler` parses it and exposes `grantedCaps()` / `grantedFactionIndex()` /
+  `hasCapability()` for UI gating (the server remains the enforcement point). The multiplayer client now
+  wires its admin-command sender unconditionally, so a granted-but-passwordless peer can issue the
+  commands its capabilities permit through the empty-token grant channel. `docs/network-protocol.md`
+  documents the tag and the future requested-authority claim. Covered by round-trip tests in
+  `test_client_net_event_handler` and `test_world_broadcaster`.
+
+- **server**: runtime `grant` / `revoke` admin commands (part of #947, rung 2 of the #944 grant
+  ladder). `grant <peerId> <admin|moderator|gm|faction_leader> [factionIndex]` and `revoke <peerId>`
+  (both require `grant_roles`) set/clear a peer's `PeerAuthority` via `enqueueSimCallback` with a
+  synchronous ack (the `set_role` pattern); grants are ephemeral (lost on disconnect — persistence is
+  the identity-bound issue #950). The `peers` listing gains a `role=` column showing a granted peer's
+  preset. A granted peer authenticates on the admin channel with an empty token and is permission-
+  checked against its caps; a moderator cannot self-elevate (it lacks `grant_roles`). Covered by
+  grant/revoke and grant→act→revoke→refused cases in `test_admin_console`.
+
+- **network**: permission-checked admin command dispatch with issuer context (#946, epic #944).
+  `CommandRegistry::registerCommand` gains a required-capability mask (an unannotated command defaults
+  to Admin-only, preserving today's semantics) and a new `dispatch(line, CommandIssuer)` overload that
+  refuses with a clear "permission denied: <cmd> requires <cap>" when the issuer lacks a required
+  capability; the plain `dispatch(line)` stays the implicit-Admin path (stdin console / RCON /
+  single-player `--admin-token`). Every command in `ServerCommands.cpp` is annotated (kick/ban →
+  `kick_ban`, spawn/kill/tp/detonate → `spawn_any`, flight orders → `command_any_ai`, weather/config/
+  shutdown → `server_config`, spectate → `spectate_any`, grant-family → `grant_roles`, status/peers/
+  help → public). `WorldBroadcaster`'s `MsgAdminCommand` handler now builds a `CommandIssuer`: the
+  operator password grants Admin caps (rung 1, byte-for-byte today's behavior), while an empty-token
+  peer authenticates by its granted caps (the grant channel) — a zero-cap peer is a rate-limited
+  permission refusal, never an auth-lockout failure. New `WorldBroadcaster::setPeerAuthority` /
+  `getPeerAuthority`. Covered by reduced-caps issuer fixtures in `test_admin_console` and grant-channel
+  cases in `test_world_broadcaster`.
+
+- **network**: server capability vocabulary and per-peer authority (#945, epic #944). A new
+  stdlib-only `engine/net/Capability.h` (the `WingmanCommand.h` pattern — engine, fl-server, and the
+  game client include it with no link dependency) defines `enum class Capability` (bit positions:
+  `kick_ban`, `mute`, `server_config`, `spawn_any`, `spawn_faction`, `command_any_ai`,
+  `command_faction_ai`, `faction_posture`, `gm_map`, `gm_map_faction`, `spectate_any`, `grant_roles`),
+  a `CapabilityMask` (uint64), the `Admin`/`Moderator`/`GameMaster`/`FactionLeader` role presets,
+  `parseRolePreset`, capability-name/missing-name helpers, and a `PeerAuthority {caps, factionIndex}`
+  added to `PeerInputState` — orthogonal to `PeerRole` (embodiment), default zero caps, erased with the
+  peer on disconnect. Foundation only: zero behavior change (nothing reads the field yet). Covered by
+  `tests/test_capability.cpp`.
+
 - **platform/game**: force-feedback joystick effects via SDL3 haptics (#928, Epic #587). `IJoystick`
   gains a force-feedback surface as non-pure, no-op-default virtuals (`supportsForceFeedback`,
   `playFfbEffect(slot, FfbEffect{ConstantForce|Sine, direction, magnitude, period, duration})`,

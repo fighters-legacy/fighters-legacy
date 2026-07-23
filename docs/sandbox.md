@@ -29,6 +29,7 @@ The camera-mode keys are now rebindable `InputAction`s (`CameraCockpit`/`CameraC
 | F5 | Padlock — slew to keep the designated target centered; auto-picks best-in-cone if nothing is designated, breaks lock with a `PADLOCK — BREAK` cue when terrain or the airframe masks the target, and reverts to Cockpit after a 4 s reacquire window (#697) | `PadlockToggle` (gamepad: RightStick click) |
 | F6 | Toggle the target-slaved inset view (#698) | `TargetInsetToggle` |
 | F7 | Toggle night-vision goggles — a green photocathode gain applied at the tonemap stage; brightens dim night scenes (#210) | `NvgToggle` |
+| M | Toggle the game-master overview map (#861) — the whole-battlespace top-down map. Only functional for a peer granted the `gm_map` capability (see `grant` below). While open: ← / → / ↑ / ↓ pan, `-` / `=` zoom, left-click selects an entity, and the side panel issues orders / drops into the entity's view. | `GmMap` |
 | N / P | Cycle to the next / previous target (#696) | `NextTarget` / `PrevTarget` (gamepad: DpadUp = next) |
 | PageUp / PageDown / ← / → | Pan the cockpit view (keyboard alternative to RMB drag; Cockpit/Padlock only) | `ViewUp` / `ViewDown` / `ViewLeft` / `ViewRight` |
 | F3 | Cycle performance overlay (Off → Compact → Full) | raw |

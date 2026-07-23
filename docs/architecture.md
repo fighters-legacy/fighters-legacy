@@ -218,6 +218,22 @@ revised by a dated decision record instead of a full RFC, provided the change is
 with its rationale. This keeps the velocity of pre-1.0 architecture work without leaving the
 locked table silently stale.
 
+**2026-07-23 — server authority is a capability bitmask, and the game-master map is the first consumer
+of one aggregated world-state surface (#944/#861/#600).** The single all-or-nothing `operator_password`
+gate is replaced by a per-command capability check that knows *who* issued a command: `CommandRegistry`
+carries a required-capability mask per command (unannotated = Admin-only, preserving today's
+semantics), `dispatch(line, CommandIssuer)` refuses when the issuer lacks it, and `WorldBroadcaster`
+builds the issuer from either the operator password (grants Admin — rung 1, the CI path) or a peer's
+granted `PeerAuthority` caps (the empty-token *grant channel* — rung 2). This is the same enforcement
+point the Epic M agentic-AI admin/MCP allowlist will construct its issuer against — one allowlist for
+humans and agents. `PeerRole` (Pilot/Observer) stays embodiment-only and orthogonal to authority. The
+**game-master overview map (#861)** consumes the **#600 aggregated world-state snapshot** — a
+deterministic, ~1 Hz sim-thread copy of the whole battlespace — NOT per-camera `queryRadius` interest,
+which would flood at 128 players; that snapshot is the surface designed *once* for both the GM map and
+Epic M's world-state read API. The GM feed (`MsgGmWorldState`, unicast only to `gm_map`-capable peers)
+and the map's select→order actions flow through the capability-gated command path, so there is no
+second ungated authority surface.
+
 **2026-07-22 — secondary render views extend `FrameScene` as POD fields, never new `IRenderer` pure
 virtuals (#695, Epic #587).** The renderer was strictly one `CameraView` per frame; the target-slaved
 inset (#698) needs the frame's scene rendered a second time from another camera into a sub-rect.
