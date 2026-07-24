@@ -257,10 +257,13 @@ fallback. Only the *LLM intent tier* (#611) and *LLM-generated text* (director, 
 gated by the 9B floor and the #769 GPU decision.
 
 Client-local intent inference — the original assumption — is **not** the plan (#609), which is why
-this table no longer carries a per-OS row for it. The one question that row implied and never
-answered, *how much does local inference contend with Vulkan for the GPU on each OS*, only becomes
-required work again if client-local hosting is reconsidered; it is parked in **#782** rather than
-deleted, because that is a hardware-availability gap, not a settled question.
+this table no longer carries a per-OS row for it. The question that row implied, *how much does
+local inference contend with Vulkan for the GPU on each OS*, was parked in **#782** rather than
+deleted, because it was a hardware-availability gap and not a settled question. It has since been
+measured: the harness is `tools/gpu_contention/` and the per-OS results are in
+`docs/ai-provider-evaluation.md` ("GPU contention"). The measurement does not change the hosting
+decision — that rests on accuracy, keep-warm cost and where the data already is — but it means a
+player who *does* run a model locally is no longer doing so on an unmeasured assumption.
 
 ## 9. Latency & timescale budgets
 

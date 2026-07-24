@@ -226,9 +226,10 @@ data removes the premise before contention becomes the deciding question:
   new data flow and keeps the allowlist — the thing that bounds prompt-injection blast radius — on
   the authority that already enforces it.
 - **It takes the LLM off the frame budget entirely**, which is the honest reason to be glad about
-  this answer: GPU contention with Vulkan is the one thing this spike could not measure (no Mac or
-  Windows hardware in reach — see [Caveats](#caveats--what-this-does-not-establish)). Server-side
-  hosting means that unmeasured risk is not on the critical path of a 60 Hz frame.
+  this answer: GPU contention with Vulkan was the one thing this spike could not measure (no Mac or
+  Windows hardware in reach). Server-side hosting means that risk is not on the critical path of a
+  60 Hz frame at all. It has since been measured under #782 — see
+  [GPU contention](#gpu-contention-782).
 
 **Recommendation: host the intent model server-side, behind the existing `[ai.provider]` seam on
 `fl-server`**, and treat client-local inference as an unsupported opt-in rather than the default.
@@ -283,15 +284,106 @@ it should still exist, because that is one sweep on one endpoint.
 - **Two machine classes, and they disagree.** The main table is an RTX 5080; the CPU section is the
   8-core reference instance. All three suites are now measured on both. Quote the one that matches
   the deployment you mean — the *accuracy* columns agree, the *latency* columns do not.
-- **Linux/CUDA only.** #599 asked for Metal (Apple Silicon) and Windows (CUDA/Vulkan) too. Not run —
-  no such hardware in reach this session. The harness is stdlib-only and OS-agnostic, so those are
-  runs to schedule, not work to build.
+- **Linux/CUDA only for the accuracy/latency suites.** #599 asked for Metal (Apple Silicon) and
+  Windows (CUDA/Vulkan) too. Not run — no such hardware was in reach that session. The harness is
+  stdlib-only and OS-agnostic, so those are runs to schedule, not work to build. (The separate
+  *contention* question is answered below — see [GPU contention](#gpu-contention-782).)
 - **Ollama only.** `llama-server` (llama.cpp) and vLLM are untested. Both are OpenAI-compatible, so
   the harness needs only a `--base-url`.
 - **Small n.** 26 intent / 6 mission / 8 ops cases, single pass. Enough to separate a 1.5B from a
   14B and to expose a systematic blind spot; not enough to rank two good models a few points apart.
 - **The wingman grammar is provisional.** #610 owns the real vocabulary; the intent suite encodes a
   placeholder six-command set. Re-run after #610.
+
+## GPU contention (#782)
+
+*What does a resident LLM cost the renderer?* #609 asked this on all three platforms and could not
+answer it; #769 chose server-side inference partly so the answer would not be on the critical path.
+This section answers it anyway, because "we host server-side" is a deployment choice and a player
+running a local model on their own machine is not bound by it.
+
+### The harness
+
+`tools/gpu_contention/` — see its README for the full method. In outline: the game records one
+sample per rendered frame (CPU frame ms, GPU ms from timestamp queries, and device-local VRAM
+usage/budget via `VK_EXT_memory_budget`) through the new `--frame-stats-json` flag; a driver hits
+the model on a phased schedule (idle baseline → alternating bursts and gaps → idle tail); an
+analyzer attributes every frame to the phase that was running when it rendered. Both sides stamp
+wall-clock epoch milliseconds, which is what makes the join possible across two processes.
+
+The comparison is always **against the same session's idle baseline**, never against a separate
+run: a second launch would fold in every difference between two launches.
+
+### Results
+
+Scene `builtin:sandbox`, observer camera, windowed, Release build. Workload `intent` — the real
+wingman prompt, prompt-eval dominated. One request in flight, 5 × 20 s bursts against a 60 s idle
+baseline in the same session. Frame columns are **burst minus that run's own idle baseline**.
+
+| OS / GPU | Backend | Model | Idle p99 | Burst p99 | Δ p99 | Δ mean | Worst 1% | Hitches (76 s burst) | Model VRAM | Game VRAM budget |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Linux, RTX 5080 16 GB | CUDA (Ollama) | `qwen2.5-coder:14b` | 4.42 ms | 6.68 ms | **+2.26 ms (1.51×)** | +0.01 ms | +13.8 ms | 22 | 9031 MB | 4556 MB |
+| Linux, RTX 5080 16 GB | CUDA (Ollama) | `gemma2:9b` | 4.41 ms | 6.67 ms | **+2.26 ms (1.51×)** | +0.06 ms | +5.1 ms | 8 | 5971 MB | 6939 MB |
+| macOS, Apple Silicon | Metal | — | | | | | | | | *pending run* |
+| Windows, RTX 5080 | CUDA (Ollama) | — | | | | | | | | *pending run* |
+| Windows, RTX 5080 | Vulkan (llama.cpp) | — | | | | | | | | *pending run* |
+
+Raw artifacts (frame samples, driver phases, sysinfo) are written to
+`tools/gpu_contention/results/`, which is git-ignored — re-run to reproduce rather than reading a
+committed blob.
+
+### What the numbers mean
+
+**Inference does not raise the mean frame time; it costs you the tail.** Mean is flat to within
+0.06 ms while p99 rises by half again and the worst 1 % of frames roughly triples. A player would
+not describe this as "the game got slower" — they would describe it as occasional hitching, which
+is the failure mode people actually complain about.
+
+**Read the flat mean with care: this client was vsync-limited.** Idle frame time sits at 4.17 ms
+mean with a p99 of 4.42 — a distribution that tight is a display cadence (240 Hz), not a workload.
+With that much headroom the GPU absorbs inference inside the frame interval and only occasionally
+misses one. On a machine with less headroom — a 60 Hz panel is *more* forgiving, but a mid-range GPU
+already near its frame budget is far less — the same absolute GPU cost lands directly on the frame
+time instead of being hidden. **These numbers are a floor on the impact, not a typical case.**
+
+**Model size moves the tail, not the median.** The 9B and 14B have an *identical* Δ p99 (+2.26 ms)
+but the 14B's worst 1 % is 2.7× worse and it hitches nearly 3× as often. Bigger models do not make
+every frame worse; they make the bad frames rarer-but-deeper — consistent with the cost being
+per-request GPU work competing for the same device, not a constant tax.
+
+**Hitching persists past the burst.** Idle recorded zero hitches; the gaps and tail recorded a few
+(3 and 7 for the 14B). Small absolute counts on short windows, so this is a weak signal rather than
+a finding — but recovery is not instantaneous, and a "the model is idle so the frame budget is
+clean" assumption is not supported.
+
+**VRAM is the sharper constraint, and it is invisible from inside the renderer.** A resident 14B
+holds 9 GB of a 16 GB card, and the driver responds by cutting what it offers the *game*: the
+reported budget falls from 6939 MB (9B resident) to 4556 MB (14B resident). The renderer never sees
+an allocation failure — it sees a smaller ceiling. On an 8 GB card a 14B leaves essentially nothing,
+which is a hard incompatibility rather than a performance cost.
+
+**None of this changes the #769 hosting decision**, which rests on accuracy, keep-warm cost and
+where the data already is. What it changes is the honesty of the surrounding claim: client-local
+inference is now measured rather than assumed, and the measurement says the cost is real but modest
+on a GPU with headroom, and dominated by VRAM on one without.
+
+### Reading the VRAM columns
+
+Two distinct measurements, and they are not interchangeable:
+
+- **Game VRAM / budget** is what `VK_EXT_memory_budget` reports for device-local heaps — the
+  renderer's own usage, and what the driver says is available *to it*. Note that the budget is not a
+  constant: a driver reduces it when another process holds memory, so a resident model shows up
+  here as a **shrunken budget** rather than as usage.
+- **Model VRAM** lives in the inference server's process, which the game's Vulkan view cannot see.
+  It comes from Ollama's `/api/ps`, with `nvidia-smi --query-compute-apps` (Linux/Windows NVIDIA) or
+  the `\GPU Process Memory(*)\Dedicated Usage` counter (other Windows GPUs) captured alongside.
+
+**On Apple Silicon neither reading means what it means on a discrete GPU.** Unified memory has no
+separate VRAM pool and no per-process GPU memory API; the model and the renderer draw on the same
+system RAM, and what MoltenVK reports through `VK_EXT_memory_budget` is a Metal heap's *recommended
+working set*, not a dedicated allocation. Read the macOS row as a trend across phases, not as an
+absolute.
 
 ## Recommended defaults
 
@@ -364,10 +456,11 @@ per-client hosting the expensive way to do it.
   **provisional six-command grammar**, and #610 owns the real vocabulary. The expansion belongs with
   #610, against the vocabulary that ships. Suites are data (`suites/intent.json`), so that is a file
   edit plus a re-run, not new engineering.
-- **The per-OS contention notes were never measured.** #609 asked for inference-vs-Vulkan contention
-  on all three platforms; no Apple Silicon or Windows hardware was in reach. The server-side
-  recommendation takes that question off the critical path rather than answering it — if Epic O ever
-  reconsiders client-local inference, those runs become required work again.
+- **The per-OS contention notes were never measured *by this spike*.** #609 asked for
+  inference-vs-Vulkan contention on all three platforms; no Apple Silicon or Windows hardware was in
+  reach. The server-side recommendation took that question off the critical path rather than
+  answering it, and the work was parked in **#782**. It is answered now — see
+  [GPU contention](#gpu-contention-782) for the harness and the measured numbers.
 
 Neither gap changes the verdict — **≥ 9B maps intent accurately enough to build on** — so the spike
 is resolved rather than extended. The CPU **latency** budget (2 s) is a separate, real failure and
@@ -394,6 +487,21 @@ reference VM, so inference happens on the 8 cores under test while `validate-mis
     # in the guest: install Ollama, serve with OLLAMA_HOST=0.0.0.0, pull the models
     python3 tools/ai_eval/ai_eval.py --base-url http://<vm-ip>:11434 \
         --models qwen2.5:3b,qwen2.5-coder:14b --suite intent
+
+### GPU contention runs
+
+A Release build with Vulkan enabled, a display, and a pinned model
+(`export OLLAMA_KEEP_ALIVE=-1` — an evicted model reloads *inside* a burst and its 55 s load is
+then measured as contention):
+
+    tools/gpu_contention/measure_linux.sh --model qwen2.5-coder:14b            # Linux
+    tools/gpu_contention/measure_macos.sh --model qwen2.5-coder:14b            # macOS / Metal
+    .\tools\gpu_contention\measure_windows.ps1 -Model qwen2.5-coder:14b -Label cuda
+    .\tools\gpu_contention\measure_windows.ps1 -BaseUrl http://localhost:8080 -Model local -Label vulkan
+
+Each runner prints the analyzed Markdown and writes it to `tools/gpu_contention/results/`
+(git-ignored). **The analyzer exits non-zero when it emits warnings** — a run whose numbers are not
+trustworthy must not look like a clean pass.
 
 ### ⚠ `--merge-system`: the trap that produces a confidently wrong number
 

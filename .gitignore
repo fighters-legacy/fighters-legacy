@@ -105,6 +105,9 @@ tools/bot_swarm/results/
 # Agentic-AI provider evaluation — auto-generated sweep results (#599)
 tools/ai_eval/results/
 
+# LLM-vs-renderer GPU contention — auto-generated measurement results (#782)
+tools/gpu_contention/results/
+
 # Vagrant machine state (reference-env VM) — keys, box metadata, etc.
 .vagrant/
 

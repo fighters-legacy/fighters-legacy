@@ -492,6 +492,13 @@ if(TARGET platform-enet)
     target_include_directories(test_server_tick_report PRIVATE "${CMAKE_SOURCE_DIR}/engine")
     catch_discover_tests(test_server_tick_report)
 
+    # Client-side render-perf artifact behind the #782 GPU-contention harness. platform-hal brings
+    # RenderTypes.h (FrameStats) and glm; the recorder itself is header-only.
+    add_executable(test_frame_stats_recorder test_frame_stats_recorder.cpp)
+    target_link_libraries(test_frame_stats_recorder PRIVATE Catch2::Catch2WithMain platform-hal)
+    target_include_directories(test_frame_stats_recorder PRIVATE "${CMAKE_SOURCE_DIR}/engine")
+    catch_discover_tests(test_frame_stats_recorder)
+
     add_executable(test_lan_discovery test_lan_discovery.cpp)
     target_link_libraries(test_lan_discovery PRIVATE Catch2::Catch2WithMain engine-net)
     target_include_directories(test_lan_discovery PRIVATE
