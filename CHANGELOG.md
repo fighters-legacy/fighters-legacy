@@ -261,6 +261,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **docs**: filled the macOS / Metal row of the GPU-contention table (#782) — measured on an Apple
+  M4 Pro (macOS 26.5, 64 GB unified) with `qwen2.5-coder:14b`. The finding is qualitatively different
+  from the discrete-GPU Linux leg: unified memory makes inference nearly *double* the mean frame time
+  (12.25 → 21.77 ms, +9.53 ms; p99 +12.84 ms, 1.89×) for the burst's whole duration — a sustained
+  frame-time tax rather than occasional hitching — while the discrete card's VRAM-budget squeeze
+  disappears entirely (the model holds 15 GB, the renderer under 1 GB, memory pressure barely moves).
+  On Apple Silicon GPU *time*, not memory capacity, is the scarce resource. Windows CUDA/Vulkan rows
+  remain pending; #782 stays open until they are filled.
 - **tools**: `tex-compress` now emits **Basis Universal** KTX2, not raw block-compressed textures
   (#846, Epic #836). This is a correctness fix as much as a portability one: the tool asked toktx for
   `--encode bc7`, but toktx v4 has no raw-BCn encoder and *silently emitted an uncompressed texture*
