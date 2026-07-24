@@ -9,6 +9,20 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **renderer**: node-aware glTF loader and per-node submesh draws (#839, Epic #837) — the foundation
+  articulation, the `_b` damage convention and LOD selection all needed. `createMesh` read only
+  `meshes[0].primitives[0]` and ignored node transforms entirely, so a multi-node aircraft was
+  impossible and `f5e.glb` rendered correctly only by luck. It now walks the scene graph through a new
+  pure, GPU-free `MeshNodePlan` (`platform-meshgraph`, unit-tested without a device), concatenates
+  every mesh-bearing node's primitives into the one VB/IB pair, and keeps a per-node submesh table
+  keyed by the **glTF node array index** — the contract that lets an engine-side sampler address nodes
+  a platform-side loader uploaded. Each draw loop (shadow, forward-opaque, transparent, inset) expands
+  an item into per-node draws with `model = transform · Q·G·Q⁻¹`, where `G` is the composed
+  content-frame node transform (`RenderItem::animPoses` overriding a node's rest local) and `Q` the
+  content→body rotation. `kRenderFlagDamaged` — set since #886 and read by nobody — finally selects
+  `_b` submeshes over the base ones they shadow. Per-primitive materials land here too, so a
+  multi-material `.glb` no longer loses everything after the first primitive. `FrameStats::drawCalls`
+  is now measured rather than assumed to be one per item.
 - **tools**: `validate-mod` (#651, Epic #836) — one command validates a whole content pack, so
   fl-base-pack CI runs one gate instead of seven. It composes the existing per-asset validators by
   LINKING their libs (never subprocessing): the manifest (through a new shared `parseModManifest` that

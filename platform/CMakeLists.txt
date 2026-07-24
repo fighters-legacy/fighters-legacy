@@ -5,6 +5,16 @@ add_library(platform-hal INTERFACE)
 target_include_directories(platform-hal INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(platform-hal INTERFACE glm::glm)
 
+# platform-meshgraph: the glTF scene-graph walk behind node-aware mesh loading (#839). Vulkan-free
+# and pure so it is unit-testable without a GPU; platform-vulkan's createMesh uploads what it plans
+# and VkRenderer composes its node transforms each frame.
+add_library(platform-meshgraph STATIC MeshNodePlan.cpp)
+target_include_directories(platform-meshgraph PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(platform-meshgraph PUBLIC platform-hal tinygltf-impl)
+if(TARGET tinygltf)
+    target_link_libraries(platform-meshgraph PUBLIC tinygltf)
+endif()
+
 # platform-file-logger: production ILogger implementation backed by a file.
 add_library(platform-file-logger STATIC FileLogger.cpp)
 target_include_directories(platform-file-logger PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

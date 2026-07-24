@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <glm/mat3x3.hpp>
+#include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
 
 namespace fl {
@@ -24,6 +26,21 @@ namespace fl {
 // the builtin placeholders and floor) are already in the body/world frame and leave the flag false.
 [[nodiscard]] inline glm::vec3 contentForwardToBody(const glm::vec3& v) noexcept {
     return {v.z, v.y, -v.x};
+}
+
+// The same map as a matrix, built FROM contentForwardToBody so the two cannot drift (#839).
+//
+// Node articulation needs it in matrix form: vertices are uploaded already rotated (w = Q·v), so a
+// content-frame node transform G acts on them conjugated — M = Q·G·Q⁻¹ — which keeps the vertex
+// buffer byte-identical to the pre-node loader and lets the engine-side clip sampler stay purely in
+// glTF space. Q is orthonormal, so Q⁻¹ == transpose(Q); use contentToBodyInverse() rather than a
+// general inverse.
+[[nodiscard]] inline glm::mat4 contentToBodyMatrix() noexcept {
+    return glm::mat4(glm::mat3(contentForwardToBody(glm::vec3(1, 0, 0)), contentForwardToBody(glm::vec3(0, 1, 0)),
+                               contentForwardToBody(glm::vec3(0, 0, 1))));
+}
+[[nodiscard]] inline glm::mat4 contentToBodyInverse() noexcept {
+    return glm::transpose(contentToBodyMatrix());
 }
 
 } // namespace fl

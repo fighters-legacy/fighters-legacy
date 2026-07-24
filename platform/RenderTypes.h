@@ -106,7 +106,9 @@ inline void captureSwizzleToRgba(const uint8_t* src, uint32_t pixelCount, bool b
 // ---------------------------------------------------------------------------
 
 // Raw glTF 2.0 (.glb) or .gltf+.bin mesh bytes.
-// The renderer parses the first primitive of the first mesh node.
+// The renderer walks the glTF scene graph and uploads every mesh-bearing node's primitives into one
+// vertex/index buffer pair, keeping a per-node submesh table (#839). Node-local geometry stays
+// node-local: the node's rest transform (and any NodePose override) places it at draw time.
 struct MeshUploadDesc {
     std::string_view name;          // asset name for debug labels / dedup
     std::span<const uint8_t> bytes; // .glb file contents
@@ -201,8 +203,17 @@ struct CameraView {
 };
 
 // ---------------------------------------------------------------------------
-// Per-node rigid pose for named glTF animations.
+// Per-node rigid pose for named glTF animations (#837).
 // No joint skinning — nodes are transformed independently.
+//
+// `nodeIndex` is the glTF NODE ARRAY INDEX. That single fact is what binds the engine-side
+// articulation sampler (engine/render/MeshArticulation.h) to the platform-side loader without
+// widening the HAL: both parse the same .glb bytes and therefore agree on node order.
+//
+// `localTransform` REPLACES that node's authored rest local TRS, and is expressed in the CONTENT
+// frame the clip was authored in — the renderer applies the content→body rotation itself. A node
+// with no pose keeps its rest transform, so a partial pose list is well-defined and an empty one is
+// the static mesh.
 // ---------------------------------------------------------------------------
 struct NodePose {
     uint32_t nodeIndex{0};
