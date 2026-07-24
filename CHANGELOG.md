@@ -9,6 +9,20 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **renderer**: articulation rig — channel registry, clip parser and scrub sampler (#840, Epic #837).
+  Nothing in the engine knew what an animation clip was: `docs/modding/3d-models.md` promised modders
+  an animation-name registry the renderer never read, and `NodePose` had existed with no producer.
+  `engine/render/MeshArticulation` implements the contract every shipping sim uses — **the engine owns
+  named normalized channels, the model bakes keyframed node-TRS clips, and the runtime SCRUBS at
+  `t = value × duration`; it never "plays" a clip.** So retraction is scrubbing `gear` toward 0, not a
+  second `gear_retract` clip to keep in sync. Sixteen channels (`gear`/`flaps`/`speedbrake`/`hook`/
+  `canopy`/`sweep`/TVC/control surfaces/`prop_spin`/`bay`/gear compression) in an append-only enum
+  whose order is the wire order; signed channels centre on the clip midpoint so asymmetric control
+  authority is authored as asymmetric endpoints rather than by rescaling the parameter. STEP, LINEAR
+  and CUBICSPLINE are evaluated; skins and morph-target `weights` are rejected at parse with a
+  diagnostic (rigid parts only); `_b` damage nodes inherit their base node's pose; spin is the one
+  looping exception. **A mesh with zero animations builds an empty rig and costs nothing** — the
+  static-mesh baseline stays valid forever. Transit timing lives in the simulation, never in the clip.
 - **renderer**: entity-selected variant node-sets (#882) — one `.glb` serves a whole airframe family.
   Tag a glTF node with `extras: {"fl_variant": "two_seat"}` (a string or an array) and an entity def
   picks its set with `mesh_variant = "two_seat"`; **untagged nodes are always drawn**, so the shared

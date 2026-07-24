@@ -19,6 +19,13 @@ target_link_libraries(test_mesh_node_plan PRIVATE Catch2::Catch2WithMain platfor
 target_include_directories(test_mesh_node_plan PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_mesh_node_plan)
 
+# MeshArticulation (#840): the channel registry, clip parser and scrub sampler. Engine-side and
+# GPU-free -- the rig is parsed from the same .glb bytes the renderer uploads.
+add_executable(test_mesh_articulation test_mesh_articulation.cpp)
+target_link_libraries(test_mesh_articulation PRIVATE Catch2::Catch2WithMain engine-render)
+target_include_directories(test_mesh_articulation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_mesh_articulation)
+
 add_executable(test_window test_window.cpp)
 target_link_libraries(test_window PRIVATE Catch2::Catch2WithMain platform-hal)
 target_include_directories(test_window PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
