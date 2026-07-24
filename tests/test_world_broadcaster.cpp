@@ -175,6 +175,10 @@ static void clearSnapshots(MockNetwork& net) {
 }
 
 // Parse the MsgWorldSnapshotHeader from a raw snapshot packet.
+// A pilot spawns PARKED and therefore gear-down (#639), so its snapshot carries one
+// SnapshotArticulation record (#843): 4 B tag/len + 4 B entityIdx + 2 B mask + 1 value byte.
+static constexpr std::size_t kParkedGearArtTlvBytes = 11u;
+
 static fl::MsgWorldSnapshotHeader parseSnapshotHeader(const std::vector<uint8_t>& pkt) {
     REQUIRE(pkt.size() >= sizeof(fl::MsgWorldSnapshotHeader));
     fl::MsgWorldSnapshotHeader hdr{};
@@ -1426,11 +1430,12 @@ TEST_CASE("WorldBroadcaster: onTick with connected peer and no extra entities se
     CHECK(hdr.tickIndex == 5u);
 
     // Packet = header + quantized bitstream (one full own-entity record) + SnapshotPeerCount TLV
-    // (6 bytes). SnapshotPeerLatency TLV is absent (estimatedDelayTicks == 0; no heartbeat sent).
+    // (6 bytes) + the parked pilot's articulation record. SnapshotPeerLatency is absent
+    // (estimatedDelayTicks == 0; no heartbeat sent).
     CHECK(hdr.bitstreamBytes > 0u);
     const std::size_t extOffset = sizeof(fl::MsgWorldSnapshotHeader) +
                                   static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double) + hdr.bitstreamBytes;
-    REQUIRE(pkt.size() == extOffset + 6u);
+    REQUIRE(pkt.size() == extOffset + 6u + kParkedGearArtTlvBytes);
     uint16_t pc{};
     CHECK(fl::readExtValue(pkt.data() + extOffset, 6u, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerCount), pc));
     CHECK(pc == 1u); // 1 active peer
@@ -7470,8 +7475,8 @@ TEST_CASE("WorldBroadcaster: totalEntityCount matches buffer content", "[world_b
         auto hdr = parseSnapshotHeader(pkt);
         const std::size_t expectedSize =
             sizeof(fl::MsgWorldSnapshotHeader) + static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double) +
-            hdr.bitstreamBytes +
-            6u; // SnapshotPeerCount TLV only (estimatedDelayTicks == 0; SnapshotPeerLatency absent)
+            hdr.bitstreamBytes + 6u + // SnapshotPeerCount TLV (estimatedDelayTicks == 0; SnapshotPeerLatency absent)
+            kParkedGearArtTlvBytes;
         CHECK(pkt.size() == expectedSize);
     }
     clearSnapshots(net);
@@ -7587,10 +7592,11 @@ TEST_CASE("WorldBroadcaster: SnapshotPeerLatency TLV absent when estimatedDelayT
     uint16_t lat{};
     CHECK_FALSE(fl::readExtValue(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerLatency), lat));
 
-    // Packet size: header + quantized bitstream + 6 bytes (SnapshotPeerCount TLV only).
+    // Packet size: header + quantized bitstream + the SnapshotPeerCount TLV + the parked pilot's
+    // articulation record.
     const std::size_t expected = sizeof(fl::MsgWorldSnapshotHeader) +
                                  static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double) + hdr.bitstreamBytes +
-                                 6u;
+                                 6u + kParkedGearArtTlvBytes;
     CHECK(pkt.size() == expected);
 }
 
@@ -11117,4 +11123,197 @@ TEST_CASE("WorldBroadcaster: two humans on one crewed airframe each get an own r
     };
     CHECK(ownRecordFor(1u)); // the pilot gets the bomber as its own record
     CHECK(ownRecordFor(2u)); // the gunner ALSO gets the bomber as its own record
+}
+
+// ---------------------------------------------------------------------------
+// Articulation on the wire (#843)
+//
+// Before this, no articulation channel reached a remote client, so even once the renderer could pose
+// an aircraft every OTHER aircraft would sit with its gear up and its flaps clean. And a human pilot
+// could not raise the gear at all: only Lua AI ever set gear_down, server-side.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Reads the TLV extension block of a peer's most recent snapshot.
+struct SnapshotExt {
+    const uint8_t* data{nullptr};
+    std::size_t size{0};
+    std::vector<uint8_t> pkt;
+};
+
+SnapshotExt lastSnapshotExt(const MockNetwork& net, uint32_t peerId) {
+    SnapshotExt out;
+    auto snaps = snapshotsFor(net, peerId);
+    if (snaps.empty())
+        return out;
+    out.pkt = snaps.back();
+    const auto hdr = parseSnapshotHeader(out.pkt);
+    const std::size_t off = sizeof(fl::MsgWorldSnapshotHeader) +
+                            static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double) + hdr.bitstreamBytes;
+    if (out.pkt.size() < off)
+        return out;
+    out.data = out.pkt.data() + off;
+    out.size = out.pkt.size() - off;
+    return out;
+}
+
+// Sends one MsgClientInput carrying the articulation commands.
+void sendArticulationInput(fl::WorldBroadcaster& wb, uint32_t peerId, uint32_t seq, uint8_t artButtons, uint8_t flaps) {
+    fl::MsgClientInput in{};
+    in.seqNum = seq;
+    in.throttle = 0.5f;
+    in.artButtons = artButtons;
+    in.flaps = flaps;
+    std::vector<uint8_t> buf;
+    fl::appendMsg(buf, in);
+    wb.onReceive(peerId, buf.data(), buf.size());
+}
+
+} // namespace
+
+TEST_CASE("WorldBroadcaster: MsgClientInput articulation commands reach the flight sim (#843)",
+          "[world_broadcaster][articulation]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster wb(em, registry, net, logger);
+    // The flood-rate guard counts inputs per WALL second; a test loop sends hundreds instantly, so
+    // raise the multiplier rather than have the guard silently drop the inputs under test.
+    wb.setRateLimitParams(100, 10, 1000);
+    connectPilotPeer(wb, net, 0u);
+
+    // Gear down + half flaps, held long enough to travel.
+    for (uint32_t t = 0; t < 400; ++t) {
+        sendArticulationInput(wb, 0u, t + 1u, fl::kArtButtonGearDown, 128u);
+        wb.onTick(1.0 / 60.0, t + 1u);
+    }
+
+    uint32_t pilotIdx = UINT32_MAX;
+    em.forEach([&](const fl::EntityState& st) {
+        if (pilotIdx == UINT32_MAX)
+            pilotIdx = st.id.index;
+    });
+    REQUIRE(pilotIdx != UINT32_MAX);
+    const auto* sim = wb.integratorFor(pilotIdx);
+    REQUIRE(sim != nullptr);
+    CHECK(sim->state().articulation.gear == Catch::Approx(1.0).margin(1e-3));
+    CHECK(sim->state().articulation.flaps == Catch::Approx(128.f / 255.f).margin(0.01));
+
+    // ...and back up. Absolute state, so simply clearing the bit retracts it.
+    for (uint32_t t = 400; t < 800; ++t) {
+        sendArticulationInput(wb, 0u, t + 1u, 0u, 0u);
+        wb.onTick(1.0 / 60.0, t + 1u);
+    }
+    CHECK(sim->state().articulation.gear == Catch::Approx(0.0).margin(1e-3));
+    CHECK(sim->state().articulation.flaps == Catch::Approx(0.0).margin(1e-3));
+}
+
+TEST_CASE("WorldBroadcaster: a neutral world emits no articulation TLV (#843)", "[world_broadcaster][articulation]") {
+    // An entity with all-default channels costs ZERO bytes — the snapshot is byte-identical to
+    // pre-#843 for every world of unarticulated aircraft, which is nearly all of them.
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster wb(em, registry, net, logger);
+    wb.setRateLimitParams(100, 10, 1000); // the wall-clock flood guard, as above
+    connectPilotPeer(wb, net, 0u);
+
+    // A pilot spawns PARKED and therefore gear-down (#639), so retract it first: "neutral" here means
+    // every actuator actually at its default, not merely un-commanded.
+    for (uint32_t t = 0; t < 500; ++t) {
+        sendArticulationInput(wb, 0u, t + 1u, 0u, 0u);
+        wb.onTick(1.0 / 60.0, t + 1u);
+    }
+
+    clearSnapshots(net);
+    wb.onTick(1.0 / 60.0, 501u);
+    const SnapshotExt ext = lastSnapshotExt(net, 0u);
+    REQUIRE(ext.data != nullptr);
+    uint16_t len = 0;
+    CHECK(fl::findExt(ext.data, ext.size, static_cast<uint16_t>(fl::ExtTag::SnapshotArticulation), len) == nullptr);
+}
+
+TEST_CASE("WorldBroadcaster: articulation TLV round-trips channel mask and values (#843)",
+          "[world_broadcaster][articulation]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster wb(em, registry, net, logger);
+    wb.setRateLimitParams(100, 10, 1000); // see the note above: the wall-clock flood guard
+    connectPilotPeer(wb, net, 0u);
+
+    for (uint32_t t = 0; t < 400; ++t) {
+        sendArticulationInput(wb, 0u, t + 1u, fl::kArtButtonGearDown | fl::kArtButtonHookDown, 255u);
+        wb.onTick(1.0 / 60.0, t + 1u);
+    }
+
+    // Settled state is sent on the periodic refresh, so scan a refresh window rather than assuming
+    // any one tick carries it.
+    std::vector<uint8_t> tlv;
+    for (uint32_t t = 400; t < 400 + 40 && tlv.empty(); ++t) {
+        clearSnapshots(net);
+        sendArticulationInput(wb, 0u, t + 1u, fl::kArtButtonGearDown | fl::kArtButtonHookDown, 255u);
+        wb.onTick(1.0 / 60.0, t + 1u);
+        const SnapshotExt ext = lastSnapshotExt(net, 0u);
+        if (ext.data == nullptr)
+            continue;
+        uint16_t len = 0;
+        if (const uint8_t* found =
+                fl::findExt(ext.data, ext.size, static_cast<uint16_t>(fl::ExtTag::SnapshotArticulation), len);
+            found != nullptr && len >= 6u)
+            tlv.assign(found, found + len);
+    }
+    REQUIRE(tlv.size() >= 6u);
+    const uint8_t* p = tlv.data();
+
+    uint16_t mask = 0;
+    std::memcpy(&mask, p + 4, 2);
+    CHECK((mask & (1u << static_cast<unsigned>(fl::ArtChannel::Gear))) != 0u);
+    CHECK((mask & (1u << static_cast<unsigned>(fl::ArtChannel::Flaps))) != 0u);
+    CHECK((mask & (1u << static_cast<unsigned>(fl::ArtChannel::Hook))) != 0u);
+    CHECK((mask & (1u << static_cast<unsigned>(fl::ArtChannel::Canopy))) == 0u); // never commanded
+    // Values follow in ascending channel order; gear is first and fully down.
+    CHECK(p[6] == 255u);
+}
+
+TEST_CASE("WorldBroadcaster: steady-state articulation is not resent every tick (#843)",
+          "[world_broadcaster][articulation]") {
+    // Changed-only, plus a periodic refresh for drop tolerance. Without the change gate a settled
+    // aircraft would spend bytes every tick saying nothing new.
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster wb(em, registry, net, logger);
+    wb.setRateLimitParams(100, 10, 1000); // see the note above: the wall-clock flood guard
+    connectPilotPeer(wb, net, 0u);
+
+    for (uint32_t t = 0; t < 500; ++t) { // gear fully down and settled
+        sendArticulationInput(wb, 0u, t + 1u, fl::kArtButtonGearDown, 0u);
+        wb.onTick(1.0 / 60.0, t + 1u);
+    }
+
+    int withTlv = 0;
+    for (uint32_t t = 500; t < 500 + 60; ++t) {
+        clearSnapshots(net);
+        sendArticulationInput(wb, 0u, t + 1u, fl::kArtButtonGearDown, 0u);
+        wb.onTick(1.0 / 60.0, t + 1u);
+        const SnapshotExt ext = lastSnapshotExt(net, 0u);
+        if (ext.data == nullptr)
+            continue;
+        uint16_t len = 0;
+        if (fl::findExt(ext.data, ext.size, static_cast<uint16_t>(fl::ExtTag::SnapshotArticulation), len) != nullptr)
+            ++withTlv;
+    }
+    // 60 settled ticks at a 30-tick refresh: a couple of refreshes, nowhere near every tick.
+    CHECK(withTlv > 0);
+    CHECK(withTlv <= 4);
 }

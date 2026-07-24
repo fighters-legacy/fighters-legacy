@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "flight/Articulation.h" // ArticulationTimes (#842)
 #include "math/Table1D.h"
 #include "math/Table2D.h"
 
@@ -81,6 +82,16 @@ struct AeroDragPolar {
     // airbrake changes lift as well as drag; TP-1538 publishes both. Added as q·S·(cl · speedbrake) to
     // the lift when the brake is out. 0 = drag only (the default; every existing model).
     float speedbrake_cl{0.f};
+};
+
+// Optional high-lift device increments (#842). A flap is not a drag device with a lift side effect —
+// it is a lift device whose whole point is more CL at a given speed, at the cost of drag. All three
+// scale LINEARLY with flap POSITION, so a mid-transit setting is a mid-transit effect.
+struct FlapEffect {
+    float dcl{0.f};             // CL increment at full flap
+    float dcd{0.f};             // parasite-drag increment at full flap
+    float alpha_shift_deg{0.f}; // shifts the CL-table lookup: more CL at a given body alpha, and the
+                                // stall arrives at a LOWER body alpha, which is the real behaviour
 };
 
 struct AeroMoments {
@@ -369,6 +380,12 @@ struct FlightModelData {
     AeroMoments moments;
     AeroLimits limits;
     AeroControls controls;
+    // Optional high-lift device (#842). All-zero (the default) = no modelled flap, so an aircraft
+    // whose author never wrote [aero.flaps] flies exactly as before even with the switch down.
+    FlapEffect flaps;
+    // Actuator full-travel times (#842). Defaults are plausible for a light fighter, so every
+    // existing model keeps parsing; [articulation] overrides them.
+    ArticulationTimes articulation;
     std::optional<TvcData> tvc;
     std::optional<WingSweepData> wing_sweep;
     std::optional<PropData> prop;

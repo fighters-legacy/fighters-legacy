@@ -38,7 +38,11 @@ extern "C" void stbi_image_free(void* retval_from_stbi_load);
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <glm/gtc/matrix_transform.hpp> // glm::translate / glm::scale for node TRS composition (#839)
+#include <glm/gtc/quaternion.hpp>       // glm::quat / glm::mat4_cast for node rotation (#839)
 #include <limits>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace fl {
@@ -504,7 +508,7 @@ bool VkResourceManager::createGpuImageCompressed(const uint8_t* data, VkDeviceSi
 }
 
 // ---------------------------------------------------------------------------
-// createMesh — parse glTF .glb, extract first primitive, upload to GPU
+// createMesh — parse glTF .glb, walk the node graph, upload every submesh (#839)
 // ---------------------------------------------------------------------------
 
 MeshHandle VkResourceManager::createMesh(const MeshUploadDesc& desc) {
@@ -528,33 +532,23 @@ MeshHandle VkResourceManager::createMesh(const MeshUploadDesc& desc) {
 
     if (model.meshes.empty())
         return {};
-    const auto& prim = model.meshes[0].primitives[0];
-    if (prim.attributes.find("POSITION") == prim.attributes.end())
-        return {};
 
-    // ── Extract vertex data ──────────────────────────────────────────────
-    auto getAccessorData = [&](const std::string& attr, int& accIdx) -> const uint8_t* {
-        auto it = prim.attributes.find(attr);
-        if (it == prim.attributes.end()) {
+    // ── Accessor readers (shared by every primitive) ─────────────────────
+    auto attrPtr = [&](const tinygltf::Primitive& p, const char* attr, int& accIdx) -> const uint8_t* {
+        auto it = p.attributes.find(attr);
+        if (it == p.attributes.end() || it->second < 0 || it->second >= static_cast<int>(model.accessors.size())) {
             accIdx = -1;
             return nullptr;
         }
         accIdx = it->second;
         const auto& acc = model.accessors[accIdx];
+        if (acc.bufferView < 0 || acc.bufferView >= static_cast<int>(model.bufferViews.size()))
+            return nullptr;
         const auto& bv = model.bufferViews[acc.bufferView];
+        if (bv.buffer < 0 || bv.buffer >= static_cast<int>(model.buffers.size()))
+            return nullptr;
         return model.buffers[bv.buffer].data.data() + bv.byteOffset + acc.byteOffset;
     };
-
-    int posIdx = -1, nrmIdx = -1, tanIdx = -1, uvIdx = -1;
-    const uint8_t* posPtr = getAccessorData("POSITION", posIdx);
-    const uint8_t* nrmPtr = getAccessorData("NORMAL", nrmIdx);
-    const uint8_t* tanPtr = getAccessorData("TANGENT", tanIdx);
-    const uint8_t* uvPtr = getAccessorData("TEXCOORD_0", uvIdx);
-
-    if (!posPtr)
-        return {};
-
-    const uint32_t vertexCount = static_cast<uint32_t>(model.accessors[posIdx].count);
 
     auto stridedVec3 = [&](const uint8_t* base, int accI, uint32_t i) -> glm::vec3 {
         if (!base)
@@ -587,59 +581,155 @@ MeshHandle VkResourceManager::createMesh(const MeshUploadDesc& desc) {
         return v;
     };
 
-    std::vector<Vertex> vertices(vertexCount);
+    // ── Node graph: parents, rest transforms, DFS order, damage classification ─
+    GpuMesh mesh{};
+    mesh.contentForward = desc.contentForward;
+    mesh.nodePlan = buildMeshNodePlan(model, desc.variant);
+
+    // ── Material upload (#833), one GPU material per referenced glTF material ──
+    // The glb references its textures by external URI; only the engine layer can turn a URI into file
+    // bytes (it owns asset-name resolution), so it supplies a byte resolver. No resolver (builtin /
+    // terrain meshes) ⇒ no materials, and the renderer's defaults apply.
+    std::unordered_map<int, MaterialHandle> materialByGltfIndex;
+    auto resolveMaterial = [&](int gltfMaterial) -> MaterialHandle {
+        if (!desc.textureResolver || gltfMaterial < 0 || gltfMaterial >= static_cast<int>(model.materials.size()))
+            return {};
+        if (auto it = materialByGltfIndex.find(gltfMaterial); it != materialByGltfIndex.end())
+            return it->second;
+
+        auto uploadTexture = [&](int texIndex, bool srgb) -> TextureHandle {
+            if (texIndex < 0 || texIndex >= static_cast<int>(model.textures.size()))
+                return {};
+            const int imgIndex = model.textures[texIndex].source;
+            if (imgIndex < 0 || imgIndex >= static_cast<int>(model.images.size()))
+                return {};
+            const std::string& uri = model.images[imgIndex].uri;
+            if (uri.empty())
+                return {};
+            std::vector<uint8_t> bytes = desc.textureResolver(uri);
+            if (bytes.empty()) {
+                std::fprintf(stderr, "[VkResources] texture URI unresolved (%.*s): %s — using default\n",
+                             static_cast<int>(desc.name.size()), desc.name.data(), uri.c_str());
+                return {}; // resolver miss — material falls back to the renderer's default texture
+            }
+            TextureUploadDesc td{};
+            td.name = uri;
+            td.bytes = bytes;
+            td.srgb = srgb;
+            return createTexture(td);
+        };
+
+        const tinygltf::Material& gm = model.materials[static_cast<std::size_t>(gltfMaterial)];
+        const tinygltf::PbrMetallicRoughness& pbr = gm.pbrMetallicRoughness;
+        MaterialDesc md{};
+        md.baseColorTexture = uploadTexture(pbr.baseColorTexture.index, /*srgb=*/true);
+        md.normalTexture = uploadTexture(gm.normalTexture.index, /*srgb=*/false);
+        // Engine ORM packs R=occlusion G=roughness B=metallic. glTF's metallicRoughness texture
+        // already carries G/B; a pack authoring a combined ORM references it here (occlusion in R).
+        md.ormTexture = uploadTexture(pbr.metallicRoughnessTexture.index, /*srgb=*/false);
+        md.baseColorFactor =
+            glm::vec4(static_cast<float>(pbr.baseColorFactor[0]), static_cast<float>(pbr.baseColorFactor[1]),
+                      static_cast<float>(pbr.baseColorFactor[2]), static_cast<float>(pbr.baseColorFactor[3]));
+        md.metallicFactor = static_cast<float>(pbr.metallicFactor);
+        md.roughnessFactor = static_cast<float>(pbr.roughnessFactor);
+        md.doubleSided = gm.doubleSided;
+        md.alphaBlend = (gm.alphaMode == "BLEND");
+        const MaterialHandle h = createMaterial(md);
+        materialByGltfIndex.emplace(gltfMaterial, h);
+        return h;
+    };
+
+    // ── Concatenate every mesh-bearing node's primitives into one VB/IB pair ──
+    std::vector<Vertex> vertices;
+    std::vector<uint32_t> indices;
     glm::vec3 bMin(std::numeric_limits<float>::max());
     glm::vec3 bMax(std::numeric_limits<float>::lowest());
-    for (uint32_t i = 0; i < vertexCount; ++i) {
-        vertices[i].position = stridedVec3(posPtr, posIdx, i);
-        vertices[i].normal = nrmPtr ? stridedVec3(nrmPtr, nrmIdx, i) : glm::vec3(0, 1, 0);
-        vertices[i].tangent = tanPtr ? stridedVec4(tanPtr, tanIdx, i) : glm::vec4(1, 0, 0, 1);
-        vertices[i].uv = uvPtr ? stridedVec2(uvPtr, uvIdx, i) : glm::vec2(0, 0);
 
-        // Rotate content-convention geometry (nose +Z) into the engine body frame (nose +X) — #906.
-        // A proper rotation, so winding is preserved; positions, normals and the tangent direction all
-        // take the same map.
-        if (desc.contentForward) {
-            vertices[i].position = contentForwardToBody(vertices[i].position);
-            vertices[i].normal = contentForwardToBody(vertices[i].normal);
-            const glm::vec3 t = contentForwardToBody(glm::vec3(vertices[i].tangent));
-            vertices[i].tangent = glm::vec4(t, vertices[i].tangent.w);
+    // Vertices are stored PRE-ROTATED into the body frame (as before #839), so the composed
+    // content-space node transform is conjugated on use (M = Q·G·Q^-1). Bounds are therefore
+    // accumulated as Q·G·v — for the single identity-node case that is exactly the old Q·v.
+    auto toBody = [&](const glm::vec3& v) { return desc.contentForward ? contentForwardToBody(v) : v; };
+
+    auto appendPrimitive = [&](const tinygltf::Primitive& prim, uint32_t nodeIndex, const glm::mat4& gRest) {
+        int posIdx = -1, nrmIdx = -1, tanIdx = -1, uvIdx = -1;
+        const uint8_t* posPtr = attrPtr(prim, "POSITION", posIdx);
+        if (!posPtr)
+            return;
+        const uint8_t* nrmPtr = attrPtr(prim, "NORMAL", nrmIdx);
+        const uint8_t* tanPtr = attrPtr(prim, "TANGENT", tanIdx);
+        const uint8_t* uvPtr = attrPtr(prim, "TEXCOORD_0", uvIdx);
+
+        const auto vertexBase = static_cast<uint32_t>(vertices.size());
+        const auto firstIndex = static_cast<uint32_t>(indices.size());
+        const uint32_t vertexCount = static_cast<uint32_t>(model.accessors[posIdx].count);
+
+        vertices.resize(vertexBase + vertexCount);
+        for (uint32_t i = 0; i < vertexCount; ++i) {
+            Vertex& out = vertices[vertexBase + i];
+            const glm::vec3 rawPos = stridedVec3(posPtr, posIdx, i);
+            out.position = toBody(rawPos);
+            out.normal = toBody(nrmPtr ? stridedVec3(nrmPtr, nrmIdx, i) : glm::vec3(0, 1, 0));
+            const glm::vec4 rawTan = tanPtr ? stridedVec4(tanPtr, tanIdx, i) : glm::vec4(1, 0, 0, 1);
+            out.tangent = glm::vec4(toBody(glm::vec3(rawTan)), rawTan.w);
+            out.uv = uvPtr ? stridedVec2(uvPtr, uvIdx, i) : glm::vec2(0, 0);
+
+            // Body-frame AABB for camera framing (#836), at the node's REST pose.
+            const glm::vec3 placed = toBody(glm::vec3(gRest * glm::vec4(rawPos, 1.0f)));
+            bMin = glm::min(bMin, placed);
+            bMax = glm::max(bMax, placed);
         }
 
-        // Accumulate the body-frame AABB for camera framing (#836) on the already-oriented position.
-        bMin = glm::min(bMin, vertices[i].position);
-        bMax = glm::max(bMax, vertices[i].position);
-    }
-
-    // ── Extract index data ───────────────────────────────────────────────
-    std::vector<uint32_t> indices;
-    if (prim.indices >= 0) {
-        const auto& acc = model.accessors[prim.indices];
-        const auto& bv = model.bufferViews[acc.bufferView];
-        const uint8_t* data = model.buffers[bv.buffer].data.data() + bv.byteOffset + acc.byteOffset;
-        indices.reserve(acc.count);
-        for (std::size_t i = 0; i < acc.count; ++i) {
-            uint32_t idx = 0;
-            if (acc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT) {
-                uint16_t v16 = 0;
-                std::memcpy(&v16, data + i * sizeof(uint16_t), sizeof(uint16_t));
-                idx = v16;
-            } else if (acc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT) {
-                std::memcpy(&idx, data + i * sizeof(uint32_t), sizeof(uint32_t));
-            } else if (acc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE) {
-                idx = data[i];
+        if (prim.indices >= 0 && prim.indices < static_cast<int>(model.accessors.size())) {
+            const auto& acc = model.accessors[static_cast<std::size_t>(prim.indices)];
+            if (acc.bufferView < 0 || acc.bufferView >= static_cast<int>(model.bufferViews.size()))
+                return;
+            const auto& bv = model.bufferViews[acc.bufferView];
+            const uint8_t* data = model.buffers[bv.buffer].data.data() + bv.byteOffset + acc.byteOffset;
+            indices.reserve(indices.size() + acc.count);
+            for (std::size_t i = 0; i < acc.count; ++i) {
+                uint32_t idx = 0;
+                if (acc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT) {
+                    uint16_t v16 = 0;
+                    std::memcpy(&v16, data + i * sizeof(uint16_t), sizeof(uint16_t));
+                    idx = v16;
+                } else if (acc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT) {
+                    std::memcpy(&idx, data + i * sizeof(uint32_t), sizeof(uint32_t));
+                } else if (acc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE) {
+                    idx = data[i];
+                }
+                indices.push_back(vertexBase + idx);
             }
-            indices.push_back(idx);
+        } else {
+            indices.reserve(indices.size() + vertexCount);
+            for (uint32_t i = 0; i < vertexCount; ++i)
+                indices.push_back(vertexBase + i);
         }
-    } else {
-        // No index buffer: generate sequential indices.
-        indices.resize(vertexCount);
-        for (uint32_t i = 0; i < vertexCount; ++i)
-            indices[i] = i;
+
+        GpuSubMesh sm{};
+        sm.firstIndex = firstIndex;
+        sm.indexCount = static_cast<uint32_t>(indices.size()) - firstIndex;
+        sm.nodeIndex = nodeIndex;
+        sm.material = resolveMaterial(prim.material);
+        if (sm.indexCount > 0)
+            mesh.submeshes.push_back(sm);
+    };
+
+    for (const MeshPlanPrimitive& mp : mesh.nodePlan.primitives) {
+        const auto& prims = model.meshes[static_cast<std::size_t>(mp.meshIndex)].primitives;
+        appendPrimitive(prims[static_cast<std::size_t>(mp.primitiveIndex)], mp.nodeIndex,
+                        mesh.nodePlan.globalRest[mp.nodeIndex]);
     }
+
+    // Fallback for a glb with geometry but no scene graph reaching it (hand-built JSON, or a variant
+    // selector that matched nothing): draw meshes[0].primitives[0] at identity, the pre-#839 rule.
+    if (mesh.submeshes.empty() && !model.meshes[0].primitives.empty()) {
+        mesh.nodePlan = MeshNodePlan{};
+        appendPrimitive(model.meshes[0].primitives[0], 0u, glm::mat4(1.0f));
+    }
+    if (mesh.submeshes.empty() || vertices.empty())
+        return {};
 
     // ── Upload to GPU ────────────────────────────────────────────────────
-    GpuMesh mesh{};
     const VkDeviceSize vbSize = vertices.size() * sizeof(Vertex);
     const VkDeviceSize ibSize = indices.size() * sizeof(uint32_t);
 
@@ -663,58 +753,12 @@ MeshHandle VkResourceManager::createMesh(const MeshUploadDesc& desc) {
     }
 
     mesh.indexCount = static_cast<uint32_t>(indices.size());
-    if (vertexCount > 0) {
-        mesh.boundsMin = bMin;
-        mesh.boundsMax = bMax;
-    }
+    mesh.boundsMin = bMin;
+    mesh.boundsMax = bMax;
+    // Mesh-level default material (#833): the first submesh's. getMeshMaterial() reports it, and it is
+    // what a caller binds when it does not walk submeshes.
+    mesh.material = mesh.submeshes.front().material;
     mesh.alive = true;
-
-    // ── Material (#833) ──────────────────────────────────────────────────
-    // The glb references its textures by external URI; only the engine layer can turn a URI into
-    // file bytes (it owns asset-name resolution), so it supplies a byte resolver. The renderer walks
-    // the primitive's PBR material, uploads each referenced texture, and builds one GPU material —
-    // retrievable via getMeshMaterial(). No resolver (builtin/terrain meshes) ⇒ no material.
-    if (desc.textureResolver && prim.material >= 0 && prim.material < static_cast<int>(model.materials.size())) {
-        // Turn a glTF texture index into a GPU texture via the engine-supplied byte resolver.
-        auto uploadTexture = [&](int texIndex, bool srgb) -> TextureHandle {
-            if (texIndex < 0 || texIndex >= static_cast<int>(model.textures.size()))
-                return {};
-            const int imgIndex = model.textures[texIndex].source;
-            if (imgIndex < 0 || imgIndex >= static_cast<int>(model.images.size()))
-                return {};
-            const std::string& uri = model.images[imgIndex].uri;
-            if (uri.empty())
-                return {};
-            std::vector<uint8_t> bytes = desc.textureResolver(uri);
-            if (bytes.empty()) {
-                std::fprintf(stderr, "[VkResources] texture URI unresolved (%.*s): %s — using default\n",
-                             static_cast<int>(desc.name.size()), desc.name.data(), uri.c_str());
-                return {}; // resolver miss — material falls back to the renderer's default texture
-            }
-            TextureUploadDesc td{};
-            td.name = uri;
-            td.bytes = bytes;
-            td.srgb = srgb;
-            return createTexture(td);
-        };
-
-        const tinygltf::Material& gm = model.materials[prim.material];
-        const tinygltf::PbrMetallicRoughness& pbr = gm.pbrMetallicRoughness;
-        MaterialDesc md{};
-        md.baseColorTexture = uploadTexture(pbr.baseColorTexture.index, /*srgb=*/true);
-        md.normalTexture = uploadTexture(gm.normalTexture.index, /*srgb=*/false);
-        // Engine ORM packs R=occlusion G=roughness B=metallic. glTF's metallicRoughness texture
-        // already carries G/B; a pack authoring a combined ORM references it here (occlusion in R).
-        md.ormTexture = uploadTexture(pbr.metallicRoughnessTexture.index, /*srgb=*/false);
-        md.baseColorFactor =
-            glm::vec4(static_cast<float>(pbr.baseColorFactor[0]), static_cast<float>(pbr.baseColorFactor[1]),
-                      static_cast<float>(pbr.baseColorFactor[2]), static_cast<float>(pbr.baseColorFactor[3]));
-        md.metallicFactor = static_cast<float>(pbr.metallicFactor);
-        md.roughnessFactor = static_cast<float>(pbr.roughnessFactor);
-        md.doubleSided = gm.doubleSided;
-        md.alphaBlend = (gm.alphaMode == "BLEND");
-        mesh.material = createMaterial(md);
-    }
 
     // ── Slot allocation ──────────────────────────────────────────────────
     uint32_t slot = 0;

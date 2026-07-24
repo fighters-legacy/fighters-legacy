@@ -38,6 +38,9 @@ void BotClient::sendInputIfDue(double now) {
     const BotControl ctl = m_pattern->sample(now - m_activeStart, m_index);
     MsgClientInput in;
     in.buttons = ctl.buttons;
+    in.flaps = ctl.flaps;           // #843
+    in.speedbrake = ctl.speedbrake; // #843
+    in.artButtons = ctl.artButtons; // #843
     in.seqNum = m_seq++;
     in.tickIndex = m_lastTick;
     in.ackMask = m_ackMask; // selective-ack of decoded ticks (#566); loopback = no loss = all-1s

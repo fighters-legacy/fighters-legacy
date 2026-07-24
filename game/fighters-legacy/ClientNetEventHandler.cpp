@@ -23,6 +23,7 @@
 #include "weather/WeatherController.h"
 
 #include <algorithm>
+#include <bit> // std::popcount for the articulation TLV (#843)
 #include <cstdio>
 #include <cstring>
 #include <glm/gtc/quaternion.hpp>
@@ -137,12 +138,15 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             td.dmgMesh[sizeof(td.dmgMesh) - 1] = '\0';
             td.flightModel[sizeof(td.flightModel) - 1] = '\0';
             td.name[sizeof(td.name) - 1] = '\0';
+            td.meshVariant[sizeof(td.meshVariant) - 1] = '\0';
             if (registry.findById(td.id))
                 continue; // already registered
             fl::EntityDef def;
             def.id = td.id;
             def.mesh = td.mesh;
             def.classicDamageMesh = td.dmgMesh;
+            // Variant node-set (#882): which tagged nodes of the shared family mesh this type draws.
+            def.meshVariant = td.meshVariant;
             // Friendly display name for the observer entity picker (#860); empty on the wire means the
             // picker falls back to the id.
             def.name = td.name[0] ? td.name : td.id;
@@ -314,6 +318,10 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             re.weaponFlags = qe.weaponFlags;
             re.payloadMassKg = qe.payloadMassKg;
             re.payloadCd0 = qe.payloadCd0;
+            // Articulation is carried on its own TLV (#843) and updates on CHANGE, so a record decode
+            // must not wipe it: hold the last known channel values across the overwrite.
+            if (auto cached = m_entityCache.find(qe.idx); cached != m_entityCache.end())
+                std::memcpy(re.artChannels, cached->second.re.artChannels, sizeof(re.artChannels));
             m_entityCache[qe.idx] = {re, hdr.tickIndex};
         }
 
@@ -330,14 +338,8 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             }
         }
 
-        // 4. Build the RenderSnapshot from the retained cache.
-        fl::RenderSnapshot snap;
-        snap.tickIndex = hdr.tickIndex;
-        snap.entries.reserve(m_entityCache.size());
-        for (const auto& [idx, cached] : m_entityCache)
-            snap.entries.push_back(cached.re);
-
-        // Remaining TLVs (order-independent).
+        // 4. Remaining TLVs (order-independent). These run BEFORE the RenderSnapshot is assembled so
+        // that state they carry — articulation, above all — is already in the cache when it is read.
         uint32_t ackedSeqNum = kNoAckedSeqNum; // #427: overwritten below if the server reported one
         if (ext) {
             uint16_t pc{};
@@ -376,7 +378,23 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             if (const uint8_t* cp = fl::findExt(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotCrew), crewLen);
                 cp && crewLen > 0)
                 applyCrewTurretTlv(cp, crewLen);
+
+            // Actuator positions (#843): a remote aircraft's gear and flaps. Hold-last on absence —
+            // the values are already transit-integrated server-side and arrive at snapshot rate, so
+            // an actuator that takes seconds to travel is visually adequate without a lag filter.
+            uint16_t artLen = 0;
+            if (const uint8_t* ap =
+                    fl::findExt(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotArticulation), artLen);
+                ap && artLen > 0)
+                applyArticulationTlv(ap, artLen);
         }
+
+        // 5. Build the RenderSnapshot from the retained cache.
+        fl::RenderSnapshot snap;
+        snap.tickIndex = hdr.tickIndex;
+        snap.entries.reserve(m_entityCache.size());
+        for (const auto& [idx, cached] : m_entityCache)
+            snap.entries.push_back(cached.re);
 
         // Advance the selective-ack decoded-tick mask before moving the high-water mark (#566). This
         // path only runs for snapshots we accept and DECODE, so every bit ackAdvance sets corresponds to
@@ -892,6 +910,40 @@ void ClientNetEventHandler::applyCrewTurretTlv(const uint8_t* payload, std::size
             poses.push_back(p);
         }
         m_crewTurretPoses[idx] = std::move(poses);
+    }
+}
+
+void ClientNetEventHandler::applyArticulationTlv(const uint8_t* payload, std::size_t len) {
+    // Payload: repeated { uint32 entityIdx (LE), uint16 channelMask (LE), uint8 value[popcount(mask)] }.
+    // Unaligned, so every field is memcpy'd; a truncated tail stops the scan rather than reading past.
+    //
+    // Absence means HOLD-LAST, not neutral: the server sends a channel only while it is off its
+    // default, and re-sends on change plus a periodic refresh. Zeroing on absence would snap every
+    // aircraft's gear up between refreshes.
+    std::size_t off = 0;
+    while (off + 6u <= len) {
+        uint32_t idx = 0;
+        uint16_t mask = 0;
+        std::memcpy(&idx, payload + off, 4);
+        std::memcpy(&mask, payload + off + 4, 2);
+        off += 6u;
+        const auto count = static_cast<std::size_t>(std::popcount(static_cast<unsigned>(mask)));
+        if (off + count > len)
+            return; // truncated
+        auto cached = m_entityCache.find(idx);
+        std::size_t v = 0;
+        for (std::size_t c = 0; c < fl::kArtChannelCount; ++c) {
+            if ((mask & (1u << c)) == 0u)
+                continue;
+            const uint8_t q = payload[off + v++];
+            if (cached != m_entityCache.end()) {
+                // Signed channels are offset binary around 128; unsigned are a plain 0..255 fraction.
+                cached->second.re.artChannels[c] = fl::artChannelIsSigned(static_cast<fl::ArtChannel>(c))
+                                                       ? (static_cast<float>(static_cast<int>(q) - 128) / 127.f)
+                                                       : (static_cast<float>(q) / 255.f);
+            }
+        }
+        off += count;
     }
 }
 

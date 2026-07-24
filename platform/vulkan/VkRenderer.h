@@ -6,6 +6,7 @@
 #include "VkResources.h"
 #include <array>
 #include <cstddef>
+#include <span>
 #include <string>
 #include <vector>
 #include <vulkan/vulkan.h>
@@ -286,6 +287,25 @@ class VkRenderer : public IRenderer {
     // secondary-viewport pass). Shared by the main forward-opaque pass and the inset pass so the
     // per-item bind/push/draw logic exists once.
     void drawOpaqueItems(VkCommandBuffer cmd, VkDescriptorSet set0);
+
+    // ── Node-aware submesh draws (#839) ───────────────────────────────────
+    // One resolved draw: an index-buffer slice, the model matrix its glTF node composes to, and the
+    // per-primitive material. Every draw loop (shadow, forward-opaque, transparent, inset) walks the
+    // same list, so per-node articulation, per-primitive materials and `_b` damage selection exist
+    // once rather than four times.
+    struct ResolvedDraw {
+        uint32_t firstIndex{0};
+        uint32_t indexCount{0};
+        glm::mat4 model{1.0f};
+        MaterialHandle material{};
+    };
+    // Fills m_drawScratch with this item's draws. Returns a view of it; valid until the next call.
+    // A single-submesh mesh at an identity node produces exactly one draw with model == item.transform
+    // (the pre-#839 output, bit-for-bit).
+    std::span<const ResolvedDraw> resolveItemDraws(const RenderItem& item, const GpuMesh& mesh);
+
+    std::vector<ResolvedDraw> m_drawScratch;   // reused per item; avoids per-draw allocation
+    std::vector<glm::mat4> m_nodeXformScratch; // per-node composed global transforms (content frame)
 
     // ── Overlay pipeline ──────────────────────────────────────────────────
     bool createOverlayPipeline();

@@ -100,11 +100,10 @@ static FlightModelData makeData() {
 TEST_CASE("Lift is zero at zero alpha and Mach 0.6", "[aero]") {
     auto data = makeData();
     auto atmos = computeAtmosphere(0.f);
-    ControlInput ctrl{};
     PayloadEffect payload{};
     // alpha=0, beta=0, Mach=0.6 (speed = 0.6 * 340.3 ≈ 204 m/s)
     float spd = 0.6f * atmos.speed_of_sound_m_s;
-    auto f = computeForces(0.f, 0.f, 0.6f, spd, 0.f, 55.f, false, 0.f, ctrl, payload, data, atmos);
+    auto f = computeForces(0.f, 0.f, 0.6f, spd, 0.f, 55.f, false, 0.f, payload, data, atmos, ArticulationState{});
     // At alpha=0 CL≈0.06; lift is small but positive (forces[1] = lift*cos(alpha) > 0).
     // Mainly verifying no crash and values are finite.
     CHECK(std::isfinite(f[0]));
@@ -139,19 +138,20 @@ TEST_CASE("Speedbrake and gear drag stack correctly", "[aero]") {
     PayloadEffect payload{};
     float spd = 0.3f * atmos.speed_of_sound_m_s;
 
-    ControlInput clean{};
-    ControlInput with_brake{};
+    // Device drag follows the actuator POSITION, not the command (#842).
+    ArticulationState clean{};
+    ArticulationState with_brake{};
     with_brake.speedbrake = 1.f;
-    ControlInput with_gear{};
-    with_gear.gear_down = true;
-    ControlInput both{};
+    ArticulationState with_gear{};
+    with_gear.gear = 1.f;
+    ArticulationState both{};
     both.speedbrake = 1.f;
-    both.gear_down = true;
+    both.gear = 1.f;
 
-    auto f_clean = computeForces(0.f, 0.f, 0.3f, spd, 0.f, 55.f, false, 0.f, clean, payload, data, atmos);
-    auto f_brake = computeForces(0.f, 0.f, 0.3f, spd, 0.f, 55.f, false, 0.f, with_brake, payload, data, atmos);
-    auto f_gear = computeForces(0.f, 0.f, 0.3f, spd, 0.f, 55.f, false, 0.f, with_gear, payload, data, atmos);
-    auto f_both = computeForces(0.f, 0.f, 0.3f, spd, 0.f, 55.f, false, 0.f, both, payload, data, atmos);
+    auto f_clean = computeForces(0.f, 0.f, 0.3f, spd, 0.f, 55.f, false, 0.f, payload, data, atmos, clean);
+    auto f_brake = computeForces(0.f, 0.f, 0.3f, spd, 0.f, 55.f, false, 0.f, payload, data, atmos, with_brake);
+    auto f_gear = computeForces(0.f, 0.f, 0.3f, spd, 0.f, 55.f, false, 0.f, payload, data, atmos, with_gear);
+    auto f_both = computeForces(0.f, 0.f, 0.3f, spd, 0.f, 55.f, false, 0.f, payload, data, atmos, both);
 
     // Forward force (x) should be smaller (more drag) when speedbrake or gear are deployed
     CHECK(f_brake[0] < f_clean[0]);
@@ -163,9 +163,8 @@ TEST_CASE("Speedbrake and gear drag stack correctly", "[aero]") {
 TEST_CASE("Zero speed produces zero aerodynamic forces without NaN", "[aero]") {
     auto data = makeData();
     auto atmos = computeAtmosphere(0.f);
-    ControlInput ctrl{};
     PayloadEffect payload{};
-    auto f = computeForces(0.f, 0.f, 0.f, 0.f, 0.f, 55.f, false, 0.f, ctrl, payload, data, atmos);
+    auto f = computeForces(0.f, 0.f, 0.f, 0.f, 0.f, 55.f, false, 0.f, payload, data, atmos, ArticulationState{});
     CHECK(std::isfinite(f[0]));
     CHECK(std::isfinite(f[1]));
     CHECK(std::isfinite(f[2]));
@@ -179,7 +178,7 @@ TEST_CASE("Zero speed produces finite moments without NaN", "[aero]") {
     auto data = makeData();
     auto atmos = computeAtmosphere(0.f);
     ControlInput ctrl{};
-    auto m = computeMoments(0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, ctrl, data, atmos);
+    auto m = computeMoments(0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, ctrl, data, atmos, ArticulationState{});
     CHECK(std::isfinite(m[0]));
     CHECK(std::isfinite(m[1]));
     CHECK(std::isfinite(m[2]));
@@ -188,14 +187,14 @@ TEST_CASE("Zero speed produces finite moments without NaN", "[aero]") {
 TEST_CASE("Payload drag and mass accumulate correctly", "[aero]") {
     auto data = makeData();
     auto atmos = computeAtmosphere(0.f);
-    ControlInput ctrl{};
 
     PayloadEffect no_payload{};
     PayloadEffect with_payload{.extra_mass_kg = 500.f, .extra_cd0 = 0.016f};
 
     float spd = 0.6f * atmos.speed_of_sound_m_s;
-    auto f0 = computeForces(0.f, 0.f, 0.6f, spd, 0.f, 55.f, false, 0.8f, ctrl, no_payload, data, atmos);
-    auto fp = computeForces(0.f, 0.f, 0.6f, spd, 0.f, 55.f, false, 0.8f, ctrl, with_payload, data, atmos);
+    auto f0 = computeForces(0.f, 0.f, 0.6f, spd, 0.f, 55.f, false, 0.8f, no_payload, data, atmos, ArticulationState{});
+    auto fp =
+        computeForces(0.f, 0.f, 0.6f, spd, 0.f, 55.f, false, 0.8f, with_payload, data, atmos, ArticulationState{});
     // Higher drag from payload → less forward force
     CHECK(fp[0] < f0[0]);
 }
@@ -206,11 +205,11 @@ TEST_CASE("AeroForces: lift is in the Y-up direction at positive alpha", "[aero]
     // forces[1] (the upward axis), not negative in forces[2] (the old Z-down convention).
     auto data = makeData();
     auto atmos = computeAtmosphere(0.f);
-    ControlInput ctrl{};
     PayloadEffect payload{};
     float spd = 0.4f * atmos.speed_of_sound_m_s; // subsonic, well-behaved alpha
 
-    auto f = computeForces(10.f * 3.14159f / 180.f, 0.f, 0.4f, spd, 0.f, 55.f, false, 0.f, ctrl, payload, data, atmos);
+    auto f = computeForces(10.f * 3.14159f / 180.f, 0.f, 0.4f, spd, 0.f, 55.f, false, 0.f, payload, data, atmos,
+                           ArticulationState{});
 
     CHECK(f[1] > 0.f);  // upward aerodynamic force is positive Y
     CHECK(f[2] == 0.f); // no lateral force
@@ -262,7 +261,6 @@ TEST_CASE("cd_table REPLACES the parabolic polar rather than adding to it", "[ae
     REQUIRE(data.cd_table.has_value());
 
     auto atmos = computeAtmosphere(0.f);
-    ControlInput ctrl{}; // no speedbrake, gear up
     PayloadEffect payload{};
     const float mach = 0.3f;
     const float spd = mach * atmos.speed_of_sound_m_s;
@@ -270,7 +268,7 @@ TEST_CASE("cd_table REPLACES the parabolic polar rather than adding to it", "[ae
     const float S = data.geometry.wing_area_m2;
 
     // alpha = 0 so lift ~ 0 and the body-x force is (thrust=0) - drag*cos(0) + lift*sin(0) = -drag.
-    auto f = computeForces(0.f, 0.f, mach, spd, 0.f, 55.f, false, 0.f, ctrl, payload, data, atmos);
+    auto f = computeForces(0.f, 0.f, mach, spd, 0.f, 55.f, false, 0.f, payload, data, atmos, ArticulationState{});
 
     const float cl = data.cl_table.lookup(0.f, mach);
     const float expectedDrag = q * S * kCd; // wave drag is 0 at Mach 0.3 in this fixture
@@ -308,11 +306,11 @@ TEST_CASE("a model with no cd_table produces bit-identical forces", "[aero][cd_t
     // path and must be completely unaffected by this feature.
     auto data = makeData();
     auto atmos = computeAtmosphere(5000.f);
-    ControlInput ctrl{};
-    ctrl.speedbrake = 0.3f;
+    ArticulationState art{};
+    art.speedbrake = 0.3f; // POSITION, not command (#842)
     PayloadEffect payload{80.f, 0.002f};
 
-    auto f = computeForces(0.09f, 0.f, 0.7f, 220.f, 5000.f, 55.f, false, 0.6f, ctrl, payload, data, atmos);
+    auto f = computeForces(0.09f, 0.f, 0.7f, 220.f, 5000.f, 55.f, false, 0.6f, payload, data, atmos, art);
 
     // Recompute the pre-#820 expression by hand and require an exact match.
     const float alpha_deg = 0.09f / (3.14159265358979f / 180.f);
@@ -391,9 +389,9 @@ TEST_CASE("moments: cm0 adds a constant zero-alpha pitching moment", "[aero][gap
     const float spd = 0.3f * atmos.speed_of_sound_m_s;
     ControlInput ctrl{};
     // alpha=0, all rates 0, no elevator/speedbrake -> the only pitch term is cm0.
-    auto base = computeMoments(0.f, 0.f, 0.f, 0.f, 0.f, spd, 0.f, 0.f, ctrl, d, atmos);
+    auto base = computeMoments(0.f, 0.f, 0.f, 0.f, 0.f, spd, 0.f, 0.f, ctrl, d, atmos, ArticulationState{});
     d.moments.cm0 = 0.05f;
-    auto with_cm0 = computeMoments(0.f, 0.f, 0.f, 0.f, 0.f, spd, 0.f, 0.f, ctrl, d, atmos);
+    auto with_cm0 = computeMoments(0.f, 0.f, 0.f, 0.f, 0.f, spd, 0.f, 0.f, ctrl, d, atmos, ArticulationState{});
     const float q = 0.5f * atmos.density_kg_m3 * spd * spd;
     const float expected = q * d.geometry.wing_area_m2 * d.geometry.mac_m * 0.05f;
     CHECK_THAT(with_cm0[1] - base[1], WithinRel(expected, 1e-4f));
@@ -405,10 +403,10 @@ TEST_CASE("moments: cn_da yaws against the commanded roll (adverse yaw)", "[aero
     const float spd = 0.3f * atmos.speed_of_sound_m_s;
     ControlInput ctrl{};
     ctrl.aileron = 1.f; // roll right
-    auto base = computeMoments(0.f, 0.f, 0.f, 0.f, 0.f, spd, 0.f, 0.f, ctrl, d, atmos);
+    auto base = computeMoments(0.f, 0.f, 0.f, 0.f, 0.f, spd, 0.f, 0.f, ctrl, d, atmos, ArticulationState{});
     CHECK_THAT(base[2], WithinAbs(0.f, 1e-3f)); // no adverse yaw by default
     d.moments.cn_da = -0.02f;                   // negative = yaw opposes the roll
-    auto with = computeMoments(0.f, 0.f, 0.f, 0.f, 0.f, spd, 0.f, 0.f, ctrl, d, atmos);
+    auto with = computeMoments(0.f, 0.f, 0.f, 0.f, 0.f, spd, 0.f, 0.f, ctrl, d, atmos, ArticulationState{});
     CHECK(with[2] < base[2]); // right roll now yaws left
 }
 
@@ -418,9 +416,9 @@ TEST_CASE("moments: cl_dr rolls the aircraft with rudder", "[aero][gaps899]") {
     const float spd = 0.3f * atmos.speed_of_sound_m_s;
     ControlInput ctrl{};
     ctrl.rudder = 1.f;
-    auto base = computeMoments(0.f, 0.f, 0.f, 0.f, 0.f, spd, 0.f, 0.f, ctrl, d, atmos);
+    auto base = computeMoments(0.f, 0.f, 0.f, 0.f, 0.f, spd, 0.f, 0.f, ctrl, d, atmos, ArticulationState{});
     d.moments.cl_dr = 0.03f;
-    auto with = computeMoments(0.f, 0.f, 0.f, 0.f, 0.f, spd, 0.f, 0.f, ctrl, d, atmos);
+    auto with = computeMoments(0.f, 0.f, 0.f, 0.f, 0.f, spd, 0.f, 0.f, ctrl, d, atmos, ArticulationState{});
     CHECK(with[0] != Catch::Approx(base[0])); // rudder now induces a roll moment
 }
 
@@ -431,13 +429,13 @@ TEST_CASE("moments: alpha-damper table replaces the scalar cm_q", "[aero][gaps89
     ControlInput ctrl{};
     const float q_rate = 1.0f; // rad/s pitch rate exercises the damper
     const float alpha = 10.f * 3.14159265f / 180.f;
-    auto scalar = computeMoments(alpha, 0.f, 0.f, q_rate, 0.f, spd, 0.f, 0.f, ctrl, d, atmos);
+    auto scalar = computeMoments(alpha, 0.f, 0.f, q_rate, 0.f, spd, 0.f, 0.f, ctrl, d, atmos, ArticulationState{});
     // A constant table at half the scalar damping -> a distinctly different pitch moment.
     Table1D t;
     t.keys = {0.f, 20.f};
     t.values = {-5.f, -5.f}; // scalar cm_q is -10
     d.moments.cm_q_table = t;
-    auto tabled = computeMoments(alpha, 0.f, 0.f, q_rate, 0.f, spd, 0.f, 0.f, ctrl, d, atmos);
+    auto tabled = computeMoments(alpha, 0.f, 0.f, q_rate, 0.f, spd, 0.f, 0.f, ctrl, d, atmos, ArticulationState{});
     CHECK(scalar[1] != Catch::Approx(tabled[1]));
 }
 
@@ -447,17 +445,18 @@ TEST_CASE("forces + moments: speed-brake lift and pitch increments", "[aero][gap
     const float spd = 0.3f * atmos.speed_of_sound_m_s;
     const float q = 0.5f * atmos.density_kg_m3 * spd * spd;
     ControlInput ctrl{};
-    ctrl.speedbrake = 1.f;
     PayloadEffect payload{};
+    ArticulationState brakeOut{};
+    brakeOut.speedbrake = 1.f; // the brake's aero terms follow its POSITION (#842)
 
-    auto f_base = computeForces(0.f, 0.f, 0.3f, spd, 0.f, 55.f, false, 0.f, ctrl, payload, d, atmos);
-    auto m_base = computeMoments(0.f, 0.f, 0.f, 0.f, 0.f, spd, 0.f, 0.f, ctrl, d, atmos);
+    auto f_base = computeForces(0.f, 0.f, 0.3f, spd, 0.f, 55.f, false, 0.f, payload, d, atmos, brakeOut);
+    auto m_base = computeMoments(0.f, 0.f, 0.f, 0.f, 0.f, spd, 0.f, 0.f, ctrl, d, atmos, brakeOut);
 
     d.drag_polar.speedbrake_cl = -0.10f; // airbrake dumps some lift
     d.moments.cm_speedbrake = 0.04f;     // and pitches the nose
 
-    auto f_with = computeForces(0.f, 0.f, 0.3f, spd, 0.f, 55.f, false, 0.f, ctrl, payload, d, atmos);
-    auto m_with = computeMoments(0.f, 0.f, 0.f, 0.f, 0.f, spd, 0.f, 0.f, ctrl, d, atmos);
+    auto f_with = computeForces(0.f, 0.f, 0.3f, spd, 0.f, 55.f, false, 0.f, payload, d, atmos, brakeOut);
+    auto m_with = computeMoments(0.f, 0.f, 0.f, 0.f, 0.f, spd, 0.f, 0.f, ctrl, d, atmos, brakeOut);
 
     // Lift (body-y at alpha 0) drops by q*S*|dCZ|.
     CHECK_THAT(f_with[1] - f_base[1], WithinRel(q * d.geometry.wing_area_m2 * -0.10f, 1e-4f));
@@ -502,12 +501,13 @@ TEST_CASE("controls: a symmetric model produces bit-identical pitching moments",
     ControlInput down{};
     down.elevator = -1.f;
 
-    const auto mUp = computeMoments(0.05f, 0.f, 0.f, 0.f, 0.f, 200.f, 0.f, 0.f, up, d, atmos);
-    const auto mDown = computeMoments(0.05f, 0.f, 0.f, 0.f, 0.f, 200.f, 0.f, 0.f, down, d, atmos);
+    const auto mUp = computeMoments(0.05f, 0.f, 0.f, 0.f, 0.f, 200.f, 0.f, 0.f, up, d, atmos, ArticulationState{});
+    const auto mDown = computeMoments(0.05f, 0.f, 0.f, 0.f, 0.f, 200.f, 0.f, 0.f, down, d, atmos, ArticulationState{});
 
     // Same magnitude of elevator contribution either way: the only difference between the two is the
     // sign of the command, so the pitching moments straddle the stick-free value symmetrically.
-    const auto mNeutral = computeMoments(0.05f, 0.f, 0.f, 0.f, 0.f, 200.f, 0.f, 0.f, ControlInput{}, d, atmos);
+    const auto mNeutral =
+        computeMoments(0.05f, 0.f, 0.f, 0.f, 0.f, 200.f, 0.f, 0.f, ControlInput{}, d, atmos, ArticulationState{});
     // Relative, not absolute: these moments are ~1e6 N·m, where a float ULP is larger than 1e-3.
     CHECK_THAT(mUp[1] - mNeutral[1], WithinRel(-(mDown[1] - mNeutral[1]), 1e-5f));
 }
@@ -525,9 +525,10 @@ TEST_CASE("controls: full nose-down gives 5/17 of the nose-up pitching moment", 
     ControlInput down{};
     down.elevator = -1.f;
 
-    const auto mNeutral = computeMoments(0.05f, 0.f, 0.f, 0.f, 0.f, 200.f, 0.f, 0.f, ControlInput{}, d, atmos);
-    const auto mUp = computeMoments(0.05f, 0.f, 0.f, 0.f, 0.f, 200.f, 0.f, 0.f, up, d, atmos);
-    const auto mDown = computeMoments(0.05f, 0.f, 0.f, 0.f, 0.f, 200.f, 0.f, 0.f, down, d, atmos);
+    const auto mNeutral =
+        computeMoments(0.05f, 0.f, 0.f, 0.f, 0.f, 200.f, 0.f, 0.f, ControlInput{}, d, atmos, ArticulationState{});
+    const auto mUp = computeMoments(0.05f, 0.f, 0.f, 0.f, 0.f, 200.f, 0.f, 0.f, up, d, atmos, ArticulationState{});
+    const auto mDown = computeMoments(0.05f, 0.f, 0.f, 0.f, 0.f, 200.f, 0.f, 0.f, down, d, atmos, ArticulationState{});
 
     // Isolate the elevator's contribution by subtracting the stick-free moment.
     const float upContribution = mUp[1] - mNeutral[1];
@@ -549,9 +550,10 @@ TEST_CASE("controls: partial nose-down scales against the negative travel", "[ae
     ControlInput full{};
     full.elevator = -1.f;
 
-    const auto mNeutral = computeMoments(0.05f, 0.f, 0.f, 0.f, 0.f, 200.f, 0.f, 0.f, ControlInput{}, d, atmos);
-    const auto mHalf = computeMoments(0.05f, 0.f, 0.f, 0.f, 0.f, 200.f, 0.f, 0.f, half, d, atmos);
-    const auto mFull = computeMoments(0.05f, 0.f, 0.f, 0.f, 0.f, 200.f, 0.f, 0.f, full, d, atmos);
+    const auto mNeutral =
+        computeMoments(0.05f, 0.f, 0.f, 0.f, 0.f, 200.f, 0.f, 0.f, ControlInput{}, d, atmos, ArticulationState{});
+    const auto mHalf = computeMoments(0.05f, 0.f, 0.f, 0.f, 0.f, 200.f, 0.f, 0.f, half, d, atmos, ArticulationState{});
+    const auto mFull = computeMoments(0.05f, 0.f, 0.f, 0.f, 0.f, 200.f, 0.f, 0.f, full, d, atmos, ArticulationState{});
 
     CHECK_THAT(mHalf[1] - mNeutral[1], WithinRel((mFull[1] - mNeutral[1]) * 0.5f, 1e-3f));
 }

@@ -9,6 +9,116 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **tools**: `validate-mesh` animation checks + the `3d-models.md` registry rewrite (#844, Epic #837).
+  The validator could not see animations at all: a `.glb` with a misspelled clip name, a skinned mesh,
+  or a rest pose that disagreed with its own `t=0` keyframe passed clean and then simply did not move
+  in the game, with no diagnostic anywhere. It now warns on an unknown clip name (listing the valid
+  channels), and errors on a skin, a morph-target `weights` channel, an unsupported interpolation, a
+  rest pose that disagrees with the clip's **neutral** keyframe (`t=0`, or the clip **midpoint** for a
+  signed channel — the trap that renders an aircraft subtly wrong before anything is commanded), and
+  two scrubbed clips fighting over one node. Marker empties and arbitrary `extras` stay legal, and a
+  mesh with zero animations stays valid forever. The docs' animation section was documenting a
+  registry nothing implemented (`gear_extend`/`gear_retract`, `bay_open`/`bay_close`) — it is replaced
+  by the real contract: the channel table, the scrub semantics, "transit timing lives in the
+  simulation, never in the clip", the rest-pose rule, one clip per channel with retraction as
+  scrubbing toward 0, spin as the one looping exception, and the Blender `NLA_TRACKS` recipe that
+  actually produces separately named clips.
+- **game**: landing gear and flaps end-to-end (#639, Epic #837) — the `InputAction::LandingGear` and
+  `Flaps` bindings existed and were never read, so a human pilot could not raise the gear. **G**
+  toggles the gear, **F** steps the flap detent (clean / manoeuvre / full — the positions a real lever
+  has), **H** the hook, **Shift+C** the canopy, **K** the speed brake (momentary — the one flight
+  configuration control that is not a switch). All latched client-side and sent as absolute state.
+  The HUD's new configuration block reads the actual actuator **position**, not the switch, so a gear
+  still travelling shows `GEAR ...` rather than claiming it is down. Ground contact now depends on
+  gear position: brakes, tyre cornering grip and nosewheel steering are things *wheels* do, so with
+  the gear up a ground contact is a belly slide — much higher drag and no steering at all — and a
+  half-extended strut has partial authority. Aircraft spawn gear-down when parked and gear-up when
+  airborne. `InputAction::Airbrake`'s default moved off Space, which collided with the documented gun
+  trigger and would have bitten the first person to read the bindings table and believe it.
+- **network**: articulation channels on the wire (#843, Epic #837) — two gaps, in both directions. A
+  human pilot **could not raise the gear**: `MsgClientInput` had no gear/flap/speedbrake/hook/canopy
+  command, so only Lua AI ever set one, server-side. And no articulation channel reached a remote
+  client, so even once the renderer could pose an aircraft, every aircraft except your own would sit
+  with its gear up and its flaps clean. Client→server fills the reserved bytes after `radarMode`
+  (`flaps`, `speedbrake`, an `artButtons` bitmask) as **absolute state, not edges** — an edge lost on
+  the unreliable channel never converges, an absolute value does on the next packet. Server→client
+  adds `ExtTag::SnapshotArticulation` (0x0107), a changed-only TLV with a 30-tick refresh: an entity
+  at all-default channels costs **zero bytes**, so a world of unarticulated aircraft is byte-identical
+  to before. Its 1/255 quantization is cosmetic-grade on purpose and cannot affect flight, because a
+  peer never reads its own entity's channels from the wire — `ClientPrediction` rewinds the actuators
+  to their position at the acked input and re-integrates them at full precision through the same
+  shared `advanceArticulation`. `test_prediction_parity` now cycles gear, flaps and speedbrake
+  mid-run and still holds divergence under 1e-3 m over 600 ticks. Input traces record the new
+  commands, so a determinism replay flies the aeroplane it recorded. `kProtocolVersion` stays 1.
+- **flight**: articulation state — transit dynamics and gear/flap aero (#842, Epic #837, core of #639).
+  Gear and speedbrake existed only as **commands**: `AeroForces` added their full drag the instant the
+  command flipped, so gear that takes six seconds to travel produced all of its drag in one tick — and
+  there was no number an animation could have been driven from. Flaps, hook and canopy did not exist
+  at all. `FlightState` now carries five normalized actuator **positions**, slewed toward their
+  commands at the model's `[articulation]` transit rates (the same discipline `advanceSweep`/
+  `advanceTvc` always used for wing sweep and TVC, which is why those two were already right).
+  Reversing mid-travel reverses from the current position; drag follows the position, which is both
+  correct and the reason the animation reads the same number. A new optional `[aero.flaps]` adds
+  `dcl`/`dcd`/`alpha_shift_deg` — the alpha shift moves the CL-table lookup, so a flap gives more CL at
+  a given body AoA **and** stalls at a lower one, as a real flap does. `computeForces` no longer takes
+  `ControlInput` at all: once every device term reads a position, the force calculation depends on
+  state alone. Transit timing lives in the simulation, never in the clip — one number drives the
+  server, the client's prediction replay and the visual. Everything is optional with defaults, so
+  every existing flight model keeps parsing and (with no `[aero.flaps]`) flies identically with the
+  lever down. `validate-flight-model` range-checks the transit times;
+  `docs/modding/flight-model.md` documents both sections.
+- **renderer**: `SceneRenderer` populates `RenderItem::animPoses` (#841, Epic #837) — the renderer knew
+  how to be told where an aircraft's parts are; nothing told it. `EntityRenderEntry` gains a normalized
+  `artChannels[]` (all-zero is neutral, so an entity nobody articulates renders exactly as before), and
+  the entity loop samples every channel the mesh's rig actually models into a **frame pose arena**.
+  Spans are patched in after the loop from recorded (offset, count) pairs, which makes a dangling span
+  *impossible* rather than merely unlikely — reserving up-front and hoping the estimate holds would let
+  one reallocation silently invalidate every span already handed out. An entity whose mesh has no clips
+  gets an empty span and the existing single-draw path. Spin (`prop_spin`/`rotor_spin`/`wheel_spin`)
+  gets a per-entity phase accumulator held render-side: a propeller's angle is cosmetic, never
+  simulated and never wired. A new `art <entityIdx> <channel> <value>` console command scrubs a channel
+  end-to-end, so the whole clip → sampler → arena → per-node draw path is demonstrable before the
+  simulation or the wire drive it — and stays useful afterwards for telling "the clip is wrong" apart
+  from "the sim is wrong".
+- **renderer**: articulation rig — channel registry, clip parser and scrub sampler (#840, Epic #837).
+  Nothing in the engine knew what an animation clip was: `docs/modding/3d-models.md` promised modders
+  an animation-name registry the renderer never read, and `NodePose` had existed with no producer.
+  `engine/render/MeshArticulation` implements the contract every shipping sim uses — **the engine owns
+  named normalized channels, the model bakes keyframed node-TRS clips, and the runtime SCRUBS at
+  `t = value × duration`; it never "plays" a clip.** So retraction is scrubbing `gear` toward 0, not a
+  second `gear_retract` clip to keep in sync. Sixteen channels (`gear`/`flaps`/`speedbrake`/`hook`/
+  `canopy`/`sweep`/TVC/control surfaces/`prop_spin`/`bay`/gear compression) in an append-only enum
+  whose order is the wire order; signed channels centre on the clip midpoint so asymmetric control
+  authority is authored as asymmetric endpoints rather than by rescaling the parameter. STEP, LINEAR
+  and CUBICSPLINE are evaluated; skins and morph-target `weights` are rejected at parse with a
+  diagnostic (rigid parts only); `_b` damage nodes inherit their base node's pose; spin is the one
+  looping exception. **A mesh with zero animations builds an empty rig and costs nothing** — the
+  static-mesh baseline stays valid forever. Transit timing lives in the simulation, never in the clip.
+- **renderer**: entity-selected variant node-sets (#882) — one `.glb` serves a whole airframe family.
+  Tag a glTF node with `extras: {"fl_variant": "two_seat"}` (a string or an array) and an entity def
+  picks its set with `mesh_variant = "two_seat"`; **untagged nodes are always drawn**, so the shared
+  airframe stays shared and every mesh authored before this is unaffected. A pack can now ship one
+  MiG-21 mesh serving both the bis and the two-seat U instead of N `.glb` + LOD + damage sets to keep
+  in sync. Purely load-time and static — node *presence*, never node *pose* (that is articulation,
+  #837): no per-frame cost, and the selector rides `MsgEntityTypeDef` as a tail-append because the
+  client has no pack entity def to read it from. `validate-entity --pack` errors when `mesh_variant`
+  matches no tag in the referenced mesh and lists the tags the file does declare — without it a typo
+  renders as the bare shared airframe with no diagnostic anywhere; `fl-viewer`'s node panel shows each
+  node's tags.
+- **renderer**: node-aware glTF loader and per-node submesh draws (#839, Epic #837) — the foundation
+  articulation, the `_b` damage convention and LOD selection all needed. `createMesh` read only
+  `meshes[0].primitives[0]` and ignored node transforms entirely, so a multi-node aircraft was
+  impossible and `f5e.glb` rendered correctly only by luck. It now walks the scene graph through a new
+  pure, GPU-free `MeshNodePlan` (`platform-meshgraph`, unit-tested without a device), concatenates
+  every mesh-bearing node's primitives into the one VB/IB pair, and keeps a per-node submesh table
+  keyed by the **glTF node array index** — the contract that lets an engine-side sampler address nodes
+  a platform-side loader uploaded. Each draw loop (shadow, forward-opaque, transparent, inset) expands
+  an item into per-node draws with `model = transform · Q·G·Q⁻¹`, where `G` is the composed
+  content-frame node transform (`RenderItem::animPoses` overriding a node's rest local) and `Q` the
+  content→body rotation. `kRenderFlagDamaged` — set since #886 and read by nobody — finally selects
+  `_b` submeshes over the base ones they shadow. Per-primitive materials land here too, so a
+  multi-material `.glb` no longer loses everything after the first primitive. `FrameStats::drawCalls`
+  is now measured rather than assumed to be one per item.
 - **tools**: `validate-mod` (#651, Epic #836) — one command validates a whole content pack, so
   fl-base-pack CI runs one gate instead of seven. It composes the existing per-asset validators by
   LINKING their libs (never subprocessing): the manifest (through a new shared `parseModManifest` that

@@ -33,13 +33,14 @@ TEST_CASE("GameProtocol: wire struct sizes match natural-aligned layout", "[game
     CHECK(sizeof(fl::PlayerRosterEntry) == 40u); // #996
     CHECK(offsetof(fl::PlayerRosterEntry, factionIndex) == 4u);
     CHECK(offsetof(fl::PlayerRosterEntry, callsign) == 8u);
-    CHECK(sizeof(fl::MsgEntityTypeDef) == 348u); // #38 tail-appended deck footprint (336 -> 348)
+    CHECK(sizeof(fl::MsgEntityTypeDef) == 380u); // #882 tail-appended meshVariant (348 -> 380)
     CHECK(sizeof(fl::MsgFactionDef) == 132u);    // #860: 1+1+2 + 64 + 64
     CHECK(offsetof(fl::MsgEntityTypeDef, name) == 268u);
     CHECK(offsetof(fl::MsgEntityTypeDef, category) == 332u);
     CHECK(offsetof(fl::MsgEntityTypeDef, projectileKind) == 333u);
     CHECK(offsetof(fl::MsgEntityTypeDef, deckLengthM) == 336u); // #38: deck footprint tail-append
     CHECK(offsetof(fl::MsgEntityTypeDef, deckHeightM) == 344u);
+    CHECK(offsetof(fl::MsgEntityTypeDef, meshVariant) == 348u); // #882: variant node-set tail-append
     CHECK(offsetof(fl::MsgFactionDef, factionIndex) == 2u);
     CHECK(offsetof(fl::MsgFactionDef, id) == 4u);
     CHECK(offsetof(fl::MsgFactionDef, name) == 68u);
@@ -203,6 +204,24 @@ TEST_CASE("GameProtocol: MsgEntityTypeDef field offsets (#811 tail-append is add
     CHECK(offsetof(fl::MsgEntityTypeDef, payloadCd0) == 264u);
 }
 
+TEST_CASE("GameProtocol: MsgEntityTypeDef round-trips the variant node-set selector (#882)", "[game_protocol]") {
+    // The client has no pack entity def to read mesh_variant from, so it travels on the type record.
+    fl::MsgEntityTypeDef td{};
+    std::snprintf(td.id, sizeof(td.id), "fl-base:mig21u");
+    std::snprintf(td.mesh, sizeof(td.mesh), "mig21/mig21");
+    std::snprintf(td.meshVariant, sizeof(td.meshVariant), "two_seat");
+
+    std::vector<uint8_t> buf;
+    fl::appendMsg(buf, td);
+    fl::MsgEntityTypeDef out{};
+    REQUIRE(fl::readMsg(buf.data(), buf.size(), out));
+    CHECK(std::string(out.meshVariant) == "two_seat");
+
+    // Absent is the norm: an untagged mesh selects the whole (shared) node set.
+    fl::MsgEntityTypeDef plain{};
+    CHECK(plain.meshVariant[0] == '\0');
+}
+
 TEST_CASE("GameProtocol: MsgEntityTypeDef round-trips flightModel and payload", "[game_protocol]") {
     fl::MsgEntityTypeDef td{};
     td.typeIndex = 7;
@@ -262,6 +281,11 @@ TEST_CASE("GameProtocol: MsgWorldSnapshotHeader field offsets", "[game_protocol]
 TEST_CASE("GameProtocol: selective-ack fields (#566)", "[game_protocol]") {
     // ackMask reuses the former trailing/reserved padding — no size change, must stay 4-aligned.
     CHECK(offsetof(fl::MsgClientInput, ackMask) == 44u);
+    // Articulation commands (#843) fill the reserved bytes after radarMode; every earlier offset is
+    // unchanged, which is what keeps this additive at kProtocolVersion 1.
+    CHECK(offsetof(fl::MsgClientInput, flaps) == 50u);
+    CHECK(offsetof(fl::MsgClientInput, speedbrake) == 51u);
+    CHECK(offsetof(fl::MsgClientInput, artButtons) == 52u);
     CHECK(offsetof(fl::MsgHeartbeat, ackMask) == 4u);
     CHECK(offsetof(fl::MsgHeartbeat, tickIndex) == 8u);
 }
@@ -359,6 +383,29 @@ TEST_CASE("GameProtocol: MsgConnectAck round-trip with two type defs", "[game_pr
     std::memcpy(&td1, buf.data() + sizeof(ack) + sizeof(td0), sizeof(td1));
     CHECK(std::string_view(td0.id) == "builtin:debug-entity");
     CHECK(std::string_view(td1.id) == "builtin:other");
+}
+
+TEST_CASE("GameProtocol: MsgClientInput carries the articulation commands (#843)", "[game_protocol]") {
+    fl::MsgClientInput src{};
+    src.flaps = 200;
+    src.speedbrake = 64;
+    src.artButtons = fl::kArtButtonGearDown | fl::kArtButtonCanopyOpen;
+
+    std::vector<uint8_t> buf;
+    fl::appendMsg(buf, src);
+    fl::MsgClientInput out{};
+    REQUIRE(fl::readMsg(buf.data(), buf.size(), out));
+    CHECK(out.flaps == 200);
+    CHECK(out.speedbrake == 64);
+    CHECK((out.artButtons & fl::kArtButtonGearDown) != 0);
+    CHECK((out.artButtons & fl::kArtButtonHookDown) == 0);
+    CHECK((out.artButtons & fl::kArtButtonCanopyOpen) != 0);
+
+    // Default = clean: gear up, no flap, no brake. Absolute state, so an unaware client (a load bot)
+    // simply flies clean rather than leaving the actuators in an undefined configuration.
+    const fl::MsgClientInput plain{};
+    CHECK(plain.flaps == 0);
+    CHECK(plain.artButtons == 0);
 }
 
 TEST_CASE("GameProtocol: MsgClientInput round-trip", "[game_protocol]") {

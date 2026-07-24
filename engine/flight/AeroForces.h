@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "flight/Articulation.h"
 #include "flight/Atmosphere.h"
 #include "flight/FlightModelData.h"
 
@@ -17,8 +18,15 @@ struct ControlInput {
     float rudder{0.f};   // +1 = right yaw
     float throttle{0.f}; // 0 = idle, 1 = MIL
     bool afterburner{false};
-    float speedbrake{0.f}; // 0–1
+    // ── articulation COMMANDS (#842) ─────────────────────────────────────────
+    // These are commands, not positions. The integrator slews FlightState::articulation toward them
+    // at the model's declared transit rate, and the aero model reads the POSITION — so gear drag ramps
+    // in over its travel window instead of appearing whole in the tick the switch moves.
+    float speedbrake{0.f}; // 0-1
     bool gear_down{false};
+    float flaps{0.f};         // 0 = clean, 1 = full
+    bool hook_down{false};    // arresting hook
+    bool canopy_open{false};  // canopy (no aero effect today; drives the animation and egress)
     float tvc_angle_deg{0.f}; // commanded nozzle deflection (pitch axis)
 
     // ── ground handling (#700) ───────────────────────────────────────────────
@@ -62,14 +70,19 @@ struct PayloadEffect {
                                   float throttle_actual);
 
 // Forces in body frame [x=forward, y=up, z=right] (N).
+// `art` carries the actuator POSITIONS (#842) — gear, flap and speed-brake drag follow where the
+// device actually is, not what was commanded. That is also why ControlInput is no longer a parameter:
+// once every device term reads a position, the force calculation depends on STATE alone, and passing
+// the commands as well would only invite someone to read one of them again.
 std::array<float, 3> computeForces(float alpha_rad, float beta_rad, float mach, float speed_m_s, float altitude_m,
                                    float current_sweep_deg, bool ab_engaged, float throttle_actual,
-                                   const ControlInput& ctrl, const PayloadEffect& payload, const FlightModelData& data,
-                                   const AtmosphereState& atmos);
+                                   const PayloadEffect& payload, const FlightModelData& data,
+                                   const AtmosphereState& atmos, const ArticulationState& art);
 
 // Moments in body frame [roll, pitch, yaw] (N·m).
 std::array<float, 3> computeMoments(float alpha_rad, float beta_rad, float p_rad_s, float q_rad_s, float r_rad_s,
                                     float speed_m_s, float thrust_n, float tvc_angle_rad, const ControlInput& ctrl,
-                                    const FlightModelData& data, const AtmosphereState& atmos);
+                                    const FlightModelData& data, const AtmosphereState& atmos,
+                                    const ArticulationState& art);
 
 } // namespace fl

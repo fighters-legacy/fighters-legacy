@@ -102,6 +102,9 @@ struct PeerInputState {
     uint8_t buttons{0};           // last drained value
     uint8_t selectedStation{255}; // last drained absolute station selection (#625); 255 = none
     uint8_t radarMode{255};       // last drained absolute radar mode (#526); 255 = keep server-side mode
+    uint8_t flaps{0};             // last drained commanded flap position (#843), 0..255 => 0..1
+    uint8_t speedbrake{0};        // last drained commanded speed-brake (#843), 0..255 => 0..1
+    uint8_t artButtons{0};        // last drained kArtButton* bitmask (#843): gear / hook / canopy
     bool hasSeq{false};           // false until first input received from this peer
     bool hasAppliedSeq{false};    // false until the first input is drained + applied (#427 TLV gate)
     bool ewmaSeeded{false};       // false until EWMA receives its first sample
@@ -1790,6 +1793,11 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         uint64_t lastSentTick{0};
         uint64_t fullStreakTick{0};
         bool lastWasFull{false};
+        // Articulation send policy (#843): the last channel set this peer was sent for this entity,
+        // and when. Sent on CHANGE plus a periodic refresh, so a steady-state aircraft costs zero
+        // articulation bytes between refreshes. artSentTick == 0 means "never sent".
+        uint32_t artHash{0};
+        uint64_t artSentTick{0};
     };
     std::unordered_map<uint32_t, std::unordered_map<uint32_t, PeerEntityRec>> m_peerKnownGens;
 

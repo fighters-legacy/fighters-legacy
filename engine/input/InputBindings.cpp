@@ -616,7 +616,10 @@ void InputBindings::applyDefaults() {
                                                             static_cast<uint32_t>(Key::ArrowUp), false};
     m_primary[static_cast<int>(InputAction::ThrottleDown)] = {BindingSource::Keyboard,
                                                               static_cast<uint32_t>(Key::ArrowDown), false};
-    m_primary[static_cast<int>(InputAction::Airbrake)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::Space),
+    // K, not Space (#639): Space is the gun trigger the sandbox has always documented, so an Airbrake
+    // default of Space was a conflict waiting for the first person to read this table and believe it.
+    // K also puts the flight-configuration switches on one row: F flaps, G gear, H hook, K airbrake.
+    m_primary[static_cast<int>(InputAction::Airbrake)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::K),
                                                           false};
     m_primary[static_cast<int>(InputAction::Afterburner)] = {BindingSource::Keyboard,
                                                              static_cast<uint32_t>(Key::LeftShift), false};

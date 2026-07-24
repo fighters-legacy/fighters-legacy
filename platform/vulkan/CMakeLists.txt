@@ -95,6 +95,7 @@ endif()
 
 target_link_libraries(platform-vulkan
     PUBLIC  platform-hal
+            platform-meshgraph # #839: the glTF scene-graph walk GpuMesh stores as its node plan
     PRIVATE Vulkan::Vulkan SDL3::SDL3
             VulkanMemoryAllocator
             ${_ktx_target}

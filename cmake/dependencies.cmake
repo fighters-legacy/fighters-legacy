@@ -170,7 +170,8 @@ endif()
 
 # ---------------------------------------------------------------------------
 # tinygltf — header-only glTF 2.0 loader; system preferred, FetchContent fallback
-# Used only by tools/validate-mesh.
+# Used by tools/validate-mesh, platform-vulkan/platform-meshgraph (mesh upload, #839) and
+# engine-render (the articulation rig, #840) — all through the shared tinygltf-impl TU below.
 # ---------------------------------------------------------------------------
 find_package(tinygltf 3.0.0 QUIET)
 if(tinygltf_FOUND)

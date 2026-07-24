@@ -8,6 +8,8 @@
 
 #include "mesh_validator.h"
 
+#include "render/ArtChannel.h" // #844: the channel vocabulary the clips must name (header-only, stdlib)
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -204,6 +206,175 @@ static void checkWindingConsistency(const tinygltf::Model& model, const std::str
     }
 }
 
+// ── articulation clip checks (#844) ───────────────────────────────────────────
+//
+// The engine's contract (engine/render/ArtChannel.h): one clip per channel, named for the channel,
+// SCRUBBED at t = value x duration (signed channels centred at the clip midpoint). Rigid nodes only.
+
+// Read a FLOAT accessor's `comps`-wide entries. Returns false on any shape the spec disallows for an
+// animation sampler.
+static bool readAnimFloats(const tinygltf::Model& model, int accIdx, int comps, std::vector<float>& out) {
+    if (accIdx < 0 || accIdx >= static_cast<int>(model.accessors.size()))
+        return false;
+    const tinygltf::Accessor& acc = model.accessors[static_cast<std::size_t>(accIdx)];
+    if (acc.componentType != TINYGLTF_COMPONENT_TYPE_FLOAT)
+        return false;
+    if (tinygltf::GetNumComponentsInType(static_cast<uint32_t>(acc.type)) != comps)
+        return false;
+    if (acc.bufferView < 0 || acc.bufferView >= static_cast<int>(model.bufferViews.size()))
+        return false;
+    const tinygltf::BufferView& bv = model.bufferViews[static_cast<std::size_t>(acc.bufferView)];
+    if (bv.buffer < 0 || bv.buffer >= static_cast<int>(model.buffers.size()))
+        return false;
+    const tinygltf::Buffer& buf = model.buffers[static_cast<std::size_t>(bv.buffer)];
+    std::size_t stride = static_cast<std::size_t>(acc.ByteStride(bv));
+    if (stride == 0)
+        stride = sizeof(float) * static_cast<std::size_t>(comps);
+    const std::size_t base = bv.byteOffset + acc.byteOffset;
+    out.resize(acc.count * static_cast<std::size_t>(comps));
+    for (std::size_t i = 0; i < acc.count; ++i) {
+        const std::size_t off = base + i * stride;
+        if (off + sizeof(float) * static_cast<std::size_t>(comps) > buf.data.size())
+            return false;
+        std::memcpy(out.data() + i * static_cast<std::size_t>(comps), buf.data.data() + off,
+                    sizeof(float) * static_cast<std::size_t>(comps));
+    }
+    return true;
+}
+
+// The authored rest value of one TRS component, with glTF's defaults.
+static void restValue(const tinygltf::Node& n, const std::string& path, int comps, float* out) {
+    if (path == "translation") {
+        for (int i = 0; i < 3; ++i)
+            out[i] = (n.translation.size() == 3) ? static_cast<float>(n.translation[static_cast<std::size_t>(i)]) : 0.f;
+    } else if (path == "scale") {
+        for (int i = 0; i < 3; ++i)
+            out[i] = (n.scale.size() == 3) ? static_cast<float>(n.scale[static_cast<std::size_t>(i)]) : 1.f;
+    } else { // rotation
+        const float identity[4] = {0.f, 0.f, 0.f, 1.f};
+        for (int i = 0; i < 4; ++i)
+            out[i] =
+                (n.rotation.size() == 4) ? static_cast<float>(n.rotation[static_cast<std::size_t>(i)]) : identity[i];
+    }
+    (void)comps;
+}
+
+static std::string validChannelList() {
+    std::string names;
+    for (std::size_t i = 0; i < fl::kArtChannelCount; ++i) {
+        names += (i == 0 ? " " : ", ");
+        names += std::string(fl::artChannelName(static_cast<fl::ArtChannel>(i)));
+    }
+    return names;
+}
+
+static void checkAnimations(const tinygltf::Model& model, const std::string& label, MeshValidationResult& r) {
+    // A mesh with zero animations stays valid, forever — that is the static-mesh baseline, and every
+    // shipped asset is one today.
+    if (model.animations.empty() && model.skins.empty())
+        return;
+
+    // Rigid mechanical parts only: a skin means the author reached for joint deformation, which the
+    // engine does not implement and will refuse to load rather than half-render.
+    if (!model.skins.empty()) {
+        r.errors.push_back(label + ": mesh declares a skin — articulation is rigid nodes only "
+                                   "(no joint skinning); the engine refuses to load it");
+        r.ok = false;
+    }
+
+    // A node may be driven by at most ONE scrubbed clip, plus optionally one gear_compress_* clip:
+    // deploy and compression compose only because a compression clip animates the inner strut/oleo
+    // nodes, disjoint from the doors and linkages the deploy clip drives.
+    std::vector<std::string> scrubbedOwner(model.nodes.size());
+    std::vector<std::string> compressOwner(model.nodes.size());
+
+    for (const tinygltf::Animation& anim : model.animations) {
+        const fl::ArtChannel channel = fl::artChannelFromName(anim.name);
+        if (channel == fl::ArtChannel::kCount) {
+            r.warnings.push_back(
+                label + ": animation \"" + anim.name +
+                "\" is not a known articulation channel — it will never play. Valid:" + validChannelList());
+            continue;
+        }
+        const bool isCompress =
+            (channel == fl::ArtChannel::GearCompressNose || channel == fl::ArtChannel::GearCompressLeft ||
+             channel == fl::ArtChannel::GearCompressRight);
+        const bool isSigned = fl::artChannelIsSigned(channel);
+
+        for (const tinygltf::AnimationChannel& ch : anim.channels) {
+            if (ch.target_path == "weights") {
+                r.errors.push_back(label + ": clip \"" + anim.name +
+                                   "\" animates morph-target weights — articulation is rigid nodes only");
+                r.ok = false;
+                continue;
+            }
+            if (ch.target_node < 0 || ch.target_node >= static_cast<int>(model.nodes.size()))
+                continue;
+            if (ch.sampler < 0 || ch.sampler >= static_cast<int>(anim.samplers.size()))
+                continue;
+            const tinygltf::Node& node = model.nodes[static_cast<std::size_t>(ch.target_node)];
+            const tinygltf::AnimationSampler& gs = anim.samplers[static_cast<std::size_t>(ch.sampler)];
+
+            if (gs.interpolation != "LINEAR" && gs.interpolation != "STEP" && gs.interpolation != "CUBICSPLINE") {
+                r.errors.push_back(label + ": clip \"" + anim.name + "\" uses interpolation \"" + gs.interpolation +
+                                   "\" — only LINEAR, STEP and CUBICSPLINE are supported");
+                r.ok = false;
+                continue;
+            }
+
+            // A "_b" damage node inherits its base node's sampled pose, so animating one directly is
+            // redundant work that the engine will overwrite.
+            if (node.name.size() > 2 && node.name.compare(node.name.size() - 2, 2, "_b") == 0)
+                r.warnings.push_back(label + ": clip \"" + anim.name + "\" targets damage node \"" + node.name +
+                                     "\" directly — \"_b\" nodes inherit their base node's pose");
+
+            // One scrubbed clip per node (plus one gear_compress_*).
+            std::string& owner = isCompress ? compressOwner[static_cast<std::size_t>(ch.target_node)]
+                                            : scrubbedOwner[static_cast<std::size_t>(ch.target_node)];
+            if (!owner.empty() && owner != anim.name) {
+                r.errors.push_back(label + ": node \"" + node.name + "\" is driven by two " +
+                                   (isCompress ? "gear-compression" : "scrubbed") + " clips (\"" + owner + "\" and \"" +
+                                   anim.name + "\") — they would fight over its pose");
+                r.ok = false;
+            }
+            owner = anim.name;
+
+            // Rest pose must equal the pose at the channel's NEUTRAL scrub time (t=0 unsigned, the
+            // clip midpoint for a signed channel). This is the single most likely authoring mistake
+            // and it renders the aircraft subtly wrong before anything is even commanded.
+            const int comps = (ch.target_path == "rotation") ? 4 : 3;
+            std::vector<float> times, values;
+            if (!readAnimFloats(model, gs.input, 1, times) || !readAnimFloats(model, gs.output, comps, values) ||
+                times.empty() || values.empty())
+                continue; // unreadable sampler data: nothing further to say about it here
+            const bool cubic = (gs.interpolation == "CUBICSPLINE");
+            const std::size_t perKey = cubic ? 3u : 1u;
+            const std::size_t keyCount = values.size() / (perKey * static_cast<std::size_t>(comps));
+            if (keyCount == 0)
+                continue;
+            // Neutral keyframe: the first for an unsigned channel, the middle one for a signed one.
+            const std::size_t neutralKey = isSigned ? (keyCount - 1u) / 2u : 0u;
+            const std::size_t valueBase = (neutralKey * perKey + (cubic ? 1u : 0u)) * static_cast<std::size_t>(comps);
+            if (valueBase + static_cast<std::size_t>(comps) > values.size())
+                continue;
+
+            float rest[4] = {0.f, 0.f, 0.f, 0.f};
+            restValue(node, ch.target_path, comps, rest);
+            bool mismatch = false;
+            for (int i = 0; i < comps; ++i)
+                if (std::abs(values[valueBase + static_cast<std::size_t>(i)] - rest[i]) > 1e-3f)
+                    mismatch = true;
+            if (mismatch) {
+                r.errors.push_back(label + ": node \"" + node.name + "\" rest " + ch.target_path +
+                                   " disagrees with clip \"" + anim.name + "\" at its neutral keyframe" +
+                                   (isSigned ? " (the clip MIDPOINT, for a signed channel)" : " (t=0)") +
+                                   " — the aircraft would render wrong before anything is commanded");
+                r.ok = false;
+            }
+        }
+    }
+}
+
 // ── core convention checks ────────────────────────────────────────────────────
 
 static void applyConventionChecks(const tinygltf::Model& model, const std::string& label, MeshValidationResult& r) {
@@ -269,6 +440,11 @@ static void applyConventionChecks(const tinygltf::Model& model, const std::strin
 
     // Winding consistency (catch inside-out meshes — flipped normals).
     checkWindingConsistency(model, label, r);
+
+    // Articulation clips (#844). A .glb with a misspelled clip name, a skinned mesh, or a rest pose
+    // that disagrees with its own t=0 keyframe used to pass clean and then simply not move in the
+    // game, with no diagnostic anywhere.
+    checkAnimations(model, label, r);
 
     // Texture URI convention (#833): the engine resolves an image URI to a Texture asset name under
     // the pack's `textures/` directory, and only .ktx2 (preferred) / .png decode. The authored form
@@ -481,7 +657,17 @@ MeshNodeTree buildNodeTree(const tinygltf::Model& model) {
         info.name = node.name;
         info.meshIndex = node.mesh;
         info.damageVariant = node.name.size() >= 2 && node.name.compare(node.name.size() - 2, 2, "_b") == 0;
-        info.engineDrawn = (node.mesh == 0); // the engine draws meshes[0].primitives[0] only
+        info.engineDrawn = node.mesh >= 0; // the engine draws every mesh-bearing node's primitives (#839)
+        // Variant node-set tags (#882): `extras: {"fl_variant": "two_seat"}` or an array of tags.
+        if (node.extras.IsObject() && node.extras.Has("fl_variant")) {
+            const tinygltf::Value& tag = node.extras.Get("fl_variant");
+            if (tag.IsString())
+                info.variantTags.push_back(tag.Get<std::string>());
+            else if (tag.IsArray())
+                for (size_t t = 0; t < tag.ArrayLen(); ++t)
+                    if (const tinygltf::Value& e = tag.Get(static_cast<int>(t)); e.IsString())
+                        info.variantTags.push_back(e.Get<std::string>());
+        }
         composeLocalMatrix(node, info.localMatrix);
         if (node.mesh >= 0 && node.mesh < static_cast<int>(model.meshes.size())) {
             const tinygltf::Mesh& m = model.meshes[node.mesh];
@@ -519,6 +705,16 @@ MeshNodeTree buildNodeTree(const tinygltf::Model& model) {
     return tree;
 }
 } // namespace
+
+std::vector<std::string> meshVariantTags(const MeshNodeTree& tree) {
+    std::vector<std::string> tags;
+    for (const MeshNodeInfo& n : tree.nodes)
+        for (const std::string& t : n.variantTags)
+            tags.push_back(t);
+    std::sort(tags.begin(), tags.end());
+    tags.erase(std::unique(tags.begin(), tags.end()), tags.end());
+    return tags;
+}
 
 std::optional<MeshNodeTree> describeMeshNodesFromJson(std::string_view jsonContent) {
     tinygltf::TinyGLTF loader;

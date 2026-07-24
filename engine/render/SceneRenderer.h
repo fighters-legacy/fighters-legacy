@@ -2,14 +2,19 @@
 #pragma once
 
 #include "RenderTypes.h"
+#include "render/ArtChannel.h"
 #include "render/BuiltinShape.h"
+#include "render/MeshArticulation.h"
 
+#include <array>
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace fl {
@@ -22,6 +27,7 @@ class SubtitleQueue;
 class TerrainStreamer;
 class AirportRegistry;
 class AirportRenderer;
+struct EntityRenderEntry; // render/RenderSnapshot.h
 } // namespace fl
 
 namespace fl {
@@ -50,6 +56,10 @@ class SceneRenderer {
         std::string meshName;
         std::string damageMeshName;
         BuiltinShape shape{BuiltinShape::Unknown};
+        // Variant node-set selector (#882), from EntityDef::meshVariant. Empty = the untagged node
+        // set, i.e. the whole mesh for every .glb authored before variants existed. Folded into the
+        // mesh cache key, so two variants of one family mesh are two GPU meshes.
+        std::string variant;
     };
 
     // Fills `out` for a typeIndex. Returns true if the type is known; false leaves the
@@ -152,14 +162,33 @@ class SceneRenderer {
     // full reload). Builtin placeholders + the floor are untouched.
     void invalidateAllAssets();
 
+    // ── articulation debug scrub (#841) ─────────────────────────────────────
+    // Force one channel of one entity to a value, overriding whatever the snapshot carries. This is
+    // how the whole path — clip → sampler → pose arena → per-node draw — is demonstrable before the
+    // simulation (#842) or the wire (#843) drive it, and it stays useful afterwards for isolating
+    // "the clip is wrong" from "the sim is wrong". Driven by the `art` console command.
+    void setArtChannelOverride(uint32_t entityIdx, ArtChannel channel, float value);
+    void clearArtChannelOverrides() noexcept;
+    // The rig a mesh asset resolved to (built lazily on first draw); nullptr if never uploaded. Test
+    // and console seam — the console prints which channels a spawned entity's mesh actually models.
+    [[nodiscard]] const ArticulationRig* articulationRigFor(const std::string& cacheKey) const;
+
   private:
-    // No-livery form: caches under the mesh asset name, no texture overrides.
+    // The articulation rig for a mesh (#841), built lazily from the SAME bytes the mesh uploaded
+    // from and cached under the same key, so hot-reload invalidates them together.
+    const ArticulationRig* getOrBuildRig(const std::string& meshAssetName, const std::string& cacheKey);
+    // Scrub every channel this entity's mesh models into the frame pose arena.
+    void sampleEntityArticulation(const ArticulationRig& rig, const EntityRenderEntry& entry, float dt);
+
+    // No-livery, no-variant form: caches under the mesh asset name, no texture overrides.
     MeshHandle getOrUploadMesh(const std::string& name);
-    // Livery-aware form (#845): loads bytes from `meshAssetName`, caches under `cacheKey` (mesh name
-    // plus livery id so two liveries of one mesh do not collide), and applies `liveryOverrides` in the
-    // texture resolver. `cacheKey` also keys the material.
+    // Livery- and variant-aware form (#845/#882): loads bytes from `meshAssetName`, caches under
+    // `cacheKey` (mesh name plus livery id and variant tag, so two liveries or two variants of one
+    // mesh do not collide), applies `liveryOverrides` in the texture resolver, and uploads only the
+    // node set `variant` selects. `cacheKey` also keys the material.
     MeshHandle getOrUploadMesh(const std::string& meshAssetName, const std::string& cacheKey,
-                               const std::unordered_map<std::string, std::string>& liveryOverrides);
+                               const std::unordered_map<std::string, std::string>& liveryOverrides,
+                               const std::string& variant);
     MaterialHandle getOrUploadMaterial(const std::string& cacheKey);
 
     // Resolve (and cache) the livery for an entity type index; nullptr = no livery.
@@ -197,6 +226,23 @@ class SceneRenderer {
     std::unordered_map<std::string, std::vector<std::string>> m_meshTextureDeps;
     std::vector<RenderItem> m_items; // reused each frame; avoids per-frame allocation
 
+    // ── articulation (#841) ─────────────────────────────────────────────────
+    // Per mesh cacheKey, the rig parsed from the same .glb bytes the mesh uploaded from. Built lazily
+    // beside the mesh, invalidated with it. A mesh with no clips caches an EMPTY rig, so the miss is
+    // paid once and every later frame takes the zero-cost path.
+    std::unordered_map<std::string, ArticulationRig> m_rigCache;
+    // Frame pose arena. Poses are appended here and each item's span is patched in AFTER the entity
+    // loop from a recorded (offset, count) — so a reallocation mid-loop cannot leave a live span
+    // dangling, which reserving-and-hoping would only make unlikely rather than impossible.
+    std::vector<NodePose> m_poseArena;
+    std::vector<std::pair<std::size_t, std::size_t>> m_poseSpans; // (offset, count) per item index
+    // Per-entity spin playhead (prop/rotor/wheel). Cosmetic and render-side: never simulated, never
+    // wired — a propeller's angle is not world state.
+    std::unordered_map<uint32_t, float> m_spinPhase;
+    // Debug channel overrides, keyed by entity index (#841 `art` console command).
+    std::unordered_map<uint32_t, std::array<float, kArtChannelCount>> m_artOverride;
+    std::unordered_map<uint32_t, uint32_t> m_artOverrideMask; // bit n = channel n is overridden
+
     float m_drawDistanceSq{50000.0f * 50000.0f}; // squared cull distance in meters (default 50 km)
 
     // Nominal tick period used for velocity-based position extrapolation.
@@ -232,6 +278,9 @@ class SceneRenderer {
 
     // Ownship cockpit interior asset name (#870); empty = HUD-only cockpit. Set per frame in Cockpit.
     std::string m_cockpitMesh;
+
+    // Wall-clock frame timing, used only to advance the looping spin channel (#841).
+    std::chrono::steady_clock::time_point m_lastFrameTime{};
 
     // Secondary-camera inset (#698); set each frame via setInsetView(), written into FrameScene.
     bool m_insetEnabled{false};

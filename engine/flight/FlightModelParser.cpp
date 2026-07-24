@@ -412,6 +412,39 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
         d.drag_polar.speedbrake_cl = static_cast<float>(dp["speedbrake_cl"].value<double>().value_or(0.0));
     }
 
+    // ── [aero.flaps] (optional) ───────────────────────────────────────────────
+    // High-lift device increments (#842), all scaling linearly with flap POSITION. Absent = no
+    // modelled flap, so an aircraft whose author never wrote this section flies exactly as before
+    // even with the switch down.
+    if (auto fl_ = tbl["aero"]["flaps"]; fl_ && fl_.as_table()) {
+        d.flaps.dcl = static_cast<float>(fl_["dcl"].value<double>().value_or(0.0));
+        d.flaps.dcd = static_cast<float>(fl_["dcd"].value<double>().value_or(0.0));
+        d.flaps.alpha_shift_deg = static_cast<float>(fl_["alpha_shift_deg"].value<double>().value_or(0.0));
+        if (d.flaps.dcd < 0.f)
+            throw std::runtime_error("aero.flaps.dcd must be >= 0 (a flap cannot reduce parasite drag)");
+    }
+
+    // ── [articulation] (optional) ─────────────────────────────────────────────
+    // Actuator full-travel times, in seconds. All optional with defaults, so every existing flight
+    // model keeps parsing. This is where transit timing lives -- NEVER in the animation clip -- so
+    // the server, the client's prediction replay and the renderer all read one number.
+    if (auto art = tbl["articulation"]; art && art.as_table()) {
+        auto transit = [&](const char* key, float& out) {
+            if (auto v = art[key].value<double>()) {
+                const double t = *v;
+                if (!(t >= 0.0) || t > 600.0)
+                    throw std::runtime_error(std::string("articulation.") + key +
+                                             " must be in [0, 600] seconds (0 = instantaneous)");
+                out = static_cast<float>(t);
+            }
+        };
+        transit("gear_transit_s", d.articulation.gear_transit_s);
+        transit("flap_transit_s", d.articulation.flap_transit_s);
+        transit("speedbrake_transit_s", d.articulation.speedbrake_transit_s);
+        transit("hook_transit_s", d.articulation.hook_transit_s);
+        transit("canopy_transit_s", d.articulation.canopy_transit_s);
+    }
+
     // ── [aero.cd_table] (optional) ────────────────────────────────────────────
     // Tabulated TOTAL clean drag, the form real published aero data arrives in (#820). When present
     // it REPLACES cd0 + k*CL^2 in computeForces — see the note on FlightModelData::cd_table for why

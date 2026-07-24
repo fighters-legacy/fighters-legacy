@@ -347,6 +347,32 @@ void FlightHud::drawDataBlocks(Ctx& c) {
     pushText(HudAlign::Left, rx, 0.59f, kHudR, kHudG, kHudB, "THR %3d%%", static_cast<int>(c.e.throttle));
     pushText(HudAlign::Left, rx, 0.63f, kHudR, kHudG, kHudB, "%s", "TCN ---");
 
+    // Configuration annunciator (#639): gear and flaps read the actual POSITION off the ownship's
+    // articulation channels, not the switch — so mid-transit reads "GEAR..." and the pilot can see
+    // the gear is still travelling rather than assuming the lever position is the truth. Drawn only
+    // when something is off its clean position, so a clean airframe's HUD is unchanged.
+    {
+        const float gear = c.e.artChannels[static_cast<std::size_t>(ArtChannel::Gear)];
+        const float flap = c.e.artChannels[static_cast<std::size_t>(ArtChannel::Flaps)];
+        const float hook = c.e.artChannels[static_cast<std::size_t>(ArtChannel::Hook)];
+        const float brake = c.e.artChannels[static_cast<std::size_t>(ArtChannel::Speedbrake)];
+        float y = 0.78f;
+        if (gear > 0.001f)
+            pushText(HudAlign::Left, lx, y, kHudR, kHudG, kHudB, "%s", (gear > 0.999f) ? "GEAR DN" : "GEAR ...");
+        if (flap > 0.001f) {
+            y += 0.04f;
+            pushText(HudAlign::Left, lx, y, kHudR, kHudG, kHudB, "FLAP %3d", static_cast<int>(flap * 100.f + 0.5f));
+        }
+        if (brake > 0.001f) {
+            y += 0.04f;
+            pushText(HudAlign::Left, lx, y, kHudR, kHudG, kHudB, "%s", "SPD BRK");
+        }
+        if (hook > 0.001f) {
+            y += 0.04f;
+            pushText(HudAlign::Left, lx, y, kHudR, kHudG, kHudB, "%s", (hook > 0.999f) ? "HOOK DN" : "HOOK ...");
+        }
+    }
+
     // Seeker LOCK annunciator (#628) from the own-record weaponFlags bit 0.
     if (c.e.hasLoadout && (c.e.weaponFlags & 0x01u))
         pushText(HudAlign::Center, 0.5f, 0.40f, kHudR, kHudG, kHudB, "%s", "LOCK");

@@ -57,6 +57,9 @@ inline bool parseInputTrace(const uint8_t* data, std::size_t size, InputTrace& o
         r.aileron = detail::getF32LE(p + 16);
         r.rudder = detail::getF32LE(p + 20);
         r.buttons = detail::getU32LE(p + 24);
+        r.flaps = p[28];
+        r.speedbrake = p[29];
+        r.artButtons = p[30];
         out.records.push_back(r);
     }
     return true;

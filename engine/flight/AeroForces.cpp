@@ -47,15 +47,20 @@ float engineThrustN(const EngineData& engine, float mach, float alt_km, bool ab_
 
 std::array<float, 3> computeForces(float alpha_rad, float beta_rad, float mach, float speed_m_s, float altitude_m,
                                    float current_sweep_deg, bool ab_engaged, float throttle_actual,
-                                   const ControlInput& ctrl, const PayloadEffect& payload, const FlightModelData& data,
-                                   const AtmosphereState& atmos) {
+                                   const PayloadEffect& payload, const FlightModelData& data,
+                                   const AtmosphereState& atmos, const ArticulationState& art) {
     (void)beta_rad; // lateral side force from sideslip omitted — handled via moments only
     const float alpha_deg = alpha_rad / kDegToRad;
     const float q_dyn = 0.5f * atmos.density_kg_m3 * speed_m_s * speed_m_s;
     const float S = data.geometry.wing_area_m2;
 
     // ── Lift ──────────────────────────────────────────────────────────────────
-    float cl = data.cl_table.lookup(alpha_deg, mach);
+    // High-lift device (#842): the flap's alpha shift moves the CL-table lookup, so a given body
+    // alpha reads more CL AND the stall arrives at a lower body alpha -- which is what a flap
+    // actually does. Both terms scale linearly with flap POSITION, so mid-transit is mid-effect.
+    const float flapPos = std::clamp(art.flaps, 0.f, 1.f);
+    float cl = data.cl_table.lookup(alpha_deg + flapPos * data.flaps.alpha_shift_deg, mach);
+    cl += flapPos * data.flaps.dcl;
 
     if (data.wing_sweep) {
         auto sc = sweepCorrection(current_sweep_deg, *data.wing_sweep);
@@ -67,7 +72,7 @@ std::array<float, 3> computeForces(float alpha_rad, float beta_rad, float mach, 
     // Speed-brake normal-force (lift) increment (#899, ΔCZ,sb). A real airbrake changes lift as well
     // as drag; added straight to the lift force so it does NOT feed the induced-drag term (that is the
     // speed-brake's own speedbrake_cd's job). 0 by default, so most content is unaffected.
-    lift += q_dyn * S * (data.drag_polar.speedbrake_cl * ctrl.speedbrake);
+    lift += q_dyn * S * (data.drag_polar.speedbrake_cl * art.speedbrake);
 
     // ── Drag ──────────────────────────────────────────────────────────────────
     float cd0 = data.drag_polar.cd0 + payload.extra_cd0;
@@ -83,8 +88,11 @@ std::array<float, 3> computeForces(float alpha_rad, float beta_rad, float mach, 
     if (data.cd_wave)
         cd_wave = data.cd_wave->lookup(mach);
 
+    // Device drag follows the actuator POSITION, not the command (#842). Before this, gear that takes
+    // six seconds to travel produced its full drag in the tick the switch moved -- and there was no
+    // number an animation could have been driven from.
     float cd_device =
-        ctrl.speedbrake * data.drag_polar.speedbrake_cd + (ctrl.gear_down ? data.drag_polar.gear_cd : 0.f);
+        art.speedbrake * data.drag_polar.speedbrake_cd + art.gear * data.drag_polar.gear_cd + flapPos * data.flaps.dcd;
 
     // Clean drag: tabulated when the model provides one, parabolic otherwise (#820).
     //
@@ -135,7 +143,8 @@ std::array<float, 3> computeForces(float alpha_rad, float beta_rad, float mach, 
 
 std::array<float, 3> computeMoments(float alpha_rad, float beta_rad, float p_rad_s, float q_rad_s, float r_rad_s,
                                     float speed_m_s, float thrust_n, float tvc_angle_rad, const ControlInput& ctrl,
-                                    const FlightModelData& data, const AtmosphereState& atmos) {
+                                    const FlightModelData& data, const AtmosphereState& atmos,
+                                    const ArticulationState& art) {
     const float q_dyn = 0.5f * atmos.density_kg_m3 * speed_m_s * speed_m_s;
     const float S = data.geometry.wing_area_m2;
     const float mac = data.geometry.mac_m;
@@ -173,7 +182,7 @@ std::array<float, 3> computeMoments(float alpha_rad, float beta_rad, float p_rad
     // wing trims at a non-zero alpha with zero elevator. cm_speedbrake adds the airbrake's pitch
     // increment when deployed. Both default 0.
     float cm = data.moments.cm0 + data.moments.cm_alpha * alpha_rad + cm_q_eff * (q_rad_s * mac * inv_2v) +
-               data.moments.cm_de * elev_rad + data.moments.cm_speedbrake * ctrl.speedbrake;
+               data.moments.cm_de * elev_rad + data.moments.cm_speedbrake * art.speedbrake;
     float pitch_moment = q_dyn * S * mac * cm;
 
     // TVC pitch contribution: moment arm from CG assumed ≈ 0 (moment = thrust × sin(tvc))

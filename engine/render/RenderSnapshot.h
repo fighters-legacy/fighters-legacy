@@ -2,6 +2,7 @@
 #pragma once
 
 #include "flight/EngineFailFlags.h" // kEngineFail* — the shared vocabulary (#675)
+#include "render/ArtChannel.h"      // articulation channel registry (#840)
 
 #include <cstdint>
 #include <glm/glm.hpp>
@@ -35,6 +36,14 @@ struct EntityRenderEntry {
     uint8_t weaponFlags{0};       // bit 0 = seeker locked (#628)
     float payloadMassKg{0.f};     // live store mass — ClientPrediction re-resolves from this
     float payloadCd0{0.f};        // live store drag
+
+    // ── articulation (#841) ───────────────────────────────────────────────────────────────────
+    // Normalized channel values scrubbed into the mesh's clips by SceneRenderer. Server-side these
+    // come from FlightState (#842); on a client, the receiving peer's own entity uses its locally
+    // predicted values and every remote entity's arrive on the snapshot TLV (#843). All-zero is
+    // NEUTRAL for both unsigned (stowed/up/clean) and signed (centred) channels, so an entity nobody
+    // ever articulates renders exactly as it did before articulation existed.
+    float artChannels[kArtChannelCount]{};
 };
 
 // Full entity-world snapshot published by the sim thread once per tick.

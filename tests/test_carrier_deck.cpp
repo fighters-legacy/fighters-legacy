@@ -326,7 +326,9 @@ TEST_CASE("Carrier: the catapult throws a gutless aircraft to flying speed (park
         REQUIRE(st != nullptr);
         const float spd =
             std::sqrt(st->transform.vel[0] * st->transform.vel[0] + st->transform.vel[2] * st->transform.vel[2]);
-        CHECK(spd > 50.f); // shot off the bow — its own 1 kN of thrust could never do this
+        // A cat shot happens with the GEAR DOWN — and since #842 gear position is real drag, so the
+        // end-of-stroke speed is a little lower than when the gear was aerodynamically invisible.
+        CHECK(spd > 45.f); // shot off the bow — its own 1 kN of thrust could never do this
     }
     // AFT of the stroke at the same power: nothing shoots it, and 1 kN cannot accelerate 10 t.
     {

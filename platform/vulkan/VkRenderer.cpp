@@ -6,6 +6,7 @@
 
 #include "VkRenderer.h"
 #include "IWindow.h"
+#include "MeshOrient.h" // contentForwardToBody — the content->body conjugation for node poses (#839)
 #include "UnifontBitmap.h"
 #include "Utf8Decode.h"
 #include "VkWindow.h"
@@ -4060,6 +4061,54 @@ void VkRenderer::recordBloomPasses(VkCommandBuffer cmd) {
 }
 
 // ---------------------------------------------------------------------------
+// resolveItemDraws — expand one RenderItem into per-node submesh draws (#839)
+// ---------------------------------------------------------------------------
+// Composes each glTF node's global transform from its parent chain, letting RenderItem::animPoses
+// override a node's rest local TRS (#841), and selects between base and "_b" damage submeshes.
+//
+// Node transforms are authored in the CONTENT frame (nose +Z) while vertices are uploaded already
+// rotated into the body frame, so the composed global G is conjugated: M = Q·G·Q⁻¹ with Q =
+// contentForwardToBody. Applying Q on both sides is what lets the engine-side sampler stay entirely
+// in glTF space and know nothing about the engine's axis convention.
+std::span<const VkRenderer::ResolvedDraw> VkRenderer::resolveItemDraws(const RenderItem& item, const GpuMesh& mesh) {
+    m_drawScratch.clear();
+    const bool damaged = (item.flags & kRenderFlagDamaged) != 0u;
+
+    // Fast path: a plain single-primitive mesh with no scene graph, no rest transforms and no poses.
+    // This is every terrain tile, every builtin placeholder and every unarticulated pack mesh, so it
+    // stays exactly one draw at exactly item.transform.
+    const MeshNodePlan& plan = mesh.nodePlan;
+    if (mesh.submeshes.size() == 1u && !plan.hasNodeTransforms && item.animPoses.empty()) {
+        m_drawScratch.push_back(
+            {mesh.submeshes[0].firstIndex, mesh.submeshes[0].indexCount, item.transform, mesh.submeshes[0].material});
+        return m_drawScratch;
+    }
+
+    composeNodeGlobals(plan, item.animPoses, m_nodeXformScratch);
+
+    // Q and Q⁻¹ for the content→body conjugation; Q is orthonormal, so Q⁻¹ == transpose(Q).
+    const glm::mat4 q = mesh.contentForward ? contentToBodyMatrix() : glm::mat4(1.0f);
+    const glm::mat4 qInv = mesh.contentForward ? contentToBodyInverse() : glm::mat4(1.0f);
+
+    for (const GpuSubMesh& sm : mesh.submeshes) {
+        glm::mat4 model = item.transform;
+        if (sm.nodeIndex < plan.nodes.size()) {
+            const MeshPlanNode& node = plan.nodes[sm.nodeIndex];
+            // Damage selection (#839): with the flag set, a base node that has an "_b" counterpart is
+            // hidden and the "_b" node draws; without it, the reverse. A node in neither class always
+            // draws, so a mesh with no damage variants is unaffected.
+            if (damaged ? node.shadowedByDamage : node.damageVariant)
+                continue;
+            const glm::mat4& g = m_nodeXformScratch[sm.nodeIndex];
+            if (g != glm::mat4(1.0f))
+                model = item.transform * (mesh.contentForward ? (q * g * qInv) : g);
+        }
+        m_drawScratch.push_back({sm.firstIndex, sm.indexCount, model, sm.material});
+    }
+    return m_drawScratch;
+}
+
+// ---------------------------------------------------------------------------
 // drawOpaqueItems — the shared forward-opaque draw loop (main pass + #695 inset pass)
 // ---------------------------------------------------------------------------
 // Assumes the forward pipeline is already bound and the viewport/scissor are set by the caller.
@@ -4090,34 +4139,39 @@ void VkRenderer::drawOpaqueItems(VkCommandBuffer cmd, VkDescriptorSet set0) {
             bound = want;
         }
 
-        // Resolve material; fall back to a default if invalid.
-        const GpuMaterial* mat = m_resources.getMaterial(item.material);
-
-        // Bind per-material descriptor set (set 1: base color texture).
-        if (mat && mat->descriptorSet != VK_NULL_HANDLE) {
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_forwardLayout, 1, 1, &mat->descriptorSet, 0,
-                                    nullptr);
-        }
-
-        // Push per-object constants.
-        ForwardPushConstants pc{};
-        pc.model = item.transform;
-        pc.baseColorFactor = mat ? mat->baseColorFactor : glm::vec4(1.0f);
-        pc.metallicFactor = mat ? mat->metallicFactor : 0.0f;
-        pc.roughnessFactor = mat ? mat->roughnessFactor : 1.0f;
-        pc.shadingMode = (item.flags & kRenderFlagTerrain)            ? 1.0f
-                         : (item.flags & kRenderFlagDebugFaceColor)   ? 2.0f
-                         : (item.flags & kRenderFlagRunway)           ? 3.0f
-                         : (item.flags & kRenderFlagTerrainSatellite) ? 4.0f
-                         : (item.flags & kRenderFlagDebugNormals)     ? 5.0f
-                                                                      : 0.0f;
-        vkCmdPushConstants(cmd, m_forwardLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                           sizeof(pc), &pc);
+        const float shadingMode = (item.flags & kRenderFlagTerrain)            ? 1.0f
+                                  : (item.flags & kRenderFlagDebugFaceColor)   ? 2.0f
+                                  : (item.flags & kRenderFlagRunway)           ? 3.0f
+                                  : (item.flags & kRenderFlagTerrainSatellite) ? 4.0f
+                                  : (item.flags & kRenderFlagDebugNormals)     ? 5.0f
+                                                                               : 0.0f;
 
         const VkDeviceSize offset = 0;
         vkCmdBindVertexBuffers(cmd, 0, 1, &mesh->vertexBuffer, &offset);
         vkCmdBindIndexBuffer(cmd, mesh->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-        vkCmdDrawIndexed(cmd, mesh->indexCount, 1, 0, 0, 0);
+
+        // Per-node submesh draws (#839): the item's own material stays the fallback, so a mesh whose
+        // primitives carry no material of their own behaves exactly as before.
+        VkDescriptorSet boundSet = VK_NULL_HANDLE;
+        for (const ResolvedDraw& d : resolveItemDraws(item, *mesh)) {
+            const GpuMaterial* mat = m_resources.getMaterial(d.material.valid() ? d.material : item.material);
+            if (mat && mat->descriptorSet != VK_NULL_HANDLE && mat->descriptorSet != boundSet) {
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_forwardLayout, 1, 1,
+                                        &mat->descriptorSet, 0, nullptr);
+                boundSet = mat->descriptorSet;
+            }
+
+            ForwardPushConstants pc{};
+            pc.model = d.model;
+            pc.baseColorFactor = mat ? mat->baseColorFactor : glm::vec4(1.0f);
+            pc.metallicFactor = mat ? mat->metallicFactor : 0.0f;
+            pc.roughnessFactor = mat ? mat->roughnessFactor : 1.0f;
+            pc.shadingMode = shadingMode;
+            vkCmdPushConstants(cmd, m_forwardLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                               sizeof(pc), &pc);
+            vkCmdDrawIndexed(cmd, d.indexCount, 1, d.firstIndex, 0, 0);
+            ++m_drawCallCount;
+        }
     }
 }
 
@@ -4185,14 +4239,20 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
             const GpuMesh* mesh = m_resources.getMesh(item.mesh);
             if (!mesh)
                 continue;
-            ShadowPushConstants pc{};
-            pc.model = item.transform;
-            pc.cascadeIdx = c;
-            vkCmdPushConstants(cmd, m_shadowLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(ShadowPushConstants), &pc);
             const VkDeviceSize offset = 0;
             vkCmdBindVertexBuffers(cmd, 0, 1, &mesh->vertexBuffer, &offset);
             vkCmdBindIndexBuffer(cmd, mesh->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-            vkCmdDrawIndexed(cmd, mesh->indexCount, 1, 0, 0, 0);
+            // The shadow pass casts from the same articulated node poses (#839/#841) — an extended
+            // gear leg must cast an extended gear leg's shadow.
+            for (const ResolvedDraw& d : resolveItemDraws(item, *mesh)) {
+                ShadowPushConstants pc{};
+                pc.model = d.model;
+                pc.cascadeIdx = c;
+                vkCmdPushConstants(cmd, m_shadowLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(ShadowPushConstants),
+                                   &pc);
+                vkCmdDrawIndexed(cmd, d.indexCount, 1, d.firstIndex, 0, 0);
+                ++m_drawCallCount;
+            }
         }
 
         vkCmdEndRendering(cmd);
@@ -4384,26 +4444,33 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
                 const GpuMesh* mesh = m_resources.getMesh(item.mesh);
                 if (!mesh)
                     continue;
-                const GpuMaterial* mat = m_resources.getMaterial(item.material);
-                if (mat && mat->descriptorSet != VK_NULL_HANDLE)
-                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_forwardLayout, 1, 1,
-                                            &mat->descriptorSet, 0, nullptr);
-                ForwardPushConstants pc{};
-                pc.model = item.transform;
-                pc.baseColorFactor = mat ? mat->baseColorFactor : glm::vec4(1.0f);
-                pc.metallicFactor = mat ? mat->metallicFactor : 0.0f;
-                pc.roughnessFactor = mat ? mat->roughnessFactor : 1.0f;
-                pc.shadingMode = (item.flags & kRenderFlagTerrain)            ? 1.0f
-                                 : (item.flags & kRenderFlagDebugFaceColor)   ? 2.0f
-                                 : (item.flags & kRenderFlagRunway)           ? 3.0f
-                                 : (item.flags & kRenderFlagTerrainSatellite) ? 4.0f
-                                                                              : 0.0f;
-                vkCmdPushConstants(cmd, m_forwardLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                                   sizeof(pc), &pc);
+                const float shadingMode = (item.flags & kRenderFlagTerrain)            ? 1.0f
+                                          : (item.flags & kRenderFlagDebugFaceColor)   ? 2.0f
+                                          : (item.flags & kRenderFlagRunway)           ? 3.0f
+                                          : (item.flags & kRenderFlagTerrainSatellite) ? 4.0f
+                                                                                       : 0.0f;
                 const VkDeviceSize offset = 0;
                 vkCmdBindVertexBuffers(cmd, 0, 1, &mesh->vertexBuffer, &offset);
                 vkCmdBindIndexBuffer(cmd, mesh->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-                vkCmdDrawIndexed(cmd, mesh->indexCount, 1, 0, 0, 0);
+                VkDescriptorSet boundSet = VK_NULL_HANDLE;
+                for (const ResolvedDraw& d : resolveItemDraws(item, *mesh)) {
+                    const GpuMaterial* mat = m_resources.getMaterial(d.material.valid() ? d.material : item.material);
+                    if (mat && mat->descriptorSet != VK_NULL_HANDLE && mat->descriptorSet != boundSet) {
+                        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_forwardLayout, 1, 1,
+                                                &mat->descriptorSet, 0, nullptr);
+                        boundSet = mat->descriptorSet;
+                    }
+                    ForwardPushConstants pc{};
+                    pc.model = d.model;
+                    pc.baseColorFactor = mat ? mat->baseColorFactor : glm::vec4(1.0f);
+                    pc.metallicFactor = mat ? mat->metallicFactor : 0.0f;
+                    pc.roughnessFactor = mat ? mat->roughnessFactor : 1.0f;
+                    pc.shadingMode = shadingMode;
+                    vkCmdPushConstants(cmd, m_forwardLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                       0, sizeof(pc), &pc);
+                    vkCmdDrawIndexed(cmd, d.indexCount, 1, d.firstIndex, 0, 0);
+                    ++m_drawCallCount;
+                }
             }
 
             vkCmdEndRendering(cmd);
@@ -4543,8 +4610,11 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         vkCmdEndRendering(cmd);
     }
 
-    // Accumulate draw-call count: entity passes + sky + 2 particle passes + tonemap + bloom (3).
-    m_drawCallCount = static_cast<uint32_t>(m_pendingScene.renderItems.size()) + 7u;
+    // Accumulate draw-call count: sky + 2 particle passes + tonemap + bloom (3) on top of the geometry
+    // draws the shadow/opaque/transparent/inset loops counted as they issued them. Since #839 an item
+    // can expand into several per-node submesh draws, so the geometry total is measured rather than
+    // assumed to be one per RenderItem — FrameStats::drawCalls is the budget gate for articulation.
+    m_drawCallCount += 7u;
 
     // ── Overlay pass (debug text — after tonemap, before PRESENT transition) ─
     if (!m_overlayLines.empty() || !m_overlayElements.empty() || !m_consoleElements.empty()) {

@@ -99,6 +99,7 @@ add_library(engine-render STATIC
     render/MeshTextureResolver.cpp
     render/PreviewScene.cpp
     render/ParticleSystem.cpp
+    render/MeshArticulation.cpp
     render/BuiltinGeometry.cpp
     render/BuiltinTextures.cpp
     render/BuiltinBiomes.cpp
@@ -127,6 +128,7 @@ set_source_files_properties(render/TerrainChunkIO.cpp PROPERTIES
 target_link_libraries(engine-render
     PUBLIC  platform-hal
     PRIVATE engine-content
+            tinygltf-impl   # #840: MeshArticulation parses the SAME .glb bytes the loader uploads
             engine-audio
             engine-flight   # FlightHud derives IAS/Mach from the atmosphere model (#480)
             engine-nav      # FlightHud magnetic heading from the WMM2025 model (#483)
