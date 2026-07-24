@@ -324,13 +324,17 @@ baseline in the same session. Frame columns are **burst minus that run's own idl
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
 | Linux, RTX 5080 16 GB | CUDA (Ollama) | `qwen2.5-coder:14b` | 4.42 ms | 6.68 ms | **+2.26 ms (1.51×)** | +0.01 ms | +13.8 ms | 22 | 9031 MB | 4556 MB |
 | Linux, RTX 5080 16 GB | CUDA (Ollama) | `gemma2:9b` | 4.41 ms | 6.67 ms | **+2.26 ms (1.51×)** | +0.06 ms | +5.1 ms | 8 | 5971 MB | 6939 MB |
-| macOS, Apple Silicon | Metal | — | | | | | | | | *pending run* |
+| macOS 26.5, Apple M4 Pro 64 GB | Metal (Ollama) | `qwen2.5-coder:14b` | 14.45 ms | 27.29 ms | **+12.84 ms (1.89×)** | **+9.53 ms** | +13.8 ms | 3 | 14558 MB | 53084 MB† |
 | Windows, RTX 5080 | CUDA (Ollama) | — | | | | | | | | *pending run* |
 | Windows, RTX 5080 | Vulkan (llama.cpp) | — | | | | | | | | *pending run* |
 
 Raw artifacts (frame samples, driver phases, sysinfo) are written to
 `tools/gpu_contention/results/`, which is git-ignored — re-run to reproduce rather than reading a
 committed blob.
+
+† Apple Silicon has unified memory: the "Game VRAM budget" is what MoltenVK reports as the Metal
+heap's *recommended working set* (≈ the whole 64 GB machine), not a dedicated pool that a resident
+model shrinks. See *Reading the VRAM columns* below.
 
 ### What the numbers mean
 
@@ -362,10 +366,29 @@ reported budget falls from 6939 MB (9B resident) to 4556 MB (14B resident). The 
 an allocation failure — it sees a smaller ceiling. On an 8 GB card a 14B leaves essentially nothing,
 which is a hard incompatibility rather than a performance cost.
 
+**On Apple Silicon the cost is the mean, not the tail — and it is larger.** The same harness on an
+M4 Pro (macOS 26.5, 64 GB unified) nearly *doubles* the mean frame time under inference (12.25 →
+21.77 ms, **+9.53 ms**) with the p99 rising in lockstep (+12.84 ms, 1.89×): a burst drops the client
+from ~80 fps to ~46 fps for its whole duration, not for a handful of frames. Where the discrete
+NVIDIA card slices inference into the gaps and only spills into the tail, unified memory makes the
+GPU one shared resource for Metal render *and* Metal compute, so every frame drawn while the model
+is generating pays. This is the "the game got slower" failure mode rather than occasional hitching —
+and note the idle baseline here (12 ms, a tight GPU-bound distribution) is *not* vsync-pinned the way
+the Linux client's 4 ms was, so unlike that row these numbers are not a floor.
+
+**And the VRAM constraint inverts.** The discrete card's sharp limit — a resident 14B shrinking the
+game's offered budget from 6.9 to 4.6 GB — simply does not appear on a 64 GB unified machine: the
+model holds 15 GB, the renderer needs under 1 GB, and system memory pressure moves only 73 % → 71 %
+across the run. Capacity is a non-issue where there is 64 GB to share; what is scarce is GPU *time*,
+which is exactly what the mean shift measures. On an 8 GB Apple Silicon machine the balance would
+swing back toward capacity, as it does on the 8 GB discrete card.
+
 **None of this changes the #769 hosting decision**, which rests on accuracy, keep-warm cost and
 where the data already is. What it changes is the honesty of the surrounding claim: client-local
-inference is now measured rather than assumed, and the measurement says the cost is real but modest
-on a GPU with headroom, and dominated by VRAM on one without.
+inference is now measured rather than assumed, and the measurement says the cost is real but
+character-dependent: modest hitching on a discrete GPU with headroom, VRAM-dominated on one without,
+and a sustained frame-time tax — roughly a halved frame rate for the burst's duration — on
+unified-memory Apple Silicon, where GPU time rather than memory capacity is the scarce resource.
 
 ### Reading the VRAM columns
 
