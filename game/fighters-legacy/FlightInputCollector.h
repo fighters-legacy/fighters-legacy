@@ -56,6 +56,18 @@ class FlightInputCollector {
         return m_selectedStation;
     }
 
+    // Live articulation switch state (#639), for the HUD's gear/flap readout. `flaps` is the commanded
+    // detent as a 0..1 fraction; the actual POSITION lags it through the actuator's transit.
+    [[nodiscard]] bool gearDown() const noexcept {
+        return m_gearDown;
+    }
+    [[nodiscard]] float flapCommand() const noexcept {
+        return static_cast<float>(m_flapDetent) * 0.5f;
+    }
+    [[nodiscard]] bool hookDown() const noexcept {
+        return m_hookDown;
+    }
+
     // Master arm (#641): ARM/SAFE, toggled by V. When SAFE, poll() suppresses the gun and fire-store
     // trigger bits — the safety is real, not a cosmetic HUD flag. Defaults to ARM.
     [[nodiscard]] bool masterArm() const noexcept {
@@ -93,6 +105,24 @@ class FlightInputCollector {
     bool m_prevEcmKey{false};
     bool m_masterArm{true}; // #641: ARM by default; V toggles to SAFE (gates the fire bits)
     bool m_prevArmKey{false};
+
+    // ── articulation switches (#639) ─────────────────────────────────────────
+    // Latched client-side and sent as ABSOLUTE STATE every packet, so a dropped packet costs one tick
+    // of lag rather than leaving the aircraft in the wrong configuration for the rest of the sortie.
+    // Gear starts DOWN because that is the configuration an aircraft is parked in.
+    bool m_gearDown{true};
+    bool m_prevGearKey{false};
+    bool m_hookDown{false};
+    bool m_prevHookKey{false};
+    bool m_canopyOpen{false};
+    bool m_prevCanopyKey{false};
+    // Flap detents: clean / manoeuvre / full, the three positions a real flap lever has. A continuous
+    // axis would be a worse control on a keyboard and matches no cockpit.
+    uint8_t m_flapDetent{0};
+    bool m_prevFlapKey{false};
+    bool m_prevPadGear{false};
+    bool m_prevPadFlap{false};
+    float m_speedbrake{0.f};   // held, not latched: the airbrake is a momentary control
     bool m_prevPadNext{false}; // and for the gamepad D-pad
     bool m_prevPadPrev{false};
     const IClock* m_clock{&SystemClock::instance()};

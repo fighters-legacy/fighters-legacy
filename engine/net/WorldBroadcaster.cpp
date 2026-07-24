@@ -5289,6 +5289,12 @@ void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityC
     // held static by the integrator's parking hold). Purely body-forward, so it needs no world->body
     // rotation — the heading rides on fs.quat above.
     fs.vel_body[0] = (initialAirspeed < 0.f) ? kDefaultSpawnAirspeedMps : initialAirspeed;
+    // Gear configuration at spawn (#639): DOWN for a parked start (airspeed 0), UP for an airborne
+    // one. An aircraft is parked on its wheels, and since #639 the wheels are what carry brakes,
+    // tyre grip and nosewheel steering — a ground spawn with the gear stowed would belly-scrape on
+    // the runway. Anything that disagrees simply commands the other position and the actuator travels
+    // there: an AI, which never touches the gear switch, retracts within its transit window.
+    fs.articulation.gear = (initialAirspeed == 0.f) ? 1.f : 0.f;
     fs.fuel_kg = model->geometry.fuel_kg;
     fs.mass_kg = model->geometry.mass_kg + fs.fuel_kg;
     fs.throttle_actual = initialThrottle;

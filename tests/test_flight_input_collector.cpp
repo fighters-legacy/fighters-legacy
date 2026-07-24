@@ -1221,3 +1221,143 @@ TEST_CASE("FlightInputCollector gamepad FireMissile and D-pad cycling reach the 
     CHECK((r->buttons & 0x04u) != 0u);
     CHECK(r->selectedStation == 0u); // first deliberate cycle replaces the "keep" sentinel with 0
 }
+
+// ---------------------------------------------------------------------------
+// Articulation switches (#639)
+//
+// The InputAction::LandingGear / Flaps bindings existed and were never read: a human pilot could not
+// raise the gear at all. These are LATCHED client-side and sent as absolute state, so a dropped
+// packet costs a tick of lag rather than a sortie in the wrong configuration.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Advances the rate limiter and returns the packet the collector produced.
+fl::MsgClientInput pollNext(FlightInputCollector& fic, fl::ManualClock& t, fl::SimRenderBridge& bridge,
+                            CameraInput& cam, GameConsole& console, MockInput& inp) {
+    t.advance(std::chrono::milliseconds(20));
+    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    REQUIRE(r.has_value());
+    return *r;
+}
+
+} // namespace
+
+TEST_CASE("FlightInputCollector: gear starts DOWN and G toggles it (#639)", "[flight_input][articulation]") {
+    MockLogger log;
+    CommandRegistry reg;
+    GameConsole console(log, reg);
+    MockInput inp;
+    CameraInput cam;
+    fl::SimRenderBridge bridge;
+    FlightInputCollector fic;
+    fl::ManualClock t;
+    fic.setClock(t);
+
+    // An aircraft is parked on its wheels, so the switch starts DOWN — matching the server's
+    // parked-spawn configuration, which is what stops a fresh sortie from belly-scraping.
+    auto first = fic.poll(bridge, cam, console, inp, nullptr, {});
+    REQUIRE(first.has_value());
+    CHECK((first->artButtons & fl::kArtButtonGearDown) != 0);
+    CHECK(fic.gearDown());
+
+    // Hold G: the toggle is edge-detected, so holding it flips exactly once.
+    inp.held.insert(Key::G);
+    CHECK((pollNext(fic, t, bridge, cam, console, inp).artButtons & fl::kArtButtonGearDown) == 0);
+    CHECK((pollNext(fic, t, bridge, cam, console, inp).artButtons & fl::kArtButtonGearDown) == 0);
+    CHECK_FALSE(fic.gearDown());
+
+    // Release and press again: back down.
+    inp.held.erase(Key::G);
+    (void)pollNext(fic, t, bridge, cam, console, inp);
+    inp.held.insert(Key::G);
+    CHECK((pollNext(fic, t, bridge, cam, console, inp).artButtons & fl::kArtButtonGearDown) != 0);
+}
+
+TEST_CASE("FlightInputCollector: F steps the flap detent clean/manoeuvre/full (#639)", "[flight_input][articulation]") {
+    MockLogger log;
+    CommandRegistry reg;
+    GameConsole console(log, reg);
+    MockInput inp;
+    CameraInput cam;
+    fl::SimRenderBridge bridge;
+    FlightInputCollector fic;
+    fl::ManualClock t;
+    fic.setClock(t);
+
+    auto first = fic.poll(bridge, cam, console, inp, nullptr, {});
+    REQUIRE(first.has_value());
+    CHECK(first->flaps == 0); // clean
+
+    auto tap = [&]() {
+        inp.held.insert(Key::F);
+        const auto msg = pollNext(fic, t, bridge, cam, console, inp);
+        inp.held.erase(Key::F);
+        (void)pollNext(fic, t, bridge, cam, console, inp);
+        return msg;
+    };
+
+    // Three detents, wrapping — the positions a real flap lever has, not a continuous axis.
+    CHECK(tap().flaps == 128); // manoeuvre (0.5 -> 127.5, rounds to 128)
+    CHECK(tap().flaps == 255); // full
+    CHECK(tap().flaps == 0);   // back to clean
+}
+
+TEST_CASE("FlightInputCollector: hook and canopy latch; the airbrake is momentary (#639)",
+          "[flight_input][articulation]") {
+    MockLogger log;
+    CommandRegistry reg;
+    GameConsole console(log, reg);
+    MockInput inp;
+    CameraInput cam;
+    fl::SimRenderBridge bridge;
+    FlightInputCollector fic;
+    fl::ManualClock t;
+    fic.setClock(t);
+    (void)fic.poll(bridge, cam, console, inp, nullptr, {});
+
+    // H latches the hook down and it STAYS down after release — a switch, not a button.
+    inp.held.insert(Key::H);
+    CHECK((pollNext(fic, t, bridge, cam, console, inp).artButtons & fl::kArtButtonHookDown) != 0);
+    inp.held.erase(Key::H);
+    CHECK((pollNext(fic, t, bridge, cam, console, inp).artButtons & fl::kArtButtonHookDown) != 0);
+    CHECK(fic.hookDown());
+
+    // The canopy is Shift+C — plain C is the wingman radio menu (#610), so C alone must do nothing.
+    inp.held.insert(Key::C);
+    CHECK((pollNext(fic, t, bridge, cam, console, inp).artButtons & fl::kArtButtonCanopyOpen) == 0);
+    inp.held.insert(Key::LeftShift);
+    CHECK((pollNext(fic, t, bridge, cam, console, inp).artButtons & fl::kArtButtonCanopyOpen) != 0);
+    inp.held.erase(Key::C);
+    inp.held.erase(Key::LeftShift);
+
+    // K is MOMENTARY: the airbrake retracts the moment it is released, unlike every switch above.
+    inp.held.insert(Key::K);
+    CHECK(pollNext(fic, t, bridge, cam, console, inp).speedbrake == 255);
+    inp.held.erase(Key::K);
+    CHECK(pollNext(fic, t, bridge, cam, console, inp).speedbrake == 0);
+}
+
+TEST_CASE("FlightInputCollector: articulation state rides EVERY packet (#639)", "[flight_input][articulation]") {
+    // Absolute state, not edges: a client that stops repeating the configuration would leave the
+    // server unable to recover from a single dropped packet.
+    MockLogger log;
+    CommandRegistry reg;
+    GameConsole console(log, reg);
+    MockInput inp;
+    CameraInput cam;
+    fl::SimRenderBridge bridge;
+    FlightInputCollector fic;
+    fl::ManualClock t;
+    fic.setClock(t);
+    (void)fic.poll(bridge, cam, console, inp, nullptr, {});
+
+    inp.held.insert(Key::G); // gear up
+    (void)pollNext(fic, t, bridge, cam, console, inp);
+    inp.held.erase(Key::G);
+
+    for (int i = 0; i < 10; ++i) {
+        const auto msg = pollNext(fic, t, bridge, cam, console, inp);
+        CHECK((msg.artButtons & fl::kArtButtonGearDown) == 0); // repeated, unchanged, every packet
+    }
+}

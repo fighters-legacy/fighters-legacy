@@ -715,6 +715,7 @@ TEST_CASE("FlightIntegrator: ground parking hold does not block takeoff roll", "
     fl::FlightIntegrator fi(d);
     fl::FlightState s{};
     s.pos_world[1] = 100.f;
+    s.articulation.gear = 1.f; // parked on its wheels (#639)
     s.mass_kg = 10000.f;
     s.fuel_kg = 2000.f;
     s.mass_kg += s.fuel_kg;
@@ -722,6 +723,7 @@ TEST_CASE("FlightIntegrator: ground parking hold does not block takeoff roll", "
 
     fl::ControlInput ctrl{};
     ctrl.throttle = 1.0f; // full throttle
+    ctrl.gear_down = true;
     fl::PayloadEffect px{};
 
     for (int i = 0; i < 300; ++i) // 5 simulated seconds
@@ -737,6 +739,7 @@ static fl::FlightState makeRolloutState(float groundElev, float fwdSpeed) {
     fl::FlightState s{};
     s.pos_world[1] = groundElev; // sitting on the runway (geodeticAltitude == groundElev at the origin)
     s.vel_body[0] = fwdSpeed;    // forward, identity attitude (level, nose along +X)
+    s.articulation.gear = 1.f;   // ON ITS WHEELS (#639): brakes, tyre grip and steering are what wheels do
     s.mass_kg = 14000.f;
     s.fuel_kg = 4000.f;
     return s;
@@ -2103,8 +2106,9 @@ TEST_CASE("Integrator: unpaved surface shortens the ground rollout (#487)", "[in
     auto roll = [](const fl::GroundFriction& ground) {
         FlightIntegrator fi(makeData());
         FlightState s{};
-        s.vel_body[0] = 25.f;  // rolling forward
-        s.pos_world[1] = 0.2f; // within the ground-contact margin of groundElev = 0
+        s.vel_body[0] = 25.f;      // rolling forward
+        s.pos_world[1] = 0.2f;     // within the ground-contact margin of groundElev = 0
+        s.articulation.gear = 1.f; // on its wheels (#639)
         s.mass_kg = 14000.f;
         s.fuel_kg = 4000.f;
         fi.reset(s);

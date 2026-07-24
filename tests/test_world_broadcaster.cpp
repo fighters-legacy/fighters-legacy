@@ -175,6 +175,10 @@ static void clearSnapshots(MockNetwork& net) {
 }
 
 // Parse the MsgWorldSnapshotHeader from a raw snapshot packet.
+// A pilot spawns PARKED and therefore gear-down (#639), so its snapshot carries one
+// SnapshotArticulation record (#843): 4 B tag/len + 4 B entityIdx + 2 B mask + 1 value byte.
+static constexpr std::size_t kParkedGearArtTlvBytes = 11u;
+
 static fl::MsgWorldSnapshotHeader parseSnapshotHeader(const std::vector<uint8_t>& pkt) {
     REQUIRE(pkt.size() >= sizeof(fl::MsgWorldSnapshotHeader));
     fl::MsgWorldSnapshotHeader hdr{};
@@ -1426,11 +1430,12 @@ TEST_CASE("WorldBroadcaster: onTick with connected peer and no extra entities se
     CHECK(hdr.tickIndex == 5u);
 
     // Packet = header + quantized bitstream (one full own-entity record) + SnapshotPeerCount TLV
-    // (6 bytes). SnapshotPeerLatency TLV is absent (estimatedDelayTicks == 0; no heartbeat sent).
+    // (6 bytes) + the parked pilot's articulation record. SnapshotPeerLatency is absent
+    // (estimatedDelayTicks == 0; no heartbeat sent).
     CHECK(hdr.bitstreamBytes > 0u);
     const std::size_t extOffset = sizeof(fl::MsgWorldSnapshotHeader) +
                                   static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double) + hdr.bitstreamBytes;
-    REQUIRE(pkt.size() == extOffset + 6u);
+    REQUIRE(pkt.size() == extOffset + 6u + kParkedGearArtTlvBytes);
     uint16_t pc{};
     CHECK(fl::readExtValue(pkt.data() + extOffset, 6u, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerCount), pc));
     CHECK(pc == 1u); // 1 active peer
@@ -7470,8 +7475,8 @@ TEST_CASE("WorldBroadcaster: totalEntityCount matches buffer content", "[world_b
         auto hdr = parseSnapshotHeader(pkt);
         const std::size_t expectedSize =
             sizeof(fl::MsgWorldSnapshotHeader) + static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double) +
-            hdr.bitstreamBytes +
-            6u; // SnapshotPeerCount TLV only (estimatedDelayTicks == 0; SnapshotPeerLatency absent)
+            hdr.bitstreamBytes + 6u + // SnapshotPeerCount TLV (estimatedDelayTicks == 0; SnapshotPeerLatency absent)
+            kParkedGearArtTlvBytes;
         CHECK(pkt.size() == expectedSize);
     }
     clearSnapshots(net);
@@ -7587,10 +7592,11 @@ TEST_CASE("WorldBroadcaster: SnapshotPeerLatency TLV absent when estimatedDelayT
     uint16_t lat{};
     CHECK_FALSE(fl::readExtValue(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerLatency), lat));
 
-    // Packet size: header + quantized bitstream + 6 bytes (SnapshotPeerCount TLV only).
+    // Packet size: header + quantized bitstream + the SnapshotPeerCount TLV + the parked pilot's
+    // articulation record.
     const std::size_t expected = sizeof(fl::MsgWorldSnapshotHeader) +
                                  static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double) + hdr.bitstreamBytes +
-                                 6u;
+                                 6u + kParkedGearArtTlvBytes;
     CHECK(pkt.size() == expected);
 }
 
@@ -11214,10 +11220,18 @@ TEST_CASE("WorldBroadcaster: a neutral world emits no articulation TLV (#843)", 
     registry.registerType(makeDebugDef());
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster wb(em, registry, net, logger);
+    wb.setRateLimitParams(100, 10, 1000); // the wall-clock flood guard, as above
     connectPilotPeer(wb, net, 0u);
 
+    // A pilot spawns PARKED and therefore gear-down (#639), so retract it first: "neutral" here means
+    // every actuator actually at its default, not merely un-commanded.
+    for (uint32_t t = 0; t < 500; ++t) {
+        sendArticulationInput(wb, 0u, t + 1u, 0u, 0u);
+        wb.onTick(1.0 / 60.0, t + 1u);
+    }
+
     clearSnapshots(net);
-    wb.onTick(1.0 / 60.0, 1u);
+    wb.onTick(1.0 / 60.0, 501u);
     const SnapshotExt ext = lastSnapshotExt(net, 0u);
     REQUIRE(ext.data != nullptr);
     uint16_t len = 0;

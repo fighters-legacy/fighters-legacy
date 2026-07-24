@@ -108,6 +108,39 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
                 m_masterArm = !m_masterArm;
             m_prevArmKey = armKey;
 
+            // ── Articulation switches (#639) ────────────────────────────────
+            // G toggles the gear, F steps the flap detent (clean / manoeuvre / full — the three
+            // positions a real lever has; a continuous axis would be a worse keyboard control and
+            // matches no cockpit), H the hook, C the canopy. All LATCHED and sent as absolute state,
+            // so a dropped packet costs a tick of lag, not a sortie in the wrong configuration.
+            const bool gearKey = !uiFocused && input.isKeyDown(Key::G);
+            if (gearKey && !m_prevGearKey)
+                m_gearDown = !m_gearDown;
+            m_prevGearKey = gearKey;
+
+            const bool flapKey = !uiFocused && input.isKeyDown(Key::F);
+            if (flapKey && !m_prevFlapKey)
+                m_flapDetent = static_cast<uint8_t>((m_flapDetent + 1u) % 3u);
+            m_prevFlapKey = flapKey;
+
+            const bool hookKey = !uiFocused && input.isKeyDown(Key::H);
+            if (hookKey && !m_prevHookKey)
+                m_hookDown = !m_hookDown;
+            m_prevHookKey = hookKey;
+
+            // The canopy is not bound to C: that is the wingman radio menu (#610). Shift+C, so the
+            // one discrete key a pilot uses in anger keeps its short binding.
+            const bool canopyKey = !uiFocused && input.isKeyDown(Key::C) && input.isKeyDown(Key::LeftShift);
+            if (canopyKey && !m_prevCanopyKey)
+                m_canopyOpen = !m_canopyOpen;
+            m_prevCanopyKey = canopyKey;
+
+            // The airbrake is MOMENTARY, held rather than latched — the one control here that is not
+            // a switch, and the one place holding it is the natural gesture. K, not Space: Space is
+            // the gun trigger, and the InputBindings default said otherwise, which was a latent
+            // conflict waiting for the first person to read the bindings table and believe it.
+            m_speedbrake = (!uiFocused && input.isKeyDown(Key::K)) ? 1.f : 0.f;
+
             // Ejection (#672): End commands the seat, level on the wire — the server edge-detects, so
             // holding it is one ejection. Gated while an overlay owns the keys, like the other discretes.
             if (!uiFocused && input.isKeyDown(Key::End))
@@ -170,6 +203,17 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
                     inp.buttons |= 0x02u;
                 if (readButton(fl::InputAction::FireMissile))
                     inp.buttons |= 0x04u; // fire selected store (#625)
+                // Gear and flaps on the pad, same latch/step semantics as the keys (#639).
+                const bool padGear = readButton(fl::InputAction::LandingGear);
+                if (padGear && !m_prevPadGear)
+                    m_gearDown = !m_gearDown;
+                m_prevPadGear = padGear;
+                const bool padFlap = readButton(fl::InputAction::Flaps);
+                if (padFlap && !m_prevPadFlap)
+                    m_flapDetent = static_cast<uint8_t>((m_flapDetent + 1u) % 3u);
+                m_prevPadFlap = padFlap;
+                if (readButton(fl::InputAction::Airbrake))
+                    m_speedbrake = 1.f;
                 // Station cycling on the gamepad (D-pad by default), same edge/wrap logic as keys.
                 const bool padNext = readButton(fl::InputAction::NextWeapon);
                 const bool padPrev = readButton(fl::InputAction::PrevWeapon);
@@ -237,6 +281,18 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
 
     // Absolute station selection rides every packet (#625): idempotent under loss, converges.
     inp.selectedStation = m_selectedStation;
+
+    // Articulation (#639/#843): absolute state on every packet, for the same reason. The wire carries
+    // the COMMAND; the server slews the actuator toward it and the drag follows the position.
+    inp.flaps = static_cast<uint8_t>(std::lround(std::clamp(flapCommand(), 0.f, 1.f) * 255.f));
+    inp.speedbrake = static_cast<uint8_t>(std::lround(std::clamp(m_speedbrake, 0.f, 1.f) * 255.f));
+    inp.artButtons = 0u;
+    if (m_gearDown)
+        inp.artButtons |= fl::kArtButtonGearDown;
+    if (m_hookDown)
+        inp.artButtons |= fl::kArtButtonHookDown;
+    if (m_canopyOpen)
+        inp.artButtons |= fl::kArtButtonCanopyOpen;
 
     // Camera eye world-position (#858): where this client is looking FROM. The server keys interest
     // management on it for an entity-less peer (an observer ghost camera, or a dead peer), and

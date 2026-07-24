@@ -9,6 +9,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **game**: landing gear and flaps end-to-end (#639, Epic #837) — the `InputAction::LandingGear` and
+  `Flaps` bindings existed and were never read, so a human pilot could not raise the gear. **G**
+  toggles the gear, **F** steps the flap detent (clean / manoeuvre / full — the positions a real lever
+  has), **H** the hook, **Shift+C** the canopy, **K** the speed brake (momentary — the one flight
+  configuration control that is not a switch). All latched client-side and sent as absolute state.
+  The HUD's new configuration block reads the actual actuator **position**, not the switch, so a gear
+  still travelling shows `GEAR ...` rather than claiming it is down. Ground contact now depends on
+  gear position: brakes, tyre cornering grip and nosewheel steering are things *wheels* do, so with
+  the gear up a ground contact is a belly slide — much higher drag and no steering at all — and a
+  half-extended strut has partial authority. Aircraft spawn gear-down when parked and gear-up when
+  airborne. `InputAction::Airbrake`'s default moved off Space, which collided with the documented gun
+  trigger and would have bitten the first person to read the bindings table and believe it.
 - **network**: articulation channels on the wire (#843, Epic #837) — two gaps, in both directions. A
   human pilot **could not raise the gear**: `MsgClientInput` had no gear/flap/speedbrake/hook/canopy
   command, so only Lua AI ever set one, server-side. And no articulation channel reached a remote
