@@ -47,6 +47,12 @@ inline constexpr uint64_t kSnapshotRetentionTicks = 180;
 // Number of ticks an explicit despawn is repeated on the unreliable snapshot channel (drop-tolerant).
 inline constexpr uint8_t kDespawnRepeatTicks = 4;
 
+// Articulation refresh interval in ticks (#843). The channel set is sent on CHANGE; this is the
+// periodic re-send that covers a dropped packet and a peer whose interest set just gained the entity.
+// Half a second at 60 Hz: an actuator takes seconds to travel, so a worst-case half-second of stale
+// pose is invisible, while a shorter interval would spend bytes on nothing.
+inline constexpr uint64_t kArtRefreshTicks = 30;
+
 // Rank candidates by relevance and return the admitted entity indices that fit recordByteBudget, in
 // priority (descending-score) order. The caller re-sorts the result ascending before encoding (the
 // codec's idx-delta varints require ascending idx). recordByteBudget == 0 means unlimited (admit all).

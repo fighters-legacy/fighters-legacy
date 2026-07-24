@@ -9,6 +9,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network**: articulation channels on the wire (#843, Epic #837) — two gaps, in both directions. A
+  human pilot **could not raise the gear**: `MsgClientInput` had no gear/flap/speedbrake/hook/canopy
+  command, so only Lua AI ever set one, server-side. And no articulation channel reached a remote
+  client, so even once the renderer could pose an aircraft, every aircraft except your own would sit
+  with its gear up and its flaps clean. Client→server fills the reserved bytes after `radarMode`
+  (`flaps`, `speedbrake`, an `artButtons` bitmask) as **absolute state, not edges** — an edge lost on
+  the unreliable channel never converges, an absolute value does on the next packet. Server→client
+  adds `ExtTag::SnapshotArticulation` (0x0107), a changed-only TLV with a 30-tick refresh: an entity
+  at all-default channels costs **zero bytes**, so a world of unarticulated aircraft is byte-identical
+  to before. Its 1/255 quantization is cosmetic-grade on purpose and cannot affect flight, because a
+  peer never reads its own entity's channels from the wire — `ClientPrediction` rewinds the actuators
+  to their position at the acked input and re-integrates them at full precision through the same
+  shared `advanceArticulation`. `test_prediction_parity` now cycles gear, flaps and speedbrake
+  mid-run and still holds divergence under 1e-3 m over 600 ticks. Input traces record the new
+  commands, so a determinism replay flies the aeroplane it recorded. `kProtocolVersion` stays 1.
 - **flight**: articulation state — transit dynamics and gear/flap aero (#842, Epic #837, core of #639).
   Gear and speedbrake existed only as **commands**: `AeroForces` added their full drag the instant the
   command flipped, so gear that takes six seconds to travel produced all of its drag in one tick — and

@@ -90,6 +90,15 @@ static void stateToEntry(const FlightState& fs, float maxFuel, EntityRenderEntry
     out.fuelPct = static_cast<uint8_t>(std::clamp(fuelPctF, 0.f, 100.f));
     out.abEngaged = fs.ab_engaged;
     out.engineFailFlags = fs.engineFailFlags;
+
+    // Own-ship articulation (#843): the locally integrated, FULL-PRECISION positions overwrite
+    // whatever the cosmetic snapshot TLV carried for us. That is the reason the TLV can be quantized
+    // to 1/255 at all — the authoritative path for a peer's own aircraft never reads the wire.
+    out.artChannels[static_cast<std::size_t>(ArtChannel::Gear)] = fs.articulation.gear;
+    out.artChannels[static_cast<std::size_t>(ArtChannel::Flaps)] = fs.articulation.flaps;
+    out.artChannels[static_cast<std::size_t>(ArtChannel::Speedbrake)] = fs.articulation.speedbrake;
+    out.artChannels[static_cast<std::size_t>(ArtChannel::Hook)] = fs.articulation.hook;
+    out.artChannels[static_cast<std::size_t>(ArtChannel::Canopy)] = fs.articulation.canopy;
 }
 } // namespace
 
@@ -131,7 +140,10 @@ void ClientPrediction::reset() {
 
 void ClientPrediction::pushHistory(uint32_t seqNum, const BufferedInput& bi) noexcept {
     const uint32_t writeIdx = (m_histHead + m_histCount) % kHistorySize;
-    m_history[writeIdx] = {seqNum, bi};
+    // Snapshot the actuator positions BEFORE this input is applied (#843), so a replay can rewind to
+    // exactly where they were at the acked point rather than re-integrating from a reset zero.
+    const ArticulationState artBefore = m_integrator ? m_integrator->state().articulation : ArticulationState{};
+    m_history[writeIdx] = {seqNum, bi, artBefore};
     if (m_histCount < kHistorySize) {
         ++m_histCount;
     } else {
@@ -161,6 +173,13 @@ void ClientPrediction::stepIntegrator(const BufferedInput& bi, const Environment
     ctrl.aileron = bi.aileron;
     ctrl.rudder = bi.rudder;
     ctrl.afterburner = (bi.buttons & 0x02u) != 0;
+    // Articulation commands (#843): the client integrates the same actuator transit the server does,
+    // through the same pure advanceArticulation, so gear/flap DRAG matches tick for tick.
+    ctrl.flaps = static_cast<float>(bi.flaps) / 255.f;
+    ctrl.speedbrake = static_cast<float>(bi.speedbrake) / 255.f;
+    ctrl.gear_down = (bi.artButtons & kArtButtonGearDown) != 0;
+    ctrl.hook_down = (bi.artButtons & kArtButtonHookDown) != 0;
+    ctrl.canopy_open = (bi.artButtons & kArtButtonCanopyOpen) != 0;
 
     // Altitude wind (#489): interpolate the broadcast profile at the predicted entity's altitude with
     // the SAME shared code the server runs, so a high-flying aircraft is predicted in the wind it
@@ -214,6 +233,9 @@ void ClientPrediction::onInput(const MsgClientInput& msg, const EnvironmentState
     bi.aileron = std::clamp(msg.aileron, -1.f, 1.f);
     bi.rudder = std::clamp(msg.rudder, -1.f, 1.f);
     bi.buttons = msg.buttons;
+    bi.flaps = msg.flaps;           // #843 articulation commands, absolute state
+    bi.speedbrake = msg.speedbrake; // #843
+    bi.artButtons = msg.artButtons; // #843
 
     pushHistory(msg.seqNum, bi);
 
@@ -279,30 +301,37 @@ void ClientPrediction::reconcile(RenderSnapshot& snap, uint64_t tickIndex, uint3
         m_payload.extra_cd0 = playerEntry->payloadCd0;
     }
 
-    const FlightState serverState = entryToFlightState(*playerEntry, *m_model);
-    m_integrator->reset(serverState);
-    m_predictedTick = tickIndex;
+    FlightState serverState = entryToFlightState(*playerEntry, *m_model);
 
-    // Replay the inputs the server has not yet reflected, oldest-first.
+    // Rewind the actuator positions to where they stood before the FIRST input the server has not yet
+    // applied (#843), then let the replay re-integrate them. Articulation is not on the own entity's
+    // wire record — a peer never reads its own channels from the network, so the cosmetic 1/255 TLV
+    // quantization cannot reach the authoritative path — which means the replay has to supply this
+    // baseline itself. Resetting to zero here would restart the transit every reconcile, and gear
+    // position IS drag: the two sides would then disagree about where the aircraft is.
     HistoryEntry replayBuf[kHistorySize];
+    uint32_t replayStart = 0;
+    uint32_t got = 0;
     if (ackedSeqNum != kNoAckedSeqNum) {
         // Exact window (#427): the server told us the last seqNum it applied, so replay precisely the
         // stored inputs newer than it — no over- or under-replay from a delay estimate under jitter.
         // seqNum is client-monotonic and cannot wrap within a session, so a plain > compare is safe.
-        const uint32_t got = tailHistory(m_histCount, replayBuf);
-        for (uint32_t i = 0; i < got; ++i) {
-            if (replayBuf[i].seqNum > ackedSeqNum)
-                stepIntegrator(replayBuf[i].input, env);
-        }
+        got = tailHistory(m_histCount, replayBuf);
+        while (replayStart < got && replayBuf[replayStart].seqNum <= ackedSeqNum)
+            ++replayStart;
     } else {
         // Fallback: approximate the replay depth from estimatedDelayTicks (the pre-#427 behaviour,
         // used until the server has applied one of our inputs, or against an older server).
-        const uint32_t replayCount = std::min(estimatedDelayTicks, m_histCount);
-        const uint32_t got = tailHistory(replayCount, replayBuf);
-        for (uint32_t i = 0; i < got; ++i) {
-            stepIntegrator(replayBuf[i].input, env);
-        }
+        got = tailHistory(std::min(estimatedDelayTicks, m_histCount), replayBuf);
     }
+    serverState.articulation =
+        (replayStart < got) ? replayBuf[replayStart].artBefore : m_integrator->state().articulation;
+
+    m_integrator->reset(serverState);
+    m_predictedTick = tickIndex;
+
+    for (uint32_t i = replayStart; i < got; ++i)
+        stepIntegrator(replayBuf[i].input, env);
 
     const glm::dvec3 newPredPos = {m_integrator->state().pos_world[0], m_integrator->state().pos_world[1],
                                    m_integrator->state().pos_world[2]};

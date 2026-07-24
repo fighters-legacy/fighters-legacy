@@ -353,6 +353,82 @@ TEST_CASE("client and server integrators do not diverge over 600 ticks", "[predi
     CHECK(std::abs(a.pos_world[0]) > 100.0);
 }
 
+TEST_CASE("gear and flap cycling keeps the two integrators in parity", "[prediction_parity]") {
+    // Gear and flap POSITION is drag (#842). If the two sides ever disagree about where the gear is,
+    // they disagree about where the aircraft is — so cycling the actuators mid-run is the gate that
+    // the shared advanceArticulation really is shared, not merely similar.
+    QuietLog log;
+    TrackingNetwork net;
+    EntityTypeRegistry serverRegistry;
+    EntityManager em(log, serverRegistry);
+    serverRegistry.registerType(parseEntityDef(entityToml()));
+
+    auto assets = makeAssets(log);
+
+    WorldBroadcaster broadcaster(em, serverRegistry, net, log);
+    connectPilot(broadcaster, 0u);
+    const std::vector<uint8_t>* ack = findConnectAck(net);
+    REQUIRE(ack != nullptr);
+
+    EntityTypeRegistry clientRegistry;
+    registerFromWire(*ack, clientRegistry);
+
+    const EntityDef* serverDef = serverRegistry.byIndex(0);
+    auto rawFm = assets->loadFlightModel(serverDef->flightModelAsset.c_str());
+    REQUIRE(rawFm != nullptr);
+    auto serverModel = std::make_shared<const FlightModelData>(
+        parseFlightModel(std::string_view(reinterpret_cast<const char*>(rawFm->bytes.data()), rawFm->bytes.size())));
+    auto clientModel = makeFlightModelResolver(clientRegistry, *assets, log)(0);
+    REQUIRE(clientModel != nullptr);
+
+    auto seed = [](FlightIntegrator& fi, const FlightModelData& m) {
+        FlightState s{};
+        s.pos_world[1] = 5000.0;
+        s.quat[3] = 1.f;
+        s.vel_body[0] = 180.0;
+        s.mass_kg = m.geometry.mass_kg + m.geometry.fuel_kg;
+        s.fuel_kg = m.geometry.fuel_kg;
+        fi.reset(s);
+    };
+
+    FlightIntegrator server(serverModel);
+    FlightIntegrator client(clientModel);
+    seed(server, *serverModel);
+    seed(client, *clientModel);
+
+    constexpr float kDt = 1.f / 60.f;
+    for (int tick = 0; tick < 600; ++tick) {
+        ControlInput ctrl{};
+        ctrl.throttle = 0.7f;
+        ctrl.elevator = 0.05f;
+        // Cycle: gear down for the middle third, flaps ramped in over the last third, speed-brake
+        // pulsed — so every actuator spends time mid-transit, where a mismatch would show first.
+        ctrl.gear_down = (tick >= 200 && tick < 400);
+        ctrl.flaps = (tick >= 400) ? static_cast<float>(tick - 400) / 200.f : 0.f;
+        ctrl.speedbrake = ((tick / 50) % 2 == 0) ? 1.f : 0.f;
+
+        server.step(kDt, ctrl, {}, {}, 0.f);
+        client.step(kDt, ctrl, {}, {}, 0.f);
+    }
+
+    const FlightState& a = server.state();
+    const FlightState& b = client.state();
+    const double dx = a.pos_world[0] - b.pos_world[0];
+    const double dy = a.pos_world[1] - b.pos_world[1];
+    const double dz = a.pos_world[2] - b.pos_world[2];
+    const double divergence = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+    INFO("positional divergence with gear/flap cycling: " << divergence << " m");
+    CHECK(divergence < 1e-3);
+
+    // The actuators really moved, so the assertion is not vacuous — and both sides agree on where
+    // they ended up, which is the whole point.
+    CHECK(a.articulation.gear == Catch::Approx(b.articulation.gear));
+    CHECK(a.articulation.flaps == Catch::Approx(b.articulation.flaps));
+    CHECK(a.articulation.flaps > 0.5f);
+    CHECK(std::abs(a.pos_world[0]) > 100.0);
+}
+
 TEST_CASE("a non-zero payload reaches BOTH integrators and they still agree", "[prediction_parity]") {
     // #812's half of the contract. The server resolves the default loadout from its WeaponRegistry
     // and sends the resulting mass/drag on MsgEntityTypeDef; the client reads those two floats. If

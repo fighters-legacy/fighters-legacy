@@ -281,6 +281,11 @@ TEST_CASE("GameProtocol: MsgWorldSnapshotHeader field offsets", "[game_protocol]
 TEST_CASE("GameProtocol: selective-ack fields (#566)", "[game_protocol]") {
     // ackMask reuses the former trailing/reserved padding — no size change, must stay 4-aligned.
     CHECK(offsetof(fl::MsgClientInput, ackMask) == 44u);
+    // Articulation commands (#843) fill the reserved bytes after radarMode; every earlier offset is
+    // unchanged, which is what keeps this additive at kProtocolVersion 1.
+    CHECK(offsetof(fl::MsgClientInput, flaps) == 50u);
+    CHECK(offsetof(fl::MsgClientInput, speedbrake) == 51u);
+    CHECK(offsetof(fl::MsgClientInput, artButtons) == 52u);
     CHECK(offsetof(fl::MsgHeartbeat, ackMask) == 4u);
     CHECK(offsetof(fl::MsgHeartbeat, tickIndex) == 8u);
 }
@@ -378,6 +383,29 @@ TEST_CASE("GameProtocol: MsgConnectAck round-trip with two type defs", "[game_pr
     std::memcpy(&td1, buf.data() + sizeof(ack) + sizeof(td0), sizeof(td1));
     CHECK(std::string_view(td0.id) == "builtin:debug-entity");
     CHECK(std::string_view(td1.id) == "builtin:other");
+}
+
+TEST_CASE("GameProtocol: MsgClientInput carries the articulation commands (#843)", "[game_protocol]") {
+    fl::MsgClientInput src{};
+    src.flaps = 200;
+    src.speedbrake = 64;
+    src.artButtons = fl::kArtButtonGearDown | fl::kArtButtonCanopyOpen;
+
+    std::vector<uint8_t> buf;
+    fl::appendMsg(buf, src);
+    fl::MsgClientInput out{};
+    REQUIRE(fl::readMsg(buf.data(), buf.size(), out));
+    CHECK(out.flaps == 200);
+    CHECK(out.speedbrake == 64);
+    CHECK((out.artButtons & fl::kArtButtonGearDown) != 0);
+    CHECK((out.artButtons & fl::kArtButtonHookDown) == 0);
+    CHECK((out.artButtons & fl::kArtButtonCanopyOpen) != 0);
+
+    // Default = clean: gear up, no flap, no brake. Absolute state, so an unaware client (a load bot)
+    // simply flies clean rather than leaving the actuators in an undefined configuration.
+    const fl::MsgClientInput plain{};
+    CHECK(plain.flaps == 0);
+    CHECK(plain.artButtons == 0);
 }
 
 TEST_CASE("GameProtocol: MsgClientInput round-trip", "[game_protocol]") {

@@ -111,6 +111,12 @@ class ClientPrediction {
     struct HistoryEntry {
         uint32_t seqNum{0};
         BufferedInput input{};
+        // Actuator positions BEFORE this input was applied (#843). Articulation is not on the own
+        // entity's wire record — a peer never reads its own channels from the network — so the replay
+        // rewinds to the position it had at the acked point and re-integrates from there. Without
+        // this the reset would zero it every reconcile and the gear would stutter, and gear position
+        // is drag: the two sides would then disagree about where the aircraft is.
+        ArticulationState artBefore{};
     };
 
     void pushHistory(uint32_t seqNum, const BufferedInput& bi) noexcept;
