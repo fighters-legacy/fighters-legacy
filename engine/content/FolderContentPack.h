@@ -3,7 +3,9 @@
 
 #include "content/IContentPack.h"
 #include "content/TrustLevel.h"
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace fl {
 
@@ -72,10 +74,12 @@ class FolderContentPack final : public IContentPack {
     std::optional<LiveryData> loadLivery(const char* name) override;
     std::optional<AirportDefData> loadAirportDef(const char* name) override;
     std::optional<GameModeData> loadGameMode(const char* name) override;
+    std::optional<TheaterDefData> loadTheater(const char* name) override;
 
     std::vector<std::string> listAssets(AssetType type) const override;
 
     std::optional<std::string> loadConfig(const char* name) const override;
+    std::optional<std::vector<uint8_t>> loadPackFile(const char* relPath) const override;
 
     std::optional<std::string> resolveTilePath(const char* terrainId, uint8_t face, uint8_t level, uint32_t i,
                                                uint32_t j, TileLayer layer) const override;

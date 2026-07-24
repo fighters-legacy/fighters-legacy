@@ -12,8 +12,8 @@ tile intersecting a bounding box it:
   2. reads the B04/B03/B02 (RGB) + SCL (scene-classification) bands via GDAL /vsicurl,
   3. builds an SCL-cloud-masked median composite over the scenes,
   4. converts surface reflectance to sRGB (`s2_to_srgb`),
-  5. resamples to the tile's cube-sphere lattice, writes a temp PNG, and BC7-encodes it to
-     `tile_<i>_<j>_sat.ktx2` via `tex-compress` (toktx).
+  5. resamples to the tile's cube-sphere lattice, writes a temp PNG, and Basis-UASTC-encodes it to
+     `tile_<i>_<j>_sat.ktx2` via `tex-compress` (toktx) — transcodable to BC7/ASTC per GPU at load.
 
 Copernicus Sentinel data terms require attribution ("Contains modified Copernicus Sentinel data
 <year>") on a player-reachable credits surface when the derived tiles ship — see NOTICE.
@@ -169,14 +169,18 @@ def _warp_to_latlon(ds, lat_deg, lon_deg, nearest=False):  # pragma: no cover - 
 
 
 def _encode_ktx2(srgb, out_path):  # pragma: no cover - needs toktx
-    """Write an sRGB uint8 HxWx3 array to a BC7 KTX2 via tex-compress (toktx)."""
+    """Write an sRGB uint8 HxWx3 array to a portable Basis KTX2 via tex-compress (toktx).
+
+    Uses UASTC (high quality, transcodes to BC7/ASTC at load) rather than ETC1S so the satellite
+    imagery keeps its fidelity on close approach; the runtime transcodes it per-GPU.
+    """
     from PIL import Image  # optional, only when actually encoding
 
     with tempfile.TemporaryDirectory() as td:
         png = Path(td) / "tile.png"
         Image.fromarray(srgb, "RGB").save(png)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["tex-compress", "--type", "diffuse", "--format", "bc7", "-o", str(out_path), str(png)],
+        subprocess.run(["tex-compress", "--format", "uastc", "-o", str(out_path), str(png)],
                        check=True)
 
 

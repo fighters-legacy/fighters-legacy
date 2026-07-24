@@ -19,6 +19,34 @@ namespace fl {
 
 namespace {
 
+// Append the Basis encode flags for `encoding` to a toktx argv. Both encodings imply `--t2` (the
+// caller still passes it explicitly for clarity). UASTC is losslessly zstd-supercompressed via
+// `--zcmp`, as the toktx manual strongly recommends — without it a UASTC KTX2 is ~4x an ETC1S one.
+void appendEncodeArgs(std::vector<std::string>& argv, TexEncoding encoding) {
+    argv.push_back("--encode");
+    switch (encoding) {
+    case TexEncoding::Etc1s:
+        argv.push_back("etc1s");
+        break;
+    case TexEncoding::Uastc:
+        argv.push_back("uastc");
+        argv.push_back("--zcmp");
+        break;
+    }
+}
+
+// The same encode flags as a display/test string (used by the buildToktx*Command documentation
+// helpers). Kept in lockstep with appendEncodeArgs by construction.
+std::string encodeArgsString(TexEncoding encoding) {
+    switch (encoding) {
+    case TexEncoding::Etc1s:
+        return " --encode etc1s";
+    case TexEncoding::Uastc:
+        return " --encode uastc --zcmp";
+    }
+    return {};
+}
+
 // Build the toktx ARGV (no shell). This is the execution path — deliberately argv, never a
 // concatenated shell string, so a layer/output filename can never inject a shell command
 // (CWE-78). The string builders below exist only to document + test the command shape.
@@ -26,20 +54,7 @@ std::vector<std::string> buildToktxArgv(const std::vector<std::string>& inputPng
                                         const TexCompressOptions& opts) {
     std::vector<std::string> argv;
     argv.push_back(opts.toktxPath);
-    switch (opts.format) {
-    case TexFormat::BC1:
-        argv.push_back("--encode");
-        argv.push_back("bc1");
-        break;
-    case TexFormat::BC3:
-        argv.push_back("--encode");
-        argv.push_back("bc3");
-        break;
-    case TexFormat::BC7:
-        argv.push_back("--encode");
-        argv.push_back("bc7");
-        break;
-    }
+    appendEncodeArgs(argv, opts.encoding);
     if (opts.genMipmaps)
         argv.push_back("--genmipmap");
     argv.push_back("--t2");
@@ -89,17 +104,7 @@ std::string buildToktxCommand(const std::string& inputPng, const std::string& ou
     // Quote the toktx path to handle spaces in the path (Windows SDK paths)
     cmd += "\"" + opts.toktxPath + "\"";
 
-    switch (opts.format) {
-    case TexFormat::BC1:
-        cmd += " --encode bc1";
-        break;
-    case TexFormat::BC3:
-        cmd += " --encode bc3";
-        break;
-    case TexFormat::BC7:
-        cmd += " --encode bc7";
-        break;
-    }
+    cmd += encodeArgsString(opts.encoding);
 
     if (opts.genMipmaps)
         cmd += " --genmipmap";
@@ -116,17 +121,7 @@ std::string buildToktxCommand(const std::string& inputPng, const std::string& ou
 std::string buildToktxLayersCommand(const std::vector<std::string>& inputPngs, const std::string& outputKtx2,
                                     const TexCompressOptions& opts) {
     std::string cmd = "\"" + opts.toktxPath + "\"";
-    switch (opts.format) {
-    case TexFormat::BC1:
-        cmd += " --encode bc1";
-        break;
-    case TexFormat::BC3:
-        cmd += " --encode bc3";
-        break;
-    case TexFormat::BC7:
-        cmd += " --encode bc7";
-        break;
-    }
+    cmd += encodeArgsString(opts.encoding);
     if (opts.genMipmaps)
         cmd += " --genmipmap";
     cmd += " --t2";

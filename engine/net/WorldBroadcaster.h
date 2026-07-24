@@ -207,6 +207,8 @@ struct ControlledEntity {
     bool prevDispenseCm{false};     // countermeasure-dispense edge detector (#529): a held input is one pop
     CrewState crew{};               // per-seat control frame (#969); EMPTY = single-seat fast path (above)
     bool ejected{false};            // #672 AI auto-eject guard: an AI pilot punches out once, not every tick
+    std::string aiScriptName{};     // #152: the Lua AI script asset this controller was built from (empty =
+                                    // not a Lua controller), so a changed ai/*.lua rebuilds the right controllers
 
     // ── carrier ops (#38), all sim-thread, serial deck pass only ─────────────
     bool wasOnDeck{false};       // deck-contact state last tick; the touchdown EDGE arms the arrest check
@@ -355,7 +357,23 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // entity. Sim-thread only. This is the seam future AI/scripted controllers plug into.
     void registerController(EntityId id, std::unique_ptr<IEntityController> controller,
                             std::shared_ptr<const FlightModelData> model = nullptr,
-                            float initialAirspeed = kAutoSpawnAirspeed);
+                            float initialAirspeed = kAutoSpawnAirspeed, std::string aiScriptName = {});
+
+    // ── Content hot-reload (#152), sim-thread only ──────────────────────────
+    // Re-resolve every controlled entity's flight model and swap it in place, preserving flight state
+    // (FlightIntegrator::setFlightModel). On a resolve failure the CURRENT model is kept (Warn) — a
+    // mid-flight fallback to the builtin would be a jarring regression, unlike the spawn path. Call
+    // AFTER evicting the changed flight-model assets from the resolver's cache.
+    void reloadFlightModels();
+
+    // Swap an entity's controller in place, preserving the live FlightIntegrator (unlike
+    // registerController, which rebuilds the integrator from the spawn transform and drops
+    // velocity/fuel). Used to hot-swap a rebuilt Lua controller. Returns false if the entity has no
+    // ControlledEntity. `aiScriptName` re-tags the entity for future reloads.
+    bool replaceController(EntityId id, std::unique_ptr<IEntityController> controller, std::string aiScriptName = {});
+
+    // The entities whose controller was built from the given Lua AI script asset (#152). Sim-thread.
+    [[nodiscard]] std::vector<EntityId> entitiesUsingAiScript(std::string_view scriptName) const;
 
     // Eject the pilot flying `eid` (#672): evaluate the seat envelope from the aircraft's live flight
     // state, spawn a replicating parachute at its position (if the parachute entity type is registered),

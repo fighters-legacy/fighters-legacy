@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <string_view>
 
 namespace fl {
@@ -25,6 +26,13 @@ struct CommandContext {
     // text and delivered here. nullptr = no local server (multi-player pure-client);
     // those commands return "not available".
     std::function<void(std::string_view)> serverCommand;
+
+    // reload_content (#152): force a full client-side content reload (evict caches, re-upload). The
+    // game wires it to AssetManager::evictAll + SceneRenderer::invalidateAllAssets + prediction /
+    // localization / manual invalidation. Kept as a std::function so engine-console stays free of a
+    // renderer/asset dependency. nullptr = client reload unavailable (the command still forwards to
+    // the server via serverCommand). Returns a human-readable status.
+    std::function<std::string()> reloadContent;
 };
 
 // Register all built-in debug commands (help, types, entities, spawn, kill,

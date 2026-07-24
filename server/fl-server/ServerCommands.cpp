@@ -1315,6 +1315,21 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         });
 
     // reload_banlist
+    registry.registerCommand("reload_content",
+                             "reload_content  -- evict content caches and live-apply flight-model changes (#152)",
+                             capBit(Capability::ServerConfig), [ctx](std::span<std::string_view>) -> std::string {
+                                 if (!ctx.env.reloadContent || !ctx.sim.gameLoop)
+                                     return "reload_content: not available";
+                                 ctx.sim.gameLoop->enqueueSimCallback([ctx]() {
+                                     ctx.env.reloadContent();
+                                     std::printf("[admin] reload_content: applied\n");
+                                     if (ctx.rcon.shell)
+                                         ctx.rcon.shell->print("[admin] reload_content: applied");
+                                     std::fflush(stdout);
+                                 });
+                                 return "reload_content: queued";
+                             });
+
     registry.registerCommand("reload_banlist",
                              "reload_banlist  -- reload ban list from security.banlist_path in server.toml",
                              capBit(Capability::ServerConfig), [ctx](std::span<std::string_view>) -> std::string {

@@ -27,6 +27,32 @@ target_link_libraries(test_scene_renderer PRIVATE Catch2::Catch2WithMain engine-
 target_include_directories(test_scene_renderer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_scene_renderer)
 
+# StdFilesystemWatcher (#152): the polling hot-reload backend.
+add_executable(test_std_filesystem_watcher test_std_filesystem_watcher.cpp)
+target_link_libraries(test_std_filesystem_watcher PRIVATE Catch2::Catch2WithMain platform-stdfs)
+target_include_directories(test_std_filesystem_watcher PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_std_filesystem_watcher)
+
+# PreviewScene (#666): the authoring-tools single-model preview bootstrap. engine-content is a PRIVATE
+# dep of engine-render, so link it explicitly for AssetManager in the test.
+add_executable(test_preview_scene test_preview_scene.cpp)
+target_link_libraries(test_preview_scene PRIVATE Catch2::Catch2WithMain engine-render engine-content)
+target_include_directories(test_preview_scene PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_preview_scene)
+
+# fl-viewer option parsing (#666) + overlay gizmos (#838) — only when the tool's lib is built.
+if(TARGET fl-viewer-lib)
+    add_executable(test_viewer_options test_viewer_options.cpp)
+    target_link_libraries(test_viewer_options PRIVATE Catch2::Catch2WithMain fl-viewer-lib)
+    target_include_directories(test_viewer_options PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    catch_discover_tests(test_viewer_options)
+
+    add_executable(test_overlay_gizmos test_overlay_gizmos.cpp)
+    target_link_libraries(test_overlay_gizmos PRIVATE Catch2::Catch2WithMain fl-viewer-lib)
+    target_include_directories(test_overlay_gizmos PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    catch_discover_tests(test_overlay_gizmos)
+endif()
+
 add_executable(test_flight_hud test_flight_hud.cpp)
 target_link_libraries(test_flight_hud PRIVATE Catch2::Catch2WithMain engine-render)
 target_include_directories(test_flight_hud PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -746,6 +772,27 @@ add_executable(test_validate_mesh test_validate_mesh.cpp)
 target_link_libraries(test_validate_mesh
     PRIVATE Catch2::Catch2WithMain validate-mesh-lib)
 catch_discover_tests(test_validate_mesh)
+
+# validate-campaign (#847) + the frontline PNG codec.
+add_executable(test_frontline_png test_frontline_png.cpp)
+target_link_libraries(test_frontline_png PRIVATE Catch2::Catch2WithMain engine-campaign-png)
+catch_discover_tests(test_frontline_png)
+
+add_executable(test_validate_campaign test_validate_campaign.cpp)
+target_link_libraries(test_validate_campaign PRIVATE Catch2::Catch2WithMain validate-campaign-lib engine-campaign-png)
+target_include_directories(test_validate_campaign PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_validate_campaign)
+
+# validate-mod (#651): the whole-pack validator.
+add_executable(test_validate_mod test_validate_mod.cpp)
+target_link_libraries(test_validate_mod PRIVATE Catch2::Catch2WithMain validate-mod-lib engine-crypto)
+target_include_directories(test_validate_mod PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_validate_mod)
+
+# Mesh node-tree description for the fl-viewer panel (#838).
+add_executable(test_mesh_node_tree test_mesh_node_tree.cpp)
+target_link_libraries(test_mesh_node_tree PRIVATE Catch2::Catch2WithMain validate-mesh-lib)
+catch_discover_tests(test_mesh_node_tree)
 
 add_executable(test_tex_compress test_tex_compress.cpp)
 target_link_libraries(test_tex_compress

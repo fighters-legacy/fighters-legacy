@@ -15,6 +15,9 @@ class IWindow;
 //   createMesh / createTexture / createMaterial — upload to GPU, return handle.
 //   destroyMesh / destroyTexture / destroyMaterial — deferred-delete (safe to
 //     call immediately; GPU cleanup is deferred until in-flight frames complete).
+//   destroyMesh CASCADES (#152): it also destroys the material createMesh parsed
+//     from the mesh's own glTF (#833) and that material's textures, so a hot-reload
+//     re-upload does not leak them. The shared default textures are never destroyed.
 //
 // Per-frame submission (between beginFrame and endFrame):
 //   setScene — upload camera/light UBO data, store RenderItems for this frame.
@@ -91,6 +94,18 @@ class IRenderer {
     // material or no resolver — the caller then falls back to a flat colour.
     virtual MaterialHandle getMeshMaterial(MeshHandle h) const = 0;
 
+    // Object-space axis-aligned bounds of the mesh's parsed primitive, in the ENGINE BODY frame (after
+    // any contentForward orientation, #906) — exactly the frame RenderItem transforms live in, so a
+    // caller can frame the model with a camera (the authoring-tools PreviewScene, #836). Returns true
+    // and fills outMin/outMax on success. Non-pure with a false default so a backend/mock without
+    // bounds (and every test mock) needs no change; VkRenderer overrides it.
+    virtual bool getMeshBounds(MeshHandle h, glm::vec3& outMin, glm::vec3& outMax) const {
+        (void)h;
+        (void)outMin;
+        (void)outMax;
+        return false;
+    }
+
     // ── Resource destruction ───────────────────────────────────────────────
     virtual void destroyMesh(MeshHandle h) = 0;
     virtual void destroyTexture(TextureHandle h) = 0;
@@ -131,6 +146,13 @@ class IRenderer {
     // Non-owning view; the span must remain valid until endFrame returns.
     // Cleared by endFrame.
     virtual void setConsoleElements(std::span<const HudElement> elements) = 0;
+
+    // Whether the backend can render kRenderFlagWireframe items (needs the fillModeNonSolid device
+    // feature). A viewer greys its wireframe toggle when false. Non-pure false default — mocks/backends
+    // without it (and every test mock) need no change; VkRenderer overrides it (#838).
+    virtual bool supportsWireframe() const {
+        return false;
+    }
 
     // Capture the next presented frame to a PNG at `path` (#909 groundwork). Returns true if the
     // request was accepted (the write happens at the end of the current/next frame). Non-pure with a

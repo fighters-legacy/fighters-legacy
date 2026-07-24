@@ -1052,6 +1052,9 @@ MaterialHandle VkRenderer::createMaterial(const MaterialDesc& d) {
 MaterialHandle VkRenderer::getMeshMaterial(MeshHandle h) const {
     return m_resources.getMeshMaterial(h);
 }
+bool VkRenderer::getMeshBounds(MeshHandle h, glm::vec3& outMin, glm::vec3& outMax) const {
+    return m_resources.getMeshBounds(h, outMin, outMax);
+}
 void VkRenderer::destroyMesh(MeshHandle h) {
     m_resources.destroyMesh(h);
 }
@@ -1170,6 +1173,10 @@ void VkRenderer::shutdown() {
     if (m_forwardPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_device, m_forwardPipeline, nullptr);
         m_forwardPipeline = VK_NULL_HANDLE;
+    }
+    if (m_forwardWirePipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(m_device, m_forwardWirePipeline, nullptr);
+        m_forwardWirePipeline = VK_NULL_HANDLE;
     }
     if (m_forwardAlphaPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_device, m_forwardAlphaPipeline, nullptr);
@@ -1482,6 +1489,18 @@ bool VkRenderer::createLogicalDevice() {
     VkPhysicalDeviceFeatures2 features2{};
     features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     features2.pNext = &vk13;
+
+    // Enable fillModeNonSolid for the authoring-tools wireframe view (#838) when the device supports
+    // it (all desktop hardware + lavapipe + MoltenVK do). lineWidth stays 1.0, so wideLines is not
+    // needed. m_wireframeSupported gates the LINE pipeline's creation + supportsWireframe().
+    {
+        VkPhysicalDeviceFeatures avail{};
+        vkGetPhysicalDeviceFeatures(m_physicalDevice, &avail);
+        if (avail.fillModeNonSolid) {
+            features2.features.fillModeNonSolid = VK_TRUE;
+            m_wireframeSupported = true;
+        }
+    }
 
     VkDeviceCreateInfo ci{};
     ci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -2585,6 +2604,18 @@ bool VkRenderer::createForwardPipeline() {
 
     const VkResult result =
         vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &pipelineCI, nullptr, &m_forwardPipeline);
+
+    // Wireframe variant (#838): same layout/shaders/formats, LINE polygon mode + no culling (so an
+    // inside-out face still shows its edges). Only when the device enabled fillModeNonSolid; a
+    // failure here is non-fatal (the wireframe view is simply unavailable).
+    if (result == VK_SUCCESS && m_wireframeSupported) {
+        rasterizer.polygonMode = VK_POLYGON_MODE_LINE;
+        rasterizer.cullMode = VK_CULL_MODE_NONE;
+        if (vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &pipelineCI, nullptr, &m_forwardWirePipeline) !=
+            VK_SUCCESS)
+            m_forwardWirePipeline = VK_NULL_HANDLE;
+    }
+
     vkDestroyShaderModule(m_device, vertMod, nullptr);
     vkDestroyShaderModule(m_device, fragMod, nullptr);
 
@@ -4041,12 +4072,23 @@ void VkRenderer::drawOpaqueItems(VkCommandBuffer cmd, VkDescriptorSet set0) {
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_forwardLayout, 2, 1, &m_terrainBiomeSet, 0,
                             nullptr);
 
+    // The caller bound m_forwardPipeline before calling us; track it so a wireframe item can swap to
+    // the LINE variant and back with the minimum rebinds (#838).
+    VkPipeline bound = m_forwardPipeline;
     for (const auto& item : m_pendingScene.renderItems) {
         if (item.flags & kRenderFlagShadowOnly)
             continue; // rendered into the shadow map only, not the color pass
         const GpuMesh* mesh = m_resources.getMesh(item.mesh);
         if (!mesh)
             continue;
+
+        const VkPipeline want = ((item.flags & kRenderFlagWireframe) && m_forwardWirePipeline != VK_NULL_HANDLE)
+                                    ? m_forwardWirePipeline
+                                    : m_forwardPipeline;
+        if (want != bound) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
+            bound = want;
+        }
 
         // Resolve material; fall back to a default if invalid.
         const GpuMaterial* mat = m_resources.getMaterial(item.material);
@@ -4067,6 +4109,7 @@ void VkRenderer::drawOpaqueItems(VkCommandBuffer cmd, VkDescriptorSet set0) {
                          : (item.flags & kRenderFlagDebugFaceColor)   ? 2.0f
                          : (item.flags & kRenderFlagRunway)           ? 3.0f
                          : (item.flags & kRenderFlagTerrainSatellite) ? 4.0f
+                         : (item.flags & kRenderFlagDebugNormals)     ? 5.0f
                                                                       : 0.0f;
         vkCmdPushConstants(cmd, m_forwardLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                            sizeof(pc), &pc);

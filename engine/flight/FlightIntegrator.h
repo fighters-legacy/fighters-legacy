@@ -119,6 +119,19 @@ class FlightIntegrator {
         return *m_data;
     }
 
+    // Swap the flight model in place, preserving the FLIGHT STATE (#152 hot-reload). Position,
+    // velocity, attitude, rates and throttle are model-independent; only mass/fuel are re-derived
+    // (fuel clamped to the new tank capacity, mass = empty + fuel). Strictly better than rebuilding
+    // the integrator, which would drop velocity/fuel. Ignores a null model. Caller contract: re-run
+    // applyForceModelFor() after the swap, since the model's force-model role may have changed.
+    void setFlightModel(std::shared_ptr<const FlightModelData> data) {
+        if (!data)
+            return;
+        m_data = std::move(data);
+        m_state.fuel_kg = std::min(m_state.fuel_kg, m_data->geometry.fuel_kg);
+        m_state.mass_kg = m_data->geometry.mass_kg + m_state.fuel_kg;
+    }
+
     // Inject an alternative gravity field (default: CentralGravityField::earthInstance()).
     // A custom field plugs in here for exotic planets without touching step().
     void setGravityField(const IGravityField& field) {

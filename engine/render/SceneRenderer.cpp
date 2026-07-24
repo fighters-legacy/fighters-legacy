@@ -3,6 +3,7 @@
 #include "render/AirportRenderer.h"
 #include "render/BuiltinGeometry.h"
 #include "render/BuiltinTextures.h"
+#include "render/MeshTextureResolver.h"
 #include "render/ParticleSystem.h"
 #include "render/RenderSnapshot.h"
 #include "render/SimRenderBridge.h"
@@ -21,37 +22,6 @@
 #include <cstdio>    // std::snprintf
 
 namespace fl {
-
-// Map a glTF image URI to a Texture asset name (#833). See the declaration in SceneRenderer.h for the
-// convention; takes the path after the last "textures/" segment (or the bare basename), strips the
-// extension.
-std::string textureAssetNameFromUri(std::string_view uri) {
-    constexpr std::string_view kDir = "textures/";
-    if (auto pos = uri.rfind(kDir); pos != std::string_view::npos)
-        uri.remove_prefix(pos + kDir.size());
-    else if (auto slash = uri.find_last_of("/\\"); slash != std::string_view::npos)
-        uri.remove_prefix(slash + 1);
-    if (auto dot = uri.find_last_of('.'); dot != std::string_view::npos)
-        uri = uri.substr(0, dot);
-    return std::string(uri);
-}
-
-namespace {
-// Map a base Texture asset name (`<slot>_<map>`) to a livery slot-map key (`<slot>.<map>`), or empty
-// when the name carries no recognised map suffix (#845). The map vocabulary matches the livery TOML:
-// diffuse (baseColor), orm, normal.
-std::string liveryKeyFromBaseAsset(std::string_view baseAsset) {
-    static constexpr std::string_view kMaps[] = {"diffuse", "orm", "normal"};
-    for (std::string_view m : kMaps) {
-        if (baseAsset.size() > m.size() + 1 && baseAsset.substr(baseAsset.size() - m.size()) == m &&
-            baseAsset[baseAsset.size() - m.size() - 1] == '_') {
-            const std::string_view slot = baseAsset.substr(0, baseAsset.size() - m.size() - 1);
-            return std::string(slot) + "." + std::string(m);
-        }
-    }
-    return {};
-}
-} // namespace
 
 SceneRenderer::SceneRenderer(SimRenderBridge& bridge, MeshNameResolver resolver, AssetManager& assets,
                              IRenderer& renderer)
@@ -451,27 +421,30 @@ MeshHandle SceneRenderer::getOrUploadMesh(const std::string& meshAssetName, cons
     // URI → asset-name → file mapping is a content-pack concern, not a GPU-backend one.
     //
     // Livery override (#845): a re-skin swaps the TEXTURE the material's map resolves to, never the
-    // geometry/UVs. We derive the base texture's "<slot>.<map>" key and, if the livery re-skins it,
-    // load the replacement asset. A missing key OR a broken override both fall back to the base
-    // texture (per-map fallback to base) — so a partial or broken livery degrades, never fails.
-    // `liveryOverrides` outlives this call (owned by the caller / m_liveryCache) and the resolver is
-    // invoked synchronously inside createMesh below, so capturing by reference is safe.
-    desc.textureResolver = [this, &liveryOverrides](std::string_view uri) -> std::vector<uint8_t> {
+    // geometry/UVs. The shared resolver (MeshTextureResolver.h) derives each URI's base texture, applies
+    // the "<slot>.<map>" override with per-map fallback to base, and loads the bytes — a partial/broken
+    // livery degrades, never fails. `liveryOverrides` outlives this call (owned by the caller /
+    // m_liveryCache) and the resolver is invoked synchronously inside createMesh below.
+    //
+    // Wrap the resolver to record which Texture asset names this mesh actually consumed (#152), so a
+    // hot-reload texture change re-uploads exactly the meshes that referenced it.
+    auto baseResolver = makeMeshTextureResolver(m_assets, liveryOverrides);
+    std::vector<std::string>& deps = m_meshTextureDeps[cacheKey];
+    deps.clear();
+    desc.textureResolver = [&deps, &liveryOverrides,
+                            baseResolver = std::move(baseResolver)](std::string_view uri) -> std::vector<uint8_t> {
+        // Record both the resolved (livery-override) name and the base name — a change to either
+        // must re-upload this mesh.
         const std::string baseAsset = textureAssetNameFromUri(uri);
-        std::string chosen = baseAsset;
+        deps.push_back(baseAsset);
         if (!liveryOverrides.empty()) {
             const std::string key = liveryKeyFromBaseAsset(baseAsset);
             if (!key.empty()) {
                 if (auto ov = liveryOverrides.find(key); ov != liveryOverrides.end())
-                    chosen = ov->second;
+                    deps.push_back(ov->second);
             }
         }
-        auto tex = m_assets.loadTexture(chosen.c_str());
-        if ((!tex || tex->bytes.empty()) && chosen != baseAsset)
-            tex = m_assets.loadTexture(baseAsset.c_str()); // livery override missing/broken → base
-        if (!tex || tex->bytes.empty())
-            return {};
-        return tex->bytes;
+        return baseResolver(uri);
     };
     MeshHandle h = m_renderer.createMesh(desc);
     if (!h.valid() && m_logger) {
@@ -519,6 +492,70 @@ const SceneRenderer::LiveryTextureSet* SceneRenderer::resolveLivery(uint32_t typ
 void SceneRenderer::setLiveryResolver(LiveryResolver resolver) noexcept {
     m_liveryResolver = std::move(resolver);
     m_liveryCache.clear(); // a new resolver may re-skin already-seen types
+}
+
+// ── Hot-reload invalidation (#152) ──────────────────────────────────────────
+
+void SceneRenderer::evictMeshCacheKey(const std::string& cacheKey) {
+    if (auto it = m_meshCache.find(cacheKey); it != m_meshCache.end()) {
+        if (it->second.valid())
+            m_renderer.destroyMesh(it->second); // cascades material + textures (#152)
+        m_meshCache.erase(it);
+    }
+    // The material cache entry is either the mesh-owned material (destroyed by the cascade) or the
+    // shared grey fallback (must never be destroyed) — so drop the entry without destroyMaterial.
+    m_materialCache.erase(cacheKey);
+    m_meshTextureDeps.erase(cacheKey);
+}
+
+void SceneRenderer::invalidateMesh(std::string_view meshAssetName) {
+    const std::string base(meshAssetName);
+    // Evict the plain key and every "<name>@@<livery>" variant.
+    const std::string prefix = base + "@@";
+    std::vector<std::string> keys;
+    for (const auto& [k, _] : m_meshCache)
+        if (k == base || k.compare(0, prefix.size(), prefix) == 0)
+            keys.push_back(k);
+    for (const auto& k : keys)
+        evictMeshCacheKey(k);
+}
+
+void SceneRenderer::invalidateTexture(std::string_view textureAssetName) {
+    const std::string tex(textureAssetName);
+    // Re-upload every mesh whose recorded deps include this texture.
+    std::vector<std::string> keys;
+    for (const auto& [k, deps] : m_meshTextureDeps)
+        if (std::find(deps.begin(), deps.end(), tex) != deps.end())
+            keys.push_back(k);
+    for (const auto& k : keys)
+        evictMeshCacheKey(k);
+}
+
+void SceneRenderer::invalidateLiveries() {
+    m_liveryCache.clear();
+    // Every livery-variant cache key carries the "@@" separator.
+    std::vector<std::string> keys;
+    for (const auto& [k, _] : m_meshCache)
+        if (k.find("@@") != std::string::npos)
+            keys.push_back(k);
+    for (const auto& k : keys)
+        evictMeshCacheKey(k);
+}
+
+void SceneRenderer::invalidateAllAssets() {
+    std::vector<std::string> keys;
+    keys.reserve(m_meshCache.size());
+    for (const auto& [k, _] : m_meshCache)
+        keys.push_back(k);
+    for (const auto& k : keys)
+        evictMeshCacheKey(k);
+    m_meshCache.clear();
+    m_materialCache.clear();
+    m_meshTextureDeps.clear();
+    m_liveryCache.clear();
+    m_typeNameCache.clear();
+    // Builtin placeholders + floor (m_builtin*, m_fallbackEntityMat) are untouched — they never come
+    // from a pack, so a content change can't stale them.
 }
 
 } // namespace fl

@@ -179,8 +179,8 @@ jobs:
           cmake --install build/debug --prefix /tmp/dist --component runtime
           cmake --install build/debug --prefix /tmp/dist --component tools
           missing=0
-          for f in fighters-legacy fl-server validate-flight-model validate-weapon validate-sensor \
-                   validate-entity validate-mission validate-mode validate-mesh validate-playlist \
+          for f in fighters-legacy fl-server fl-viewer validate-flight-model validate-weapon validate-sensor \
+                   validate-entity validate-mission validate-campaign validate-mod validate-mode validate-mesh validate-playlist \
                    validate-licenses validate-livery tex-compress fm-trim; do
             if [ ! -f "/tmp/dist/$f" ]; then echo "MISSING from the release archive: $f"; missing=1; fi
           done
@@ -202,6 +202,8 @@ jobs:
         run: |
           ./build/debug/tools/validate-flight-model --version
           ./build/debug/tools/validate-mission --version
+          ./build/debug/tools/validate-campaign --version
+          ./build/debug/tools/validate-mod --version
           ./build/debug/tools/validate-mode --version
           ./build/debug/tools/validate-weapon --version
           ./build/debug/tools/validate-sensor --version
@@ -218,6 +220,32 @@ jobs:
           ./build/debug/tools/tex-compress --version
           ./build/debug/tools/validate-licenses --version
           ./build/debug/tools/validate-playlist --version
+          ./build/debug/tools/fl-viewer --version
+
+      # The whole authoring-tools epic (#836) hangs off fl-viewer's headless render bootstrap (#666);
+      # exercise it on lavapipe so a broken headless path fails here, not only in the opt-in
+      # demo-videos run. No packs -> the builtin placeholder; just prove a non-empty PNG comes out.
+      - name: Headless snapshot smoke (lavapipe, Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          set -e
+          sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
+          # Do NOT hardcode the lavapipe ICD path — the mesa package's manifest filename varies across
+          # releases (lvp_icd.x86_64.json vs lvp_icd.json), and a wrong VK_ICD_FILENAMES makes the
+          # loader report "Found no drivers" (#836 CI). Discover it; fall back to loader auto-discovery.
+          echo "ICD manifests present:"; ls -la /usr/share/vulkan/icd.d/ || true
+          LVP_ICD="$(ls /usr/share/vulkan/icd.d/lvp_icd*.json 2>/dev/null | head -n1 || true)"
+          if [ -n "$LVP_ICD" ]; then
+            echo "using lavapipe ICD: $LVP_ICD"
+            export VK_ICD_FILENAMES="$LVP_ICD"
+          else
+            echo "no lvp_icd*.json found — relying on Vulkan loader auto-discovery"
+          fi
+          DISPLAY= ./build/debug/tools/fl-viewer --snapshot /tmp/flv-smoke.png --size 320x180
+          test -s /tmp/flv-smoke.png
+          # Exercise the LINE pipeline + fillModeNonSolid enable (#838) on lavapipe too.
+          DISPLAY= ./build/debug/tools/fl-viewer --snapshot /tmp/flv-wire.png --size 320x180 --view wireframe
+          test -s /tmp/flv-wire.png
           ./build/debug/tools/terrain-chunk-io --version
           # --transport enet: net_check is an enet6 client, so the smoke server must speak enet6
           # (fl-server defaults to GNS when built with FL_ENABLE_GNS).
@@ -245,12 +273,16 @@ jobs:
           demo_out=$(./build/debug/tools/validate-mission missions/demos/*.yaml 2>&1)
           if [ -n "$demo_out" ]; then echo "demo missions failed validation:"; echo "$demo_out"; exit 1; fi
 
-      - name: Smoke test tex-compress array KTX2 (Linux)
+      - name: Smoke test tex-compress Basis KTX2 (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          # Real encode gate (#447): install toktx from the KTX-Software release (not reliably an
-          # apt package), pack 4 layer PNGs into an array KTX2, and assert layerCount == 4 — so this
-          # gate actually runs the encode, not just --version.
+          # Real encode gate (#447/#846): install toktx from the KTX-Software release (not reliably an
+          # apt package) and actually run the encode. Two assertions that matter:
+          #   1. the ETC1S array is a Basis payload (vkFormat == VK_FORMAT_UNDEFINED == 0) with
+          #      layerCount == 4 — a raw BCn output (the old silent-uncompressed bug) has a nonzero
+          #      vkFormat and would NOT transcode to ASTC on Apple Silicon;
+          #   2. a UASTC single texture is likewise Basis (vkFormat == 0).
+          # vkFormat is a uint32 LE at KTX2 offset 12; layerCount at offset 32.
           set -e
           KTXVER=4.4.2
           curl -sSL -o /tmp/ktx.tar.bz2 \
@@ -269,13 +301,18 @@ jobs:
           PY
           ./build/debug/tools/tex-compress --type diffuse --layers /tmp/grass.png /tmp/dirt.png /tmp/rock.png /tmp/snow.png \
             -o /tmp/biome.ktx2 --toktx /tmp/ktx/bin/toktx
-          # KTX2 header: layerCount is a uint32 LE at byte offset 32.
+          ./build/debug/tools/tex-compress --type normal /tmp/grass.png /tmp/normal.ktx2 --toktx /tmp/ktx/bin/toktx
           python3 - <<'PY'
           import struct, sys
-          data = open("/tmp/biome.ktx2", "rb").read()
-          layers = struct.unpack_from("<I", data, 32)[0]
-          print("array KTX2 layerCount =", layers)
-          sys.exit(0 if layers == 4 else 1)
+          def vkformat(p): return struct.unpack_from("<I", open(p, "rb").read(), 12)[0]
+          arr = open("/tmp/biome.ktx2", "rb").read()
+          layers = struct.unpack_from("<I", arr, 32)[0]
+          arr_fmt = struct.unpack_from("<I", arr, 12)[0]
+          uastc_fmt = vkformat("/tmp/normal.ktx2")
+          print("array ETC1S KTX2: layerCount =", layers, "vkFormat =", arr_fmt)
+          print("UASTC KTX2: vkFormat =", uastc_fmt)
+          ok = layers == 4 and arr_fmt == 0 and uastc_fmt == 0
+          sys.exit(0 if ok else 1)
           PY
 
       - name: Smoke test asset pipeline tools (Windows)
@@ -283,6 +320,8 @@ jobs:
         run: |
           .\build\debug-msvc\tools\validate-flight-model.exe --version
           .\build\debug-msvc\tools\validate-mission.exe --version
+          .\build\debug-msvc\tools\validate-campaign.exe --version
+          .\build\debug-msvc\tools\validate-mod.exe --version
           .\build\debug-msvc\tools\validate-weapon.exe --version
           .\build\debug-msvc\tools\validate-sensor.exe --version
           .\build\debug-msvc\tools\validate-entity.exe --version
@@ -292,6 +331,7 @@ jobs:
           .\build\debug-msvc\tools\validate-licenses.exe --version
           .\build\debug-msvc\tools\validate-playlist.exe --version
           .\build\debug-msvc\tools\terrain-chunk-io.exe --version
+          .\build\debug-msvc\tools\fl-viewer.exe --version
         shell: pwsh
 
       - name: Verify static linking (Linux)

@@ -129,6 +129,36 @@ bool ImGuiGui::selectable(std::string_view label, bool selected) {
     return m_valid && ImGui::Selectable(z(label), selected);
 }
 
+bool ImGuiGui::checkbox(std::string_view label, bool* value) {
+    if (!m_valid || !value)
+        return false;
+    return ImGui::Checkbox(z(label), value);
+}
+
+bool ImGuiGui::treeNode(std::string_view id, std::string_view label, bool* selected, bool leaf) {
+    if (!m_valid)
+        return false;
+    ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
+    if (leaf)
+        flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+    if (selected && *selected)
+        flags |= ImGuiTreeNodeFlags_Selected;
+    // Push the id so duplicate node labels don't collide; render `label` as the visible text.
+    ImGui::PushID(z(id));
+    const bool open = ImGui::TreeNodeEx("", flags, "%s", z(label));
+    if (selected && ImGui::IsItemClicked())
+        *selected = true;
+    ImGui::PopID();
+    // A leaf uses NoTreePushOnOpen, so it never pushes the tree stack -> return false so the caller
+    // does not call treePop() for it. A non-leaf returns whether it is open (caller pairs treePop()).
+    return leaf ? false : open;
+}
+
+void ImGuiGui::treePop() {
+    if (m_valid)
+        ImGui::TreePop();
+}
+
 bool ImGuiGui::beginTable(std::string_view id, int columns) {
     if (!m_valid || columns < 1)
         return false;

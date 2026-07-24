@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "content/ModLoader.h"
 
+#include "content/ModManifest.h"
+
 #include "IFilesystem.h"
 #include "ILogger.h"
 #include "content/FolderContentPack.h"
 #include "content/IContentPackEventHandler.h"
 
-#include "config/TomlNumeric.h"
 #include <toml++/toml.hpp>
 
 #if defined(_WIN32)
@@ -16,8 +17,6 @@
 #endif
 
 #include <algorithm>
-#include <cctype>
-#include <cstring>
 #include <unordered_set>
 
 namespace fl {
@@ -25,57 +24,6 @@ namespace fl {
 // ---------------------------------------------------------------------------
 // Manifest sanitization helpers
 // ---------------------------------------------------------------------------
-
-static bool isWindowsReservedName(std::string_view component) {
-    // Strip extension before comparing (e.g. "NUL.toml" → "NUL")
-    auto dot = component.rfind('.');
-    if (dot != std::string_view::npos)
-        component = component.substr(0, dot);
-
-    if (component.empty())
-        return false;
-
-    static const char* kReserved[] = {
-        "CON",  "NUL",  "PRN",  "AUX",  "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
-        "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
-    };
-    for (const char* r : kReserved) {
-        if (component.size() != std::strlen(r))
-            continue;
-        bool match = true;
-        for (size_t i = 0; i < component.size(); ++i) {
-            if (std::toupper(static_cast<unsigned char>(component[i])) != static_cast<unsigned char>(r[i])) {
-                match = false;
-                break;
-            }
-        }
-        if (match)
-            return true;
-    }
-    return false;
-}
-
-// Returns true if `field` is safe to use as an id or name manifest field.
-// Rejects: length > 128, null bytes, path separators, drive letters, Windows reserved names.
-static bool isValidIdentifier(std::string_view field) {
-    if (field.size() > 128)
-        return false;
-    // Null bytes
-    if (field.find('\0') != std::string_view::npos)
-        return false;
-    // Path separators
-    if (field.find('/') != std::string_view::npos)
-        return false;
-    if (field.find('\\') != std::string_view::npos)
-        return false;
-    // Drive-letter prefix (e.g. "C:")
-    if (field.size() >= 2 && std::isalpha(static_cast<unsigned char>(field[0])) && field[1] == ':')
-        return false;
-    // Windows reserved device names
-    if (isWindowsReservedName(field))
-        return false;
-    return true;
-}
 
 ModLoader::ModLoader(IFilesystem& fs, ILogger& logger, std::string assetsAbsoluteRoot)
     : m_fs(fs), m_logger(logger), m_assetsAbsoluteRoot(std::move(assetsAbsoluteRoot)) {}
@@ -96,105 +44,41 @@ bool ModLoader::validateEngineApi(const std::string& engineApi, const std::strin
 }
 
 std::optional<ModLoader::Manifest> ModLoader::parseManifest(const char* path) {
-    // Read file into string
     int handle = m_fs.openFile(PathDomain::Assets, path, false);
     if (handle < 0)
-        return std::nullopt; // missing manifest.toml ��� silently skip at Debug level
+        return std::nullopt; // missing manifest.toml — silently skip at Debug level
 
     std::size_t size = m_fs.getFileSize(handle);
     std::string content(size, '\0');
     m_fs.readFile(handle, content.data(), size);
     m_fs.closeFile(handle);
 
-    toml::table tbl;
-    try {
-        tbl = toml::parse(content);
-    } catch (const toml::parse_error& e) {
-        m_logger.log(LogLevel::Error, __FILE__, __LINE__,
-                     (std::string("failed to parse manifest '") + path + "': " + e.what()).c_str());
+    // Delegate the schema to the shared parser (#651), so ModLoader and validate-mod cannot drift on
+    // the required-field / identifier rules. ModLoader keeps its log-and-skip contract by logging the
+    // accumulated errors here and returning nullopt on any of them.
+    ModManifestParseResult res = parseModManifest(content);
+    for (const std::string& w : res.warnings)
+        m_logger.log(LogLevel::Warn, __FILE__, __LINE__, (std::string("manifest '") + path + "': " + w).c_str());
+    for (const std::string& e : res.errors)
+        m_logger.log(LogLevel::Error, __FILE__, __LINE__, (std::string("manifest '") + path + "': " + e).c_str());
+    if (!res.ok)
         return std::nullopt;
-    }
 
-    auto mod = tbl["mod"];
-    if (!mod) {
-        m_logger.log(LogLevel::Error, __FILE__, __LINE__,
-                     (std::string("manifest '") + path + "': missing [mod] table").c_str());
-        return std::nullopt;
-    }
-
-    // Validate required fields
-    auto name = mod["name"].value<std::string>();
-    auto id = mod["id"].value<std::string>();
-    auto version = mod["version"].value<std::string>();
-    auto engineApi = mod["engine-api"].value<std::string>();
-    auto priority = tomlIntNarrow(mod["priority"]);
-
-    if (!name || !id || !version || !engineApi || !priority) {
-        m_logger.log(LogLevel::Error, __FILE__, __LINE__,
-                     (std::string("manifest '") + path +
-                      "': missing required field(s) (name, id, version, engine-api, priority)")
-                         .c_str());
-        return std::nullopt;
-    }
+    // A present signature is noted (GPG verification is Phase 6). ModLoader-level Info, not a parser
+    // finding, so it stays out of the validator's error/warning surface.
+    if (res.manifest.hasSignature)
+        m_logger.log(LogLevel::Info, __FILE__, __LINE__,
+                     ("mod '" + res.manifest.id + "': signature present but not verified in this build").c_str());
 
     Manifest manifest;
-    manifest.name = std::move(*name);
-    manifest.id = std::move(*id);
-    manifest.version = std::move(*version);
-    manifest.engineApi = std::move(*engineApi);
-    manifest.priority = *priority;
-
-    // Sanitize id and name: must be safe path-component identifiers
-    if (!isValidIdentifier(manifest.id)) {
-        m_logger.log(LogLevel::Error, __FILE__, __LINE__,
-                     (std::string("manifest '") + path + "': invalid id field '" + manifest.id + "'").c_str());
-        return std::nullopt;
-    }
-    if (!isValidIdentifier(manifest.name)) {
-        m_logger.log(LogLevel::Error, __FILE__, __LINE__,
-                     (std::string("manifest '") + path + "': invalid name field '" + manifest.name + "'").c_str());
-        return std::nullopt;
-    }
-
-    // Optional def-id prefix. Defaults to the mod id, which is what a pack whose def ids agree with
-    // its id gets for free. A ':' is rejected outright: the namespace IS the part before the colon,
-    // so one inside it would make "a:b:c" ambiguous to every id parser downstream.
-    manifest.namespaceId = mod["namespace"].value<std::string>().value_or(manifest.id);
-    if (!isValidIdentifier(manifest.namespaceId) || manifest.namespaceId.find(':') != std::string::npos) {
-        m_logger.log(
-            LogLevel::Error, __FILE__, __LINE__,
-            (std::string("manifest '") + path + "': invalid namespace field '" + manifest.namespaceId + "'").c_str());
-        return std::nullopt;
-    }
-
-    // Optional depends array
-    if (auto deps = mod["depends"].as_array()) {
-        for (auto& dep : *deps) {
-            if (auto s = dep.value<std::string>())
-                manifest.depends.push_back(std::move(*s));
-        }
-    }
-
-    // Optional [mod.trust] section — parsed but GPG not verified until Phase 6
-    if (auto trust = tbl["mod"]["trust"]) {
-        if (auto sig = trust["signature"].value<std::string>(); sig && !sig->empty()) {
-            m_logger.log(LogLevel::Info, __FILE__, __LINE__,
-                         ("mod '" + manifest.id + "': signature present but not verified in this build").c_str());
-        }
-        if (auto signedBy = trust["signed-by"].value<std::string>()) {
-            if (*signedBy == "community") {
-                manifest.trustLevel = TrustLevel::Community;
-            } else if (*signedBy == "maintainer") {
-                manifest.trustLevel = TrustLevel::Maintainer;
-            } else {
-                m_logger.log(
-                    LogLevel::Warn, __FILE__, __LINE__,
-                    ("mod '" + manifest.id + "': unknown signed-by value '" + *signedBy + "' — defaulting to Unsigned")
-                        .c_str());
-            }
-        }
-    }
-
+    manifest.name = std::move(res.manifest.name);
+    manifest.id = std::move(res.manifest.id);
+    manifest.version = std::move(res.manifest.version);
+    manifest.engineApi = std::move(res.manifest.engineApi);
+    manifest.namespaceId = std::move(res.manifest.namespaceId);
+    manifest.priority = res.manifest.priority;
+    manifest.depends = std::move(res.manifest.depends);
+    manifest.trustLevel = res.manifest.trustLevel;
     return manifest;
 }
 

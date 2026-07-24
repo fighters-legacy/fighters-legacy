@@ -63,6 +63,18 @@ class IGui {
     // label (this HAL stays list-oriented; the table below is read-only display).
     virtual bool selectable(std::string_view label, bool selected) = 0;
 
+    // A labelled on/off checkbox bound to *value; returns true only on the frame it toggles (#838).
+    virtual bool checkbox(std::string_view label, bool* value) = 0;
+
+    // ── Hierarchy tree (fl-viewer node panel, #838) ─────────────────────────────────────────────
+    // One row of a collapsible tree at the current depth. `id` disambiguates duplicate labels (glTF
+    // nodes may share names). Returns true when the row is OPEN — the caller then emits its children
+    // and calls treePop(). A `leaf` row draws without an arrow, never opens, and its treeNode() returns
+    // false (so the caller does NOT call treePop() for it). `selected` (may be null) reflects and
+    // receives click-selection: it is set true on the frame the row is clicked.
+    virtual bool treeNode(std::string_view id, std::string_view label, bool* selected, bool leaf) = 0;
+    virtual void treePop() = 0;
+
     // ── Read-only table (scoreboard / stats display) ───────────────────────────────────────────
     // beginTable() returns true when visible; then tableHeadersRow(headers) once, then per row
     // tableNextRow() followed by exactly `columns` tableCell() calls. Always endTable() when beginTable

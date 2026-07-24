@@ -3,6 +3,10 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <set>
+#include <string>
+#include <vector>
+
 namespace fl {
 
 namespace {
@@ -160,6 +164,64 @@ CampaignParseResult parseCampaign(std::string_view yamlContent) {
 
     if (c.theaters.empty() && c.story.empty())
         r.errors.push_back("a campaign must declare at least one dynamic theater or story mission");
+
+    // ── Referential integrity (#847): the engine cannot resolve these, so a broken graph must not
+    // load. Also warn on unreachable beats (almost always an authoring bug). ──────────────────────
+    std::set<std::string> storyIds, theaterIds;
+    for (const auto& s : c.story) {
+        if (!s.id.empty() && !storyIds.insert(s.id).second)
+            r.errors.push_back("story[] duplicate id: " + s.id);
+    }
+    for (const auto& t : c.theaters) {
+        if (!t.id.empty() && !theaterIds.insert(t.id).second)
+            r.errors.push_back("dynamic.theaters[] duplicate id: " + t.id);
+    }
+    auto storyExists = [&](const std::string& id) { return storyIds.count(id) != 0; };
+    auto theaterExists = [&](const std::string& id) { return theaterIds.count(id) != 0; };
+    for (const auto& s : c.story) {
+        if (!s.onComplete.nextId.empty() && !storyExists(s.onComplete.nextId))
+            r.errors.push_back("story '" + s.id + "': on_complete.next.id references unknown story '" +
+                               s.onComplete.nextId + "'");
+        if (!s.onFail.nextId.empty() && !storyExists(s.onFail.nextId))
+            r.errors.push_back("story '" + s.id + "': on_fail.next.id references unknown story '" + s.onFail.nextId +
+                               "'");
+        if (!s.onComplete.unlock.empty() && !theaterExists(s.onComplete.unlock))
+            r.errors.push_back("story '" + s.id + "': on_complete.unlock references unknown theater '" +
+                               s.onComplete.unlock + "'");
+        if (!s.theaterId.empty() && !theaterExists(s.theaterId))
+            r.errors.push_back("story '" + s.id + "': theater references unknown theater '" + s.theaterId + "'");
+        // A set_frontline needs a theater to apply to.
+        if ((!s.onComplete.setFrontline.empty() || !s.onFail.setFrontline.empty()) && s.theaterId.empty())
+            r.errors.push_back("story '" + s.id + "': set_frontline requires a theater: field");
+    }
+    // Unreachable-story warning: BFS from the trigger-armed roots (a non-empty top-level trigger is
+    // what the engine arms at construction) over the next.id edges.
+    if (!c.story.empty()) {
+        std::set<std::string> reachable;
+        std::vector<std::string> queue;
+        for (const auto& s : c.story)
+            if (!s.trigger.empty() && !s.id.empty() && reachable.insert(s.id).second)
+                queue.push_back(s.id);
+        auto findStory = [&](const std::string& id) -> const CampaignStoryMission* {
+            for (const auto& s : c.story)
+                if (s.id == id)
+                    return &s;
+            return nullptr;
+        };
+        while (!queue.empty()) {
+            const std::string id = queue.back();
+            queue.pop_back();
+            const CampaignStoryMission* s = findStory(id);
+            if (!s)
+                continue;
+            for (const std::string& nxt : {s->onComplete.nextId, s->onFail.nextId})
+                if (!nxt.empty() && reachable.insert(nxt).second)
+                    queue.push_back(nxt);
+        }
+        for (const auto& s : c.story)
+            if (!s.id.empty() && reachable.count(s.id) == 0)
+                r.warnings.push_back("story '" + s.id + "' is unreachable from any campaign_start / trigger");
+    }
 
     r.ok = r.errors.empty();
     return r;

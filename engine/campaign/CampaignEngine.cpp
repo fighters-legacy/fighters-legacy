@@ -55,7 +55,7 @@ CampaignEngine::CampaignEngine(CampaignDef def, uint64_t seed, FrontlineLoader l
         ts.groundUnits = th.groundUnits;
         ts.unlocked = !theaterEverUnlockedByStory(th.id);
         ts.frontline = Frontline(th.frontlineCols, th.frontlineRows,
-                                 GeoBounds{}); // bounds are theater-manifest data; the loader may refine
+                                 th.bounds); // bounds from the theater manifest (#847), zero if unresolved
         if (m_loader && !th.initialFrontline.empty())
             m_loader(th.initialFrontline, ts.frontline);
         m_theaters.emplace(th.id, std::move(ts));

@@ -61,6 +61,11 @@ struct ServerCommandContext {
         // data/difficulty.toml); null = difficulty scaling unavailable, and reload_config leaves the
         // running scaling untouched rather than silently resetting it to a default.
         std::function<fl::AiScaling(const std::string& preset)> resolveAiScaling;
+
+        // reload_content (#152): evict the content caches and live-apply the changes on the sim thread
+        // (flight models re-resolved onto live entities via WorldBroadcaster::reloadFlightModels). The
+        // command enqueues onto the sim callback queue; null = content reload unavailable.
+        std::function<void()> reloadContent;
     } env;
 
     // Shutdown command policy (from ServerConfig [shutdown] section).

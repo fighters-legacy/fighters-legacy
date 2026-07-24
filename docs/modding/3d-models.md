@@ -211,11 +211,13 @@ in the glTF material. The URI in the glTF JSON should be a relative path to the 
 },
 ...
 "images": [
-    { "uri": "../textures/fa18c_diffuse.ktx2" }
+    { "uri": "../../textures/fa18c_diffuse.ktx2" }
 ]
 ```
 
-See [`docs/modding/textures.md`](textures.md) for the full texture pipeline workflow.
+The URI points at the built `.ktx2` under the pack-level `textures/` directory (two levels up from
+`aircraft/<id>/`); the `.ktx2` itself is a release artifact, built by `tex-compress` from the
+committed PNG masters — see [`docs/modding/textures.md`](textures.md) for the full pipeline.
 
 ---
 

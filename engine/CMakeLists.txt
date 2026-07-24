@@ -2,8 +2,10 @@
 # Sources added here as Workstream A progresses
 
 add_library(engine-content STATIC
+    content/AssetPaths.cpp
     content/FolderContentPack.cpp
     content/ModLoader.cpp
+    content/ModManifest.cpp
     content/AssetManager.cpp
     content/AssetValidator.cpp
     content/BundledBaseTerrain.cpp
@@ -94,6 +96,8 @@ add_library(engine-render STATIC
     render/SimRenderBridge.cpp
     render/CameraController.cpp
     render/SceneRenderer.cpp
+    render/MeshTextureResolver.cpp
+    render/PreviewScene.cpp
     render/ParticleSystem.cpp
     render/BuiltinGeometry.cpp
     render/BuiltinTextures.cpp
@@ -340,12 +344,27 @@ add_library(engine-campaign STATIC
     campaign/CampaignEngine.cpp
     campaign/MissionTemplate.cpp
     campaign/CampaignRunner.cpp
+    campaign/TheaterManifest.cpp
+    campaign/TemplateHeader.cpp
 )
 target_include_directories(engine-campaign PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-campaign
     PUBLIC  engine-entity   # GLM + engine/ include dir; flight/Geodetic.h (world<->geodetic mapping)
     PRIVATE yaml-cpp::yaml-cpp
+            tomlplusplus::tomlplusplus  # theater manifest parser (#847)
 )
+
+# The 8-bit-grayscale frontline PNG codec (#847), its own target so engine-campaign keeps its
+# documented no-image-library policy (Frontline holds decoded pixels only). stb via FetchContent.
+add_library(engine-campaign-png STATIC
+    campaign/FrontlinePng.cpp
+)
+target_include_directories(engine-campaign-png
+    PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}
+    PRIVATE "${stb_SOURCE_DIR}")
+# One vendored-header TU (STB_IMAGE_STATIC) — quiet the stb unused-function warnings under -Werror.
+set_source_files_properties(campaign/FrontlinePng.cpp PROPERTIES
+    COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/W0,-w>")
 
 # Data-parallel task scheduler: persistent worker pool + blocking parallel_for. Declared before
 # engine-net so the broadcaster can link it for the parallel sim tick.

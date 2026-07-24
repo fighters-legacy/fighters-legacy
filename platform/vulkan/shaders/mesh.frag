@@ -218,7 +218,8 @@ void main() {
     // #475), or runway markings (#487). Terrain/debug/runway use the geometric (flat) normal.
     bool isTerrain   = (push.shadingMode > 0.5 && push.shadingMode < 1.5);
     bool isRunway    = (push.shadingMode > 2.5 && push.shadingMode < 3.5);
-    bool isSatellite = (push.shadingMode > 3.5); // #488: albedo from the satellite texture
+    bool isSatellite = (push.shadingMode > 3.5 && push.shadingMode < 4.5); // #488: albedo from the satellite texture
+    bool isNormals   = (push.shadingMode > 4.5); // #838 authoring view: visualize the final world-space normal
 
     // Packed terrain data (#475): the spherical-valid detail coordinate replaces the old
     // fragWorldPos.xz + worldOrigin.xz, which cancelled to metre-precision garbage at Earth radius.
@@ -284,6 +285,15 @@ void main() {
             roughness = clamp(roughness + (h0 - 0.5) * 0.15 * detailFade, 0.5, 1.0);
         }
         roughness = mix(roughness, 0.12, water); // glossy water
+    }
+
+    // Normals debug view (#838): visualize the FINAL shaded normal (post normal-map) as RGB, so an
+    // author can debug a normal map without flying the jet. It still passes through the sky/tonemap
+    // like the face-color view; hue direction is what matters. N is fully resolved by here.
+    if (isNormals) {
+        outColor = vec4(N * 0.5 + 0.5, 1.0);
+        outNormal = vec4(octEncode(N), 0.0, 1.0);
+        return;
     }
 
     // View and half vectors (camera-relative: camera is at origin)
