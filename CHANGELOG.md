@@ -9,6 +9,59 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **audio**: the radio-net presentation layer — radio DSP, PTT squelch, per-net ducking, subtitles
+  (#925, Epic #499). What separates a combat flight sim's radio from lobby voice chat is almost
+  entirely presentation; the bytes are the same Opus either way. `engine/voice/RadioDsp.h` adds a
+  300–3000 Hz biquad pair into a `tanh` soft clipper (not a hard clamp, whose odd harmonics read as
+  digital distortion rather than a compressed channel), an optional carrier hiss, and **generated**
+  key-down click / squelch-tail cues — deterministic byte-stable procedural PCM, the
+  `SfxBuiltinSounds` contract, so the radio sounds like a radio in the zero-pack sandbox and
+  identical on every machine. Those cues are why the wire carries an explicit end-of-transmission
+  marker rather than deriving the boundary from a receive timeout, which would put the squelch a
+  timeout late. Ducking is one smoothed envelope for the whole radio and drops the **music** only —
+  the engine note and the RWR are information the pilot is flying on. Each new transmission pushes a
+  `[NET] Callsign…` line onto the same `SubtitleQueue` the ATC callouts use, which is both the
+  accessibility path and the answer to "who was that?" when a radio-filtered voice is hard to place.
+  Crucially, ATC/AWACS/TTS traffic runs the **same** filter, cues, net gain and ducking as human
+  voice (`MsgRadioTransmission.netId` → `VoiceCalloutManager`), so there is one implementation rather
+  than two that drift and a synthetic transmission is indistinguishable in presentation. New
+  bottom-left HUD indicator shows the armed net, a mic-level-driven TX light, and who is on the air.
+  Full design record in `docs/voice.md`.
+
+- **network**: voice channel over the transport with team / flight / proximity routing (#532, Epic
+  #499). Three messages — `MsgVoiceNetDef` (0x23, the server's radio-net table, sent once after
+  ConnectAck), `MsgVoiceFrame` (0x24, client→server) and `MsgVoiceRelay` (0x25, server→client) — and
+  **the server understands exactly one thing about the audio: how many bytes it is**. Frames are
+  relayed opaque to a recipient set derived from the net's kind, so voice at 128 players costs the
+  server almost nothing and the codec stays a client-to-client contract that can change without a
+  protocol change. Routing lives in `engine/net/VoiceRouter.h` as pure functions over a net table and
+  a peer list, testable without a server or a transport. Nets are **data**: `[[voice.nets]]` in
+  server.toml, or the compiled-in team/flight/atc/proximity stack when an operator configures
+  nothing. There is deliberately no frequency dial. Voice rides its **own transport channel**
+  (`kNetChVoice`, new `INetwork::sendChannel` with a forwarding default so no mock changes) because
+  ENet sequences unreliable packets per channel and drops stale ones — 50 voice frames/s sharing a
+  channel with 60 snapshots/s would make the two streams cut each other to pieces. `MsgRadioTransmission`
+  gained a `netId` so synthetic ATC/TTS traffic rides the same net as human voice and gets the same
+  presentation. Admin: `voice`, `voice_mute`, `voice_unmute` (transmit-only — muting is not a
+  punishment that also blinds someone to their own team).
+
+- **audio**: Opus voice capture, playback and positional mix — the local half of the radio (#531,
+  Epic #499). New `engine-voice` library: a fixed-operating-point Opus wrapper (48 kHz mono, 20 ms
+  frames, VOIP mode, in-band FEC scaled by measured link loss), a per-speaker voice jitter buffer,
+  a PTT/VOX keying gate, and a `VoiceMixer` that decodes one stream per **(speaker, net)** pair and
+  places it head-locked or camera-relative-positional per the net's profile. A new `IAudioCapture`
+  HAL (SDL3 recording backend) keeps microphone capture out of `IAudio` — OpenAL's capture side is
+  an optional extension with no device enumeration, and capture has a per-transmission lifecycle
+  playback does not. Voice cannot reuse `engine/net/JitterBuffer.h`: control input stale-repeats on
+  underrun, which for audio produces a robotic stutter instead of Opus's near-inaudible packet-loss
+  concealment, and a late voice frame is a syllable rather than a worthless stale stick position.
+  Every failure degrades softly and independently (no device / no encoder / no audio device =
+  listen-only, send-only, or a clean no-op), so CI and a machine with no sound card need no
+  `#ifdef`. Client config lands as `[voice]` in `user.toml` plus three rebindable actions
+  (`PushToTalkPrimary` V, `PushToTalkSecondary` B, `VoiceNetCycle` M) and a voice section in the
+  settings screen — whose row layout is now computed rather than hand-tabulated, so the hover bands
+  can no longer drift off the drawn rows.
+
 - **tools**: `validate-mesh` animation checks + the `3d-models.md` registry rewrite (#844, Epic #837).
   The validator could not see animations at all: a `.glb` with a misspelled clip name, a skinned mesh,
   or a rest pose that disagreed with its own `t=0` keyframe passed clean and then simply did not move

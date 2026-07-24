@@ -562,3 +562,72 @@ else()
     )
     FetchContent_MakeAvailable(tomlplusplus)
 endif()
+
+# ---------------------------------------------------------------------------
+# Opus — the voice codec for the in-game radio nets (Epic J, #531/#532).
+# System-preferred with a FetchContent fallback, normalized onto `fl::opus`
+# (the zstd pattern), because distros disagree about what an opus dev package
+# provides: Fedora/brew/vcpkg ship upstream's OpusConfig.cmake, Debian/Ubuntu
+# ship only headers + pkg-config.
+#
+# Unconditional (not gated behind an option) on purpose: a build flag here would
+# create a second, differently-shaped voice path that CI would never exercise
+# evenly. libopus is ~1 MB of dependency-free C with a native CMake build; the
+# cost of always having it is far below the cost of two code paths. BSD-3.
+# Note the codec is only ever fed OUR OWN encoder's output relayed by the
+# server — but the server never decodes, so a client decodes attacker-supplied
+# bytes; payload length is capped on both sides (see kMaxVoicePayloadBytes).
+# ---------------------------------------------------------------------------
+find_package(Opus CONFIG QUIET)
+if(TARGET Opus::opus)
+    add_library(fl-opus INTERFACE)
+    target_link_libraries(fl-opus INTERFACE Opus::opus)
+    add_library(fl::opus ALIAS fl-opus)
+    message(STATUS "opus: system (CMake config)")
+else()
+    find_path(FL_OPUS_INCLUDE_DIR opus/opus.h)
+    find_library(FL_OPUS_LIBRARY NAMES opus libopus)
+    if(FL_OPUS_INCLUDE_DIR AND FL_OPUS_LIBRARY)
+        add_library(fl-opus INTERFACE)
+        # Upstream headers include each other as "opus_types.h", so the opus/ subdir
+        # must be on the include path too, not just its parent.
+        target_include_directories(fl-opus SYSTEM INTERFACE
+            ${FL_OPUS_INCLUDE_DIR} ${FL_OPUS_INCLUDE_DIR}/opus)
+        target_link_libraries(fl-opus INTERFACE ${FL_OPUS_LIBRARY})
+        add_library(fl::opus ALIAS fl-opus)
+        message(STATUS "opus: system (${FL_OPUS_LIBRARY})")
+    else()
+        message(STATUS "opus: FetchContent")
+        set(OPUS_BUILD_SHARED_LIBRARY OFF CACHE BOOL "" FORCE)
+        set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+        set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+        set(OPUS_INSTALL_PKG_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
+        set(OPUS_INSTALL_CMAKE_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
+        # Opus's CMakeLists does `if(OPUS_BUILD_TESTING OR BUILD_TESTING)` and force-enables its own
+        # tests when the PARENT project has BUILD_TESTING on (ours does) — OPUS_BUILD_TESTING=OFF is
+        # not enough. Shadow BUILD_TESTING for the subproject scope only (the vorbis-block pattern),
+        # so opus never registers its test_opus_* targets, whose MSVC C4244 double->float warnings
+        # became fatal under our -Werror (GCC's equivalent is not in -Wall -Wextra, so only Windows
+        # failed). Belt and suspenders: disable warning-as-error around MakeAvailable so ANY opus
+        # target opus does build is exempt (the SDL-block pattern).
+        set(FL_SAVED_BUILD_TESTING "${BUILD_TESTING}")
+        set(BUILD_TESTING OFF)
+        set(CMAKE_COMPILE_WARNING_AS_ERROR OFF)
+        FetchContent_Declare(opus_src
+            GIT_REPOSITORY https://github.com/xiph/opus.git
+            GIT_TAG        v1.5.2
+            GIT_SHALLOW    TRUE
+            GIT_PROGRESS   TRUE
+            SYSTEM
+        )
+        FetchContent_MakeAvailable(opus_src)
+        unset(CMAKE_COMPILE_WARNING_AS_ERROR)
+        set(BUILD_TESTING "${FL_SAVED_BUILD_TESTING}")
+        unset(FL_SAVED_BUILD_TESTING)
+        # Third-party C sources must not inherit -Werror (see the Lua/zstd blocks above).
+        set_target_properties(opus PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
+        add_library(fl-opus INTERFACE)
+        target_link_libraries(fl-opus INTERFACE opus)
+        add_library(fl::opus ALIAS fl-opus)
+    endif()
+endif()

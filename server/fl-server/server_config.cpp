@@ -284,7 +284,26 @@ static const char* kDefaultToml =
     "[chat]\n"
     "# In-match text chat (#646): all/team channels, per-peer rate limit, admin mute.\n"
     "enabled = true\n"
-    "# rate_limit_per_s = 2     # chat lines per second per player; [1, 60]\n";
+    "# rate_limit_per_s = 2     # chat lines per second per player; [1, 60]\n"
+    "\n"
+    "[voice]\n"
+    "# In-game voice comms (Epic J): PTT-keyed radio NETS, Opus relayed without server-side decode.\n"
+    "# There is deliberately no frequency dial - nets are named channels.\n"
+    "enabled = true\n"
+    "# frame_rate_limit = 60    # frames/s per player; [1, 200]. 50 = one continuous transmission.\n"
+    "#\n"
+    "# Omit [[voice.nets]] entirely to use the compiled-in stack: team (default PTT), flight, atc,\n"
+    "# and a positional proximity net at 3 km. Defining ANY net replaces that stack wholesale.\n"
+    "# [[voice.nets]]\n"
+    "# id = \"team\"            # addressed by config and admin commands; must be unique\n"
+    "# name = \"TEAM\"          # display label on the HUD and PTT selector\n"
+    "# kind = \"team\"          # global | team | flight | proximity | atc\n"
+    "# default = true          # pre-selected under the primary PTT key\n"
+    "# [[voice.nets]]\n"
+    "# id = \"proximity\"\n"
+    "# kind = \"proximity\"\n"
+    "# positional = true       # mix at the speaker's bearing rather than head-locked\n"
+    "# range_m = 3000.0        # audible radius; 0 = unlimited\n";
 
 std::string_view defaultServerConfigToml() {
     return kDefaultToml;
@@ -1035,6 +1054,38 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
             else
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "chat.rate_limit_per_s out of range [1, 60]; using default 2");
+        }
+
+        // [voice]  — in-game voice comms (Epic J, #532)
+        if (auto v = tbl["voice"]["enabled"].value<bool>())
+            cfg.voice.enabled = *v;
+        if (auto v = tomlInt(tbl["voice"]["frame_rate_limit"])) {
+            if (*v >= 1 && *v <= 200)
+                cfg.voice.frameRateLimit = static_cast<int>(*v);
+            else
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "voice.frame_rate_limit out of range [1, 200]; using default 60");
+        }
+        if (auto* arr = tbl["voice"]["nets"].as_array()) {
+            for (auto& node : *arr) {
+                const auto* nt = node.as_table();
+                if (!nt)
+                    continue;
+                ServerConfig::VoiceNetConfig n;
+                n.id = (*nt)["id"].value_or(std::string{});
+                if (n.id.empty()) {
+                    log->log(LogLevel::Warn, __FILE__, __LINE__, "voice.nets entry with no id; skipped");
+                    continue;
+                }
+                n.name = (*nt)["name"].value_or(std::string{});
+                n.kind = (*nt)["kind"].value_or(std::string{"team"});
+                n.positional = (*nt)["positional"].value_or(false);
+                n.rangeM = (*nt)["range_m"].value_or(0.0);
+                n.radioEffect = (*nt)["radio_effect"].value_or(true);
+                n.gain = (*nt)["gain"].value_or(1.0);
+                n.defaultNet = (*nt)["default"].value_or(false);
+                cfg.voice.nets.push_back(std::move(n));
+            }
         }
 
     } catch (const toml::parse_error& e) {

@@ -246,6 +246,11 @@ WorldBroadcaster::WorldBroadcaster(EntityManager& entityManager, EntityTypeRegis
     : m_entityManager(entityManager), m_registry(registry), m_net(net), m_logger(logger), m_weather(weather),
       m_sensorSystem(entityManager, registry), m_gravity(&fl::CentralGravityField::earthInstance()),
       m_planetRadiusKm(6371.f) {
+    // The compiled-in radio-net stack (Epic J). Seeded here so voice works with zero configuration;
+    // fl-server's [[voice.nets]] replaces it wholesale via setRadioNets().
+    for (auto& def : builtinRadioNets())
+        m_radioNets.add(def);
+
     // Seeker target signatures come from the same type registry the sensor system reads (#627).
     m_projectileSystem.setTypeRegistry(&registry);
     // SARH / pre-pitbull ARH shots are supported by the SHOOTER's contact table (#628): the missile
@@ -4399,6 +4404,8 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         handleRadioCommand(peerId, data, size);
     } else if (msgId == static_cast<uint8_t>(MsgId::Chat)) {
         handleChat(peerId, data, size);
+    } else if (msgId == static_cast<uint8_t>(MsgId::VoiceFrame)) {
+        handleVoiceFrame(peerId, data, size);
     } else if (msgId == static_cast<uint8_t>(MsgId::TeamRequest)) {
         // Mid-match team switch request (#522). Guard it against unbalancing, then despawn+respawn on
         // the new team. An unadmitted peer or a guard denial is answered with a MsgServerNotice.
@@ -4434,8 +4441,9 @@ void WorldBroadcaster::sendWingmanAck(uint32_t peerId, uint8_t command, WingmanR
 
 namespace {
 // Copy an ATC RadioTransmission into its wire form; snprintf force-terminates each char[] safely.
-MsgRadioTransmission buildRadioWire(const fl::atc::RadioTransmission& tx) {
+MsgRadioTransmission buildRadioWire(const fl::atc::RadioTransmission& tx, uint8_t netId) {
     MsgRadioTransmission w{};
+    w.netId = netId;
     w.displaySeconds = tx.displaySeconds;
     std::snprintf(w.speaker, sizeof(w.speaker), "%s", tx.speaker.c_str());
     std::snprintf(w.voiceKey, sizeof(w.voiceKey), "%s", tx.voiceKey.c_str());
@@ -4699,7 +4707,7 @@ void WorldBroadcaster::handleBaseOpsCommand(uint32_t peerId, EntityId flight, st
         tx.speaker = "Crew chief";
         tx.text = text;
         tx.displaySeconds = 5;
-        const MsgRadioTransmission w = buildRadioWire(tx);
+        const MsgRadioTransmission w = buildRadioWire(tx, m_radioNets.indexOf("atc"));
         m_net.send(peerId, &w, sizeof(w), /*reliable=*/true);
     };
 
@@ -4778,7 +4786,7 @@ void WorldBroadcaster::handleBaseOpsCommand(uint32_t peerId, EntityId flight, st
 }
 
 void WorldBroadcaster::sendRadioTransmission(const fl::atc::RadioTransmission& tx) {
-    const MsgRadioTransmission w = buildRadioWire(tx);
+    const MsgRadioTransmission w = buildRadioWire(tx, m_radioNets.indexOf("atc"));
     if (tx.target.valid()) {
         for (const auto& [pid, eid] : m_peerEntities) {
             if (eid == tx.target) {
@@ -4824,7 +4832,7 @@ void WorldBroadcaster::handleRadioCommand(uint32_t peerId, const void* data, std
         fl::atc::RadioTransmission tx = fl::atc::makeTransmission(phrase, "Tower", flight);
         if (overrideText)
             tx.text = overrideText;
-        const MsgRadioTransmission w = buildRadioWire(tx);
+        const MsgRadioTransmission w = buildRadioWire(tx, m_radioNets.indexOf("atc"));
         m_net.send(peerId, &w, sizeof(w), /*reliable=*/true);
     };
 
@@ -4993,6 +5001,177 @@ bool WorldBroadcaster::setPeerMuted(uint32_t peerId, bool muted) {
 bool WorldBroadcaster::isPeerMuted(uint32_t peerId) const {
     const auto it = m_peerInputs.find(peerId);
     return it != m_peerInputs.end() && it->second.chatMuted;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Voice comms (#532)
+// ---------------------------------------------------------------------------------------------
+// The server's entire involvement with audio is: check the sender may talk on this net, work out
+// who is on it, and copy the bytes. It never decodes a frame — which is what makes voice for 128
+// players cost the server almost nothing, and what lets the codec change without a protocol change.
+
+void WorldBroadcaster::setRadioNets(RadioNetTable nets) {
+    m_radioNets = std::move(nets);
+    if (m_radioNets.empty()) {
+        // A server that configures no nets still gets a working radio rather than silent voice.
+        for (auto& def : builtinRadioNets())
+            m_radioNets.add(def);
+    }
+}
+
+bool WorldBroadcaster::setPeerVoiceMuted(uint32_t peerId, bool muted) {
+    const auto it = m_peerInputs.find(peerId);
+    if (it == m_peerInputs.end())
+        return false;
+    it->second.voiceMuted = muted;
+    return true;
+}
+
+bool WorldBroadcaster::isPeerVoiceMuted(uint32_t peerId) const {
+    const auto it = m_peerInputs.find(peerId);
+    return it != m_peerInputs.end() && it->second.voiceMuted;
+}
+
+std::vector<uint32_t> WorldBroadcaster::voiceMutedPeers() const {
+    std::vector<uint32_t> out;
+    for (const auto& [pid, ps] : m_peerInputs) {
+        if (ps.voiceMuted)
+            out.push_back(pid);
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+VoicePeerView WorldBroadcaster::voicePeerView(uint32_t peerId) const {
+    VoicePeerView v;
+    v.peerId = peerId;
+    const auto pit = m_peerInputs.find(peerId);
+    if (pit == m_peerInputs.end())
+        return v;
+    v.admitted = pit->second.handshakeComplete;
+    v.voiceMuted = pit->second.voiceMuted;
+
+    const auto eit = m_peerEntities.find(peerId);
+    if (eit == m_peerEntities.end())
+        return v; // observer / not yet spawned: admitted, but with no team, flight or position
+    if (const EntityState* st = m_entityManager.get(eit->second)) {
+        // Faction 0 is NEUTRAL, not "teamless" — matching handleChat, where neutral players form
+        // their own team. Only the kNoFaction sentinel (no entity at all) means teamless.
+        v.faction = st->factionIndex;
+        v.hasPosition = true;
+        v.pos[0] = st->transform.pos[0];
+        v.pos[1] = st->transform.pos[1];
+        v.pos[2] = st->transform.pos[2];
+    }
+    // "My flight" is the formation holding this aircraft as a member, or — for a flight lead, who is
+    // the ANCHOR rather than a member — the formation anchored on it. Missing either reading would
+    // silently exclude every lead from their own flight net.
+    fl::FormationId fid = m_formations.formationOfEntity(eit->second);
+    if (fid == fl::kNoFormation)
+        fid = m_formations.formationAnchoredOn(eit->second);
+    v.formationId = fid;
+    return v;
+}
+
+void WorldBroadcaster::buildVoicePeerViews(std::vector<VoicePeerView>& out) const {
+    out.clear();
+    out.reserve(m_peerInputs.size());
+    for (const auto& [pid, ps] : m_peerInputs) {
+        if (!ps.handshakeComplete)
+            continue;
+        out.push_back(voicePeerView(pid));
+    }
+}
+
+void WorldBroadcaster::sendVoiceNetDefs(uint32_t peerId) {
+    std::vector<uint8_t> buf;
+    MsgVoiceNetDefHeader hdr;
+    const bool on = m_voiceEnabled && !m_radioNets.empty();
+    hdr.flags = on ? kVoiceServerEnabled : 0u;
+    hdr.netCount = on ? static_cast<uint8_t>(m_radioNets.size()) : 0u;
+    buf.reserve(sizeof(hdr) + (on ? m_radioNets.size() * sizeof(MsgVoiceNetRecord) : 0u));
+    appendMsg(buf, hdr);
+    if (on) {
+        for (std::size_t i = 0; i < m_radioNets.size(); ++i) {
+            const RadioNetDef& def = m_radioNets.nets()[i];
+            MsgVoiceNetRecord rec{};
+            rec.netId = static_cast<uint8_t>(i);
+            rec.kind = static_cast<uint8_t>(def.kind);
+            rec.flags = static_cast<uint8_t>((def.positional ? kVoiceNetFlagPositional : 0u) |
+                                             (def.radioEffect ? kVoiceNetFlagRadioEffect : 0u) |
+                                             (def.defaultNet ? kVoiceNetFlagDefault : 0u));
+            rec.rangeM = def.rangeM;
+            rec.gain = def.gain;
+            std::snprintf(rec.id, sizeof(rec.id), "%s", def.id.c_str());
+            std::snprintf(rec.name, sizeof(rec.name), "%s", def.name.c_str());
+            appendMsg(buf, rec);
+        }
+    }
+    // Reliable: a client that never learns the table cannot key a mic at all, and the table is one
+    // packet per connect.
+    m_net.send(peerId, buf.data(), buf.size(), /*reliable=*/true);
+}
+
+void WorldBroadcaster::handleVoiceFrame(uint32_t peerId, const void* data, std::size_t size) {
+    if (!m_voiceEnabled)
+        return;
+    MsgVoiceFrameHeader hdr;
+    if (!readMsg(data, size, hdr))
+        return; // truncated
+
+    const auto pit = m_peerInputs.find(peerId);
+    if (pit == m_peerInputs.end() || !pit->second.handshakeComplete)
+        return; // not admitted
+    auto& ps = pit->second;
+
+    // Length validation is the ONLY thing we can do to a payload nobody on this machine will ever
+    // decode; do it before anything else touches the bytes.
+    const std::size_t avail = size > sizeof(hdr) ? size - sizeof(hdr) : 0u;
+    const std::size_t payloadBytes = std::min<std::size_t>(hdr.payloadBytes, avail);
+    if (hdr.payloadBytes > kMaxVoiceFrameBytes || payloadBytes != hdr.payloadBytes)
+        return;
+
+    // Bandwidth bound (see PeerInputState). Dropped silently: a reply to a flood is amplification.
+    {
+        const auto now = m_clock->now();
+        if (now - ps.voiceWindowStart >= std::chrono::seconds(1)) {
+            ps.voiceWindowStart = now;
+            ps.voiceFrameCount = 0;
+        }
+        ++ps.voiceFrameCount;
+        if (ps.voiceFrameCount > static_cast<uint32_t>(m_voiceFrameRateLimit))
+            return;
+    }
+
+    const VoicePeerView sender = voicePeerView(peerId);
+    buildVoicePeerViews(m_voicePeerScratch);
+    if (!selectVoiceRecipients(m_radioNets, hdr.netId, sender, m_voicePeerScratch, m_voiceRecipientScratch))
+        return; // unknown net, muted, or no membership on this net
+    if (m_voiceRecipientScratch.empty())
+        return; // nobody on the net — a common and completely normal case
+
+    MsgVoiceRelayHeader rel;
+    rel.netId = hdr.netId;
+    rel.seq = hdr.seq;
+    rel.flags = hdr.flags;
+    rel.senderPeerId = peerId;
+    rel.payloadBytes = static_cast<uint16_t>(payloadBytes);
+    rel.senderEntityIdx = kNoVoiceEntity;
+    if (const auto eit = m_peerEntities.find(peerId); eit != m_peerEntities.end())
+        rel.senderEntityIdx = eit->second.index;
+
+    m_voiceRelayScratch.clear();
+    m_voiceRelayScratch.reserve(sizeof(rel) + payloadBytes);
+    appendMsg(m_voiceRelayScratch, rel);
+    const auto* bytes = static_cast<const uint8_t*>(data) + sizeof(hdr);
+    m_voiceRelayScratch.insert(m_voiceRelayScratch.end(), bytes, bytes + payloadBytes);
+
+    // Unreliable, on the dedicated voice channel: a lost frame is 20 ms the receiver conceals, and
+    // retransmitting it would deliver it after the moment it belonged to. The dedicated channel
+    // keeps ENet's per-channel unreliable sequencing from making voice and snapshots drop each
+    // other (see kNetChVoice).
+    for (const uint32_t rid : m_voiceRecipientScratch)
+        m_net.sendChannel(rid, m_voiceRelayScratch.data(), m_voiceRelayScratch.size(), /*reliable=*/false, kNetChVoice);
 }
 
 std::vector<uint32_t> WorldBroadcaster::mutedPeers() const {
@@ -5944,6 +6123,11 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned, PeerRo
                 m_net.send(peerId, fbuf.data(), fbuf.size(), /*reliable=*/true);
         }
     }
+
+    // Radio-net table (#532): the client cannot key a mic until it knows which nets exist and what
+    // each one sounds like. Sent beside the faction table for the same reason — both are small,
+    // server-authoritative vocabularies the client needs before its first frame.
+    sendVoiceNetDefs(peerId);
 
     // Mission roster (#914): one reliable packet of concatenated MsgMissionRoster records mapping each
     // spawned mission object's entity idx/gen -> its mission object id, so the cinematic recorder (#909)

@@ -918,6 +918,36 @@ bool UserConfig::load() {
     if (auto v = tbl["headtracking"]["smoothing"].value<double>())
         m_headTracking.smoothing = std::clamp(static_cast<float>(*v), 0.f, 0.95f);
 
+    // [voice] (Epic J, #531)
+    m_voice.enabled = tbl["voice"]["enabled"].value_or(true);
+    m_voice.transmitEnabled = tbl["voice"]["transmit"].value_or(true);
+    m_voice.inputDevice = tbl["voice"]["input_device"].value_or(std::string{});
+    if (auto v = tbl["voice"]["key_mode"].value<std::string>()) {
+        if (*v == "vox")
+            m_voice.keyMode = VoiceKeyMode::Voice;
+        else if (*v == "open")
+            m_voice.keyMode = VoiceKeyMode::Open;
+        else
+            m_voice.keyMode = VoiceKeyMode::PushToTalk;
+    }
+    if (auto v = tbl["voice"]["vox_threshold"].value<double>())
+        m_voice.voxThreshold = std::clamp(static_cast<float>(*v), 0.f, 1.f);
+    if (auto v = tbl["voice"]["mic_gain"].value<double>())
+        m_voice.micGain = std::clamp(static_cast<float>(*v), 0.f, 4.f);
+    m_voice.bitrate = std::clamp(static_cast<int>(tbl["voice"]["bitrate"].value_or(int64_t{24000})), 6000, 128000);
+    m_voice.jitterTargetFrames =
+        std::clamp(static_cast<int>(tbl["voice"]["jitter_frames"].value_or(int64_t{3})), 1, 12);
+    m_voice.radioEffect = tbl["voice"]["radio_effect"].value_or(true);
+    m_voice.subtitles = tbl["voice"]["subtitles"].value_or(true);
+    if (auto v = tbl["voice"]["ducking"].value<double>())
+        m_voice.duckingAmount = std::clamp(static_cast<float>(*v), 0.f, 1.f);
+    if (auto* arr = tbl["voice"]["net_volume"].as_array()) {
+        for (std::size_t i = 0; i < m_voice.netVolume.size() && i < arr->size(); ++i) {
+            if (auto v = arr->get(i)->value<double>())
+                m_voice.netVolume[i] = std::clamp(static_cast<float>(*v), 0.f, 2.f);
+        }
+    }
+
     return true;
 }
 
@@ -1023,6 +1053,27 @@ bool UserConfig::save() {
     headtracking.insert_or_assign("invert_roll", m_headTracking.invertRoll);
     headtracking.insert_or_assign("smoothing", static_cast<double>(m_headTracking.smoothing));
 
+    toml::table voice; // Epic J (#531)
+    voice.insert_or_assign("enabled", m_voice.enabled);
+    voice.insert_or_assign("transmit", m_voice.transmitEnabled);
+    voice.insert_or_assign("input_device", m_voice.inputDevice);
+    voice.insert_or_assign("key_mode", m_voice.keyMode == VoiceKeyMode::Voice  ? "vox"
+                                       : m_voice.keyMode == VoiceKeyMode::Open ? "open"
+                                                                               : "ptt");
+    voice.insert_or_assign("vox_threshold", static_cast<double>(m_voice.voxThreshold));
+    voice.insert_or_assign("mic_gain", static_cast<double>(m_voice.micGain));
+    voice.insert_or_assign("bitrate", static_cast<int64_t>(m_voice.bitrate));
+    voice.insert_or_assign("jitter_frames", static_cast<int64_t>(m_voice.jitterTargetFrames));
+    voice.insert_or_assign("radio_effect", m_voice.radioEffect);
+    voice.insert_or_assign("subtitles", m_voice.subtitles);
+    voice.insert_or_assign("ducking", static_cast<double>(m_voice.duckingAmount));
+    {
+        toml::array netVol;
+        for (const float v : m_voice.netVolume)
+            netVol.push_back(static_cast<double>(v));
+        voice.insert_or_assign("net_volume", std::move(netVol));
+    }
+
     toml::table debug;
     debug.insert_or_assign("overlay_mode", static_cast<int64_t>(m_debug.overlayMode));
 
@@ -1087,6 +1138,7 @@ bool UserConfig::save() {
     root.insert_or_assign("hud", std::move(hud));
     root.insert_or_assign("prediction", std::move(prediction));
     root.insert_or_assign("headtracking", std::move(headtracking));
+    root.insert_or_assign("voice", std::move(voice));
     root.insert_or_assign("debug", std::move(debug));
     root.insert_or_assign("pilot", std::move(pilot));
 
@@ -1197,6 +1249,13 @@ void UserConfig::setPrediction(const PredictionSettings& ps) {
 HeadTrackingSettings UserConfig::headTracking() const {
     return m_headTracking;
 }
+VoiceSettings UserConfig::voice() const {
+    return m_voice;
+}
+void UserConfig::setVoice(const VoiceSettings& vs) {
+    m_voice = vs;
+}
+
 void UserConfig::setHeadTracking(const HeadTrackingSettings& hts) {
     m_headTracking = hts;
 }

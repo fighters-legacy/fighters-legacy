@@ -6,6 +6,7 @@
 
 #include "config/AudioSettings.h"
 #include "config/GraphicsSettings.h"
+#include "config/VoiceSettings.h"
 
 #include <array>
 #include <string>
@@ -19,7 +20,8 @@ class IWindow;
 class UserConfig;
 
 // Settings screen: graphics (resolution, display, vsync, AA mode, shadow quality,
-// particle density, draw distance) and audio (master/music/SFX volumes).
+// particle density, draw distance), audio (master/music/SFX/voice volumes) and voice comms
+// (Epic J: enable, keying mode, input device, mic gain, radio effect, ducking).
 // Copies UserConfig on entry; saves and applies on Back/Escape.
 class SettingsScreen : public IScreen {
   public:
@@ -33,6 +35,27 @@ class SettingsScreen : public IScreen {
         m_returnTarget = target;
     }
 
+    // Capture devices to offer on the input-device row. Filled by Game.cpp from IAudioCapture; an
+    // empty list simply leaves the row on "Default" rather than hiding it, so a player with no
+    // device still sees WHY they cannot talk.
+    void setVoiceDevices(std::vector<std::string> devices);
+
+    // The row layout is PUBLIC because it is a fact about what is drawn, and the mouse hit-test and
+    // the tests both have to agree with it. Computed, not tabulated: the old hand-written y table had
+    // to be re-derived by hand on every addition, and the hover bands silently drifted off the drawn
+    // rows when it was not.
+    static constexpr int kRowAaMode = 3;
+    static constexpr int kRowSfxVolume = 11;
+    static constexpr int kRowVoiceVolume = 12;
+    static constexpr int kRowBack = 19;
+    static constexpr int kRowCount = kRowBack + 1;
+    static constexpr float kFirstRowY = 0.16f;
+    static constexpr float kRowStep = 0.042f;
+    static constexpr float kRowHitH = kRowStep;
+    static constexpr float rowY(int rowIdx) {
+        return kFirstRowY + kRowStep * static_cast<float>(rowIdx);
+    }
+
   private:
     UserConfig& m_userConfig;
     IRenderer& m_renderer;
@@ -41,7 +64,12 @@ class SettingsScreen : public IScreen {
 
     GraphicsSettings m_graphics;
     AudioSettings m_audio;
+    VoiceSettings m_voice;
     Screen m_returnTarget{Screen::MainMenu};
+
+    // Capture-device choices; index 0 is always "Default" (the empty device name).
+    std::vector<std::string> m_voiceDevices{std::string{}};
+    int m_voiceDeviceIdx{0};
 
     // Cached display modes for the current monitor
     std::vector<std::pair<int, int>> m_modes; // (width, height) unique entries
@@ -49,21 +77,15 @@ class SettingsScreen : public IScreen {
     bool m_fullscreen{false};
 
     // 0=Resolution, 1=Display, 2=Vsync, 3=AAMode, 4=ShadowQuality, 5=AmbientOcclusion,
-    // 6=SkyQuality, 7=ParticleDensity, 8=DrawDist, 9=MasterVol, 10=MusicVol, 11=SfxVol, 12=Back
+    // 6=SkyQuality, 7=ParticleDensity, 8=DrawDist, 9=MasterVol, 10=MusicVol, 11=SfxVol,
+    // 12=VoiceVol, 13=VoiceEnabled, 14=VoiceMode, 15=VoiceDevice, 16=MicGain, 17=RadioEffect,
+    // 18=Ducking, 19=Back
     int m_focusedRow{0};
-    static constexpr int kRowCount = 13;
-
-    // Drawn y of each row (rows 0-11 + Back at 12), shared by buildElements()
-    // and the mouse-hover hit-test so the hover bands always match the
-    // rendered rows.
-    static constexpr float kRowHitH = 0.05f; // hover band height (normalized)
-    static constexpr std::array<float, kRowCount> kRowY = {0.20f, 0.27f, 0.34f, 0.39f, 0.45f, 0.51f, 0.57f,
-                                                           0.63f, 0.69f, 0.77f, 0.83f, 0.89f, 0.95f};
 
     void applyAndSave();
     void buildModes();
 
-    static constexpr int kMaxElements = 32;
+    static constexpr int kMaxElements = 64;
     std::array<HudElement, kMaxElements> m_elements{};
     std::array<std::string, kMaxElements> m_strings{};
     int m_elementCount{0};

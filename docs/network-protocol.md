@@ -42,10 +42,19 @@ the backend choice.
 |---------|----------|----------|-----|
 | 0 | `kNetChReliable` | Ordered, guaranteed | Handshake messages |
 | 1 | `kNetChUnreliable` | Best-effort datagram | World-state snapshots, client input frames |
+| 2 | `kNetChVoice` | Best-effort datagram | Voice frames (Epic J, #532) |
 
 ENet enforces ordering within each channel; reliable packets are retransmitted until
 acknowledged. Unreliable packets may be dropped or arrive out of order — clients tolerate
 this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
+
+**Why voice gets its own channel.** ENet sequences *unreliable* packets **per channel** and
+discards one that arrives older than the last received on that channel. Two independent unreliable
+streams sharing a channel therefore knock each other out: at ~50 voice frames/s against 60
+snapshots/s, each stream's packets look stale relative to the other's and both lose frames. The
+channel number is a **transport** index, not a protocol constant — `INetwork::sendChannel` routes it
+and a backend with no channel concept ignores it (GNS's send flags carry the reliability, and its
+lanes are not configured). Callers must not assume ordering *between* channels.
 
 ## Implementation Rules
 
@@ -847,6 +856,97 @@ call.
 **Deduplication:** `DiscoveryListener` merges beacons with the same `(gamePort, name)` into one
 `ServerInfo` entry regardless of source address family.
 
+### Voice comms — `MsgVoiceNetDef` / `MsgVoiceFrame` / `MsgVoiceRelay` (Epic J, #532)
+
+Three messages, and **the server understands exactly one thing about the audio: how many bytes it
+is.** Frames are relayed *opaque* to a recipient set derived from the net's kind — no decode, no
+mix, no transcode. That is what makes voice for 128 players cost the server almost nothing, and it
+keeps the codec (48 kHz mono Opus, 20 ms frames — see `engine/voice/VoiceCodec.h`) a
+**client-to-client contract** that can change without a protocol change.
+
+Routing is by **radio net**: a named channel with a membership rule, defined in server config
+(`[[voice.nets]]`) and replicated to clients once after `MsgConnectAck`. There is deliberately **no
+frequency dial** — tuning 251.000 to hear the tanker is ceremony rather than gameplay, and a new
+player cannot discover it. A net's **index** in the server's table is its wire `netId`, so net
+strings never travel per frame. Kinds: `global`, `team` (same faction), `flight` (the speaker's
+formation, #610's command tree), `proximity` (within `rangeM`, side-agnostic), `atc`.
+
+The sender is **always excluded** from the recipient set: a network round trip of your own voice is
+the most disorienting thing a voice system can do. Sidetone belongs on the client.
+
+#### MsgVoiceNetDef — 4 + n×68 bytes
+
+Server→client, **reliable**, sent once after `MsgConnectAck` (beside `MsgFactionDef`). A client
+cannot key a mic until it arrives.
+
+| Offset | Size | Field | Type | Notes |
+|--------|------|-------|------|-------|
+| 0 | 1 | `msgId` | `uint8_t` | `0x23` |
+| 1 | 1 | `netCount` | `uint8_t` | Records following at offset 4 |
+| 2 | 1 | `flags` | `uint8_t` | Bit 0 = `kVoiceServerEnabled`; clear + `netCount == 0` = voice off |
+| 3 | 1 | `reserved` | `uint8_t` | |
+
+Each `MsgVoiceNetRecord` (68 bytes, align 4):
+
+| Offset | Size | Field | Type | Notes |
+|--------|------|-------|------|-------|
+| 0 | 1 | `netId` | `uint8_t` | Index in the table; the wire net id on every frame |
+| 1 | 1 | `kind` | `uint8_t` | `RadioNetKind` ordinal — gate with `isRadioNetKindOrdinal` before casting |
+| 2 | 1 | `flags` | `uint8_t` | `kVoiceNetFlagPositional` / `…RadioEffect` / `…Default` |
+| 3 | 1 | `reserved` | `uint8_t` | |
+| 4 | 4 | `rangeM` | `float` | Proximity radius / positional rolloff ceiling; 0 = unlimited |
+| 8 | 4 | `gain` | `float` | Authored per-net trim |
+| 12 | 24 | `id[24]` | `char[24]` | Stable machine id (23 usable) |
+| 36 | 32 | `name[32]` | `char[32]` | Display label (31 usable) |
+
+#### MsgVoiceFrame — 8 + payload bytes
+
+Client→server, **unreliable, channel 2**. The opaque Opus payload follows the header at offset 8.
+
+| Offset | Size | Field | Type | Notes |
+|--------|------|-------|------|-------|
+| 0 | 1 | `msgId` | `uint8_t` | `0x24` |
+| 1 | 1 | `netId` | `uint8_t` | Index into the table received in `MsgVoiceNetDef` |
+| 2 | 2 | `seq` | `uint16_t` | Per-(speaker, net) counter; wraps, compared half-window |
+| 4 | 2 | `payloadBytes` | `uint16_t` | ≤ `kMaxVoiceFrameBytes` (400) |
+| 6 | 1 | `flags` | `uint8_t` | `kVoiceFlagStart` / `kVoiceFlagEnd` |
+| 7 | 1 | `reserved` | `uint8_t` | |
+
+An **empty payload with `kVoiceFlagEnd`** is a pure end-of-transmission marker: it is what the
+receiver turns into a squelch tail, and deriving that boundary from a receive timeout instead would
+put the squelch a timeout late.
+
+The server validates the length, the sender's net membership, and a per-peer **frames/second** cap
+(`[voice] frame_rate_limit`, default 60). That cap is a *bandwidth* bound, not anti-spam: a frame is
+fanned out to every recipient on the net, so an unbounded sender costs (recipients × bytes). An
+over-rate frame is dropped **silently** — replying to a flood amplifies it.
+
+#### MsgVoiceRelay — 16 + payload bytes
+
+Server→client, **unreliable, channel 2**. The same payload, plus who said it.
+
+| Offset | Size | Field | Type | Notes |
+|--------|------|-------|------|-------|
+| 0 | 1 | `msgId` | `uint8_t` | `0x25` |
+| 1 | 1 | `netId` | `uint8_t` | |
+| 2 | 2 | `seq` | `uint16_t` | Forwarded unchanged |
+| 4 | 4 | `senderPeerId` | `uint32_t` | Participant id (matches `MsgPlayerRoster`) |
+| 8 | 4 | `senderEntityIdx` | `uint32_t` | Entity pool index, or `kNoVoiceEntity` |
+| 12 | 2 | `payloadBytes` | `uint16_t` | ≤ `kMaxVoiceFrameBytes` |
+| 14 | 1 | `flags` | `uint8_t` | |
+| 15 | 1 | `reserved` | `uint8_t` | |
+
+`senderEntityIdx` carries the speaker's **entity index rather than a position**: the receiving
+client already has entity transforms from its snapshot, and 24 bytes of double position on every
+20 ms frame would cost more than the audio. A speaker the client cannot resolve (interest-culled, or
+an observer with no aircraft) is mixed **head-locked**, which is the right fallback for a radio
+anyway.
+
+`MsgRadioTransmission` (#703) gained a `netId` at offset 1 for the same reason: synthetic traffic
+(ATC, AWACS, Epic O TTS) rides the **same net** as human voice, so the presentation layer (#925)
+applies the same DSP, ducking and gain to both. A human and a synthetic transmission must be
+indistinguishable in presentation.
+
 ---
 
 ## Extension Blocks (TLV)
@@ -1123,8 +1223,8 @@ offline-verifiable access token (e.g. Ed25519/JWT) issued by a pluggable identit
 `fl-server` verifies the signature locally against the issuer's published public key (no live
 callback per connect). The verified account ID — not the client-generated `PilotProfile::guid`
 — keys persistent stats, ranking, and bans. Guest connections remain possible when the server
-permits them. A **voice channel** (Epic J — positional + team, Opus over an unreliable channel)
-is also reserved here. Exact message layout is specified when Epic C/J land.
+permits them. Exact message layout is specified when Epic C lands. (The Epic J voice channel that
+was reserved here has landed — see **Voice comms** above.)
 
 ## Notes
 

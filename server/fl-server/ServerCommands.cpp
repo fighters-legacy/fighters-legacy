@@ -398,6 +398,79 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                                  return "mutes: queued";
                              });
 
+    // Voice comms (Epic J, #532). voice_mute gates TRANSMIT only — a muted peer still hears the net,
+    // because muting someone is a moderation action against what they broadcast, not a punishment
+    // that also blinds them to their own team.
+    for (bool muteVal : {true, false}) {
+        const char* name = muteVal ? "voice_mute" : "voice_unmute";
+        const char* help = muteVal ? "voice_mute <peerId>  -- stop a peer transmitting on the radio nets"
+                                   : "voice_unmute <peerId>  -- restore a peer's radio transmit";
+        registry.registerCommand(name, help, capBit(Capability::Mute),
+                                 [ctx, muteVal, name](std::span<std::string_view> args) -> std::string {
+                                     if (args.empty())
+                                         return std::string("usage: ") + name + " <peerId>";
+                                     if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
+                                         return std::string(name) + ": not available";
+                                     std::string arg(args[0]);
+                                     if (!isNumeric(arg))
+                                         return std::string(name) + ": expected a peer ID";
+                                     uint32_t peerId = 0;
+                                     auto [ptr, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), peerId);
+                                     if (ec != std::errc{})
+                                         return std::string(name) + ": invalid peer ID";
+                                     ctx.sim.gameLoop->enqueueSimCallback([ctx, peerId, muteVal, name]() {
+                                         const bool ok = ctx.sim.broadcaster->setPeerVoiceMuted(peerId, muteVal);
+                                         char m[80];
+                                         std::snprintf(m, sizeof(m), "[admin] %s peer %u%s", name, peerId,
+                                                       ok ? "" : " (unknown peer)");
+                                         std::printf("%s\n", m);
+                                         if (ctx.rcon.shell)
+                                             ctx.rcon.shell->print(m);
+                                         std::fflush(stdout);
+                                     });
+                                     char buf[80];
+                                     std::snprintf(buf, sizeof(buf), "%s: queued peer %u", name, peerId);
+                                     return std::string(buf);
+                                 });
+    }
+
+    // voice  -- the radio-net table + who is voice-muted, so an operator can see what the clients see
+    registry.registerCommand(
+        "voice", "voice  -- list the radio nets and voice-muted peers", 0,
+        [ctx](std::span<std::string_view>) -> std::string {
+            if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
+                return "voice: not available";
+            ctx.sim.gameLoop->enqueueSimCallback([ctx]() {
+                const auto& b = *ctx.sim.broadcaster;
+                std::string out = "[admin] voice: ";
+                out += b.voiceEnabled() ? "enabled" : "DISABLED";
+                out += "\n";
+                const auto& nets = b.radioNets();
+                for (std::size_t i = 0; i < nets.size(); ++i) {
+                    const auto& n = nets.nets()[i];
+                    char line[192];
+                    std::snprintf(line, sizeof(line), "  net %zu  %-12s %-10s %s%s range=%.0fm gain=%.2f", i,
+                                  n.id.c_str(), radioNetKindName(n.kind), n.positional ? "positional " : "head-locked ",
+                                  n.radioEffect ? "radio" : "clean", static_cast<double>(n.rangeM),
+                                  static_cast<double>(n.gain));
+                    out += line;
+                    out += "\n";
+                }
+                const std::vector<uint32_t> muted = b.voiceMutedPeers();
+                out += "  voice-muted: ";
+                if (muted.empty())
+                    out += "(none)";
+                else
+                    for (std::size_t i = 0; i < muted.size(); ++i)
+                        out += (i ? ", " : "") + std::to_string(muted[i]);
+                std::printf("%s\n", out.c_str());
+                if (ctx.rcon.shell)
+                    ctx.rcon.shell->print(out);
+                std::fflush(stdout);
+            });
+            return "voice: queued";
+        });
+
     // set_role <peerId> <pilot|observer>  -- switch a peer between pilot and spectator without a reconnect (#857)
     registry.registerCommand(
         "set_role", "set_role <peerId> <pilot|observer>  -- switch a peer's role without a reconnect",

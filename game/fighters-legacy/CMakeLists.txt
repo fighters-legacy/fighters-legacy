@@ -55,6 +55,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         engine-mission
         engine-weapon
         engine-sensor
+        engine-voice     # Epic J: Opus capture/playback + the radio-net mix (#531/#532)
         engine-world     # AirportRegistry + runway terrain flattening (#486)
         platform-file-logger
         platform-subprocess
