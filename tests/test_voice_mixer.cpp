@@ -2,9 +2,11 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "voice/RadioDsp.h"
 #include "voice/VoiceCodec.h"
 #include "voice/VoiceMixer.h"
 
+#include <algorithm>
 #include <cmath>
 #include <numbers>
 #include <unordered_map>
@@ -56,8 +58,11 @@ struct StreamingAudio final : public IAudio {
     AudioBufferId allocStreamBuffer() override {
         return nextBuffer++;
     }
-    void queueBuffer(AudioSourceId src, AudioBufferId buf, const void*, std::size_t, int, int) override {
+    // Record queued byte counts so a test can tell a 20 ms speech frame from a 120 ms squelch tail.
+    std::vector<std::size_t> queuedBytes;
+    void queueBuffer(AudioSourceId src, AudioBufferId buf, const void*, std::size_t bytes, int, int) override {
         sources[src].queued.push_back(buf);
+        queuedBytes.push_back(bytes);
         ++buffersQueued;
     }
     int processedBufferCount(AudioSourceId src) override {
@@ -341,4 +346,77 @@ TEST_CASE("voice mixer reset drops every stream", "[voice]") {
     m.reset();
     REQUIRE(audio.sourcesDestroyed == 2);
     REQUIRE_FALSE(m.anyActive());
+}
+
+TEST_CASE("voice mixer brackets a transmission with the key click and the squelch tail", "[voice]") {
+    StreamingAudio audio;
+    VoiceMixer m;
+    REQUIRE(m.init(&audio, nullptr));
+    m.applySettings(defaultVoiceSettings(), AudioSettings{});
+    auto enc = createVoiceEncoder();
+    REQUIRE(enc);
+
+    const std::size_t clickBytes = radioClickPcm(kVoiceSampleRate).size() * sizeof(int16_t);
+    const std::size_t squelchBytes = radioSquelchPcm(kVoiceSampleRate).size() * sizeof(int16_t);
+    REQUIRE(clickBytes > 0);
+    REQUIRE(squelchBytes > clickBytes);
+
+    // Net 0 is the builtin TEAM net, which carries radioEffect.
+    m.onFrame(1, 0xFFFFFFFFu, 0, 0, realFrame(*enc), /*start=*/true, false);
+    m.update(0.016f, glm::dvec3{}, kNoPositions);
+    // The click must come FIRST — a click after the first syllable announces nothing.
+    REQUIRE_FALSE(audio.queuedBytes.empty());
+    CHECK(audio.queuedBytes.front() == clickBytes);
+
+    m.onFrame(1, 0xFFFFFFFFu, 0, 1, std::vector<uint8_t>{}, false, /*end=*/true);
+    for (int i = 0; i < 4; ++i) {
+        audio.completeAll();
+        m.update(0.016f, glm::dvec3{}, kNoPositions);
+    }
+    const bool sawSquelch =
+        std::find(audio.queuedBytes.begin(), audio.queuedBytes.end(), squelchBytes) != audio.queuedBytes.end();
+    // The squelch is what tells a listener the transmission ENDED rather than merely paused.
+    CHECK(sawSquelch);
+    CHECK(audio.sourcesDestroyed == 1); // and the stream is only retired once the tail has played
+}
+
+TEST_CASE("voice mixer skips the radio cues on a net that asks for clean audio", "[voice]") {
+    StreamingAudio audio;
+    VoiceMixer m;
+    REQUIRE(m.init(&audio, nullptr));
+    m.applySettings(defaultVoiceSettings(), AudioSettings{});
+    auto enc = createVoiceEncoder();
+
+    RadioNetTable clean;
+    clean.add(RadioNetDef{"intercom", "ICS", RadioNetKind::Global, /*positional=*/false, /*rangeM=*/0.f,
+                          /*radioEffect=*/false});
+    m.setNets(clean);
+
+    const std::size_t clickBytes = radioClickPcm(kVoiceSampleRate).size() * sizeof(int16_t);
+    m.onFrame(1, 0xFFFFFFFFu, 0, 0, realFrame(*enc), true, false);
+    m.update(0.016f, glm::dvec3{}, kNoPositions);
+    // "In the room" means in the room: no key click, no band-limiting, no squelch.
+    REQUIRE_FALSE(audio.queuedBytes.empty());
+    CHECK(audio.queuedBytes.front() != clickBytes);
+}
+
+TEST_CASE("voice mixer ducks for synthetic radio traffic via holdDuck", "[voice]") {
+    StreamingAudio audio;
+    VoiceMixer m;
+    REQUIRE(m.init(&audio, nullptr));
+    auto vs = defaultVoiceSettings();
+    vs.duckingAmount = 0.5f;
+    m.applySettings(vs, AudioSettings{});
+
+    // No relayed frames at all — this is an ATC line played through VoiceCalloutManager. Without the
+    // hold, the one audible difference between human and synthetic radio would be that only one of
+    // them makes the music get out of the way.
+    m.holdDuck(1.0f);
+    for (int i = 0; i < 20; ++i)
+        m.update(0.016f, glm::dvec3{}, kNoPositions);
+    CHECK(m.duckGain() < 0.99f);
+
+    for (int i = 0; i < 200; ++i)
+        m.update(0.016f, glm::dvec3{}, kNoPositions);
+    CHECK(m.duckGain() == Catch::Approx(1.f)); // and it lets go when the line is over
 }

@@ -29,6 +29,7 @@ for clustered fleets.
 | [docs/legal/aircraft-likeness.md](docs/legal/aircraft-likeness.md) | Modelling real aircraft: permitted references, forbidden sources, markings, the `SOURCES.md` requirement, trademarks |
 | [docs/modding/localization.md](docs/modding/localization.md) | Translator guide: key scheme, TOML layout, plural forms, mod locale |
 | [docs/network-protocol.md](docs/network-protocol.md) | Wire protocol: fl-server ↔ client message format, channel assignments, scalability notes |
+| [docs/voice.md](docs/voice.md) | In-game voice comms (Epic J): the radio-net model, why not frequencies, the opaque server relay, the presentation layer, player/operator reference |
 | [docs/snapshot-quantization.md](docs/snapshot-quantization.md) | Quantized/bit-packed snapshot codec: frame-origin encoding, smallest-three quaternion, bit budget, byte-determinism |
 | [docs/load-testing.md](docs/load-testing.md) | bot_swarm load generator: client metrics + authoritative server tick-budget block, flight patterns, scale-gate targets, the CI perf/soak scale gate (PR + scheduled tiers), ceiling-characterisation runbook |
 | [docs/server-job-system-design.md](docs/server-job-system-design.md) | Data-parallel sim tick: engine-job worker pool, two-phase parallel onTick, serial-equivalence, `sim_worker_threads` |

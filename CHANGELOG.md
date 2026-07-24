@@ -9,6 +9,25 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **audio**: the radio-net presentation layer — radio DSP, PTT squelch, per-net ducking, subtitles
+  (#925, Epic #499). What separates a combat flight sim's radio from lobby voice chat is almost
+  entirely presentation; the bytes are the same Opus either way. `engine/voice/RadioDsp.h` adds a
+  300–3000 Hz biquad pair into a `tanh` soft clipper (not a hard clamp, whose odd harmonics read as
+  digital distortion rather than a compressed channel), an optional carrier hiss, and **generated**
+  key-down click / squelch-tail cues — deterministic byte-stable procedural PCM, the
+  `SfxBuiltinSounds` contract, so the radio sounds like a radio in the zero-pack sandbox and
+  identical on every machine. Those cues are why the wire carries an explicit end-of-transmission
+  marker rather than deriving the boundary from a receive timeout, which would put the squelch a
+  timeout late. Ducking is one smoothed envelope for the whole radio and drops the **music** only —
+  the engine note and the RWR are information the pilot is flying on. Each new transmission pushes a
+  `[NET] Callsign…` line onto the same `SubtitleQueue` the ATC callouts use, which is both the
+  accessibility path and the answer to "who was that?" when a radio-filtered voice is hard to place.
+  Crucially, ATC/AWACS/TTS traffic runs the **same** filter, cues, net gain and ducking as human
+  voice (`MsgRadioTransmission.netId` → `VoiceCalloutManager`), so there is one implementation rather
+  than two that drift and a synthetic transmission is indistinguishable in presentation. New
+  bottom-left HUD indicator shows the armed net, a mic-level-driven TX light, and who is on the air.
+  Full design record in `docs/voice.md`.
+
 - **network**: voice channel over the transport with team / flight / proximity routing (#532, Epic
   #499). Three messages — `MsgVoiceNetDef` (0x23, the server's radio-net table, sent once after
   ConnectAck), `MsgVoiceFrame` (0x24, client→server) and `MsgVoiceRelay` (0x25, server→client) — and

@@ -86,18 +86,24 @@ target_include_directories(engine-audio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-audio
     PUBLIC  platform-hal
             engine-content
+            engine-radio     # #925: synthetic radio voice runs the SAME DSP as human voice
     PRIVATE engine-i18n
             engine-config
             tomlplusplus::tomlplusplus
             vorbisfile
 )
 
-# The radio-net VOCABULARY (Epic J): net kinds, defs, the ordered table, and the builtin net stack.
-# Its own target, stdlib-only, because BOTH sides need it and only one of them may have a codec:
-# engine-net routes frames by net kind on the server, which must never link libopus (it never
-# decodes a single frame), while engine-voice needs the same vocabulary to place and mix them.
+# The radio-net VOCABULARY + presentation DSP (Epic J): net kinds, defs, the ordered table, the
+# builtin net stack, and the radio filter / click / squelch cues.
+#
+# Its own target, stdlib-only, because THREE consumers need pieces of it and none of them wants the
+# others' dependencies: engine-net routes frames by net kind on the server, which must never link
+# libopus (it never decodes a single frame); engine-voice places and mixes human speech; and
+# engine-audio runs the SAME DSP on synthetic ATC/TTS voice, which is what makes a human and a
+# synthetic transmission indistinguishable in presentation (#925).
 add_library(engine-radio STATIC
     voice/RadioNet.cpp
+    voice/RadioDsp.cpp
 )
 target_include_directories(engine-radio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 

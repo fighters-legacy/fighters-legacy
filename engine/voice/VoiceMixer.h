@@ -4,6 +4,7 @@
 #include "IAudio.h"
 #include "config/AudioSettings.h"
 #include "config/VoiceSettings.h"
+#include "voice/RadioDsp.h"
 #include "voice/RadioNet.h"
 #include "voice/VoiceCodec.h"
 #include "voice/VoiceJitterBuffer.h"
@@ -85,6 +86,13 @@ class VoiceMixer {
         return !m_active.empty();
     }
 
+    // Hold the ducking envelope open for `seconds` even though no relayed frame is arriving. This is
+    // how SYNTHETIC radio traffic (ATC, AWACS, Epic O TTS — played through VoiceCalloutManager, not
+    // through the mixer) ducks the music exactly like a human transmission does. Without it, the one
+    // audible difference between human and synthetic radio would be that only one of them makes the
+    // music get out of the way.
+    void holdDuck(float seconds) noexcept;
+
     // 1 = no ducking; < 1 while a net is live (#925). Smoothed, so music does not pump on every
     // syllable — it dips once when the net opens and recovers over ~0.4 s after it closes.
     [[nodiscard]] float duckGain() const noexcept {
@@ -113,6 +121,9 @@ class VoiceMixer {
         uint8_t netId{kInvalidRadioNet};
         std::unique_ptr<VoiceDecoder> decoder;
         VoiceJitterBuffer jitter;
+        // Per-stream, because filter memory shared across speakers would smear one voice's tail
+        // into the next (#925).
+        RadioFilter filter;
         AudioSourceId source{0};
         AudioBufferId buffers[kStreamBuffers]{};
         int queued{0};    // buffers currently queued on the source (we track; AL only reports processed)
@@ -122,6 +133,8 @@ class VoiceMixer {
         float level{0.f};   // smoothed RMS for the HUD
         bool started{false};
         bool ending{false};
+        bool pendingClick{false}; // queue the key-down click before the first decoded frame (#925)
+        bool tailQueued{false};   // the squelch tail has been queued; retire once it drains
     };
 
     Stream* findStream(uint32_t peerId, uint8_t netId);
@@ -142,7 +155,12 @@ class VoiceMixer {
     std::vector<ActiveSpeaker> m_active;
     std::vector<int16_t> m_pcm;     // scratch decode buffer, kVoiceFrameSamples
     std::vector<uint8_t> m_payload; // scratch, popped from the jitter buffer
+    // Procedural radio cues, generated once (deterministic + byte-stable, so they are identical on
+    // every machine) and reused for every transmission on every net.
+    std::vector<int16_t> m_clickPcm;
+    std::vector<int16_t> m_squelchPcm;
     float m_duckGain{1.f};
+    float m_duckHoldSec{0.f}; // synthetic-transmission hold (see holdDuck)
 };
 
 } // namespace fl

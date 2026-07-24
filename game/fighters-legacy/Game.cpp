@@ -35,9 +35,11 @@
 #include "ServerBrowserScreen.h"
 #include "ServerNotice.h"
 #include "SessionStatus.h"
+#include "SettingsScreen.h" // mic-device list wiring (#531)
 #include "SubtitleOverlay.h"
 #include "Version.h"
 #include "VideoEncoderPipe.h"
+#include "VoiceOverlay.h" // the radio-net HUD indicator (#925)
 #include "WingmanMenu.h"
 #include "audio/MusicBuiltinTracks.h"
 #include "audio/MusicManager.h"
@@ -118,6 +120,7 @@
 #include "world/BuiltinAirport.h"
 
 #include <SDL3/SDL.h>
+
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
@@ -126,6 +129,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <set>
 #include <thread>
 #include <vector>
 
@@ -381,7 +385,9 @@ struct GameServices {
     // the encode/decode/mix pipeline for the whole session.
     std::unique_ptr<fl::IAudioCapture> audioCapture;
     fl::VoiceChat voiceChat;
-    AudioSettings audioSettings{}; // a stable copy the effect router points at; refreshed on apply
+    fl::VoiceOverlay voiceOverlay;        // the radio-net HUD indicator (#925)
+    std::set<uint64_t> voiceSpeakingSeen; // (peerId<<8|netId) already announced this transmission
+    AudioSettings audioSettings{};        // a stable copy the effect router points at; refreshed on apply
 
     // Multiplayer connection target (empty = single-player, spawn LocalServer).
     // Populated from --connect CLI arg in initPlatform().
@@ -1290,6 +1296,11 @@ void Game::initScreenManager() {
     d.services.screenMgr = std::make_unique<ScreenManager>(*d.services.p.input);
     d.services.screenMgr->init(*d.services.userConfig, *d.services.p.renderer, *d.services.p.window,
                                *d.services.p.display, *d.services.assets, !d.services.connectHost.empty());
+    // Populate the settings screen's mic-device list. Enumeration is a cheap query that does not open
+    // a device, so it costs nothing on a machine with no microphone — and an empty list still leaves
+    // the row visible on "Default", so a player can see WHY they cannot talk.
+    if (d.services.audioCapture)
+        d.services.screenMgr->settings().setVoiceDevices(d.services.audioCapture->listDevices());
 
     // #322: the multiplayer join-server screen. Prefilled with the last-connected host (from --connect,
     // if any) and the pilot callsign; on Connect it writes the session's connect parameters into Services
@@ -1457,19 +1468,29 @@ void Game::startGame(const std::string& mission) {
         // ATC/radio callouts (#704): render each transmission as a subtitle (+ a pack OGG at
         // radio/<voiceKey> if one exists, else text-only). The console already logged the raw line.
         d.session.clientHandler->radioCallback = [&d](const char* speaker, const char* text, const char* voiceKey,
-                                                      uint16_t seconds) {
+                                                      uint16_t seconds, uint8_t netId) {
             std::string line =
                 (speaker && speaker[0] != '\0') ? std::string(speaker) + ": " + (text ? text : "") : (text ? text : "");
             std::string asset;
             if (voiceKey && voiceKey[0] != '\0')
                 asset = std::string("radio/") + voiceKey;
-            d.services.voiceCallouts.playText(line, asset.empty() ? nullptr : asset.c_str(),
-                                              seconds > 0 ? static_cast<float>(seconds) : 4.f,
-                                              d.services.audioSettings);
+            const float dwell = seconds > 0 ? static_cast<float>(seconds) : 4.f;
+            // #925: a synthetic transmission rides the SAME radio net as human voice, so it gets the
+            // same band-limiting, the same key click and squelch tail, the same net gain, and it ducks
+            // the music the same way. A human and an ATC call must be indistinguishable in presentation.
+            const fl::RadioNetDef* net = d.services.voiceChat.nets().byIndex(netId);
+            const bool asRadio = net && net->radioEffect && d.services.userConfig->voice().radioEffect;
+            const fl::RadioProfile profile{};
+            d.services.voiceCallouts.playText(line, asset.empty() ? nullptr : asset.c_str(), dwell,
+                                              d.services.audioSettings, asRadio ? &profile : nullptr,
+                                              net ? net->gain : 1.f);
+            if (net)
+                d.services.voiceChat.mixer().holdDuck(dwell);
         };
         // Voice comms (Epic J, #532). The net table is server-authoritative and arrives once after
         // ConnectAck; frames arrive on the dedicated voice channel and go straight to the mixer.
         d.services.voiceChat.reset(); // no stale streams or a latched mic across sessions
+        d.services.voiceSpeakingSeen.clear();
         d.services.voiceChat.applySettings(d.services.userConfig->voice(), d.services.audioSettings);
         d.session.clientHandler->voiceNetsCallback = [&d](const fl::RadioNetTable& nets, bool enabled) {
             d.services.voiceChat.setNets(nets);
@@ -2194,13 +2215,44 @@ void Game::run() {
             d.services.voiceChat.update(1.0f / 60.0f, held(fl::InputAction::PushToTalkPrimary),
                                         held(fl::InputAction::PushToTalkSecondary), uiFocused, cam.worldOrigin,
                                         speakerPos);
+
+            // #925: announce each new transmission on the SAME subtitle queue ATC callouts use.
+            // Human speech cannot be transcribed here, so the line names the speaker and the net —
+            // which is exactly what a player who cannot hear the audio needs, and what a player who
+            // can hear it needs when a radio-filtered voice is hard to place. Edge-triggered off the
+            // active-speaker set, so a transmission produces one line, not one per frame.
+            if (d.services.userConfig->voice().subtitles && d.session.clientHandler) {
+                auto& seen = d.services.voiceSpeakingSeen;
+                const auto active = d.services.voiceChat.mixer().activeSpeakers();
+                for (const fl::ActiveSpeaker& sp : active) {
+                    const uint64_t key = (static_cast<uint64_t>(sp.peerId) << 8) | sp.netId;
+                    if (seen.insert(key).second) {
+                        const std::string_view net = d.services.voiceChat.netName(sp.netId);
+                        d.services.subtitleQueue.push("[" + std::string(net) + "] " +
+                                                          d.session.clientHandler->displayName(sp.peerId) + "...",
+                                                      2.5f);
+                    }
+                }
+                // Drop keys that are no longer transmitting, so the next burst announces again.
+                for (auto it = seen.begin(); it != seen.end();) {
+                    const bool stillActive =
+                        std::any_of(active.begin(), active.end(), [&](const fl::ActiveSpeaker& sp) {
+                            return ((static_cast<uint64_t>(sp.peerId) << 8) | sp.netId) == *it;
+                        });
+                    it = stillActive ? std::next(it) : seen.erase(it);
+                }
+            }
         }
 
         // Audio update (always — so music plays on main menu too).
         {
             const AudioSettings& aud = d.services.userConfig->audio();
             d.services.subtitleQueue.update(1.0f / 60.0f);
-            d.services.musicManager.update(1.0f / 60.0f, aud.masterVolume, aud.musicVolume);
+            // #925: duck the music while any radio net is live. Ducking the MUSIC and not the flight
+            // audio is deliberate — the engine note and the RWR are information the pilot is flying
+            // on, and burying them under a radio call would trade one kind of deafness for another.
+            const float duck = d.services.voiceChat.mixer().duckGain();
+            d.services.musicManager.update(1.0f / 60.0f, aud.masterVolume, aud.musicVolume * duck);
 
             // Warning tones (#957): drive stall/overspeed cues from the OWN aircraft's predicted
             // FlightState (the snapshot carries neither stalled nor Mach). predictedState() is null
@@ -2381,6 +2433,12 @@ void Game::run() {
             d.services.subtitleOverlay.build(d.services.subtitleQueue));                   // radio/ATC callouts (#704)
         d.services.p.renderer->submitOverlayElements(d.services.killFeed.buildElements()); // #647
         d.services.p.renderer->submitOverlayElements(d.services.chatOverlay.buildElements()); // #646
+        // Radio-net indicator (#925): which net the PTT key will use, and who is on the air.
+        if (cur == Screen::Flight && d.session.clientHandler) {
+            ClientNetEventHandler* h = d.session.clientHandler.get();
+            d.services.p.renderer->submitOverlayElements(
+                d.services.voiceOverlay.build(d.services.voiceChat, [h](uint32_t pid) { return h->displayName(pid); }));
+        }
         // Game-master overview map (#861): the map canvas HudElements when open (the IGui order panel is
         // emitted from FlightScreen::update, inside the newFrame/render bracket).
         if (d.services.gmMapOverlay.isOpen())

@@ -4,6 +4,7 @@
 #include "IAudio.h"
 #include "IAudioSynthesizer.h"
 #include "config/AudioSettings.h"
+#include "voice/RadioDsp.h"
 
 #include <string>
 #include <string_view>
@@ -39,12 +40,20 @@ class VoiceCalloutManager {
     // Play a callout whose subtitle text is ALREADY resolved (#704) — the server sends the rendered
     // line, not a localization key. audioAsset may be null/empty (subtitle only — the no-pack-audio
     // degradation path in docs/ai-architecture.md). Safe to call before init()/without an audio device.
-    void playText(std::string_view text, const char* audioAsset, float subtitleDuration, const AudioSettings& settings);
+    //
+    // `radio` (#925): when non-null, the audio is put through the SAME radio treatment human voice
+    // gets — band-limited and compressed by RadioFilter, bracketed with the key-down click and the
+    // squelch tail. This is what makes an ATC or AWACS transmission indistinguishable from a pilot's
+    // in presentation, which is the whole point of routing synthetic voice through the radio nets
+    // rather than growing a parallel voicing path. Null = play it dry (a cockpit callout, not radio).
+    void playText(std::string_view text, const char* audioAsset, float subtitleDuration, const AudioSettings& settings,
+                  const RadioProfile* radio = nullptr, float netGain = 1.f);
 
     void shutdown();
 
   private:
     AudioBufferId getOrUploadBuffer(const char* assetName);
+    AudioBufferId getOrUploadRadioBuffer(const char* assetName, const RadioProfile& profile);
 
     IAudio* m_audio{nullptr};
     AssetManager* m_assets{nullptr};

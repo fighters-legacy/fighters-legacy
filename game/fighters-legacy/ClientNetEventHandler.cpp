@@ -515,7 +515,7 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             console->print(std::string(line));
         }
         if (radioCallback)
-            radioCallback(rt.speaker, rt.text, rt.voiceKey, rt.displaySeconds);
+            radioCallback(rt.speaker, rt.text, rt.voiceKey, rt.displaySeconds, rt.netId);
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::VoiceNetDef)) {
         // The server's radio-net table (#532). Sent once after ConnectAck; a client cannot key a mic
         // until it arrives, and net ids on every subsequent frame index into it.

@@ -427,7 +427,10 @@ struct ClientNetEventHandler : INetworkEventHandler {
     // Optional: called on a MsgRadioTransmission (#703) with (speaker, text, voiceKey, displaySeconds).
     // #704 wires it to the subtitle overlay + voice-callout pipeline. The line is always also printed to
     // the console. Null = console only. Main-thread only.
-    std::function<void(const char* speaker, const char* text, const char* voiceKey, uint16_t seconds)> radioCallback;
+    // `netId` (#925) is the radio net the line was spoken on, so synthetic traffic gets the same
+    // DSP, ducking and net gain as human voice — kInvalidRadioNet = no net (a dry cockpit callout).
+    std::function<void(const char* speaker, const char* text, const char* voiceKey, uint16_t seconds, uint8_t netId)>
+        radioCallback;
 
     // ── voice comms (Epic J, #532) ──────────────────────────────────────────
     // Optional: called once per MsgVoiceNetDef with the server's radio-net table (and whether voice

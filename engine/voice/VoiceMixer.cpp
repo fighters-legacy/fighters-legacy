@@ -19,6 +19,8 @@ bool VoiceMixer::init(IAudio* audio, ILogger* logger) {
     m_audio = audio;
     m_logger = logger;
     m_pcm.assign(static_cast<std::size_t>(kVoiceFrameSamples), 0);
+    m_clickPcm = radioClickPcm(kVoiceSampleRate);
+    m_squelchPcm = radioSquelchPcm(kVoiceSampleRate);
     m_nets.clear();
     for (auto& def : builtinRadioNets())
         m_nets.add(def);
@@ -73,6 +75,9 @@ VoiceMixer::Stream* VoiceMixer::createStream(uint32_t peerId, uint8_t netId) {
     s->decoder = std::move(decoder);
     s->jitter.setDepth(static_cast<uint32_t>(std::clamp(m_voice.jitterTargetFrames, 1, 12)),
                        VoiceJitterBuffer::kDefaultMaxDepth);
+    // Radio character comes from the NET, so every client on a server hears the same radio (#925).
+    if (const RadioNetDef* def = m_nets.byIndex(netId); def && def->radioEffect && m_voice.radioEffect)
+        s->filter.configure(RadioProfile{}, kVoiceSampleRate);
     s->source = m_audio->createSource();
     if (!s->source)
         return nullptr;
@@ -101,12 +106,17 @@ void VoiceMixer::destroyStream(Stream& s) {
     s.queued = 0;
 }
 
+void VoiceMixer::holdDuck(float seconds) noexcept {
+    m_duckHoldSec = std::max(m_duckHoldSec, std::max(0.f, seconds));
+}
+
 void VoiceMixer::reset() {
     for (auto& s : m_streams)
         destroyStream(*s);
     m_streams.clear();
     m_active.clear();
     m_duckGain = 1.f;
+    m_duckHoldSec = 0.f;
 }
 
 void VoiceMixer::onFrame(uint32_t senderPeerId, uint32_t senderEntityIdx, uint8_t netId, uint16_t seq,
@@ -132,7 +142,10 @@ void VoiceMixer::onFrame(uint32_t senderPeerId, uint32_t senderEntityIdx, uint8_
         // bleed into this one, and so the sequence numbering restarts cleanly.
         s->jitter.reset();
         s->decoder->reset();
+        s->filter.reset();
         s->ending = false;
+        s->tailQueued = false;
+        s->pendingClick = s->filter.configured();
     }
     if (end)
         s->ending = true;
@@ -158,6 +171,19 @@ void VoiceMixer::pumpStream(Stream& s, float dt) {
     }
 
     bool produced = false;
+
+    // Key-down click, ahead of the first decoded frame (#925). Queued on the SAME source as the
+    // speech so it inherits the net's placement and gain — a click that came from a different
+    // direction than the voice would be worse than no click at all.
+    if (s.pendingClick && s.freeCount > 0 && !m_clickPcm.empty()) {
+        const AudioBufferId buf = s.freeList[--s.freeCount];
+        m_audio->queueBuffer(s.source, buf, m_clickPcm.data(), m_clickPcm.size() * sizeof(int16_t), kVoiceSampleRate,
+                             kVoiceChannels);
+        ++s.queued;
+        s.pendingClick = false;
+        produced = true;
+    }
+
     while (s.queued < kTargetQueued && s.freeCount > 0) {
         // Concealment bridges LOSS. Once the sender has told us the transmission is over there is
         // nothing left to conceal, and running PLC anyway would append ~160 ms of invented speech
@@ -175,6 +201,7 @@ void VoiceMixer::pumpStream(Stream& s, float dt) {
         if (samples <= 0)
             break;
         produced = true;
+        s.filter.process(std::span<int16_t>(m_pcm.data(), static_cast<std::size_t>(samples)));
 
         // Level meter for the HUD, measured on the DECODED audio so it reflects what the listener
         // actually hears rather than what the sender's mic saw.
@@ -186,6 +213,17 @@ void VoiceMixer::pumpStream(Stream& s, float dt) {
         m_audio->queueBuffer(s.source, buf, m_pcm.data(), static_cast<std::size_t>(samples) * sizeof(int16_t),
                              kVoiceSampleRate, kVoiceChannels);
         ++s.queued;
+    }
+
+    // Squelch tail once the transmission has ended and its audio has drained out of the buffer.
+    if (s.ending && !s.tailQueued && s.jitter.size() == 0 && s.freeCount > 0 && !m_squelchPcm.empty() &&
+        s.filter.configured()) {
+        const AudioBufferId buf = s.freeList[--s.freeCount];
+        m_audio->queueBuffer(s.source, buf, m_squelchPcm.data(), m_squelchPcm.size() * sizeof(int16_t),
+                             kVoiceSampleRate, kVoiceChannels);
+        ++s.queued;
+        s.tailQueued = true;
+        produced = true;
     }
 
     if (produced) {
@@ -249,7 +287,10 @@ void VoiceMixer::update(float dt, const glm::dvec3& cameraOrigin, const SpeakerP
     for (auto it = m_streams.begin(); it != m_streams.end();) {
         Stream& s = **it;
         const bool drained = s.queued == 0 && s.jitter.size() == 0;
-        if (drained && (s.ending || s.idleSec >= kStreamIdleTimeoutS)) {
+        // An ended stream is not finished until its squelch tail has played out, or the cue would be
+        // cut off by the very retirement it announces.
+        const bool tailDone = !s.filter.configured() || s.tailQueued || m_squelchPcm.empty();
+        if (drained && ((s.ending && tailDone) || s.idleSec >= kStreamIdleTimeoutS)) {
             destroyStream(s);
             it = m_streams.erase(it);
         } else {
@@ -258,8 +299,11 @@ void VoiceMixer::update(float dt, const glm::dvec3& cameraOrigin, const SpeakerP
     }
 
     // Ducking (#925): one smoothed envelope for the whole radio, not per net — the listener's ear
-    // does not care which net is live, only that someone is talking.
-    const float target = m_active.empty() ? 1.f : std::clamp(1.f - m_voice.duckingAmount, 0.f, 1.f);
+    // does not care which net is live, only that someone is talking. Synthetic traffic holds it open
+    // via holdDuck so ATC ducks the music exactly like a human does.
+    m_duckHoldSec = std::max(0.f, m_duckHoldSec - dt);
+    const bool live = !m_active.empty() || m_duckHoldSec > 0.f;
+    const float target = live ? std::clamp(1.f - m_voice.duckingAmount, 0.f, 1.f) : 1.f;
     const float rate = target < m_duckGain ? kDuckAttackPerSec : kDuckReleasePerSec;
     const float step = rate * dt;
     if (std::fabs(target - m_duckGain) <= step)

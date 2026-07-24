@@ -872,6 +872,11 @@ add_executable(test_voice_mixer test_voice_mixer.cpp)
 target_link_libraries(test_voice_mixer PRIVATE Catch2::Catch2WithMain engine-voice)
 catch_discover_tests(test_voice_mixer)
 
+# Radio presentation DSP (#925): band-limiting, soft clipping, and the byte-stable click/squelch cues.
+add_executable(test_radio_dsp test_radio_dsp.cpp)
+target_link_libraries(test_radio_dsp PRIVATE Catch2::Catch2WithMain engine-radio)
+catch_discover_tests(test_radio_dsp)
+
 # Voice routing (#532): who hears a transmission, as pure functions over a net table + peer list.
 add_executable(test_voice_router test_voice_router.cpp)
 target_link_libraries(test_voice_router PRIVATE Catch2::Catch2WithMain engine-net)
