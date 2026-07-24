@@ -72,7 +72,7 @@ notes whether each is in use today or planned under an epic. All are GPL-3.0-com
 |---|---|---|---|
 | GameNetworkingSockets | **Selected** transport for 128+ peers (Epic L, #506) — reliable+unreliable UDP, congestion control, built-in encryption; behind `INetwork`, `enet6` retained as fallback | BSD-3 | [ValveSoftware/GameNetworkingSockets](https://github.com/ValveSoftware/GameNetworkingSockets) |
 | OpenSSL | Crypto backend for the GNS transport (the #506 spike's libsodium pick was reversed during #507 — GNS rejects libsodium AES on ARM/Apple Silicon; see `docs/gns-backend.md`) | Apache-2.0 | [openssl.org/docs](https://www.openssl.org/docs/) |
-| Opus | Voice-chat codec (Epic J) | BSD-3 | [opus-codec.org](https://opus-codec.org) |
+| Opus | **In use** — the voice codec for the radio nets (Epic J, #531): 48 kHz mono, 20 ms frames, VOIP mode with in-band FEC. The server relays frames without decoding, so this is a client-to-client contract | BSD-3 | [opus-codec.org](https://opus-codec.org) |
 | OIDC / OAuth 2.0 | Federated identity option for self-hosted communities (`OidcIdentityProvider`, Epic C) | — | [OpenID Connect](https://openid.net/developers/how-connect-works/) |
 | SQLite / PostgreSQL | Persistence backends (`IPersistence`, Epic H) — SQLite single-server, Postgres for clusters | Public domain / PostgreSQL | [sqlite.org](https://sqlite.org) · [postgresql.org/docs](https://www.postgresql.org/docs/) |
 | Prometheus / OpenMetrics | Server metrics export (Epic G) | Apache-2.0 | [prometheus.io/docs](https://prometheus.io/docs/) |

@@ -92,6 +92,18 @@ target_link_libraries(engine-audio
             vorbisfile
 )
 
+add_library(engine-voice STATIC
+    voice/RadioNet.cpp
+    voice/VoiceCodec.cpp
+    voice/VoiceMixer.cpp
+    voice/VoiceChat.cpp
+)
+target_include_directories(engine-voice PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(engine-voice
+    PUBLIC  platform-hal
+    PRIVATE fl::opus
+)
+
 add_library(engine-render STATIC
     render/SimRenderBridge.cpp
     render/CameraController.cpp

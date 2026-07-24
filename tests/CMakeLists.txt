@@ -845,6 +845,33 @@ add_executable(test_ack_window test_ack_window.cpp)
 target_link_libraries(test_ack_window PRIVATE Catch2::Catch2WithMain engine-protocol)
 catch_discover_tests(test_ack_window)
 
+# --- Epic J: in-game voice comms (#499) --------------------------------------------------------
+# Opus codec wrapper (#531). Real libopus round trips, so a broken encoder configuration or a
+# regressed payload cap fails here rather than on a live server.
+add_executable(test_voice_codec test_voice_codec.cpp)
+target_link_libraries(test_voice_codec PRIVATE Catch2::Catch2WithMain engine-voice)
+catch_discover_tests(test_voice_codec)
+
+# Per-speaker voice jitter buffer (#531; pure, no codec/device).
+add_executable(test_voice_jitter test_voice_jitter.cpp)
+target_link_libraries(test_voice_jitter PRIVATE Catch2::Catch2WithMain engine-voice)
+catch_discover_tests(test_voice_jitter)
+
+# PTT/VOX keying gate (#531; pure, header-only).
+add_executable(test_voice_activity test_voice_activity.cpp)
+target_link_libraries(test_voice_activity PRIVATE Catch2::Catch2WithMain engine-voice)
+catch_discover_tests(test_voice_activity)
+
+# Radio-net table + the builtin zero-config net stack (#531/#532).
+add_executable(test_radio_net test_radio_net.cpp)
+target_link_libraries(test_radio_net PRIVATE Catch2::Catch2WithMain engine-voice)
+catch_discover_tests(test_radio_net)
+
+# Remote voice playback / positional mix (#531) against a queue-tracking IAudio double.
+add_executable(test_voice_mixer test_voice_mixer.cpp)
+target_link_libraries(test_voice_mixer PRIVATE Catch2::Catch2WithMain engine-voice)
+catch_discover_tests(test_voice_mixer)
+
 # Server capability vocabulary + role presets (#945; header-only, stdlib).
 add_executable(test_capability test_capability.cpp)
 target_link_libraries(test_capability PRIVATE Catch2::Catch2WithMain engine-protocol)

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "SDL3Factory.h"
+#include "SDL3AudioCapture.h"
+#include "SDL3AudioCaptureFactory.h"
 #include "SDL3Display.h"
 #include "SDL3Input.h"
 #include "SDL3Window.h"
@@ -15,6 +17,10 @@ SDL3WindowInput createSDL3WindowInput() {
 
 std::unique_ptr<IDisplay> createSDL3Display() {
     return std::make_unique<SDL3Display>();
+}
+
+std::unique_ptr<IAudioCapture> createSDL3AudioCapture() {
+    return std::make_unique<SDL3AudioCapture>();
 }
 
 } // namespace fl

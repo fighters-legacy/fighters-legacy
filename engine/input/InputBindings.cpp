@@ -57,6 +57,9 @@ static constexpr const char* kActionNames[] = {
     "MfdRange",
     "NvgToggle",
     "GmMap",
+    "PushToTalkPrimary",
+    "PushToTalkSecondary",
+    "VoiceNetCycle",
 };
 static_assert(std::size(kActionNames) == static_cast<size_t>(InputAction::Count),
               "kActionNames must have one entry per InputAction");
@@ -691,6 +694,16 @@ void InputBindings::applyDefaults() {
                                                           static_cast<uint32_t>(Key::ArrowLeft), false};
     m_primary[static_cast<int>(InputAction::ViewRight)] = {BindingSource::Keyboard,
                                                            static_cast<uint32_t>(Key::ArrowRight), false};
+
+    // Voice PTT (Epic J, #531). V/B are free and off the flight cluster, and V is the near-universal
+    // push-to-talk convention. M cycles the primary key's net. All three are HELD, not toggled: a
+    // latched mic is how a lobby ends up listening to someone's kitchen.
+    m_primary[static_cast<int>(InputAction::PushToTalkPrimary)] = {BindingSource::Keyboard,
+                                                                   static_cast<uint32_t>(Key::V), false};
+    m_primary[static_cast<int>(InputAction::PushToTalkSecondary)] = {BindingSource::Keyboard,
+                                                                     static_cast<uint32_t>(Key::B), false};
+    m_primary[static_cast<int>(InputAction::VoiceNetCycle)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::M),
+                                                               false};
 
     // Gamepad alt defaults
     m_alt[static_cast<int>(InputAction::PitchAxis)] = {BindingSource::GamepadAxis,

@@ -86,6 +86,14 @@ enum class InputAction : uint32_t {
     // Game-master overview map toggle (#861) — opens the battlespace map for GM-capable peers
     GmMap,
 
+    // Voice radio nets (Epic J, #531). Two PTT keys, not one, because the pair of nets a pilot uses
+    // constantly is "my flight" and "everyone else on my side" — reaching a menu to switch between
+    // them mid-merge is exactly the ceremony the radio-net model exists to avoid. VoiceNetCycle
+    // re-points the PRIMARY key at another net for the rarer ATC/proximity calls.
+    PushToTalkPrimary,
+    PushToTalkSecondary,
+    VoiceNetCycle,
+
     Count
 };
 

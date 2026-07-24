@@ -9,6 +9,23 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **audio**: Opus voice capture, playback and positional mix — the local half of the radio (#531,
+  Epic #499). New `engine-voice` library: a fixed-operating-point Opus wrapper (48 kHz mono, 20 ms
+  frames, VOIP mode, in-band FEC scaled by measured link loss), a per-speaker voice jitter buffer,
+  a PTT/VOX keying gate, and a `VoiceMixer` that decodes one stream per **(speaker, net)** pair and
+  places it head-locked or camera-relative-positional per the net's profile. A new `IAudioCapture`
+  HAL (SDL3 recording backend) keeps microphone capture out of `IAudio` — OpenAL's capture side is
+  an optional extension with no device enumeration, and capture has a per-transmission lifecycle
+  playback does not. Voice cannot reuse `engine/net/JitterBuffer.h`: control input stale-repeats on
+  underrun, which for audio produces a robotic stutter instead of Opus's near-inaudible packet-loss
+  concealment, and a late voice frame is a syllable rather than a worthless stale stick position.
+  Every failure degrades softly and independently (no device / no encoder / no audio device =
+  listen-only, send-only, or a clean no-op), so CI and a machine with no sound card need no
+  `#ifdef`. Client config lands as `[voice]` in `user.toml` plus three rebindable actions
+  (`PushToTalkPrimary` V, `PushToTalkSecondary` B, `VoiceNetCycle` M) and a voice section in the
+  settings screen — whose row layout is now computed rather than hand-tabulated, so the hover bands
+  can no longer drift off the drawn rows.
+
 - **tools**: `validate-mesh` animation checks + the `3d-models.md` registry rewrite (#844, Epic #837).
   The validator could not see animations at all: a `.glb` with a misspelled clip name, a skinned mesh,
   or a rest pose that disagreed with its own `t=0` keyframe passed clean and then simply did not move
