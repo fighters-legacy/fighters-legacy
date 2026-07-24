@@ -292,6 +292,9 @@ add_executable(validate-licenses validate-licenses/main.cpp)
 target_link_libraries(validate-licenses PRIVATE validate-licenses-lib)
 
 add_library(validate-mesh-lib STATIC validate-mesh/mesh_validator.cpp)
+# #844: the articulation channel registry (engine/render/ArtChannel.h) is header-only and stdlib-only,
+# so the validator names the same channels the engine consumes without linking engine-render.
+target_include_directories(validate-mesh-lib PRIVATE "${CMAKE_SOURCE_DIR}/engine")
 target_include_directories(validate-mesh-lib SYSTEM PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/validate-mesh"
     "${tinygltf_SOURCE_DIR}")

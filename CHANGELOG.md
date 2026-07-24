@@ -9,6 +9,20 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **tools**: `validate-mesh` animation checks + the `3d-models.md` registry rewrite (#844, Epic #837).
+  The validator could not see animations at all: a `.glb` with a misspelled clip name, a skinned mesh,
+  or a rest pose that disagreed with its own `t=0` keyframe passed clean and then simply did not move
+  in the game, with no diagnostic anywhere. It now warns on an unknown clip name (listing the valid
+  channels), and errors on a skin, a morph-target `weights` channel, an unsupported interpolation, a
+  rest pose that disagrees with the clip's **neutral** keyframe (`t=0`, or the clip **midpoint** for a
+  signed channel — the trap that renders an aircraft subtly wrong before anything is commanded), and
+  two scrubbed clips fighting over one node. Marker empties and arbitrary `extras` stay legal, and a
+  mesh with zero animations stays valid forever. The docs' animation section was documenting a
+  registry nothing implemented (`gear_extend`/`gear_retract`, `bay_open`/`bay_close`) — it is replaced
+  by the real contract: the channel table, the scrub semantics, "transit timing lives in the
+  simulation, never in the clip", the rest-pose rule, one clip per channel with retraction as
+  scrubbing toward 0, spin as the one looping exception, and the Blender `NLA_TRACKS` recipe that
+  actually produces separately named clips.
 - **game**: landing gear and flaps end-to-end (#639, Epic #837) — the `InputAction::LandingGear` and
   `Flaps` bindings existed and were never read, so a human pilot could not raise the gear. **G**
   toggles the gear, **F** steps the flap detent (clean / manoeuvre / full — the positions a real lever

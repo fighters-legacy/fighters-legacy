@@ -265,18 +265,80 @@ committed PNG masters — see [`docs/modding/textures.md`](textures.md) for the 
 
 ---
 
-## Animation conventions
+## Animation channels
 
-Animation names are not validated, but the renderer expects these specific names when present:
+*(Enforced by `validate-mesh`)*
 
-| Animation name | Trigger |
-|---|---|
-| `gear_extend` | Landing gear extending |
-| `gear_retract` | Landing gear retracting |
-| `prop_spin` | Propeller rotation (turboprops/pistons) |
-| `bay_open` | Weapon bay opening |
-| `bay_close` | Weapon bay closing |
-| `sweep` | Wing sweep (variable-geometry aircraft) |
+**The engine owns named, normalized channels. Your model bakes keyframed node-TRS clips. The runtime
+SCRUBS the clip at `t = value × duration` — it never "plays" it.**
+
+That is the contract every established sim implements (DCS numbered draw arguments, X-Plane's named
+datarefs, MSFS's simvar → keyframe mapping, BMS's numbered DOF nodes), and it has one consequence
+worth stating plainly: **retraction is scrubbing `gear` toward 0.** There is no `gear_retract` clip.
+A second clip would be duplicate state to keep in sync, and it matches no shipping sim.
+
+### The channel registry
+
+One clip per channel. **The clip's name IS the channel name.** A clip may target any number of nodes.
+
+| Clip | Semantics | Range |
+|---|---|---|
+| `gear` | 0 = up, doors closed; 1 = down-locked. One clip sequences struts, doors and linkages | 0..1 |
+| `flaps` | 0 = clean, 1 = full. Slats may live in the same clip | 0..1 |
+| `speedbrake` | 0 = stowed, 1 = deployed | 0..1 |
+| `hook` | 0 = stowed, 1 = down | 0..1 |
+| `canopy` | 0 = closed, 1 = open | 0..1 |
+| `sweep` | 0 = `[wing_sweep] min_deg`, 1 = `max_deg` | 0..1 |
+| `tvc_pitch` | −1 = `[aero.tvc] min_angle_deg`, +1 = `max_angle_deg` | −1..+1 |
+| `tvc_yaw` | reserved (the sim is pitch-only today) | −1..+1 |
+| `elevator` | −1 = full nose-down, +1 = full nose-up | −1..+1 |
+| `aileron` | +1 = right-roll command; one clip animates both surfaces | −1..+1 |
+| `rudder` | +1 = right yaw | −1..+1 |
+| `prop_spin` (also `rotor_spin`, `wheel_spin`) | **Looping**: the playhead advances at `rate × (1/duration)` rev/s | rate |
+| `bay` | 0 = closed, 1 = open | 0..1 |
+| `gear_compress_nose` / `_left` / `_right` | 0 = extended, 1 = bottomed. Oleo compression, derived client-side | 0..1 |
+
+Gear *compression* is a separate channel from gear *deploy*, as it is in every sim that models both.
+
+### Authoring rules
+
+1. **Scrub mapping.** Unsigned channels: `t = value × duration`. Signed channels:
+   `t = (value + 1) / 2 × duration` — the clip's **start** is full negative deflection, its
+   **midpoint** is neutral, its **end** is full positive.
+2. **Asymmetric control authority** (`max_elevator_deg` ≠ `max_elevator_neg_deg`) is expressed by
+   authoring **asymmetric endpoints**, never by rescaling the parameter. Rescaling would make the
+   neutral position depend on the flight model.
+3. **Transit timing lives in the simulation, never in the clip.** Clip duration is arbitrary — the
+   runtime rescales it. Actuator rate limiting is server-side, from
+   [`[articulation]`](flight-model.md#articulation--actuator-transit-times-optional). The one
+   exception is a spin clip, whose duration is one revolution at rate 1.0.
+4. **A node's rest local TRS must equal its pose at the neutral keyframe** (`t = 0` for an unsigned
+   channel, the clip midpoint for a signed one). `validate-mesh` errors on a mismatch: this is the
+   most likely authoring mistake, and it renders the aircraft subtly wrong before anything is even
+   commanded.
+5. **LINEAR and STEP are required; CUBICSPLINE is accepted.** Animating morph-target `weights`, or
+   shipping a mesh with a **skin**, is a validation error — rigid mechanical parts are plain animated
+   nodes, never joint deformation.
+6. **Articulated geometry is authored in node-local space, with the node origin on the hinge line.**
+7. **A node may be driven by at most one scrubbed clip** (plus optionally one `gear_compress_*`
+   clip — deploy and compression compose only because compression animates the inner strut/oleo
+   nodes, disjoint from the doors and linkages the deploy clip drives).
+8. A `_b` damage node **inherits its base node's pose**; animating one directly is a warning.
+9. **Marker empties are legal.** A node with no mesh (a `camera_anchor`, a hardpoint or hinge marker)
+   and arbitrary glTF `extras` are forward-compatible metadata, not errors.
+10. **A mesh with zero animations stays valid, forever.** `f5e.glb` as shipped is the compatibility
+    baseline.
+
+### Blender recipe
+
+One **action** per channel, pushed to its own single-strip **NLA track named for the channel**, then:
+
+```python
+bpy.ops.export_scene.gltf(filepath="f5e.glb", export_animation_mode='NLA_TRACKS')
+```
+
+`NLA_TRACKS` mode is what makes each track export as a separately named glTF animation. In the
+default mode Blender merges everything into one clip, and none of it will bind.
 
 ---
 
