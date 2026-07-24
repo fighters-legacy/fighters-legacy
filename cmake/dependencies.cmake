@@ -603,6 +603,16 @@ else()
         set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
         set(OPUS_INSTALL_PKG_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
         set(OPUS_INSTALL_CMAKE_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
+        # Opus's CMakeLists does `if(OPUS_BUILD_TESTING OR BUILD_TESTING)` and force-enables its own
+        # tests when the PARENT project has BUILD_TESTING on (ours does) — OPUS_BUILD_TESTING=OFF is
+        # not enough. Shadow BUILD_TESTING for the subproject scope only (the vorbis-block pattern),
+        # so opus never registers its test_opus_* targets, whose MSVC C4244 double->float warnings
+        # became fatal under our -Werror (GCC's equivalent is not in -Wall -Wextra, so only Windows
+        # failed). Belt and suspenders: disable warning-as-error around MakeAvailable so ANY opus
+        # target opus does build is exempt (the SDL-block pattern).
+        set(FL_SAVED_BUILD_TESTING "${BUILD_TESTING}")
+        set(BUILD_TESTING OFF)
+        set(CMAKE_COMPILE_WARNING_AS_ERROR OFF)
         FetchContent_Declare(opus_src
             GIT_REPOSITORY https://github.com/xiph/opus.git
             GIT_TAG        v1.5.2
@@ -611,6 +621,9 @@ else()
             SYSTEM
         )
         FetchContent_MakeAvailable(opus_src)
+        unset(CMAKE_COMPILE_WARNING_AS_ERROR)
+        set(BUILD_TESTING "${FL_SAVED_BUILD_TESTING}")
+        unset(FL_SAVED_BUILD_TESTING)
         # Third-party C sources must not inherit -Werror (see the Lua/zstd blocks above).
         set_target_properties(opus PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
         add_library(fl-opus INTERFACE)
