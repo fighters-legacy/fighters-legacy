@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <bit> // std::popcount for the articulation TLV (#843)
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <glm/gtc/quaternion.hpp>
@@ -76,6 +77,22 @@ void ClientNetEventHandler::onConnect(uint32_t /*peerId*/) {
                          static_cast<uint16_t>(p.size()));
     }
     net.send(0, buf.data(), buf.size(), /*reliable=*/true);
+}
+
+void ClientNetEventHandler::sendVoiceFrame(uint8_t netId, uint16_t seq, std::span<const uint8_t> payload, bool start,
+                                           bool end) {
+    if (payload.size() > fl::kMaxVoiceFrameBytes)
+        return;
+    fl::MsgVoiceFrameHeader hdr;
+    hdr.netId = netId;
+    hdr.seq = seq;
+    hdr.payloadBytes = static_cast<uint16_t>(payload.size());
+    hdr.flags = static_cast<uint8_t>((start ? fl::kVoiceFlagStart : 0u) | (end ? fl::kVoiceFlagEnd : 0u));
+    std::vector<uint8_t> pkt;
+    pkt.reserve(sizeof(hdr) + payload.size());
+    fl::appendMsg(pkt, hdr);
+    pkt.insert(pkt.end(), payload.begin(), payload.end());
+    net.sendChannel(0, pkt.data(), pkt.size(), /*reliable=*/false, fl::kNetChVoice);
 }
 
 void ClientNetEventHandler::signalFailure(SessionFailure f) {
@@ -499,6 +516,50 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         }
         if (radioCallback)
             radioCallback(rt.speaker, rt.text, rt.voiceKey, rt.displaySeconds);
+    } else if (msgId == static_cast<uint8_t>(fl::MsgId::VoiceNetDef)) {
+        // The server's radio-net table (#532). Sent once after ConnectAck; a client cannot key a mic
+        // until it arrives, and net ids on every subsequent frame index into it.
+        fl::MsgVoiceNetDefHeader vh;
+        if (!fl::readMsg(data, size, vh))
+            return;
+        fl::RadioNetTable nets;
+        const std::size_t have = size > sizeof(vh) ? size - sizeof(vh) : 0u;
+        const std::size_t count = std::min<std::size_t>(vh.netCount, have / sizeof(fl::MsgVoiceNetRecord));
+        for (std::size_t i = 0; i < count; ++i) {
+            fl::MsgVoiceNetRecord rec{};
+            if (!fl::readRecordAt(data, size, sizeof(vh) + i * sizeof(rec), rec))
+                break;
+            rec.id[sizeof(rec.id) - 1] = '\0';
+            rec.name[sizeof(rec.name) - 1] = '\0';
+            fl::RadioNetDef def;
+            def.id = rec.id;
+            def.name = rec.name;
+            // Gate the attacker-supplied ordinal before casting; an unknown kind degrades to Global
+            // (audible, clearly labelled) rather than silently vanishing from the player's radio.
+            def.kind = fl::isRadioNetKindOrdinal(rec.kind) ? static_cast<fl::RadioNetKind>(rec.kind)
+                                                           : fl::RadioNetKind::Global;
+            def.positional = (rec.flags & fl::kVoiceNetFlagPositional) != 0;
+            def.radioEffect = (rec.flags & fl::kVoiceNetFlagRadioEffect) != 0;
+            def.defaultNet = (rec.flags & fl::kVoiceNetFlagDefault) != 0;
+            def.rangeM = std::isfinite(rec.rangeM) ? rec.rangeM : 0.f;
+            def.gain = std::isfinite(rec.gain) ? rec.gain : 1.f;
+            nets.add(std::move(def));
+        }
+        if (voiceNetsCallback)
+            voiceNetsCallback(nets, (vh.flags & fl::kVoiceServerEnabled) != 0);
+    } else if (msgId == static_cast<uint8_t>(fl::MsgId::VoiceRelay)) {
+        fl::MsgVoiceRelayHeader rh;
+        if (!fl::readMsg(data, size, rh))
+            return;
+        const std::size_t have = size > sizeof(rh) ? size - sizeof(rh) : 0u;
+        // The payload length is the only thing anyone can check about bytes no server decoded.
+        if (rh.payloadBytes > fl::kMaxVoiceFrameBytes || rh.payloadBytes > have)
+            return;
+        const auto* bytes = static_cast<const uint8_t*>(data) + sizeof(rh);
+        if (voiceFrameCallback)
+            voiceFrameCallback(rh.senderPeerId, rh.senderEntityIdx, rh.netId, rh.seq,
+                               std::span<const uint8_t>(bytes, rh.payloadBytes), (rh.flags & fl::kVoiceFlagStart) != 0,
+                               (rh.flags & fl::kVoiceFlagEnd) != 0);
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::AdminResponse)) {
         fl::MsgAdminResponse resp;
         if (!fl::readMsg(data, size, resp))

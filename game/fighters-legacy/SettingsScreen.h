@@ -40,6 +40,22 @@ class SettingsScreen : public IScreen {
     // device still sees WHY they cannot talk.
     void setVoiceDevices(std::vector<std::string> devices);
 
+    // The row layout is PUBLIC because it is a fact about what is drawn, and the mouse hit-test and
+    // the tests both have to agree with it. Computed, not tabulated: the old hand-written y table had
+    // to be re-derived by hand on every addition, and the hover bands silently drifted off the drawn
+    // rows when it was not.
+    static constexpr int kRowAaMode = 3;
+    static constexpr int kRowSfxVolume = 11;
+    static constexpr int kRowVoiceVolume = 12;
+    static constexpr int kRowBack = 19;
+    static constexpr int kRowCount = kRowBack + 1;
+    static constexpr float kFirstRowY = 0.16f;
+    static constexpr float kRowStep = 0.042f;
+    static constexpr float kRowHitH = kRowStep;
+    static constexpr float rowY(int rowIdx) {
+        return kFirstRowY + kRowStep * static_cast<float>(rowIdx);
+    }
+
   private:
     UserConfig& m_userConfig;
     IRenderer& m_renderer;
@@ -65,19 +81,6 @@ class SettingsScreen : public IScreen {
     // 12=VoiceVol, 13=VoiceEnabled, 14=VoiceMode, 15=VoiceDevice, 16=MicGain, 17=RadioEffect,
     // 18=Ducking, 19=Back
     int m_focusedRow{0};
-    static constexpr int kRowVoiceVolume = 12;
-    static constexpr int kRowBack = 19;
-    static constexpr int kRowCount = kRowBack + 1;
-
-    // Row y is COMPUTED, not tabulated: the old hand-written table had to be re-derived by hand
-    // every time a row was added, and the hover bands silently drifted off the drawn rows when it
-    // was not. One formula keeps the hit-test and the render in lockstep by construction.
-    static constexpr float kFirstRowY = 0.16f;
-    static constexpr float kRowStep = 0.042f;
-    static constexpr float kRowHitH = kRowStep;
-    static constexpr float rowY(int rowIdx) {
-        return kFirstRowY + kRowStep * static_cast<float>(rowIdx);
-    }
 
     void applyAndSave();
     void buildModes();

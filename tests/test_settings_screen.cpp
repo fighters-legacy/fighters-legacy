@@ -305,8 +305,9 @@ TEST_CASE("SettingsScreen: labels right-align at 0.48 and values left-align at 0
             CHECK(el.x == Catch::Approx(0.5f));
         }
     }
-    CHECK(labels == 12);
-    CHECK(values == 12);
+    // One label/value pair per data row; the title and [ Back ] are the two centred elements.
+    CHECK(labels == SettingsScreen::kRowBack);
+    CHECK(values == SettingsScreen::kRowBack);
     CHECK(centered == 2);
 }
 
@@ -315,8 +316,10 @@ TEST_CASE("SettingsScreen: mouse hover focuses the row drawn under the cursor") 
     SettingsScreen s(f.cfg, f.renderer, f.window, f.display);
     MockInput inp;
     inp.mouseX = 640;
-    // Inside the Anti-aliasing row: drawn at y=0.39, hover band [0.39,0.44).
-    inp.mouseY = static_cast<int>(0.41f * 720.f);
+    // Inside the Anti-aliasing row's hover band, derived from the layout formula rather than a
+    // hardcoded y — a new row must not silently move this test onto a different row.
+    inp.mouseY =
+        static_cast<int>((SettingsScreen::rowY(SettingsScreen::kRowAaMode) + 0.5f * SettingsScreen::kRowHitH) * 720.f);
     s.update(inp, f.window);
     auto elems = s.buildElements();
     bool found = false;
@@ -334,10 +337,13 @@ TEST_CASE("SettingsScreen: hover matches drawn rows on the lower block (drift re
     SettingsScreen s(f.cfg, f.renderer, f.window, f.display);
     MockInput inp;
     inp.mouseX = 640;
-    // Cursor on the drawn "SFX volume:" glyphs (row 11 at y=0.89; glyphs span
-    // 0.890-0.912 at 720p logical height). The old uniform hover formula
-    // (0.20 + r*0.06) matched no row at ny=0.911.
-    inp.mouseY = 656;
+    // Cursor on the BOTTOM of the drawn "SFX volume:" glyphs (one 16 px glyph cell below the row's
+    // baseline y, at 720p logical height). This is the regression the old hand-written y table kept
+    // producing: a hover band that no longer covered the glyphs it was supposed to be under.
+    constexpr float kGlyphH = 16.f / 720.f;
+    inp.mouseY = static_cast<int>((SettingsScreen::rowY(SettingsScreen::kRowSfxVolume) + kGlyphH) * 720.f);
+    // The band must actually contain the glyph bottom, or the test proves nothing.
+    STATIC_REQUIRE(kGlyphH < SettingsScreen::kRowHitH);
     s.update(inp, f.window);
     auto elems = s.buildElements();
     bool found = false;

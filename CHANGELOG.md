@@ -9,6 +9,23 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network**: voice channel over the transport with team / flight / proximity routing (#532, Epic
+  #499). Three messages — `MsgVoiceNetDef` (0x23, the server's radio-net table, sent once after
+  ConnectAck), `MsgVoiceFrame` (0x24, client→server) and `MsgVoiceRelay` (0x25, server→client) — and
+  **the server understands exactly one thing about the audio: how many bytes it is**. Frames are
+  relayed opaque to a recipient set derived from the net's kind, so voice at 128 players costs the
+  server almost nothing and the codec stays a client-to-client contract that can change without a
+  protocol change. Routing lives in `engine/net/VoiceRouter.h` as pure functions over a net table and
+  a peer list, testable without a server or a transport. Nets are **data**: `[[voice.nets]]` in
+  server.toml, or the compiled-in team/flight/atc/proximity stack when an operator configures
+  nothing. There is deliberately no frequency dial. Voice rides its **own transport channel**
+  (`kNetChVoice`, new `INetwork::sendChannel` with a forwarding default so no mock changes) because
+  ENet sequences unreliable packets per channel and drops stale ones — 50 voice frames/s sharing a
+  channel with 60 snapshots/s would make the two streams cut each other to pieces. `MsgRadioTransmission`
+  gained a `netId` so synthetic ATC/TTS traffic rides the same net as human voice and gets the same
+  presentation. Admin: `voice`, `voice_mute`, `voice_unmute` (transmit-only — muting is not a
+  punishment that also blinds someone to their own team).
+
 - **audio**: Opus voice capture, playback and positional mix — the local half of the radio (#531,
   Epic #499). New `engine-voice` library: a fixed-operating-point Opus wrapper (48 kHz mono, 20 ms
   frames, VOIP mode, in-band FEC scaled by measured link loss), a per-speaker voice jitter buffer,

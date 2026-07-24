@@ -910,6 +910,44 @@ int main(int argc, char** argv) {
         return true; // allow
     });
 
+    // In-game voice comms (Epic J, #532). The server relays opaque Opus frames by net membership and
+    // never decodes one; everything here is routing + bandwidth policy. An empty [[voice.nets]] leaves
+    // the compiled-in stack in place (setRadioNets falls back), so voice works with no configuration.
+    broadcaster.setVoiceEnabled(cfg.voice.enabled);
+    broadcaster.setVoiceFrameRateLimit(cfg.voice.frameRateLimit);
+    if (!cfg.voice.nets.empty()) {
+        RadioNetTable nets;
+        for (const auto& n : cfg.voice.nets) {
+            RadioNetDef def;
+            def.id = n.id;
+            def.name = n.name;
+            if (!radioNetKindFromString(n.kind, def.kind)) {
+                char buf[192];
+                std::snprintf(buf, sizeof(buf), "[voice] net '%s': unknown kind '%s'; using 'team'", n.id.c_str(),
+                              n.kind.c_str());
+                log->log(LogLevel::Warn, __FILE__, __LINE__, buf);
+            }
+            def.positional = n.positional;
+            def.rangeM = static_cast<float>(n.rangeM);
+            def.radioEffect = n.radioEffect;
+            def.gain = static_cast<float>(n.gain);
+            def.defaultNet = n.defaultNet;
+            if (nets.add(std::move(def)) == kInvalidRadioNet) {
+                char buf[192];
+                std::snprintf(buf, sizeof(buf), "[voice] net '%s' rejected (duplicate id or table full); skipped",
+                              n.id.c_str());
+                log->log(LogLevel::Warn, __FILE__, __LINE__, buf);
+            }
+        }
+        broadcaster.setRadioNets(std::move(nets));
+    }
+    if (cfg.voice.enabled) {
+        char buf[192];
+        std::snprintf(buf, sizeof(buf), "voice: %zu radio net(s), %d frames/s/peer", broadcaster.radioNets().size(),
+                      cfg.voice.frameRateLimit);
+        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+    }
+
     // Spectator snapshot delay (#403): anti-ghosting for dead/observer peers (0 = off).
     broadcaster.setSpectateDelay(cfg.spectateDelayS);
 

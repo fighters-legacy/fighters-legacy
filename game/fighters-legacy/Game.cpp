@@ -29,6 +29,7 @@
 #include "Platform.h"
 #include "PrecipitationController.h"
 #include "RecordScheduler.h"
+#include "SDL3AudioCaptureFactory.h" // Epic J microphone capture (#531)
 #include "ScoreboardOverlay.h"
 #include "ScreenManager.h"
 #include "ServerBrowserScreen.h"
@@ -93,6 +94,7 @@
 #include "stdfs/StdAsyncFilesystem.h"
 #include "stdfs/StdFilesystem.h"
 #include "stdfs/StdFilesystemWatcher.h"
+#include "voice/VoiceChat.h" // Epic J: Opus capture/playback + radio-net mix (#531/#532)
 #include "vulkan/VkRendererFactory.h"
 #include "weather/WeatherController.h" // applyGeographicSun — per-observer sun (#481)
 
@@ -374,7 +376,12 @@ struct GameServices {
     fl::SfxManager sfxManager;           // positional weapon SFX (#631)
     fl::WarningToneManager warningTones; // stall / overspeed cockpit tones (#957)
     fl::EngineAudioManager engineAudio;  // continuous engine + aero doppler layers (#959)
-    AudioSettings audioSettings{};       // a stable copy the effect router points at; refreshed on apply
+    // In-game voice comms (Epic J). The capture device is created once for the process (opening it
+    // is deferred inside VoiceChat until the player actually enables transmit) and VoiceChat owns
+    // the encode/decode/mix pipeline for the whole session.
+    std::unique_ptr<fl::IAudioCapture> audioCapture;
+    fl::VoiceChat voiceChat;
+    AudioSettings audioSettings{}; // a stable copy the effect router points at; refreshed on apply
 
     // Multiplayer connection target (empty = single-player, spawn LocalServer).
     // Populated from --connect CLI arg in initPlatform().
@@ -1261,6 +1268,14 @@ void Game::initGameSystems() {
                                   /*i18n=*/nullptr, d.services.rawLogger, /*synth=*/nullptr);
     d.services.audioSettings = d.services.userConfig->audio();
     d.services.effectRouter.setSfx(&d.services.sfxManager, &d.services.audioSettings);
+
+    // Voice comms (Epic J). The capture object is always constructed; whether a DEVICE opens is
+    // decided later, lazily, the first time the player is actually able to transmit — so a machine
+    // with no microphone (or a player who never enables voice) never touches the recording API and
+    // never sees a permission prompt.
+    d.services.audioCapture = fl::createSDL3AudioCapture();
+    d.services.voiceChat.init(d.services.audioCapture.get(), d.services.p.audio.get(), d.services.rawLogger);
+    d.services.voiceChat.applySettings(d.services.userConfig->voice(), d.services.audioSettings);
 }
 
 // Steps 19–20: debug console — console widget only; server commands wired in startGame().
@@ -1452,6 +1467,28 @@ void Game::startGame(const std::string& mission) {
                                               seconds > 0 ? static_cast<float>(seconds) : 4.f,
                                               d.services.audioSettings);
         };
+        // Voice comms (Epic J, #532). The net table is server-authoritative and arrives once after
+        // ConnectAck; frames arrive on the dedicated voice channel and go straight to the mixer.
+        d.services.voiceChat.reset(); // no stale streams or a latched mic across sessions
+        d.services.voiceChat.applySettings(d.services.userConfig->voice(), d.services.audioSettings);
+        d.session.clientHandler->voiceNetsCallback = [&d](const fl::RadioNetTable& nets, bool enabled) {
+            d.services.voiceChat.setNets(nets);
+            if (!enabled)
+                d.services.gameConsole->print("[voice] disabled by the server");
+        };
+        d.session.clientHandler->voiceFrameCallback = [&d](uint32_t peerId, uint32_t entityIdx, uint8_t netId,
+                                                           uint16_t seq, std::span<const uint8_t> payload, bool start,
+                                                           bool end) {
+            d.services.voiceChat.onRemoteFrame(peerId, entityIdx, netId, seq, payload, start, end);
+        };
+        {
+            ClientNetEventHandler* handler = d.session.clientHandler.get();
+            d.services.voiceChat.setFrameSink(
+                [handler](uint8_t netId, uint16_t seq, std::span<const uint8_t> payload, bool start, bool end) {
+                    handler->sendVoiceFrame(netId, seq, payload, start, end);
+                });
+        }
+
         // Server-driven music (#413/#166): a mission/AI world.set_music_state() reaches MusicManager here.
         d.session.clientHandler->musicStateCallback = [&d](uint8_t state) {
             if (fl::isGameStateOrdinal(state))
@@ -2114,6 +2151,49 @@ void Game::run() {
                     playerEntry ? playerEntry->position : (ghostCam ? d.services.camInput.eyeWorld() : glm::dvec3{});
                 d.services.terrainStreamer->update(terrainPos);
             }
+        }
+
+        // Voice comms (Epic J). Runs only in Flight: menus are where a player types, and a PTT key
+        // that also fires while a chat box or the console has focus would transmit their keystrokes'
+        // worth of room noise to the whole team. The mic is HELD, never latched, so leaving Flight
+        // with the key down closes the transmission cleanly via reset().
+        {
+            const bool inFlight = cur == Screen::Flight && d.session.clientHandler != nullptr;
+            const bool uiFocused = !inFlight || d.services.gameConsole->isOpen() ||
+                                   d.services.chatOverlay.isInputOpen() || d.services.gmMapOverlay.isOpen();
+            auto held = [&d](fl::InputAction action) {
+                const fl::Binding b = d.services.inputBindings.get(action);
+                if (b.source == fl::BindingSource::Keyboard)
+                    return d.services.p.input->isKeyDown(static_cast<fl::Key>(b.id));
+                if (b.source == fl::BindingSource::GamepadButton)
+                    return d.services.p.input->isGamepadButtonDown(0, static_cast<fl::GamepadButton>(b.id));
+                return false;
+            };
+            if (inFlight && !uiFocused) {
+                const fl::Binding cyc = d.services.inputBindings.get(fl::InputAction::VoiceNetCycle);
+                if (cyc.source == fl::BindingSource::Keyboard &&
+                    d.services.p.input->isKeyJustPressed(static_cast<fl::Key>(cyc.id))) {
+                    d.services.voiceChat.cyclePrimaryNet();
+                    d.services.gameConsole->print(
+                        "[voice] net: " + std::string(d.services.voiceChat.netName(d.services.voiceChat.primaryNet())));
+                }
+            }
+            // A speaker's position comes from the client's OWN entity cache, so a voice frame carries
+            // an entity index rather than 24 bytes of position at 50 Hz.
+            const fl::SpeakerPositionFn speakerPos = [&d](uint32_t entityIdx, glm::dvec3& out) {
+                if (!d.services.renderBridge.hasSnapshot())
+                    return false;
+                for (const auto& e : d.services.renderBridge.current().entries) {
+                    if (e.entityIdx == entityIdx) {
+                        out = e.position;
+                        return true;
+                    }
+                }
+                return false;
+            };
+            d.services.voiceChat.update(1.0f / 60.0f, held(fl::InputAction::PushToTalkPrimary),
+                                        held(fl::InputAction::PushToTalkSecondary), uiFocused, cam.worldOrigin,
+                                        speakerPos);
         }
 
         // Audio update (always — so music plays on main menu too).

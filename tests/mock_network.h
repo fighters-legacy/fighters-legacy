@@ -65,6 +65,7 @@ struct TrackingNetwork : NullNetwork {
     // tests to assert on per-peer snapshot content without touching the existing sends list.
     std::vector<std::pair<uint32_t, std::vector<uint8_t>>> perPeerSends;
     bool sendReliable{false};
+    uint8_t lastChannel{0xFFu};                      // channel of the last sendChannel() call; 0xFF = never called
     std::map<uint32_t, std::string> peerAddresses;   // configure per-test
     std::map<uint32_t, PeerLinkStats> peerLinkStats; // configure per-test (congestion tests)
     std::vector<uint32_t> disconnectedPeers;         // tracks disconnectPeer calls
@@ -80,6 +81,12 @@ struct TrackingNetwork : NullNetwork {
         perPeerSends.emplace_back(peerId, std::move(pkt));
         sendReliable = reliable;
         return true;
+    }
+    // Records the channel then forwards, so a test can assert voice actually rode kNetChVoice (#532)
+    // without every existing assertion on `sends` having to change.
+    bool sendChannel(uint32_t peerId, const void* data, std::size_t size, bool reliable, uint8_t channel) override {
+        lastChannel = channel;
+        return send(peerId, data, size, reliable);
     }
     void broadcast(const void* data, std::size_t size, bool) override {
         broadcasts.push_back({static_cast<const uint8_t*>(data), static_cast<const uint8_t*>(data) + size});

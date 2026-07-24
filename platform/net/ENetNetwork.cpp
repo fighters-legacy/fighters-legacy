@@ -254,12 +254,22 @@ void ENetNetwork::disconnect() {
 // -------------------------------------------------------------------------
 
 bool ENetNetwork::send(uint32_t peerId, const void* data, std::size_t size, bool reliable) {
+    return sendChannel(peerId, data, size, reliable,
+                       reliable ? static_cast<uint8_t>(kChReliable) : static_cast<uint8_t>(kChUnreliable));
+}
+
+bool ENetNetwork::sendChannel(uint32_t peerId, const void* data, std::size_t size, bool reliable, uint8_t channelIn) {
     if (!m_host) {
         m_lastError = "not connected";
         return false;
     }
     enet_uint32 flags = reliable ? ENET_PACKET_FLAG_RELIABLE : 0;
-    enet_uint8 channel = reliable ? static_cast<enet_uint8>(kChReliable) : static_cast<enet_uint8>(kChUnreliable);
+    // An out-of-range channel falls back to the reliability default rather than being rejected: a
+    // caller asking for a channel this host was not created with should still get its packet.
+    enet_uint8 channel =
+        channelIn < static_cast<uint8_t>(kChannelCount)
+            ? static_cast<enet_uint8>(channelIn)
+            : (reliable ? static_cast<enet_uint8>(kChReliable) : static_cast<enet_uint8>(kChUnreliable));
     ENetPacket* pkt = enet_packet_create(data, size, flags);
     if (!pkt) {
         m_lastError = "enet_packet_create() failed";

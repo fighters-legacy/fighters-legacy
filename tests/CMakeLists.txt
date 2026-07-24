@@ -872,6 +872,11 @@ add_executable(test_voice_mixer test_voice_mixer.cpp)
 target_link_libraries(test_voice_mixer PRIVATE Catch2::Catch2WithMain engine-voice)
 catch_discover_tests(test_voice_mixer)
 
+# Voice routing (#532): who hears a transmission, as pure functions over a net table + peer list.
+add_executable(test_voice_router test_voice_router.cpp)
+target_link_libraries(test_voice_router PRIVATE Catch2::Catch2WithMain engine-net)
+catch_discover_tests(test_voice_router)
+
 # Server capability vocabulary + role presets (#945; header-only, stdlib).
 add_executable(test_capability test_capability.cpp)
 target_link_libraries(test_capability PRIVATE Catch2::Catch2WithMain engine-protocol)

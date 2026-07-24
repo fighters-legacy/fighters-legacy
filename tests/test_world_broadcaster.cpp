@@ -1455,7 +1455,7 @@ TEST_CASE("WorldBroadcaster: onConnect sends ConnectAck with registered types an
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     connectPilotPeer(broadcaster, net, 0u);
 
-    REQUIRE(net.sends.size() == 3u); // +1 PlayerRoster (#996)
+    REQUIRE(net.sends.size() == 4u); // +1 PlayerRoster (#996), +1 VoiceNetDef (#532)
     CHECK(net.sendReliable);
 
     fl::MsgConnectAck ack = parseSendAck(net);
@@ -2216,7 +2216,7 @@ TEST_CASE("WorldBroadcaster: onConnect with empty registry sends typeCount=0 and
 
     connectPilotPeer(broadcaster, net, 0u);
 
-    REQUIRE(net.sends.size() == 3u); // +1 PlayerRoster (#996)
+    REQUIRE(net.sends.size() == 4u); // +1 PlayerRoster (#996), +1 VoiceNetDef (#532)
     fl::MsgConnectAck ack = parseSendAck(net);
     CHECK(ack.typeCount == 0u);
     CHECK(ack.assignedEntityIdx == 0u); // spawn failed — type not registered
@@ -2578,7 +2578,7 @@ TEST_CASE("WorldBroadcaster: onConnect sends MsgHello as first reliable packet",
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     connectPilotPeer(broadcaster, net, 0u);
 
-    REQUIRE(net.sends.size() == 3u); // +1 PlayerRoster (#996)
+    REQUIRE(net.sends.size() == 4u); // +1 PlayerRoster (#996), +1 VoiceNetDef (#532)
 
     fl::MsgHello hello = parseSendHello(net);
     CHECK(hello.msgId == static_cast<uint8_t>(fl::MsgId::Hello));
@@ -4663,6 +4663,16 @@ static bool parseLastChunk(const MockNetwork& net, fl::MsgAdminResponseChunk& ch
 // MOTD helpers
 // ---------------------------------------------------------------------------
 
+// Find a packet by message id rather than by position. The connect handshake has grown a message
+// on nearly every epic (PlayerRoster #996, VoiceNetDef #532, ...), and every index-based assertion
+// broke each time while testing nothing about ordering.
+static const std::vector<uint8_t>* findSend(const MockNetwork& net, fl::MsgId id) {
+    for (const auto& pkt : net.sends)
+        if (!pkt.empty() && pkt[0] == static_cast<uint8_t>(id))
+            return &pkt;
+    return nullptr;
+}
+
 static std::string parseMotdText(const std::vector<uint8_t>& pkt) {
     if (pkt.size() < sizeof(fl::MsgMotdHeader) + 1u || pkt[0] != static_cast<uint8_t>(fl::MsgId::Motd))
         return {};
@@ -4684,7 +4694,7 @@ TEST_CASE("WorldBroadcaster: no MOTD sent by default", "[world_broadcaster][motd
     connectPilotPeer(broadcaster, net, 0u);
 
     // Hello + ConnectAck; no MOTD packet
-    CHECK(net.sends.size() == 3u); // +1 PlayerRoster (#996)
+    CHECK(net.sends.size() == 4u); // +1 PlayerRoster (#996), +1 VoiceNetDef (#532)
     for (const auto& pkt : net.sends)
         CHECK(pkt[0] != static_cast<uint8_t>(fl::MsgId::Motd));
 }
@@ -4701,9 +4711,10 @@ TEST_CASE("WorldBroadcaster: MOTD sent as third send when non-empty", "[world_br
 
     connectPilotPeer(broadcaster, net, 0u);
 
-    REQUIRE(net.sends.size() == 4u); // +1 PlayerRoster (#996)
-    CHECK(net.sends[2][0] == static_cast<uint8_t>(fl::MsgId::Motd));
-    CHECK(parseMotdText(net.sends[2]) == "Welcome!");
+    REQUIRE(net.sends.size() == 5u); // +1 PlayerRoster (#996), +1 VoiceNetDef (#532)
+    const auto* motd = findSend(net, fl::MsgId::Motd);
+    REQUIRE(motd != nullptr);
+    CHECK(parseMotdText(*motd) == "Welcome!");
 }
 
 TEST_CASE("WorldBroadcaster: oversized MOTD capped at kMaxMotdBytes", "[world_broadcaster][motd]") {
@@ -4718,9 +4729,11 @@ TEST_CASE("WorldBroadcaster: oversized MOTD capped at kMaxMotdBytes", "[world_br
 
     connectPilotPeer(broadcaster, net, 0u);
 
-    REQUIRE(net.sends.size() == 4u); // +1 PlayerRoster (#996)
+    REQUIRE(net.sends.size() == 5u); // +1 PlayerRoster (#996), +1 VoiceNetDef (#532)
     // sizeof(MsgMotdHeader) (4) + kMaxMotdBytes (text) + 1 (NUL)
-    CHECK(net.sends[2].size() == sizeof(fl::MsgMotdHeader) + fl::kMaxMotdBytes + 1u);
+    const auto* motd = findSend(net, fl::MsgId::Motd);
+    REQUIRE(motd != nullptr);
+    CHECK(motd->size() == sizeof(fl::MsgMotdHeader) + fl::kMaxMotdBytes + 1u);
     CHECK(net.sends[2].back() == 0u); // NUL terminator
 }
 
@@ -4737,7 +4750,7 @@ TEST_CASE("WorldBroadcaster: setMotd with empty string suppresses MOTD send", "[
 
     connectPilotPeer(broadcaster, net, 0u);
 
-    CHECK(net.sends.size() == 3u); // +1 PlayerRoster (#996)
+    CHECK(net.sends.size() == 4u); // +1 PlayerRoster (#996), +1 VoiceNetDef (#532)
     for (const auto& pkt : net.sends)
         CHECK(pkt[0] != static_cast<uint8_t>(fl::MsgId::Motd));
 }
@@ -4754,10 +4767,12 @@ TEST_CASE("WorldBroadcaster: MOTD displaySeconds is 0 by default", "[world_broad
 
     connectPilotPeer(broadcaster, net, 0u);
 
-    REQUIRE(net.sends.size() == 4u); // +1 PlayerRoster (#996)
-    REQUIRE(net.sends[2].size() >= sizeof(fl::MsgMotdHeader));
+    REQUIRE(net.sends.size() == 5u); // +1 PlayerRoster (#996), +1 VoiceNetDef (#532)
+    const auto* motd = findSend(net, fl::MsgId::Motd);
+    REQUIRE(motd != nullptr);
+    REQUIRE(motd->size() >= sizeof(fl::MsgMotdHeader));
     uint16_t secs = 0;
-    std::memcpy(&secs, net.sends[2].data() + offsetof(fl::MsgMotdHeader, displaySeconds), sizeof(secs));
+    std::memcpy(&secs, motd->data() + offsetof(fl::MsgMotdHeader, displaySeconds), sizeof(secs));
     CHECK(secs == 0u);
 }
 
@@ -4774,10 +4789,12 @@ TEST_CASE("WorldBroadcaster: MOTD packet displaySeconds matches setMotdDisplaySe
 
     connectPilotPeer(broadcaster, net, 0u);
 
-    REQUIRE(net.sends.size() == 4u); // +1 PlayerRoster (#996)
-    REQUIRE(net.sends[2].size() >= sizeof(fl::MsgMotdHeader));
+    REQUIRE(net.sends.size() == 5u); // +1 PlayerRoster (#996), +1 VoiceNetDef (#532)
+    const auto* motd = findSend(net, fl::MsgId::Motd);
+    REQUIRE(motd != nullptr);
+    REQUIRE(motd->size() >= sizeof(fl::MsgMotdHeader));
     uint16_t secs = 0;
-    std::memcpy(&secs, net.sends[2].data() + offsetof(fl::MsgMotdHeader, displaySeconds), sizeof(secs));
+    std::memcpy(&secs, motd->data() + offsetof(fl::MsgMotdHeader, displaySeconds), sizeof(secs));
     CHECK(secs == 45u);
 }
 
@@ -4797,11 +4814,12 @@ TEST_CASE("WorldBroadcaster: applyConfig wires MOTD and display seconds in one c
 
     connectPilotPeer(broadcaster, net, 0u);
 
-    REQUIRE(net.sends.size() == 4u); // +1 PlayerRoster (#996)
-    CHECK(net.sends[2][0] == static_cast<uint8_t>(fl::MsgId::Motd));
-    CHECK(parseMotdText(net.sends[2]) == "Welcome via config!");
+    REQUIRE(net.sends.size() == 5u); // +1 PlayerRoster (#996), +1 VoiceNetDef (#532)
+    const auto* motd = findSend(net, fl::MsgId::Motd);
+    REQUIRE(motd != nullptr);
+    CHECK(parseMotdText(*motd) == "Welcome via config!");
     uint16_t secs = 0;
-    std::memcpy(&secs, net.sends[2].data() + offsetof(fl::MsgMotdHeader, displaySeconds), sizeof(secs));
+    std::memcpy(&secs, motd->data() + offsetof(fl::MsgMotdHeader, displaySeconds), sizeof(secs));
     CHECK(secs == 30u);
 }
 

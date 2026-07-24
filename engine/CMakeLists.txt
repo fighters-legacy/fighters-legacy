@@ -92,8 +92,16 @@ target_link_libraries(engine-audio
             vorbisfile
 )
 
-add_library(engine-voice STATIC
+# The radio-net VOCABULARY (Epic J): net kinds, defs, the ordered table, and the builtin net stack.
+# Its own target, stdlib-only, because BOTH sides need it and only one of them may have a codec:
+# engine-net routes frames by net kind on the server, which must never link libopus (it never
+# decodes a single frame), while engine-voice needs the same vocabulary to place and mix them.
+add_library(engine-radio STATIC
     voice/RadioNet.cpp
+)
+target_include_directories(engine-radio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+add_library(engine-voice STATIC
     voice/VoiceCodec.cpp
     voice/VoiceMixer.cpp
     voice/VoiceChat.cpp
@@ -101,6 +109,7 @@ add_library(engine-voice STATIC
 target_include_directories(engine-voice PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-voice
     PUBLIC  platform-hal
+            engine-radio
     PRIVATE fl::opus
 )
 
@@ -421,6 +430,7 @@ add_library(engine-net STATIC
     net/CongestionController.cpp
     net/TickGovernor.cpp
     net/WorldState.cpp
+    net/VoiceRouter.cpp
     net/LobbyListClient.cpp
     net/LobbyRegistration.cpp
     net/ServerBrowserModel.cpp
@@ -435,6 +445,7 @@ target_link_libraries(engine-net
             engine-spatial
             engine-job
             engine-world
+            engine-radio     # the radio-net vocabulary voice frames are routed by (#532)
             platform-hal
     PRIVATE engine-flight
             engine-weather

@@ -32,6 +32,7 @@ class ENetNetwork : public INetwork {
     bool connect(const char* host, uint16_t port) override;
     void disconnect() override;
     bool send(uint32_t peerId, const void* data, std::size_t size, bool reliable) override;
+    bool sendChannel(uint32_t peerId, const void* data, std::size_t size, bool reliable, uint8_t channel) override;
     void broadcast(const void* data, std::size_t size, bool reliable) override;
     void service(int timeoutMs = 0) override;
     int getPeerCount() const override;
@@ -75,7 +76,12 @@ class ENetNetwork : public INetwork {
 
     static constexpr unsigned char kChReliable = 0;
     static constexpr unsigned char kChUnreliable = 1;
-    static constexpr int kChannelCount = 2;
+    // Channel 2 is the voice channel (#532; kNetChVoice in GameProtocol.h). It is a separate channel
+    // because ENet's unreliable sequencing is PER CHANNEL and drops packets that arrive older than
+    // the channel's last -- 50 voice frames/s sharing a channel with 60 snapshots/s would make the
+    // two streams cut each other to pieces.
+    static constexpr unsigned char kChVoice = 2;
+    static constexpr int kChannelCount = 3;
 
     _ENetHost* m_host{nullptr};
     // Cumulative-counter -> rate conversion for getWireStats (#772). Mutable because the

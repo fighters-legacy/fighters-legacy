@@ -1023,6 +1023,107 @@ Default `true`. When `false`, every incoming chat line is dropped (no `ChatEvent
 Default `2`, range `[1, 60]`. Chat lines accepted per second per peer. Over the limit, the peer gets one
 "sending chat too fast" notice per one-second window and the excess lines are dropped silently.
 
+## [voice] — In-game voice comms (Epic J, #532)
+
+PTT-keyed **radio nets**: Opus voice relayed by net membership. The server **never decodes a frame**
+— it checks the length, checks the sender is on the net, and copies the bytes to that net's
+recipients. That is what makes voice at 128 players cost the server almost nothing, and it means
+this section is entirely routing and bandwidth policy, never audio.
+
+There is deliberately **no frequency dial**. Nets are named channels (`team`, `flight`, `atc`,
+`proximity`), which is what a frequency simulation is actually *used* for, without a new player
+having to discover that they must tune 251.000 to hear the tanker.
+
+### `enabled`
+
+Default `true`. When `false`, no audio is relayed and each client is told at connect that voice is
+off (so the HUD says so rather than a mic that silently does nothing).
+
+### `frame_rate_limit`
+
+Default `60`, range `[1, 200]`. Voice frames accepted per second per peer. 50 frames/s is one
+continuous transmission at the 20 ms frame size, so the default leaves headroom for jitter.
+
+This is a **bandwidth bound, not anti-spam**: a frame is fanned out to every recipient on the net, so
+an unbounded sender costs the server *(recipients × bytes)*, not *(1 × bytes)*. Over-rate frames are
+dropped **silently** — a reply to a flood is amplification.
+
+### `[[voice.nets]]`
+
+An array of net definitions. **Omit it entirely** and the compiled-in stack is used: `team` (the
+default PTT net), `flight`, `atc`, and a positional `proximity` net at 3 km — so voice works with
+zero configuration. Defining **any** net replaces that stack wholesale.
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `id` | string | — | **Required**, unique. How config and admin commands address the net |
+| `name` | string | the `id` | Display label on the HUD and the PTT selector |
+| `kind` | string | `"team"` | `global` / `team` / `flight` / `proximity` / `atc` |
+| `positional` | bool | `false` | Mix at the speaker's world position instead of head-locked |
+| `range_m` | float | `0` | Proximity radius / positional rolloff ceiling; `0` = unlimited |
+| `radio_effect` | bool | `true` | Apply the radio DSP (#925); `false` = "in the room" |
+| `gain` | float | `1.0` | Per-net trim, `[0, 4]`, on top of the client's own slider |
+| `default` | bool | `false` | Pre-selected under the client's primary PTT key |
+
+Net **kinds** decide the recipient set, server-side, per transmission:
+
+- `global` — every admitted peer.
+- `team` — same faction as the speaker. A peer with no aircraft (an observer) has no team, so it
+  **may not transmit** here: "my team" would have no referent, and the safe reading of that is to
+  refuse rather than let the frame reach nobody or everybody.
+- `flight` — the speaker's formation (#610's element → flight → package tree). A lead is the
+  formation's *anchor* rather than a member, and both readings are checked, so a flight lead is
+  never excluded from their own flight net.
+- `proximity` — every peer within `range_m`, **regardless of side**. An observer has no position and
+  so no proximity; they can still listen on other nets.
+- `atc` — everyone, including teamless spectators: it is how a player who is not yet flying talks to
+  the tower. Synthetic ATC traffic (#673/#704) is stamped onto this net so it presents identically
+  to a human transmission.
+
+The table is capped at **8 nets** (`kMaxRadioNets`) so the client's PTT selector, the wire record
+count, and the per-net mixer state are all statically sized. A duplicate or empty `id`, or a net past
+the cap, logs a warning and is skipped.
+
+Only **more than one net is limiting** in practice: clients bind two PTT keys (primary and
+secondary) and cycle the primary through the rest.
+
+### Admin commands
+
+- `voice` — the net table and the currently voice-muted peers, as the clients see them.
+- `voice_mute <peerId>` / `voice_unmute <peerId>` — session-scoped **transmit** mute. A muted peer
+  still hears every net: muting is a moderation action against what someone broadcasts, not a
+  punishment that also blinds them to their own team.
+
+### Example
+
+    [voice]
+    enabled = true
+    frame_rate_limit = 60
+
+    [[voice.nets]]
+    id = "team"
+    name = "TEAM"
+    kind = "team"
+    default = true
+
+    [[voice.nets]]
+    id = "flight"
+    name = "FLIGHT"
+    kind = "flight"
+
+    [[voice.nets]]
+    id = "tanker"
+    name = "TANKER"
+    kind = "global"
+    gain = 0.8
+
+    [[voice.nets]]
+    id = "proximity"
+    name = "PROX"
+    kind = "proximity"
+    positional = true
+    range_m = 3000.0
+
 ## [network] — Transport backend
 
 Selects the network transport. See [transport-selection.md](transport-selection.md) and
