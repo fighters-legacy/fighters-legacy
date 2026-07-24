@@ -76,6 +76,7 @@
 #include "net/ServerBrowserModel.h"
 #include "net/ServerQueryClient.h"
 #include "openal/OALAudio.h"
+#include "perf/FrameStatsRecorder.h"
 #include "perf/PerformanceOverlay.h"
 #include "render/BuiltinGeometry.h"
 #include "render/CameraController.h"
@@ -123,6 +124,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -287,6 +289,20 @@ static void updateAudioListener(IAudio& audio, const CameraView& cam, const glm:
     audio.setListenerVelocity(velA);
 }
 
+// Wall-clock epoch milliseconds — the join key the frame-stats document (#782) shares with any
+// external tool sampling the same machine. Deliberately NOT a monotonic clock: its epoch is
+// per-process, so two processes' monotonic timestamps cannot be put on one timeline.
+static double epochMillis() {
+    using namespace std::chrono;
+    return static_cast<double>(duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count());
+}
+
+// Writes the frame-stats document atomically (.tmp then rename), the same way fl-server writes
+// --metrics-json.
+static void writeFrameStats(const fl::FrameStatsRecorder& rec, const std::string& path, ILogger& log) {
+    fl::writeConfigFile(fs::path(path), rec.toJson(), log);
+}
+
 static void updatePerfOverlay(GameConsole& console, IRenderer& renderer, PerformanceOverlay& overlay,
                               const fl::SimRenderBridge& bridge, UserConfig& userConfig, bool inFlight,
                               fl::CameraMode camMode, const CameraView& cam, const fl::EntityRenderEntry* playerEntry,
@@ -416,6 +432,19 @@ struct GameServices {
     // after the Flight session starts, then quits — the reliable in-engine visual-verification path.
     std::string screenshotPath;
     int screenshotFrames{600}; // ~10 s at 60 fps: enough for terrain + airports to stream in
+
+    // Frame-stats export (#782): --frame-stats-json <path> records one sample per rendered Flight
+    // frame and writes engine/perf/FrameStatsRecorder.h's document — the render-side sibling of
+    // fl-server's --metrics-json. The per-frame wall-clock timestamps are what let an external tool
+    // correlate frames against something else on the machine (the GPU-contention harness in
+    // tools/gpu_contention/ joins them against LLM inference bursts).
+    std::string frameStatsJsonPath;
+    fl::FrameStatsRecorder frameStatsRecorder;
+    // --run-seconds <n>: leave the session cleanly n wall-clock seconds after the first Flight frame.
+    // Deliberately NOT --screenshot-frames: that counts FRAMES, and a measurement run whose length
+    // depends on the frame rate cannot bracket a fixed-duration external schedule — the slower the
+    // run gets (which is the thing being measured), the longer it lasts.
+    int runSeconds{0};
 
     // Headless client (#913): no window, no display, swapchain-free renderer (pair with a software
     // Vulkan ICD like lavapipe for no-GPU rendering). The camera is driven by the recorder, not input.
@@ -793,6 +822,10 @@ bool Game::initPlatform(int argc, char** argv) {
             d.services.screenshotPath = argv[i + 1];
         else if (std::strcmp(argv[i], "--screenshot-frames") == 0)
             d.services.screenshotFrames = std::atoi(argv[i + 1]);
+        else if (std::strcmp(argv[i], "--frame-stats-json") == 0)
+            d.services.frameStatsJsonPath = argv[i + 1]; // per-frame render-perf export (#782)
+        else if (std::strcmp(argv[i], "--run-seconds") == 0)
+            d.services.runSeconds = std::max(0, std::atoi(argv[i + 1]));
         else if (std::strcmp(argv[i], "--size") == 0) {
             // Headless render resolution (#666). Mirrors --record-res; windowed mode ignores it (the
             // window's own size wins). Malformed values keep the 1280x720 default.
@@ -2465,6 +2498,37 @@ void Game::run() {
                           d.services.renderBridge, *d.services.userConfig, cur == Screen::Flight,
                           d.services.cameraController.mode(), cam, playerEntry, d.services.terrainStreamer.get());
 
+        // Frame-stats export (#782) + the unattended run clock. Flight frames only: menu and loading
+        // frames render a different (trivial) scene, and mixing them into the sample set would drag
+        // the baseline distribution toward numbers no measurement is about.
+        if (cur == Screen::Flight) {
+            const double nowMs = epochMillis();
+            if (!d.services.frameStatsJsonPath.empty()) {
+                auto& rec = d.services.frameStatsRecorder;
+                if (rec.sampleCount() == 0) {
+                    // Provenance, captured once: which GPU and which scene produced these numbers.
+                    const char* gpu = d.services.p.renderer->gpuInfo();
+                    rec.setGpuInfo(gpu ? gpu : "");
+                    rec.setScene(d.services.autoStartMission);
+                }
+                rec.record(d.services.p.renderer->getFrameStats(), nowMs);
+                // Periodic flush: a measurement run that is killed rather than exited (the normal
+                // orchestrator teardown, and the only option on Windows) must still leave a usable
+                // artifact behind.
+                if (rec.shouldFlush(nowMs)) {
+                    writeFrameStats(rec, d.services.frameStatsJsonPath, *d.services.rawLogger);
+                    rec.markFlushed(nowMs);
+                }
+            }
+            if (d.services.runSeconds > 0) {
+                static double flightStartMs = 0.0;
+                if (flightStartMs == 0.0)
+                    flightStartMs = nowMs;
+                else if (nowMs - flightStartMs >= d.services.runSeconds * 1000.0)
+                    running = false;
+            }
+        }
+
         // Automated frame capture (#909 groundwork): once the Flight session has streamed in, write one
         // PNG and quit — the reliable in-engine path for visual verification (no external screenshot tool).
         if (!d.services.screenshotPath.empty() && cur == Screen::Flight) {
@@ -2493,6 +2557,11 @@ void Game::run() {
     }
 
     recorderFinish(); // close the encoder + set the exit code (#916)
+
+    // Final frame-stats write (#782). The periodic flush already left a usable file behind; this is
+    // the complete one, covering the frames since the last flush.
+    if (!d.services.frameStatsJsonPath.empty() && d.services.frameStatsRecorder.sampleCount() > 0)
+        writeFrameStats(d.services.frameStatsRecorder, d.services.frameStatsJsonPath, *d.services.rawLogger);
 }
 
 } // namespace fl

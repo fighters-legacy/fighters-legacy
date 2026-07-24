@@ -8,10 +8,11 @@
 // "server_tick" block in its report so the metric stays "one shape" on both sides. Header-only
 // and dependency-free (just engine/perf + stdlib) so server/ and tools/ can both include it.
 //
-// fromJson() is a deliberately small, tolerant scanner over the deterministic shape toJson()
-// emits — missing/extra fields are ignored, numbers parsed with strtod (NOT std::from_chars,
-// which lacks floating-point support on Apple Clang).
+// fromJson() reads back through engine/perf/JsonScan.h — a deliberately small, tolerant scanner
+// over the deterministic shape toJson() emits (missing/extra fields ignored, numbers via strtod).
+// Those scanners were promoted out of this header when FrameStatsRecorder.h needed them too.
 
+#include "JsonScan.h"
 #include "Stats.h"
 #include "TickProfiler.h"
 
@@ -136,51 +137,6 @@ inline std::string statJson(const char* name, const Stats& s, const std::string&
                   "%s\"%s\": { \"min\": %.4f, \"mean\": %.4f, \"max\": %.4f, \"p95\": %.4f, \"p99\": %.4f }",
                   indent.c_str(), name, s.min, s.mean, s.max, s.p95, s.p99);
     return buf;
-}
-
-// Returns the numeric value following the first `"key"` occurrence (after its colon), or nullopt.
-inline std::optional<double> findNumber(std::string_view json, std::string_view key) {
-    const std::string needle = "\"" + std::string(key) + "\"";
-    const auto kpos = json.find(needle);
-    if (kpos == std::string_view::npos)
-        return std::nullopt;
-    auto cpos = json.find(':', kpos + needle.size());
-    if (cpos == std::string_view::npos)
-        return std::nullopt;
-    // Copy the tail to a NUL-terminated buffer for strtod (string_view is not guaranteed NUL-terminated).
-    std::string tail(json.substr(cpos + 1));
-    char* end = nullptr;
-    const double v = std::strtod(tail.c_str(), &end);
-    if (end == tail.c_str())
-        return std::nullopt;
-    return v;
-}
-
-// Parses the stat sub-object that follows `"key"` (its `{ ... }`), filling out. Returns true if
-// the key (and an object body) was found.
-inline bool parseStat(std::string_view json, std::string_view key, Stats& out) {
-    const std::string needle = "\"" + std::string(key) + "\"";
-    const auto kpos = json.find(needle);
-    if (kpos == std::string_view::npos)
-        return false;
-    const auto open = json.find('{', kpos);
-    if (open == std::string_view::npos)
-        return false;
-    const auto close = json.find('}', open);
-    if (close == std::string_view::npos)
-        return false;
-    const std::string_view obj = json.substr(open, close - open + 1);
-    if (auto v = findNumber(obj, "min"))
-        out.min = *v;
-    if (auto v = findNumber(obj, "mean"))
-        out.mean = *v;
-    if (auto v = findNumber(obj, "max"))
-        out.max = *v;
-    if (auto v = findNumber(obj, "p95"))
-        out.p95 = *v;
-    if (auto v = findNumber(obj, "p99"))
-        out.p99 = *v;
-    return true;
 }
 
 } // namespace detail
