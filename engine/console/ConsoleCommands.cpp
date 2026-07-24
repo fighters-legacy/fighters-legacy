@@ -4,6 +4,7 @@
 #include "console/CommandRegistry.h"
 #include "entity/EntityDef.h"
 #include "entity/EntityTypeRegistry.h"
+#include "render/ArtChannel.h"
 #include "render/RenderSnapshot.h"
 #include "render/SimRenderBridge.h"
 
@@ -293,6 +294,48 @@ void registerConsoleCommands(CommandRegistry& registry, CommandContext ctx) {
                 msg += msg.empty() ? "reload_content: forwarded to server" : " (+ server)";
             }
             return msg.empty() ? "reload_content: not available" : msg;
+        });
+
+    // ------------------------------------------------------------------
+    // art (#841) — scrub one articulation channel of one entity
+    // ------------------------------------------------------------------
+    registry.registerCommand(
+        "art", "art <entityIdx> <channel> <value> | art clear — force an articulation channel",
+        [setArt = ctx.setArtChannel, clearArt = ctx.clearArtChannels](std::span<std::string_view> args) -> std::string {
+            if (!setArt || !clearArt)
+                return "art: not available (no renderer)";
+            if (args.size() == 1 && args[0] == "clear") {
+                clearArt();
+                return "art: overrides cleared";
+            }
+            if (args.size() != 3)
+                return "usage: art <entityIdx> <channel> <value>   |   art clear";
+
+            uint32_t idx = 0;
+            if (!parseUint(args[0], idx))
+                return "art: entityIdx must be a non-negative integer";
+
+            const ArtChannel channel = artChannelFromName(args[1]);
+            if (channel == ArtChannel::kCount) {
+                std::string names = "art: unknown channel. Valid:";
+                for (std::size_t i = 0; i < kArtChannelCount; ++i)
+                    names += " " + std::string(artChannelName(static_cast<ArtChannel>(i)));
+                return names;
+            }
+
+            double v = 0.0;
+            if (!parseDouble(args[2], v))
+                return "art: value must be a number";
+            const std::string vs(args[2]);
+
+            setArt(idx, static_cast<uint8_t>(channel), static_cast<float>(v));
+            std::string out = "art: entity ";
+            out += std::to_string(idx);
+            out += " ";
+            out += std::string(artChannelName(channel));
+            out += " = ";
+            out += vs;
+            return out;
         });
 }
 

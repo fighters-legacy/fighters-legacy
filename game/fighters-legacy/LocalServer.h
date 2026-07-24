@@ -63,7 +63,9 @@ class LocalServer {
     void registerConsoleCommands(CommandRegistry& registry, std::function<void(std::string_view)> serverCommand,
                                  SimRenderBridge& renderBridge, EntityTypeRegistry* typeRegistry,
                                  uint32_t* playerEntityIdx, uint32_t* playerEntityGen, bool* showPos, bool* showPing,
-                                 std::function<std::string()> reloadContent = {});
+                                 std::function<std::string()> reloadContent = {},
+                                 std::function<void(uint32_t, uint8_t, float)> setArtChannel = {},
+                                 std::function<void()> clearArtChannels = {});
 
     // Returns the per-session admin token generated at start(). Valid after start() returns true.
     std::string_view sessionToken() const;

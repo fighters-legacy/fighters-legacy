@@ -69,10 +69,12 @@ struct ArticulationRig {
     // carries the diagnostic. A rig that simply has no animations is VALID and empty.
     bool valid{true};
     std::string error;
+    // True when the bytes were not glTF at all (as opposed to glTF the rig REJECTED). The mesh
+    // loader reports that failure itself, so the rig stays quiet rather than double-logging it.
+    bool parseFailed{false};
 
     // Upper bound on the poses one full sample of EVERY present channel can produce — computed at
-    // build time. The frame pose arena reserves against this (#841) so the spans handed to FrameScene
-    // never dangle behind a reallocation.
+    // build time, so a caller can size its pose storage ahead of sampling (#841).
     std::size_t poseCapacity{0};
 
     [[nodiscard]] bool hasChannel(ArtChannel c) const noexcept {

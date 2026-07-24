@@ -9,6 +9,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **renderer**: `SceneRenderer` populates `RenderItem::animPoses` (#841, Epic #837) — the renderer knew
+  how to be told where an aircraft's parts are; nothing told it. `EntityRenderEntry` gains a normalized
+  `artChannels[]` (all-zero is neutral, so an entity nobody articulates renders exactly as before), and
+  the entity loop samples every channel the mesh's rig actually models into a **frame pose arena**.
+  Spans are patched in after the loop from recorded (offset, count) pairs, which makes a dangling span
+  *impossible* rather than merely unlikely — reserving up-front and hoping the estimate holds would let
+  one reallocation silently invalidate every span already handed out. An entity whose mesh has no clips
+  gets an empty span and the existing single-draw path. Spin (`prop_spin`/`rotor_spin`/`wheel_spin`)
+  gets a per-entity phase accumulator held render-side: a propeller's angle is cosmetic, never
+  simulated and never wired. A new `art <entityIdx> <channel> <value>` console command scrubs a channel
+  end-to-end, so the whole clip → sampler → arena → per-node draw path is demonstrable before the
+  simulation or the wire drive it — and stays useful afterwards for telling "the clip is wrong" apart
+  from "the sim is wrong".
 - **renderer**: articulation rig — channel registry, clip parser and scrub sampler (#840, Epic #837).
   Nothing in the engine knew what an animation clip was: `docs/modding/3d-models.md` promised modders
   an animation-name registry the renderer never read, and `NodePose` had existed with no producer.

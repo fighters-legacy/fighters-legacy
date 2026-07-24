@@ -186,6 +186,7 @@ ArticulationRig buildArticulationRig(std::span<const uint8_t> bytes) {
                                         static_cast<unsigned int>(bytes.size()), /*base_dir=*/"");
     if (!ok) {
         rig.valid = false;
+        rig.parseFailed = true;
         rig.error = "glTF parse failed: " + err;
         return rig;
     }

@@ -1350,3 +1350,206 @@ TEST_CASE("SceneRenderer omits the cockpit interior in external views (#870)") {
     REQUIRE(renderer.lastScene.renderItems.size() == 1); // just the exterior, no cockpit item
     CHECK((renderer.lastScene.renderItems[0].flags & kRenderFlagShadowOnly) == 0);
 }
+
+// ---------------------------------------------------------------------------
+// Articulation (#841) — animPoses production
+// ---------------------------------------------------------------------------
+
+// A glTF whose "gear" clip translates node 1 from (0,0,0) at t=0 to (0,-4,0) at t=2. The 32-byte
+// data: buffer is {0.0f, 2.0f} then {0,0,0},{0,-4,0}; its byteLength MUST match the decoded size.
+static const char* kRiggedGltf = R"({
+  "asset": {"version": "2.0"},
+  "scenes": [{"nodes": [0]}],
+  "nodes": [{"name": "fuselage", "mesh": 0, "children": [1]}, {"name": "gear"}],
+  "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+  "accessors": [
+    {"componentType": 5126, "count": 3, "type": "VEC3"},
+    {"bufferView": 0, "componentType": 5126, "count": 2, "type": "SCALAR", "min": [0.0], "max": [2.0]},
+    {"bufferView": 1, "componentType": 5126, "count": 2, "type": "VEC3"}
+  ],
+  "bufferViews": [
+    {"buffer": 0, "byteOffset": 0, "byteLength": 8},
+    {"buffer": 0, "byteOffset": 8, "byteLength": 24}
+  ],
+  "buffers": [{"byteLength": 32, "uri": "data:application/octet-stream;base64,AAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAACAwAAAAAA="}],
+  "animations": [{
+    "name": "gear",
+    "samplers": [{"input": 1, "output": 2, "interpolation": "LINEAR"}],
+    "channels": [{"sampler": 0, "target": {"node": 1, "path": "translation"}}]
+  }]
+})";
+
+// A static mesh with no animations at all — the f5e.glb baseline.
+static const char* kStaticGltf = R"({
+  "asset": {"version": "2.0"},
+  "scenes": [{"nodes": [0]}],
+  "nodes": [{"name": "f5e", "mesh": 0}],
+  "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+  "accessors": [{"componentType": 5126, "count": 3, "type": "VEC3"}]
+})";
+
+static std::vector<uint8_t> asVec(const char* json) {
+    const std::string s(json);
+    return std::vector<uint8_t>(s.begin(), s.end());
+}
+
+TEST_CASE("SceneRenderer populates animPoses for a rigged mesh (#841)") {
+    MockLogger logger;
+    auto pack = std::make_unique<MockContentPack>();
+    pack->meshes["f15c"] = asVec(kRiggedGltf);
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::move(pack));
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockRenderer renderer;
+    SimRenderBridge bridge;
+    SceneRenderer sr{bridge, oneType(), assets, renderer};
+
+    RenderSnapshot snap = makeSnap();
+    EntityRenderEntry e = makeEntry(0, {0.0, 0.0, 0.0});
+    e.artChannels[static_cast<size_t>(ArtChannel::Gear)] = 1.0f; // gear fully down
+    snap.entries.push_back(e);
+    bridge.publish(std::move(snap));
+
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+
+    REQUIRE(renderer.lastScene.renderItems.size() == 1);
+    const auto& poses = renderer.lastScene.renderItems[0].animPoses;
+    REQUIRE(poses.size() == 1);
+    CHECK(poses[0].nodeIndex == 1u);
+    CHECK(poses[0].localTransform[3][1] == Catch::Approx(-4.0));
+}
+
+TEST_CASE("SceneRenderer poses track the entity's channel values (#841)") {
+    MockLogger logger;
+    auto pack = std::make_unique<MockContentPack>();
+    pack->meshes["f15c"] = asVec(kRiggedGltf);
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::move(pack));
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockRenderer renderer;
+    SimRenderBridge bridge;
+    SceneRenderer sr{bridge, oneType(), assets, renderer};
+
+    auto renderWithGear = [&](float gear) {
+        RenderSnapshot snap = makeSnap();
+        EntityRenderEntry e = makeEntry(0, {0.0, 0.0, 0.0});
+        e.artChannels[static_cast<size_t>(ArtChannel::Gear)] = gear;
+        snap.entries.push_back(e);
+        bridge.publish(std::move(snap));
+        sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+        REQUIRE(renderer.lastScene.renderItems.size() == 1);
+        REQUIRE(renderer.lastScene.renderItems[0].animPoses.size() == 1);
+        return renderer.lastScene.renderItems[0].animPoses[0].localTransform[3][1];
+    };
+
+    CHECK(renderWithGear(0.0f) == Catch::Approx(0.0));  // up
+    CHECK(renderWithGear(0.5f) == Catch::Approx(-2.0)); // mid-transit
+    CHECK(renderWithGear(1.0f) == Catch::Approx(-4.0)); // down-locked
+
+    // A channel the rig has no clip for is ignored silently — that is what lets the simulation drive
+    // all sixteen channels at every entity regardless of what its mesh models.
+    RenderSnapshot snap = makeSnap();
+    EntityRenderEntry e = makeEntry(0, {0.0, 0.0, 0.0});
+    e.artChannels[static_cast<size_t>(ArtChannel::Canopy)] = 1.0f;
+    snap.entries.push_back(e);
+    bridge.publish(std::move(snap));
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+    CHECK(renderer.lastScene.renderItems[0].animPoses.size() == 1); // still just the gear pose
+}
+
+TEST_CASE("SceneRenderer leaves animPoses empty for a static mesh (#841)") {
+    // The static baseline: f5e.glb as shipped has zero animations and must cost nothing.
+    MockLogger logger;
+    auto pack = std::make_unique<MockContentPack>();
+    pack->meshes["f15c"] = asVec(kStaticGltf);
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::move(pack));
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockRenderer renderer;
+    SimRenderBridge bridge;
+    SceneRenderer sr{bridge, oneType(), assets, renderer};
+
+    RenderSnapshot snap = makeSnap();
+    EntityRenderEntry e = makeEntry(0, {0.0, 0.0, 0.0});
+    e.artChannels[static_cast<size_t>(ArtChannel::Gear)] = 1.0f; // commanded, but nothing models it
+    snap.entries.push_back(e);
+    bridge.publish(std::move(snap));
+
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+    REQUIRE(renderer.lastScene.renderItems.size() == 1);
+    CHECK(renderer.lastScene.renderItems[0].animPoses.empty());
+}
+
+TEST_CASE("SceneRenderer articulation spans stay valid across many entities (#841)") {
+    // The arena grows (and reallocates) as entities are sampled; spans are patched in afterwards, so
+    // no span can be left pointing into a freed buffer.
+    MockLogger logger;
+    auto pack = std::make_unique<MockContentPack>();
+    pack->meshes["f15c"] = asVec(kRiggedGltf);
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::move(pack));
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockRenderer renderer;
+    SimRenderBridge bridge;
+    SceneRenderer sr{bridge, oneType(), assets, renderer};
+
+    RenderSnapshot snap = makeSnap();
+    for (uint32_t i = 0; i < 64; ++i) {
+        EntityRenderEntry e = makeEntry(0, {static_cast<double>(i), 0.0, 0.0});
+        e.entityIdx = i;
+        e.artChannels[static_cast<size_t>(ArtChannel::Gear)] = 1.0f;
+        snap.entries.push_back(e);
+    }
+    bridge.publish(std::move(snap));
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+
+    REQUIRE(renderer.lastScene.renderItems.size() == 64);
+    for (const auto& item : renderer.lastScene.renderItems) {
+        REQUIRE(item.animPoses.size() == 1);
+        CHECK(item.animPoses[0].localTransform[3][1] == Catch::Approx(-4.0));
+    }
+}
+
+TEST_CASE("SceneRenderer art channel override drives the pose end-to-end (#841)") {
+    // The debug scrub: the whole clip -> sampler -> arena -> per-node draw path, demonstrable before
+    // the simulation (#842) or the wire (#843) drive it.
+    MockLogger logger;
+    auto pack = std::make_unique<MockContentPack>();
+    pack->meshes["f15c"] = asVec(kRiggedGltf);
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::move(pack));
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockRenderer renderer;
+    SimRenderBridge bridge;
+    SceneRenderer sr{bridge, oneType(), assets, renderer};
+
+    RenderSnapshot snap = makeSnap();
+    EntityRenderEntry e = makeEntry(0, {0.0, 0.0, 0.0});
+    e.entityIdx = 7;
+    snap.entries.push_back(e); // snapshot says gear up
+    bridge.publish(std::move(snap));
+
+    sr.setArtChannelOverride(7, ArtChannel::Gear, 1.0f);
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+    REQUIRE(renderer.lastScene.renderItems[0].animPoses.size() == 1);
+    CHECK(renderer.lastScene.renderItems[0].animPoses[0].localTransform[3][1] == Catch::Approx(-4.0));
+
+    sr.clearArtChannelOverrides();
+    RenderSnapshot snap2 = makeSnap(2);
+    EntityRenderEntry e2 = makeEntry(0, {0.0, 0.0, 0.0});
+    e2.entityIdx = 7;
+    snap2.entries.push_back(e2);
+    bridge.publish(std::move(snap2));
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+    CHECK(renderer.lastScene.renderItems[0].animPoses[0].localTransform[3][1] == Catch::Approx(0.0));
+}
