@@ -292,9 +292,56 @@ At high speed near max Mach, CL_trim ≈ 0, so `cd0 ≈ Thrust / (q × S)`.
 turn rate (corner velocity). Decreasing k allows higher sustained G at the cost of physical
 accuracy.
 
-**Speedbrake and gear drag** are applied as additive deltas. The integrator blends
-`speedbrake_cd` linearly from 0 (retracted) to full at the deploy command. Both can be active
+**Speedbrake and gear drag** are applied as additive deltas, scaled by the actuator's **position**,
+not by the command — a gear that takes six seconds to travel builds its drag over those six seconds.
+See [`[articulation]`](#articulation--actuator-transit-times-optional). Both can be active
 simultaneously and stack with wave drag and payload drag.
+
+---
+
+## `[aero.flaps]` — High-lift device (optional)
+
+```toml
+[aero.flaps]
+dcl             = 0.60   # CL increment at full flap
+dcd             = 0.055  # parasite-drag increment at full flap
+alpha_shift_deg = 3.0    # shifts the CL-table lookup (optional)
+```
+
+| Field | Meaning |
+|---|---|
+| `dcl` | CL added at `flaps = 1`, scaling linearly with position |
+| `dcd` | Parasite drag added at `flaps = 1`. Must be ≥ 0 — a flap cannot reduce parasite drag |
+| `alpha_shift_deg` | Shifts where the CL table is sampled, so a given body AoA reads more CL **and the stall arrives at a lower body AoA** — which is what a real flap does |
+
+Omitting the section means the aircraft models no flap: the flap switch still moves and still drives
+the animation, but nothing changes aerodynamically. Every model written before this section existed
+therefore flies exactly as it did.
+
+---
+
+## `[articulation]` — Actuator transit times (optional)
+
+```toml
+[articulation]
+gear_transit_s       = 6.0
+flap_transit_s       = 4.0
+speedbrake_transit_s = 1.5
+hook_transit_s       = 2.0
+canopy_transit_s     = 5.0
+```
+
+Seconds for **full travel** (0 → 1) of each actuator. All fields are optional; the defaults above are
+plausible for a light fighter, so an existing model keeps parsing and keeps flying.
+
+**Transit timing lives here, never in the animation clip.** The renderer *scrubs* a clip to the
+actuator's current position (see [`docs/modding/3d-models.md`](3d-models.md#animation-channels)), so
+retiming an animation changes how the gear looks, not how long it takes. One number drives the
+server's physics, the client's prediction replay and the visual.
+
+Reversing mid-travel reverses from the current position — there is no snap. `0` means instantaneous,
+which is the honest reading of a model that declares no travel time for an actuator; the validator
+rejects negative values and anything over 600 s, and warns below 0.1 s.
 
 ---
 

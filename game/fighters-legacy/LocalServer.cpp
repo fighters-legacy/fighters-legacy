@@ -204,7 +204,9 @@ void LocalServer::registerConsoleCommands(CommandRegistry& registry,
                                           std::function<void(std::string_view)> serverCommand,
                                           fl::SimRenderBridge& renderBridge, fl::EntityTypeRegistry* typeRegistry,
                                           uint32_t* playerEntityIdx, uint32_t* playerEntityGen, bool* showPos,
-                                          bool* showPing, std::function<std::string()> reloadContent) {
+                                          bool* showPing, std::function<std::string()> reloadContent,
+                                          std::function<void(uint32_t, uint8_t, float)> setArtChannel,
+                                          std::function<void()> clearArtChannels) {
     CommandContext ctx{};
     ctx.renderBridge = &renderBridge;
     ctx.typeRegistry = typeRegistry;
@@ -214,6 +216,8 @@ void LocalServer::registerConsoleCommands(CommandRegistry& registry,
     ctx.showPing = showPing;
     ctx.serverCommand = std::move(serverCommand);
     ctx.reloadContent = std::move(reloadContent);
+    ctx.setArtChannel = std::move(setArtChannel);
+    ctx.clearArtChannels = std::move(clearArtChannels);
     fl::registerConsoleCommands(registry, ctx);
 }
 

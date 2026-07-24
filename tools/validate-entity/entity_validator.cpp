@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "entity_validator.h"
 
+#include "mesh_validator.h" // #882: describeMeshNodesFromMemory / meshVariantTags for the variant cross-check
+
 #include "ILogger.h"
 #include "content/AssetManager.h"
 #include "content/ContentIndex.h"
@@ -232,6 +234,32 @@ EntityValidationResult validateEntityPack(const std::string& packDir) {
         checkAssetRef(*pack, file, "flight_model", def.flightModelAsset, AssetType::FlightModel, r);
         checkAssetRef(*pack, file, "ai_script", def.aiScriptAsset, AssetType::AIScript, r);
         checkAssetRef(*pack, file, "manual", def.manualAsset, AssetType::Manual, r);
+
+        // Variant node-set (#882): `mesh_variant` must match a tag some node in the referenced mesh
+        // actually declares. A typo here is invisible at runtime — the aircraft simply renders as the
+        // untagged shared airframe, missing exactly the geometry that made it a distinct variant.
+        if (!def.meshVariant.empty()) {
+            if (def.mesh.empty()) {
+                r.errors.push_back(file + ": mesh_variant = \"" + def.meshVariant + "\" but no mesh is declared");
+                r.ok = false;
+            } else if (const auto meshData = pack->loadMesh(lowered(def.mesh).c_str()); meshData) {
+                const auto tree = describeMeshNodesFromMemory(meshData->bytes.data(), meshData->bytes.size());
+                const std::vector<std::string> tags = tree ? meshVariantTags(*tree) : std::vector<std::string>{};
+                if (std::find(tags.begin(), tags.end(), def.meshVariant) == tags.end()) {
+                    std::string msg = file + ": mesh_variant = \"" + def.meshVariant +
+                                      "\" matches no fl_variant tag in mesh \"" + def.mesh +
+                                      "\" — the entity would render as the untagged airframe only";
+                    if (!tags.empty()) {
+                        msg += " (available:";
+                        for (const std::string& t : tags)
+                            msg += " \"" + t + "\"";
+                        msg += ")";
+                    }
+                    r.errors.push_back(std::move(msg));
+                    r.ok = false;
+                }
+            }
+        }
 
         // Def-id references: resolved through the index, never the filesystem (#810). Builtin ids
         // ("builtin:eyeball", the #440 seeker heads) are compiled in, never pack files.

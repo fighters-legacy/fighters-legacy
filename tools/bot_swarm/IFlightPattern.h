@@ -31,6 +31,11 @@ struct BotControl {
     float aileron{0.f};  // [-1, 1] right-roll positive
     float rudder{0.f};   // [-1, 1] right-yaw positive
     uint8_t buttons{0};  // bit 0 = weapon, bit 1 = afterburner
+    // Articulation commands (#843), so a replayed trace flies the aeroplane it recorded: gear and
+    // flap POSITION is drag, and a determinism replay that silently differs is worse than none.
+    uint8_t flaps{0};      // 0..255 => 0..1
+    uint8_t speedbrake{0}; // 0..255 => 0..1
+    uint8_t artButtons{0}; // kArtButton* bitmask: gear / hook / canopy
 };
 
 class IFlightPattern {
@@ -202,6 +207,9 @@ class TracePattern : public IFlightPattern {
         c.aileron = r.aileron;
         c.rudder = r.rudder;
         c.buttons = static_cast<uint8_t>(r.buttons & 0xFFu);
+        c.flaps = r.flaps;
+        c.speedbrake = r.speedbrake;
+        c.artButtons = r.artButtons;
         return c;
     }
 

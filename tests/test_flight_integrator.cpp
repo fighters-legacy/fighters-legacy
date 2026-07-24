@@ -715,6 +715,7 @@ TEST_CASE("FlightIntegrator: ground parking hold does not block takeoff roll", "
     fl::FlightIntegrator fi(d);
     fl::FlightState s{};
     s.pos_world[1] = 100.f;
+    s.articulation.gear = 1.f; // parked on its wheels (#639)
     s.mass_kg = 10000.f;
     s.fuel_kg = 2000.f;
     s.mass_kg += s.fuel_kg;
@@ -722,6 +723,7 @@ TEST_CASE("FlightIntegrator: ground parking hold does not block takeoff roll", "
 
     fl::ControlInput ctrl{};
     ctrl.throttle = 1.0f; // full throttle
+    ctrl.gear_down = true;
     fl::PayloadEffect px{};
 
     for (int i = 0; i < 300; ++i) // 5 simulated seconds
@@ -737,6 +739,7 @@ static fl::FlightState makeRolloutState(float groundElev, float fwdSpeed) {
     fl::FlightState s{};
     s.pos_world[1] = groundElev; // sitting on the runway (geodeticAltitude == groundElev at the origin)
     s.vel_body[0] = fwdSpeed;    // forward, identity attitude (level, nose along +X)
+    s.articulation.gear = 1.f;   // ON ITS WHEELS (#639): brakes, tyre grip and steering are what wheels do
     s.mass_kg = 14000.f;
     s.fuel_kg = 4000.f;
     return s;
@@ -2103,8 +2106,9 @@ TEST_CASE("Integrator: unpaved surface shortens the ground rollout (#487)", "[in
     auto roll = [](const fl::GroundFriction& ground) {
         FlightIntegrator fi(makeData());
         FlightState s{};
-        s.vel_body[0] = 25.f;  // rolling forward
-        s.pos_world[1] = 0.2f; // within the ground-contact margin of groundElev = 0
+        s.vel_body[0] = 25.f;      // rolling forward
+        s.pos_world[1] = 0.2f;     // within the ground-contact margin of groundElev = 0
+        s.articulation.gear = 1.f; // on its wheels (#639)
         s.mass_kg = 14000.f;
         s.fuel_kg = 4000.f;
         fi.reset(s);
@@ -2352,4 +2356,197 @@ max_airspeed_mps = 120.0
 TEST_CASE("Drone limits: absent block leaves everything untouched", "[integrator][drone]") {
     auto d = makeData();
     CHECK_FALSE(d->drone_limits.has_value());
+}
+
+// ---------------------------------------------------------------------------
+// Articulation (#842) — actuator positions and transit dynamics
+//
+// Before this, gear and speedbrake existed only as COMMANDS and the aero model added their full drag
+// the instant the command flipped. Gear that takes six seconds to travel produced all of its drag in
+// one tick — and there was no number an animation could have been driven from.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("advanceActuator travels over exactly the declared transit time (#842)", "[integrator][articulation]") {
+    // Pure, so it is testable without a whole airframe — and shared verbatim by the server integrator
+    // and ClientPrediction's replay.
+    float pos = 0.f;
+    const float dt = 1.f / 60.f;
+    for (int i = 0; i < 360; ++i) // 6 seconds at 60 Hz
+        pos = advanceActuator(pos, 1.f, dt, 6.f);
+    CHECK(pos == Catch::Approx(1.0).margin(1e-4));
+
+    // Half the window is half the travel — the ramp is linear, which is what makes the same number
+    // usable as an animation scrub parameter.
+    float half = 0.f;
+    for (int i = 0; i < 180; ++i)
+        half = advanceActuator(half, 1.f, dt, 6.f);
+    CHECK(half == Catch::Approx(0.5).margin(1e-3));
+}
+
+TEST_CASE("advanceActuator reverses from the current position, never snapping (#842)", "[integrator][articulation]") {
+    const float dt = 1.f / 60.f;
+    float pos = 0.f;
+    for (int i = 0; i < 90; ++i) // 1.5 s down: a quarter of the travel
+        pos = advanceActuator(pos, 1.f, dt, 6.f);
+    const float mid = pos;
+    CHECK(mid == Catch::Approx(0.25).margin(1e-3));
+
+    // Command back up: the next tick must move a single step from `mid`, not jump to 0.
+    const float afterOne = advanceActuator(mid, 0.f, dt, 6.f);
+    CHECK(afterOne < mid);
+    CHECK(afterOne > mid - 0.01f);
+
+    // And it takes a quarter of the window to get home, not a full one.
+    float back = mid;
+    for (int i = 0; i < 90; ++i)
+        back = advanceActuator(back, 0.f, dt, 6.f);
+    CHECK(back == Catch::Approx(0.0).margin(1e-4));
+}
+
+TEST_CASE("advanceActuator treats a zero transit time as instantaneous (#842)", "[integrator][articulation]") {
+    CHECK(advanceActuator(0.f, 1.f, 1.f / 60.f, 0.f) == Catch::Approx(1.0));
+    // And commands are clamped to the actuator's physical range.
+    CHECK(advanceActuator(0.f, 5.f, 1.f, 1.f) == Catch::Approx(1.0));
+    CHECK(advanceActuator(1.f, -5.f, 1.f, 1.f) == Catch::Approx(0.0));
+}
+
+TEST_CASE("Integrator: gear position slews over gear_transit_s (#842)", "[integrator][articulation]") {
+    auto data = std::make_shared<FlightModelData>(parseFlightModel(kBaseToml));
+    const_cast<FlightModelData*>(data.get())->articulation.gear_transit_s = 6.0f;
+    FlightIntegrator integ(data);
+
+    FlightState st{};
+    st.pos_world[1] = 5000.0;
+    st.vel_body[0] = 200.0;
+    st.quat[3] = 1.f;
+    st.mass_kg = 10000.f;
+    st.fuel_kg = 4000.f;
+    integ.reset(st);
+
+    ControlInput ctrl{};
+    ctrl.gear_down = true;
+    PayloadEffect payload{};
+
+    CHECK(integ.state().articulation.gear == Catch::Approx(0.0));
+    for (int i = 0; i < 180; ++i) // 3 s: half travel
+        integ.step(1.f / 60.f, ctrl, payload);
+    CHECK(integ.state().articulation.gear == Catch::Approx(0.5).margin(0.02));
+
+    for (int i = 0; i < 180; ++i) // 6 s total: down and locked
+        integ.step(1.f / 60.f, ctrl, payload);
+    CHECK(integ.state().articulation.gear == Catch::Approx(1.0).margin(1e-3));
+
+    // Reversing mid-travel reverses from the current position.
+    ctrl.gear_down = false;
+    for (int i = 0; i < 90; ++i)
+        integ.step(1.f / 60.f, ctrl, payload);
+    CHECK(integ.state().articulation.gear == Catch::Approx(0.75).margin(0.02));
+}
+
+TEST_CASE("Integrator: gear drag appears progressively across the transit window (#842)",
+          "[integrator][articulation]") {
+    // The defect this replaced: full gear drag in the tick the switch moved.
+    auto data = std::make_shared<FlightModelData>(parseFlightModel(kBaseToml));
+    auto* mut = const_cast<FlightModelData*>(data.get());
+    mut->articulation.gear_transit_s = 6.0f;
+    mut->drag_polar.gear_cd = 0.05f; // a big, easily-measured gear
+
+    auto axialForceAfter = [&](int ticks, bool gearDown) {
+        FlightIntegrator integ(data);
+        FlightState st{};
+        st.pos_world[1] = 5000.0;
+        st.vel_body[0] = 200.0;
+        st.quat[3] = 1.f;
+        st.mass_kg = 10000.f;
+        st.fuel_kg = 4000.f;
+        integ.reset(st);
+        ControlInput ctrl{};
+        ctrl.gear_down = gearDown;
+        PayloadEffect payload{};
+        for (int i = 0; i < ticks; ++i)
+            integ.step(1.f / 60.f, ctrl, payload);
+        return integ.state().vel_body[0]; // slower = more drag
+    };
+
+    // 30 ticks (0.5 s) into a 6 s travel the gear is barely out, so the speed loss must be far closer
+    // to the clean case than to the fully-extended one.
+    const double clean = axialForceAfter(30, false);
+    const double early = axialForceAfter(30, true);
+    const double lateClean = axialForceAfter(600, false);
+    const double late = axialForceAfter(600, true);
+
+    CHECK(early < clean);                              // some drag already
+    CHECK(late < lateClean);                           // and much more once it is down
+    CHECK((clean - early) < (lateClean - late) * 0.2); // the ramp, not a step
+}
+
+TEST_CASE("Integrator: flap position adds the model's dCL and dCD (#842)", "[integrator][articulation]") {
+    auto data = std::make_shared<FlightModelData>(parseFlightModel(kBaseToml));
+    auto* mut = const_cast<FlightModelData*>(data.get());
+    mut->flaps.dcl = 0.6f;
+    mut->flaps.dcd = 0.05f;
+
+    auto atmos = computeAtmosphere(0.f);
+    const float spd = 100.f;
+    PayloadEffect payload{};
+
+    ArticulationState clean{};
+    ArticulationState full{};
+    full.flaps = 1.f;
+    ArticulationState half{};
+    half.flaps = 0.5f;
+
+    const auto fClean = computeForces(0.f, 0.f, 0.3f, spd, 0.f, 55.f, false, 0.f, payload, *data, atmos, clean);
+    const auto fHalf = computeForces(0.f, 0.f, 0.3f, spd, 0.f, 55.f, false, 0.f, payload, *data, atmos, half);
+    const auto fFull = computeForces(0.f, 0.f, 0.3f, spd, 0.f, 55.f, false, 0.f, payload, *data, atmos, full);
+
+    const float q = 0.5f * atmos.density_kg_m3 * spd * spd;
+    const float S = data->geometry.wing_area_m2;
+
+    // At alpha 0 the lift is body-y: the increment is exactly q*S*dcl at full flap.
+    CHECK(fFull[1] - fClean[1] == Catch::Approx(q * S * 0.6f).epsilon(1e-3));
+    // ...and linear in position.
+    CHECK(fHalf[1] - fClean[1] == Catch::Approx(q * S * 0.3f).epsilon(1e-3));
+    // Drag increases by the parasite increment PLUS the induced drag of the extra lift — a flap's CL
+    // is real lift and pays the real induced penalty, which is why dcd alone would understate it.
+    const float clClean = data->cl_table.lookup(0.f, 0.3f);
+    const float clFull = clClean + 0.6f;
+    const float k = data->drag_polar.k;
+    const float expectedDrag = q * S * (0.05f + k * (clFull * clFull - clClean * clClean));
+    CHECK(fClean[0] - fFull[0] == Catch::Approx(expectedDrag).epsilon(1e-3));
+}
+
+TEST_CASE("Integrator: an aircraft with no [aero.flaps] is unaffected by the flap switch (#842)",
+          "[integrator][articulation]") {
+    // Every model written before flaps existed must fly identically with the lever down.
+    auto data = std::make_shared<FlightModelData>(parseFlightModel(kBaseToml));
+    auto atmos = computeAtmosphere(0.f);
+    PayloadEffect payload{};
+    ArticulationState clean{};
+    ArticulationState full{};
+    full.flaps = 1.f;
+
+    const auto a = computeForces(0.f, 0.f, 0.3f, 100.f, 0.f, 55.f, false, 0.f, payload, *data, atmos, clean);
+    const auto b = computeForces(0.f, 0.f, 0.3f, 100.f, 0.f, 55.f, false, 0.f, payload, *data, atmos, full);
+    CHECK(a[0] == b[0]);
+    CHECK(a[1] == b[1]);
+}
+
+TEST_CASE("FlightModelParser: [articulation] is optional and range-checked (#842)", "[integrator][articulation]") {
+    // Absent: the defaults, so every existing model keeps parsing.
+    const FlightModelData def = parseFlightModel(kBaseToml);
+    CHECK(def.articulation.gear_transit_s == Catch::Approx(6.0));
+    CHECK(def.articulation.canopy_transit_s == Catch::Approx(5.0));
+
+    const FlightModelData set = parseFlightModel(kBaseToml + R"(
+[articulation]
+gear_transit_s = 9.5
+flap_transit_s = 2.0
+)");
+    CHECK(set.articulation.gear_transit_s == Catch::Approx(9.5));
+    CHECK(set.articulation.flap_transit_s == Catch::Approx(2.0));
+    CHECK(set.articulation.hook_transit_s == Catch::Approx(2.0)); // untouched keys keep their default
+
+    CHECK_THROWS(parseFlightModel(kBaseToml + "\n[articulation]\ngear_transit_s = -1.0\n"));
+    CHECK_THROWS(parseFlightModel(kBaseToml + "\n[articulation]\ngear_transit_s = 10000.0\n"));
 }

@@ -18,7 +18,8 @@
 #include <glm/gtc/matrix_transform.hpp> // glm::translate
 #include <glm/gtc/quaternion.hpp>       // glm::mat4_cast
 
-#include <algorithm> // std::sort
+#include <algorithm> // std::sort, std::clamp
+#include <chrono>    // steady_clock for the spin-channel frame delta (#841)
 #include <cstdio>    // std::snprintf
 
 namespace fl {
@@ -166,6 +167,19 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
     ensureBuiltins();
     m_bridge.tryAdvance();
     m_items.clear();
+    m_poseArena.clear();
+    m_poseSpans.clear();
+
+    // Wall-clock frame delta, for the looping spin channel only (#841). Spin is the one articulation
+    // channel that is a RATE rather than a position, and it is cosmetic and render-side — a
+    // propeller's angle is not world state, so it is never simulated and never wired. Clamped so a
+    // hitch or a debugger pause cannot spin the disc through several revolutions in one frame.
+    const auto nowT = std::chrono::steady_clock::now();
+    float frameDt = 0.0f;
+    if (m_lastFrameTime.time_since_epoch().count() != 0)
+        frameDt = std::chrono::duration<float>(nowT - m_lastFrameTime).count();
+    m_lastFrameTime = nowT;
+    frameDt = std::clamp(frameDt, 0.0f, 0.25f);
 
     if (m_particleSystem)
         m_particleSystem->reset();
@@ -229,18 +243,27 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
 
         MeshHandle mesh{};
         MaterialHandle mat{};
+        const ArticulationRig* rig = nullptr;
         bool useBuiltin = activeMesh.empty();
 
         if (!useBuiltin) {
             // Livery (#845): swaps textures per material slot, never geometry. The cache key folds in
             // the livery id so two liveries of the same mesh get distinct GPU materials.
             const LiveryTextureSet* livery = resolveLivery(entry.typeIndex);
-            const std::string cacheKey = livery ? (activeMesh + "@@" + livery->id) : activeMesh;
-            mesh = getOrUploadMesh(activeMesh, cacheKey, livery ? livery->overrides : m_noOverrides);
-            if (mesh.valid())
+            // Cache key folds in BOTH the livery id and the variant tag (#882): two liveries, or a
+            // single-seat and a two-seat variant of one family mesh, are distinct GPU meshes.
+            std::string cacheKey = activeMesh;
+            if (!resolved.variant.empty())
+                cacheKey += "#" + resolved.variant;
+            if (livery)
+                cacheKey += "@@" + livery->id;
+            mesh = getOrUploadMesh(activeMesh, cacheKey, livery ? livery->overrides : m_noOverrides, resolved.variant);
+            if (mesh.valid()) {
                 mat = getOrUploadMaterial(cacheKey);
-            else
+                rig = getOrBuildRig(activeMesh, cacheKey);
+            } else {
                 useBuiltin = true; // failed pack mesh: fall back to the type's category shape (#832 warned)
+            }
         }
 
         if (useBuiltin) {
@@ -291,6 +314,13 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
         if (useBuiltin)
             item.flags |= kRenderFlagDebugFaceColor; // distinct per-face colours on the placeholder
 #endif
+        // Articulation (#841): scrub every channel this mesh actually models into the frame pose
+        // arena. An entity whose mesh has no clips gets an empty span and the existing single-draw
+        // path, which is what keeps every static prop and f5e.glb exactly as cheap as before.
+        const std::size_t poseBegin = m_poseArena.size();
+        if (rig && !rig->empty())
+            sampleEntityArticulation(*rig, entry, frameDt);
+        m_poseSpans.emplace_back(poseBegin, m_poseArena.size() - poseBegin);
         m_items.push_back(item);
 
         // Cockpit interior (#870): in Cockpit view the ownship is the hidden (shadow-only) entity and
@@ -308,9 +338,20 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
                     ci.material = m_fallbackEntityMat;
                 ci.transform = model; // locked to the airframe, at the camera origin
                 ci.lod = 0;
+                m_poseSpans.emplace_back(m_poseArena.size(), 0u); // keeps the span table index-aligned
                 m_items.push_back(ci);
             }
         }
+    }
+
+    // Patch each item's animPoses span now that the arena has stopped growing (#841). Recording
+    // (offset, count) during the loop and resolving to spans here is what makes a dangling span
+    // IMPOSSIBLE rather than merely unlikely: reserving up-front and hoping the estimate holds would
+    // leave a reallocation mid-loop silently invalidating every span already handed out.
+    for (std::size_t i = 0; i < m_poseSpans.size() && i < m_items.size(); ++i) {
+        const auto& [off, count] = m_poseSpans[i];
+        if (count > 0)
+            m_items[i].animPoses = std::span<const NodePose>(m_poseArena.data() + off, count);
     }
 
     // Emit per-entity damage particle effects (uses snapshot positions — thread-safe).
@@ -385,12 +426,78 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
     m_renderer.setScene(scene);
 }
 
+// ── articulation (#841) ─────────────────────────────────────────────────────
+// The rig is parsed from the SAME bytes the mesh uploaded from, and cached under the same key, so it
+// is invalidated with the mesh on hot-reload and a mesh with no clips pays the parse exactly once.
+const ArticulationRig* SceneRenderer::getOrBuildRig(const std::string& meshAssetName, const std::string& cacheKey) {
+    if (auto it = m_rigCache.find(cacheKey); it != m_rigCache.end())
+        return &it->second;
+
+    auto data = m_assets.loadMesh(meshAssetName.c_str());
+    ArticulationRig rig = data ? buildArticulationRig(data->bytes) : ArticulationRig{};
+    if (!rig.valid && !rig.parseFailed && m_logger) {
+        char buf[256];
+        std::snprintf(buf, sizeof(buf), "mesh '%s' articulation rejected: %s — drawing it static",
+                      meshAssetName.c_str(), rig.error.c_str());
+        m_logger->log(LogLevel::Warn, __FILE__, __LINE__, buf);
+    }
+    if (!rig.valid)
+        rig = ArticulationRig{}; // an invalid rig renders as the static mesh, never half-articulated
+    return &m_rigCache.emplace(cacheKey, std::move(rig)).first->second;
+}
+
+void SceneRenderer::sampleEntityArticulation(const ArticulationRig& rig, const EntityRenderEntry& entry, float dt) {
+    const auto ovMaskIt = m_artOverrideMask.find(entry.entityIdx);
+    const uint32_t ovMask = (ovMaskIt == m_artOverrideMask.end()) ? 0u : ovMaskIt->second;
+    const auto ovIt = m_artOverride.find(entry.entityIdx);
+
+    for (std::size_t c = 0; c < kArtChannelCount; ++c) {
+        const auto channel = static_cast<ArtChannel>(c);
+        if (!rig.hasChannel(channel))
+            continue; // a channel the mesh does not model is ignored silently — that is what lets the
+                      // simulation drive all sixteen at every entity regardless of its geometry
+
+        float value = entry.artChannels[c];
+        if ((ovMask & (1u << c)) != 0u && ovIt != m_artOverride.end())
+            value = ovIt->second[c];
+
+        if (artChannelIsSpin(channel)) {
+            // Spin loops rather than scrubbing: the value is a rate, so advance a per-entity phase.
+            float& phase = m_spinPhase[entry.entityIdx];
+            phase = advanceSpinPhase(phase, dt, value);
+            sampleSpin(rig, phase, m_poseArena);
+            continue;
+        }
+        sampleClip(rig, channel, value, m_poseArena);
+    }
+}
+
+void SceneRenderer::setArtChannelOverride(uint32_t entityIdx, ArtChannel channel, float value) {
+    const auto c = static_cast<std::size_t>(channel);
+    if (c >= kArtChannelCount)
+        return;
+    m_artOverride[entityIdx][c] = value;
+    m_artOverrideMask[entityIdx] |= (1u << c);
+}
+
+void SceneRenderer::clearArtChannelOverrides() noexcept {
+    m_artOverride.clear();
+    m_artOverrideMask.clear();
+}
+
+const ArticulationRig* SceneRenderer::articulationRigFor(const std::string& cacheKey) const {
+    auto it = m_rigCache.find(cacheKey);
+    return (it == m_rigCache.end()) ? nullptr : &it->second;
+}
+
 MeshHandle SceneRenderer::getOrUploadMesh(const std::string& name) {
-    return getOrUploadMesh(name, name, m_noOverrides);
+    static const std::string kNoVariant;
+    return getOrUploadMesh(name, name, m_noOverrides, kNoVariant);
 }
 
 MeshHandle SceneRenderer::getOrUploadMesh(const std::string& meshAssetName, const std::string& cacheKey,
-                                          const std::unordered_map<std::string, std::string>& liveryOverrides) {
+                                          const std::unordered_map<std::string, std::string>& liveryOverrides,
+                                          const std::string& variant) {
     auto it = m_meshCache.find(cacheKey);
     if (it != m_meshCache.end())
         return it->second;
@@ -412,6 +519,9 @@ MeshHandle SceneRenderer::getOrUploadMesh(const std::string& meshAssetName, cons
     }
 
     MeshUploadDesc desc{meshAssetName, data->bytes};
+    // Variant node-set (#882): upload only the nodes this entity type selects. Empty keeps the
+    // untagged set — the whole mesh, for every .glb authored before variants existed.
+    desc.variant = variant;
     // Pack-authored meshes are in the standard glTF/Blender content convention (nose +Z); the loader
     // rotates them into the engine body frame (nose +X) on upload (#906). The builtin placeholders and
     // terrain are engine-generated in the body/world frame and keep contentForward false.
@@ -506,15 +616,19 @@ void SceneRenderer::evictMeshCacheKey(const std::string& cacheKey) {
     // shared grey fallback (must never be destroyed) — so drop the entry without destroyMaterial.
     m_materialCache.erase(cacheKey);
     m_meshTextureDeps.erase(cacheKey);
+    m_rigCache.erase(cacheKey); // the rig came from the same bytes; it stales with them (#841)
 }
 
 void SceneRenderer::invalidateMesh(std::string_view meshAssetName) {
     const std::string base(meshAssetName);
-    // Evict the plain key and every "<name>@@<livery>" variant.
-    const std::string prefix = base + "@@";
+    // Evict the plain key and every derived key: "<name>#<variant>" (#882) and "<name>@@<livery>"
+    // (#845), in either combination. Both separators are illegal in an asset name, so a prefix match
+    // up to the first separator identifies exactly this mesh's keys.
+    const std::string livery = base + "@@";
+    const std::string variant = base + "#";
     std::vector<std::string> keys;
     for (const auto& [k, _] : m_meshCache)
-        if (k == base || k.compare(0, prefix.size(), prefix) == 0)
+        if (k == base || k.compare(0, livery.size(), livery) == 0 || k.compare(0, variant.size(), variant) == 0)
             keys.push_back(k);
     for (const auto& k : keys)
         evictMeshCacheKey(k);
@@ -552,6 +666,7 @@ void SceneRenderer::invalidateAllAssets() {
     m_meshCache.clear();
     m_materialCache.clear();
     m_meshTextureDeps.clear();
+    m_rigCache.clear();
     m_liveryCache.clear();
     m_typeNameCache.clear();
     // Builtin placeholders + floor (m_builtin*, m_fallbackEntityMat) are untouched — they never come

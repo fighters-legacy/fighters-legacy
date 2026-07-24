@@ -11,6 +11,7 @@
 #include <vk_mem_alloc.h>
 #include <vulkan/vulkan.h>
 
+#include "MeshNodePlan.h"
 #include "RenderTypes.h"
 #include <vector>
 
@@ -35,6 +36,18 @@ static_assert(sizeof(Vertex) == 48);
 // GPU-resident resources
 // ---------------------------------------------------------------------------
 
+// One drawable primitive of a node-aware mesh (#839). Every mesh-bearing node's primitives are
+// concatenated into the mesh's single VB/IB pair; a submesh is the [firstIndex, indexCount) slice
+// plus the glTF node it hangs off. `nodeIndex` is the glTF NODE ARRAY INDEX — the contract that
+// binds this platform-side loader to the engine-side articulation sampler (NodePose::nodeIndex),
+// without widening the HAL: both parse the same bytes and agree on glTF node order.
+struct GpuSubMesh {
+    uint32_t firstIndex{0};
+    uint32_t indexCount{0};
+    uint32_t nodeIndex{0};
+    MaterialHandle material{}; // per-primitive material (#833 lands here); invalid = renderer default
+};
+
 struct GpuMesh {
     VkBuffer vertexBuffer{VK_NULL_HANDLE};
     VmaAllocation vertexAlloc{};
@@ -44,6 +57,13 @@ struct GpuMesh {
     MaterialHandle material{}; // material parsed from the glb (#833); invalid = none
     glm::vec3 boundsMin{0.0f}; // object-space AABB in the engine body frame (#836), from createMesh
     glm::vec3 boundsMax{0.0f};
+    // Node-aware draw tables (#839): the MeshNodePlan the loader uploaded, kept so the renderer can
+    // recompose node transforms every frame with the item's articulation poses folded in. Empty
+    // `submeshes` never happens for a live mesh — the loader falls back to meshes[0].primitives[0] at
+    // identity for a .glb whose scene graph reaches no geometry.
+    std::vector<GpuSubMesh> submeshes;
+    MeshNodePlan nodePlan;
+    bool contentForward{false}; // vertices were rotated by contentForwardToBody at upload
     bool alive{false};
 };
 

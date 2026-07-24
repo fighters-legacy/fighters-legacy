@@ -23,8 +23,11 @@ struct MeshNodeInfo {
     int meshIndex{-1}; // glTF mesh index, -1 = no mesh on this node
     int primitiveCount{0};
     bool damageVariant{false}; // name ends "_b" (the JumpToDamage convention)
-    bool engineDrawn{false};   // references mesh 0 (the engine draws meshes[0].primitives[0] only)
-    float localMatrix[16]{};   // column-major composed TRS (content frame)
+    bool engineDrawn{false};   // the node graph reaches this node, so the engine draws its primitives (#839)
+    // Variant node-set tags from glTF `extras.fl_variant` (#882): a string or an array of strings.
+    // Empty = untagged, i.e. always drawn (the shared airframe).
+    std::vector<std::string> variantTags;
+    float localMatrix[16]{}; // column-major composed TRS (content frame)
     bool hasAabb{false};
     float aabbMin[3]{};
     float aabbMax[3]{}; // node-local, union of its primitives' POSITION accessor min/max
@@ -35,6 +38,10 @@ struct MeshNodeTree {
     int meshCount{0};
     int totalPrimitives{0};
 };
+
+// Every distinct `fl_variant` tag declared anywhere in the file, sorted and deduped (#882). An entity
+// def's `mesh_variant` must appear here, or it selects nothing and the aircraft loses its geometry.
+[[nodiscard]] std::vector<std::string> meshVariantTags(const MeshNodeTree& tree);
 
 // Validates a glTF 2.0 file (.glb or .gltf) against engine mesh conventions
 // documented in docs/modding/3d-models.md.

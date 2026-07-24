@@ -519,6 +519,29 @@ TEST_CASE("EntityDefParser: entity.cockpit parses into cockpitMesh", "[parser]")
     CHECK(def.cockpitMesh == "f5e_cockpit");
 }
 
+TEST_CASE("EntityDefParser: entity.mesh_variant selects a node-set (#882)", "[parser]") {
+    // Node PRESENCE, not node pose: one family .glb carries the union of a family's geometry and each
+    // entity def picks its tagged set. Absent = the untagged shared airframe, so every def written
+    // before this existed is unchanged.
+    const std::string toml = "[entity]\n"
+                             "id = \"test:mig21u\"\n"
+                             "name = \"MiG-21U\"\n"
+                             "category = \"air_vehicle\"\n"
+                             "max_hp = 100.0\n"
+                             "mesh = \"mig21/mig21\"\n"
+                             "mesh_variant = \"two_seat\"\n";
+    fl::EntityDef def = fl::parseEntityDef(toml);
+    CHECK(def.meshVariant == "two_seat");
+
+    const std::string plain = "[entity]\n"
+                              "id = \"test:mig21bis\"\n"
+                              "name = \"MiG-21bis\"\n"
+                              "category = \"air_vehicle\"\n"
+                              "max_hp = 100.0\n"
+                              "mesh = \"mig21/mig21\"\n";
+    CHECK(fl::parseEntityDef(plain).meshVariant.empty());
+}
+
 TEST_CASE("EntityDefParser: full TOML with damage and classic sections", "[parser]") {
     fl::EntityDef def = fl::parseEntityDef(kFullEntityToml);
     CHECK(def.id == "test:tank");

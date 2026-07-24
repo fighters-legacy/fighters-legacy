@@ -44,9 +44,9 @@ class InputTraceWriter {
         return m_os != nullptr && m_os->good();
     }
 
-    // Append one 28-byte record. No-op if the stream is not writable.
-    void writeRecord(uint64_t serverTick, float throttle, float elevator, float aileron, float rudder,
-                     uint32_t buttons) {
+    // Append one 32-byte record. No-op if the stream is not writable.
+    void writeRecord(uint64_t serverTick, float throttle, float elevator, float aileron, float rudder, uint32_t buttons,
+                     uint8_t flaps = 0, uint8_t speedbrake = 0, uint8_t artButtons = 0) {
         if (!good())
             return;
         std::vector<uint8_t> rec;
@@ -57,6 +57,10 @@ class InputTraceWriter {
         detail::putF32LE(rec, aileron);
         detail::putF32LE(rec, rudder);
         detail::putU32LE(rec, buttons);
+        rec.push_back(flaps);
+        rec.push_back(speedbrake);
+        rec.push_back(artButtons);
+        rec.push_back(0); // reserved
         m_os->write(reinterpret_cast<const char*>(rec.data()), static_cast<std::streamsize>(rec.size()));
     }
 

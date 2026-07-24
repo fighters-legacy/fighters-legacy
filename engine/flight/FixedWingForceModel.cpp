@@ -13,8 +13,9 @@ ForceMoment FixedWingForceModel::compute(const FlightState& s, const ControlInpu
                                          const AeroInputs& aero) const {
     constexpr float kDegToRad = static_cast<float>(std::numbers::pi) / 180.f;
 
-    auto forces = computeForces(aero.alpha_rad, aero.beta_rad, aero.mach, aero.speed_m_s, aero.altitude_m,
-                                s.current_sweep_deg, s.ab_engaged, s.throttle_actual, ctrl, payload, data, atmos);
+    auto forces =
+        computeForces(aero.alpha_rad, aero.beta_rad, aero.mach, aero.speed_m_s, aero.altitude_m, s.current_sweep_deg,
+                      s.ab_engaged, s.throttle_actual, payload, data, atmos, s.articulation);
 
     // Thrust magnitude (for the TVC moment and prop effects inside computeMoments). Same helper
     // computeForces uses, so the two thrust figures — and the idle deck (#898) — cannot drift.
@@ -29,7 +30,7 @@ ForceMoment FixedWingForceModel::compute(const FlightState& s, const ControlInpu
     // moment flip below — together they were #891's directional divergence: a sideslip fed the
     // weathercock moment back with the wrong sign and the aircraft departed on any perturbation.
     auto moments = computeMoments(aero.alpha_rad, aero.beta_rad, s.omega[0], s.omega[2], -s.omega[1], aero.speed_m_s,
-                                  thrust_n, s.tvc_angle_deg * kDegToRad, ctrl, data, atmos);
+                                  thrust_n, s.tvc_angle_deg * kDegToRad, ctrl, data, atmos, s.articulation);
 
     // Engine-out asymmetry (#675, parameterized by engine count in #308). engineFailFlags is set by
     // per-subsystem damage; until #675 it was parsed and ignored. A total loss (both engines,

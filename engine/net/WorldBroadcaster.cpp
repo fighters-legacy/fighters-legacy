@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "net/WorldBroadcaster.h"
+
+#include "render/ArtChannel.h" // the articulation channel vocabulary (#840); stdlib-only, no link dep
 #include "render/RenderSnapshot.h"
 #include "render/SurfaceType.h" // groundFrictionFor (#487)
 
@@ -42,6 +44,7 @@
 #include <glm/trigonometric.hpp> // glm::radians for turret limit conversion (#969)
 
 #include <algorithm>
+#include <bit> // std::popcount for the articulation TLV (#843)
 #include <cassert>
 #include <cmath>
 #include <cstdio>
@@ -87,6 +90,13 @@ class PeerController final : public fl::IEntityController {
         // pass), bit 4 = ECM jammer on (level).
         ctrl.dispenseCm = (m_input->buttons & 0x08u) != 0;
         ctrl.ecm = (m_input->buttons & 0x10u) != 0;
+        // Articulation commands (#843): a human pilot can finally raise the gear. Absolute state, so
+        // a dropped packet costs one tick of lag rather than a permanently wrong configuration.
+        ctrl.flaps = static_cast<float>(m_input->flaps) / 255.f;
+        ctrl.speedbrake = static_cast<float>(m_input->speedbrake) / 255.f;
+        ctrl.gear_down = (m_input->artButtons & fl::kArtButtonGearDown) != 0;
+        ctrl.hook_down = (m_input->artButtons & fl::kArtButtonHookDown) != 0;
+        ctrl.canopy_open = (m_input->artButtons & fl::kArtButtonCanopyOpen) != 0;
         // Wheel brakes (#700): the integrator only acts on this while the aircraft is in ground
         // contact, so a held brake in flight is harmless. Level on the wire; no edge detection needed.
         ctrl.wheelBrake = (m_input->buttons & fl::kInputButtonWheelBrake) != 0 ? 1.f : 0.f;
@@ -800,6 +810,9 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             ps.buttons = bi.buttons;
             ps.selectedStation = bi.selectedStation;
             ps.radarMode = bi.radarMode;
+            ps.flaps = bi.flaps;           // #843
+            ps.speedbrake = bi.speedbrake; // #843
+            ps.artButtons = bi.artButtons; // #843
             // Apply the player's radar mode (#526) to their own aircraft's sensor observer. Absolute +
             // idempotent, so a repeated value costs nothing; 255 = keep whatever the server holds (an
             // unaware client / load bot leaves the spawned Search mode alone). Runs before the sensing
@@ -1250,7 +1263,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         uint8_t fuelPct;
         uint8_t abEngaged;
         uint8_t engineFailFlags;
-        float omega[3]; // body-frame angular rates p,q,r (rad/s)
+        float omega[3];                   // body-frame angular rates p,q,r (rad/s)
+        ArticulationState articulation{}; // actuator positions (#843)
     };
     std::unordered_map<uint32_t, TelemetryEntry> entityTelemetry;
     for (auto& [entityIdx, ce] : m_controlledEntities) {
@@ -1259,7 +1273,52 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                                       static_cast<uint8_t>(std::clamp(s.fuel_kg / 4000.f * 100.f, 0.f, 100.f)),
                                       static_cast<uint8_t>(s.ab_engaged ? 1u : 0u),
                                       s.engineFailFlags,
-                                      {s.omega[0], s.omega[1], s.omega[2]}};
+                                      {s.omega[0], s.omega[1], s.omega[2]},
+                                      s.articulation};
+    }
+
+    // Articulation table (#843): the quantized channel values for every entity whose actuators are
+    // off their neutral positions. Built serially here (the integrate pass is done), read lock-free
+    // by the parallel per-peer pass, which emits only the entities in that peer's interest set.
+    //
+    // AN ENTITY AT ALL-DEFAULT COSTS ZERO BYTES: it is simply absent from the table, so a world of
+    // unarticulated meshes emits no TLV and its snapshot is byte-identical to pre-#843.
+    struct ArtSnap {
+        uint16_t mask{0};
+        uint8_t count{0};
+        uint8_t values[kArtChannelCount]{};
+        uint32_t hash{0}; // change detector for the per-peer send policy
+    };
+    std::unordered_map<uint32_t, ArtSnap> artSnap;
+    for (const auto& [entityIdx, tel] : entityTelemetry) {
+        const ArticulationState& a = tel.articulation;
+        const float ch[5] = {a.gear, a.flaps, a.speedbrake, a.hook, a.canopy};
+        static constexpr ArtChannel kMap[5] = {ArtChannel::Gear, ArtChannel::Flaps, ArtChannel::Speedbrake,
+                                               ArtChannel::Hook, ArtChannel::Canopy};
+        ArtSnap out;
+        uint8_t n = 0;
+        for (int i = 0; i < 5; ++i) {
+            if (!(ch[i] > 0.f))
+                continue; // at neutral: omit, so an unarticulated entity is free
+            out.mask = static_cast<uint16_t>(out.mask | (1u << static_cast<unsigned>(kMap[i])));
+            out.values[n++] = static_cast<uint8_t>(std::lround(std::clamp(ch[i], 0.f, 1.f) * 255.f));
+        }
+        out.count = n;
+        if (out.mask != 0) {
+            // FNV-1a over mask + values: the send policy needs only "did this change", and a hash is
+            // one word per peer per entity instead of a whole channel set.
+            uint32_t h = 2166136261u;
+            auto mix = [&h](uint8_t b) {
+                h ^= b;
+                h *= 16777619u;
+            };
+            mix(static_cast<uint8_t>(out.mask & 0xFFu));
+            mix(static_cast<uint8_t>(out.mask >> 8));
+            for (uint8_t i = 0; i < n; ++i)
+                mix(out.values[i]);
+            out.hash = h ? h : 1u; // 0 is the "never sent" sentinel in PeerEntityRec
+            artSnap.emplace(entityIdx, out);
+        }
     }
 
     // Step 2: build entity snapshot map — one pass shared across all per-peer loops.
@@ -1815,6 +1874,41 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                     appendExtRaw(buf, static_cast<uint16_t>(ExtTag::SnapshotCrew), payload.data(),
                                  static_cast<uint16_t>(payload.size()));
                 }
+            }
+            // Actuator positions (#843): the articulated entities in this peer's interest set
+            // (`selected`, already interest-filtered), so a REMOTE aircraft's gear and flaps move.
+            // Read-only over the serially-built artSnap — this worker owns buf, so the per-peer buffer
+            // stays byte-identical across worker counts (#512). Absent for an unarticulated interest
+            // set, which is what keeps a world of static meshes at pre-#843 bytes.
+            if (!artSnap.empty()) {
+                std::vector<uint8_t> ab;
+                for (uint32_t idx : selected) {
+                    const auto ait = artSnap.find(idx);
+                    if (ait == artSnap.end())
+                        continue;
+                    const ArtSnap& a = ait->second;
+                    // Send policy: on CHANGE, plus a periodic refresh (drop tolerance on the
+                    // unreliable channel, and late joiners / re-entering interest), plus always the
+                    // first time. A steady-state aircraft therefore costs zero articulation bytes
+                    // between refreshes, and gear/flap transitions are rare.
+                    PeerEntityRec& rec = knownGens[idx];
+                    const bool changed = rec.artHash != a.hash;
+                    const bool refresh = rec.artSentTick == 0u || (tickIndex - rec.artSentTick) >= kArtRefreshTicks;
+                    if (!changed && !refresh)
+                        continue;
+                    rec.artHash = a.hash;
+                    rec.artSentTick = tickIndex;
+
+                    const std::size_t at = ab.size();
+                    ab.resize(at + 6u + a.count);
+                    uint8_t* p = ab.data() + at;
+                    std::memcpy(p, &idx, 4);
+                    std::memcpy(p + 4, &a.mask, 2);
+                    std::memcpy(p + 6, a.values, a.count);
+                }
+                if (!ab.empty())
+                    appendExtRaw(buf, static_cast<uint16_t>(ExtTag::SnapshotArticulation), ab.data(),
+                                 static_cast<uint16_t>(ab.size()));
             }
             // Snapshot payload compression (#775): zstd the fully-assembled payload (origin table +
             // record stream + TLV block) in place, still inside the parallel per-peer region — the
@@ -4109,7 +4203,10 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         bi.buttons = msg.buttons;
         bi.selectedStation = msg.selectedStation; // clamped against the entity's stations at consumption
         bi.radarMode = msg.radarMode;             // absolute radar mode (#526); validated at consumption
-        bi.seqNum = msg.seqNum;                   // carried through so the applied seqNum can be acked (#427)
+        bi.flaps = msg.flaps;                     // articulation commands (#843), absolute state
+        bi.speedbrake = msg.speedbrake;
+        bi.artButtons = msg.artButtons;
+        bi.seqNum = msg.seqNum; // carried through so the applied seqNum can be acked (#427)
         stored.jitterBuffer.push(bi);
 
         // Server-side input tracing (#560): append the accepted, sanitized control sample to this
@@ -4130,7 +4227,8 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
                 }
             }
             if (writer && writer->good())
-                writer->writeRecord(m_currentTick, bi.throttle, bi.elevator, bi.aileron, bi.rudder, bi.buttons);
+                writer->writeRecord(m_currentTick, bi.throttle, bi.elevator, bi.aileron, bi.rudder, bi.buttons,
+                                    bi.flaps, bi.speedbrake, bi.artButtons);
         }
 
         // viewAxis is updated immediately — it is camera state, not a flight sim input.
@@ -5191,6 +5289,12 @@ void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityC
     // held static by the integrator's parking hold). Purely body-forward, so it needs no world->body
     // rotation — the heading rides on fs.quat above.
     fs.vel_body[0] = (initialAirspeed < 0.f) ? kDefaultSpawnAirspeedMps : initialAirspeed;
+    // Gear configuration at spawn (#639): DOWN for a parked start (airspeed 0), UP for an airborne
+    // one. An aircraft is parked on its wheels, and since #639 the wheels are what carry brakes,
+    // tyre grip and nosewheel steering — a ground spawn with the gear stowed would belly-scrape on
+    // the runway. Anything that disagrees simply commands the other position and the actuator travels
+    // there: an AI, which never touches the gear switch, retracts within its transit window.
+    fs.articulation.gear = (initialAirspeed == 0.f) ? 1.f : 0.f;
     fs.fuel_kg = model->geometry.fuel_kg;
     fs.mass_kg = model->geometry.mass_kg + fs.fuel_kg;
     fs.throttle_actual = initialThrottle;
@@ -5795,6 +5899,9 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned, PeerRo
             typeDef.deckWidthM = def->deck->widthM;
             typeDef.deckHeightM = def->deck->heightM;
         }
+        // Variant node-set (#882): which tagged node-set of a shared family mesh the client draws.
+        // A render-only selection, but the client has no pack entity def to read it from.
+        std::snprintf(typeDef.meshVariant, sizeof(typeDef.meshVariant), "%s", def->meshVariant.c_str());
 
         appendMsg(buf, typeDef);
     }

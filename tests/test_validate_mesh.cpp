@@ -3,7 +3,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstring>
 #include <string>
+#include <vector>
 
 using namespace fl;
 
@@ -273,4 +275,231 @@ TEST_CASE("mesh wound inside-out fails winding check", "[validate-mesh]") {
             break;
         }
     CHECK(found);
+}
+
+// ---------------------------------------------------------------------------
+// Articulation clip checks (#844)
+//
+// Before these, a .glb with a misspelled clip name, a skinned mesh, or a rest pose that disagreed
+// with its own t=0 keyframe passed validation clean and then simply did not move in the game, with
+// no diagnostic anywhere.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// A rigged aircraft: node 1 ("gear") translates (0,0,0) -> (0,-4,0) over 2 s. `clipName`,
+// `interp` and the node's authored rest translation are the knobs the cases below turn.
+std::string riggedGltf(const char* clipName, const char* interp = "LINEAR", const char* restTranslation = "[0, 0, 0]",
+                       const char* extraNodes = "", const char* extraTop = "") {
+    std::string s = R"({
+  "asset": {"version": "2.0"},
+  "scenes": [{"nodes": [0]}],
+  "nodes": [
+    {"name": "fuselage", "mesh": 0, "children": [1]},
+    {"name": "gear", "translation": REST}EXTRANODES
+  ],
+  "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+  "accessors": [
+    {"componentType": 5126, "count": 3, "type": "VEC3"},
+    {"bufferView": 0, "componentType": 5126, "count": 2, "type": "SCALAR", "min": [0.0], "max": [2.0]},
+    {"bufferView": 1, "componentType": 5126, "count": 2, "type": "VEC3"}
+  ],
+  "bufferViews": [
+    {"buffer": 0, "byteOffset": 0, "byteLength": 8},
+    {"buffer": 0, "byteOffset": 8, "byteLength": 24}
+  ],
+  "buffers": [{"byteLength": 32, "uri": "data:application/octet-stream;base64,AAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAACAwAAAAAA="}],
+  "animations": [{
+    "name": "CLIP",
+    "samplers": [{"input": 1, "output": 2, "interpolation": "INTERP"}],
+    "channels": [{"sampler": 0, "target": {"node": 1, "path": "translation"}}]
+  }]EXTRATOP
+})";
+    auto sub = [&s](const std::string& from, const std::string& to) {
+        const auto at = s.find(from);
+        if (at != std::string::npos)
+            s.replace(at, from.size(), to);
+    };
+    sub("CLIP", clipName);
+    sub("INTERP", interp);
+    sub("REST", restTranslation);
+    sub("EXTRANODES", extraNodes);
+    sub("EXTRATOP", extraTop);
+    return s;
+}
+
+bool hasFinding(const std::vector<std::string>& v, const char* needle) {
+    for (const auto& s : v)
+        if (s.find(needle) != std::string::npos)
+            return true;
+    return false;
+}
+
+} // namespace
+
+TEST_CASE("validate-mesh: a correctly authored clip passes clean (#844)", "[validate_mesh][articulation]") {
+    const auto r = validateMeshFromJson(riggedGltf("gear"));
+    CHECK(r.ok);
+    CHECK_FALSE(hasFinding(r.warnings, "articulation channel"));
+}
+
+TEST_CASE("validate-mesh: an unknown clip name warns and lists the valid channels (#844)",
+          "[validate_mesh][articulation]") {
+    // The retired two-clip name. It would bind to nothing at runtime and say nothing about it.
+    const auto r = validateMeshFromJson(riggedGltf("gear_retract"));
+    CHECK(r.ok); // a warning, not an error — an author may ship an unrelated clip
+    REQUIRE(hasFinding(r.warnings, "gear_retract"));
+    CHECK(hasFinding(r.warnings, "speedbrake")); // the valid-name list is printed
+}
+
+TEST_CASE("validate-mesh: an unsupported interpolation is an error (#844)", "[validate_mesh][articulation]") {
+    const auto r = validateMeshFromJson(riggedGltf("gear", "BOGUS"));
+    CHECK_FALSE(r.ok);
+    CHECK(hasFinding(r.errors, "interpolation"));
+    // The three the engine evaluates are all accepted.
+    CHECK(validateMeshFromJson(riggedGltf("gear", "STEP")).ok);
+    CHECK(validateMeshFromJson(riggedGltf("gear", "LINEAR")).ok);
+}
+
+TEST_CASE("validate-mesh: a rest pose disagreeing with the neutral keyframe is an error (#844)",
+          "[validate_mesh][articulation]") {
+    // The single most likely authoring mistake: the aircraft renders wrong before anything is
+    // commanded, and nothing at runtime would ever say so.
+    const auto r = validateMeshFromJson(riggedGltf("gear", "LINEAR", "[0, -2, 0]"));
+    CHECK_FALSE(r.ok);
+    CHECK(hasFinding(r.errors, "rest translation"));
+}
+
+TEST_CASE("validate-mesh: a signed channel's neutral is the clip MIDPOINT (#844)", "[validate_mesh][articulation]") {
+    // elevator is signed: t=0 is full nose-down, the middle keyframe is neutral. A rest pose equal to
+    // the FIRST keyframe would be correct for `gear` and wrong here — which is exactly the trap.
+    const char* json = R"({
+      "asset": {"version": "2.0"},
+      "scenes": [{"nodes": [0]}],
+      "nodes": [{"name": "fuselage", "mesh": 0, "children": [1]}, {"name": "stab", "translation": [0, 0, 0]}],
+      "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+      "accessors": [
+        {"componentType": 5126, "count": 3, "type": "VEC3"},
+        {"bufferView": 0, "componentType": 5126, "count": 3, "type": "SCALAR", "min": [0.0], "max": [2.0]},
+        {"bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3"}
+      ],
+      "bufferViews": [
+        {"buffer": 0, "byteOffset": 0, "byteLength": 12},
+        {"buffer": 0, "byteOffset": 12, "byteLength": 36}
+      ],
+      "buffers": [{"byteLength": 48, "uri": "data:application/octet-stream;base64,AAAAAAAAgD8AAABAAAAAAAAAgMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgEAAAAAA"}],
+      "animations": [{
+        "name": "elevator",
+        "samplers": [{"input": 1, "output": 2, "interpolation": "LINEAR"}],
+        "channels": [{"sampler": 0, "target": {"node": 1, "path": "translation"}}]
+      }]
+    })";
+    // Rest (0,0,0) matches the MIDDLE keyframe (neutral) — correct.
+    CHECK(validateMeshFromJson(json).ok);
+
+    // Rest matching the FIRST keyframe (full negative deflection) is the mistake.
+    std::string bad = json;
+    const auto at = bad.find("\"name\": \"stab\", \"translation\": [0, 0, 0]");
+    REQUIRE(at != std::string::npos);
+    bad.replace(at, std::strlen("\"name\": \"stab\", \"translation\": [0, 0, 0]"),
+                "\"name\": \"stab\", \"translation\": [0, -4, 0]");
+    const auto r = validateMeshFromJson(bad);
+    CHECK_FALSE(r.ok);
+    CHECK(hasFinding(r.errors, "MIDPOINT"));
+}
+
+TEST_CASE("validate-mesh: a skin is an error (#844)", "[validate_mesh][articulation]") {
+    const auto r =
+        validateMeshFromJson(riggedGltf("gear", "LINEAR", "[0, 0, 0]", "", ",\n  \"skins\": [{\"joints\": [1]}]"));
+    CHECK_FALSE(r.ok);
+    CHECK(hasFinding(r.errors, "skin"));
+}
+
+TEST_CASE("validate-mesh: a clip targeting a _b damage node directly warns (#844)", "[validate_mesh][articulation]") {
+    // "_b" nodes inherit their base node's sampled pose, so animating one is redundant work the
+    // engine overwrites.
+    const char* json = R"({
+      "asset": {"version": "2.0"},
+      "scenes": [{"nodes": [0]}],
+      "nodes": [
+        {"name": "fuselage", "mesh": 0, "children": [1, 2]},
+        {"name": "gear", "translation": [0, 0, 0]},
+        {"name": "gear_b", "translation": [0, 0, 0]}
+      ],
+      "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+      "accessors": [
+        {"componentType": 5126, "count": 3, "type": "VEC3"},
+        {"bufferView": 0, "componentType": 5126, "count": 2, "type": "SCALAR", "min": [0.0], "max": [2.0]},
+        {"bufferView": 1, "componentType": 5126, "count": 2, "type": "VEC3"}
+      ],
+      "bufferViews": [
+        {"buffer": 0, "byteOffset": 0, "byteLength": 8},
+        {"buffer": 0, "byteOffset": 8, "byteLength": 24}
+      ],
+      "buffers": [{"byteLength": 32, "uri": "data:application/octet-stream;base64,AAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAACAwAAAAAA="}],
+      "animations": [{
+        "name": "gear",
+        "samplers": [{"input": 1, "output": 2, "interpolation": "LINEAR"}],
+        "channels": [{"sampler": 0, "target": {"node": 2, "path": "translation"}}]
+      }]
+    })";
+    const auto r = validateMeshFromJson(json);
+    CHECK(hasFinding(r.warnings, "gear_b"));
+}
+
+TEST_CASE("validate-mesh: two scrubbed clips on one node is an error (#844)", "[validate_mesh][articulation]") {
+    const char* json = R"({
+      "asset": {"version": "2.0"},
+      "scenes": [{"nodes": [0]}],
+      "nodes": [{"name": "fuselage", "mesh": 0, "children": [1]}, {"name": "gear", "translation": [0, 0, 0]}],
+      "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+      "accessors": [
+        {"componentType": 5126, "count": 3, "type": "VEC3"},
+        {"bufferView": 0, "componentType": 5126, "count": 2, "type": "SCALAR", "min": [0.0], "max": [2.0]},
+        {"bufferView": 1, "componentType": 5126, "count": 2, "type": "VEC3"}
+      ],
+      "bufferViews": [
+        {"buffer": 0, "byteOffset": 0, "byteLength": 8},
+        {"buffer": 0, "byteOffset": 8, "byteLength": 24}
+      ],
+      "buffers": [{"byteLength": 32, "uri": "data:application/octet-stream;base64,AAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAACAwAAAAAA="}],
+      "animations": [
+        {"name": "gear", "samplers": [{"input": 1, "output": 2, "interpolation": "LINEAR"}],
+         "channels": [{"sampler": 0, "target": {"node": 1, "path": "translation"}}]},
+        {"name": "flaps", "samplers": [{"input": 1, "output": 2, "interpolation": "LINEAR"}],
+         "channels": [{"sampler": 0, "target": {"node": 1, "path": "translation"}}]}
+      ]
+    })";
+    const auto r = validateMeshFromJson(json);
+    CHECK_FALSE(r.ok);
+    CHECK(hasFinding(r.errors, "two scrubbed clips"));
+}
+
+TEST_CASE("validate-mesh: a marker empty with extras is legal (#844)", "[validate_mesh][articulation]") {
+    // A node with no mesh (a camera anchor, a hardpoint or hinge marker) and arbitrary glTF extras
+    // are forward-compatible metadata, not errors.
+    const char* json = R"({
+      "asset": {"version": "2.0"},
+      "scenes": [{"nodes": [0]}],
+      "nodes": [
+        {"name": "fuselage", "mesh": 0, "children": [1]},
+        {"name": "camera_anchor", "translation": [1, 2, 3], "extras": {"fl_note": "pilot eye point"}}
+      ],
+      "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+      "accessors": [{"componentType": 5126, "count": 3, "type": "VEC3"}]
+    })";
+    const auto r = validateMeshFromJson(json);
+    CHECK(r.ok);
+}
+
+TEST_CASE("validate-mesh: a mesh with zero animations stays valid (#844)", "[validate_mesh][articulation]") {
+    // The static baseline: f5e.glb as shipped has no animations and must pass forever.
+    const char* json = R"({
+      "asset": {"version": "2.0"},
+      "scenes": [{"nodes": [0]}],
+      "nodes": [{"name": "f5e", "mesh": 0}],
+      "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+      "accessors": [{"componentType": 5126, "count": 3, "type": "VEC3"}]
+    })";
+    CHECK(validateMeshFromJson(json).ok);
 }

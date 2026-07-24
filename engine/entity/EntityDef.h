@@ -50,11 +50,18 @@ struct EntityDef {
     // missile) for hand-authored projectile defs. Sent to the client on MsgEntityTypeDef.
     ProjectileKind projectileKind{ProjectileKind::None};
     float maxHp{100.f};
-    std::optional<DamageDef> damage;   // absent = binary death (no progressive damage)
-    std::string mesh;                  // ASSET NAME for primary geometry
-    std::string cockpitMesh;           // ASSET NAME: cockpit interior geometry; empty if none (#813)
-    std::string manualAsset;           // ASSET NAME: hand-written manual prose (#821); the numbers are generated
-    std::string classicDamageMesh;     // ASSET NAME: JumpToDamage geometry variant; empty if none
+    std::optional<DamageDef> damage; // absent = binary death (no progressive damage)
+    std::string mesh;                // ASSET NAME for primary geometry
+    std::string cockpitMesh;         // ASSET NAME: cockpit interior geometry; empty if none (#813)
+    std::string manualAsset;         // ASSET NAME: hand-written manual prose (#821); the numbers are generated
+    std::string classicDamageMesh;   // ASSET NAME: JumpToDamage geometry variant; empty if none
+    // Variant node-set selector (#882): which tagged node-set of a shared family mesh this type
+    // draws. NOT an asset name and NOT a def id — it is a tag matched against the glTF nodes'
+    // `extras.fl_variant`, so one .glb can carry a family's union of geometry (a MiG-21bis nose and a
+    // MiG-21U two-seat canopy) and each entity def picks its set. Untagged nodes are always drawn, so
+    // empty (the default) means "the shared airframe only" — every mesh authored before this existed.
+    // Node PRESENCE, chosen statically at load; node POSE is articulation (#837), a different axis.
+    std::string meshVariant;
     std::string flightModelAsset;      // ASSET NAME: flight-model TOML; empty = builtin UFO model
     std::string aiScriptAsset;         // ASSET NAME: Lua AI script; empty = no scripted AI (server-side)
     std::vector<Hardpoint> hardpoints; // weapon stations; empty = carries nothing

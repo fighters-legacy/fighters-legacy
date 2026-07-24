@@ -117,6 +117,11 @@ Active in all camera modes. All game inputs (flight controls and camera) are sup
 | Arrow Up / Down | Elevator (pitch) |
 | Arrow Left / Right | Aileron (roll) |
 | Z / X | Rudder left / right |
+| G | Landing gear up / down (#639; latched, absolute on the wire). Position slews at the model's `gear_transit_s` and the drag ramps in with it, so the HUD reads `GEAR ...` mid-travel. **With the gear up, a ground contact is a belly slide** — no brakes, no tyre grip, no nosewheel steering |
+| F | Flap detent: clean → manoeuvre → full → clean (#639). Lift, drag and stall AoA follow the POSITION as it travels |
+| K | Speed brake (momentary — held, not latched; the one flight-configuration control that is not a switch) |
+| H | Arresting hook up / down (#639; latched) |
+| Shift + C | Canopy open / closed (#639; latched). Plain C is the wingman radio menu |
 | B | Wheel brakes (bit 6, level; #700). Only bites in ground contact — hold it to stop the rollout after touchdown. Rudder also steers the nosewheel at taxi speed, fading out by ~50 m/s |
 | Space | Gun trigger (bit 0, level — hold to keep firing, rate-limited server-side) |
 | Tab | Afterburner command (bit 1) |

@@ -1168,6 +1168,8 @@ void Game::initGameSystems() {
                 return false;
             out.meshName = def->mesh;
             out.damageMeshName = def->classicDamageMesh;
+            // Variant node-set (#882): which tagged nodes of a shared family mesh this type draws.
+            out.variant = def->meshVariant;
             // Category + projectile kind arrive on MsgEntityTypeDef (#886); a mesh-less type
             // renders as its category's builtin placeholder silhouette.
             out.shape = fl::builtinShapeFor(def->category, def->projectileKind);
@@ -1512,6 +1514,18 @@ void Game::startGame(const std::string& mission) {
             return "reload_content: client caches reloaded";
         };
 
+        // Articulation debug scrub (#841): force one channel of one entity from the console, so the
+        // clip -> sampler -> pose arena -> per-node draw path can be exercised independently of the
+        // simulation and the wire. Guarded on the scene renderer; headless has none.
+        auto setArtChannel = [&d](uint32_t idx, uint8_t channel, float value) {
+            if (d.services.sceneRenderer)
+                d.services.sceneRenderer->setArtChannelOverride(idx, static_cast<fl::ArtChannel>(channel), value);
+        };
+        auto clearArtChannels = [&d]() {
+            if (d.services.sceneRenderer)
+                d.services.sceneRenderer->clearArtChannelOverrides();
+        };
+
         if (!isMultiplayer) {
             d.services.env = d.session.localServer->initialEnvironment();
 
@@ -1520,7 +1534,8 @@ void Game::startGame(const std::string& mission) {
             d.session.localServer->registerConsoleCommands(
                 d.services.cmdRegistry, adminSender, d.services.renderBridge, &d.services.entityRegistry,
                 &d.session.clientHandler->assignedEntityIdx, &d.session.clientHandler->assignedEntityGen,
-                &d.services.gameConsole->showPosRef(), &d.services.showPing, reloadContent);
+                &d.services.gameConsole->showPosRef(), &d.services.showPing, reloadContent, setArtChannel,
+                clearArtChannels);
             d.services.gmMapOverlay.setDeps({d.session.clientHandler.get(), &d.services.entityRegistry,
                                              d.services.p.gui.get(), adminSender}); // #861 (SP: needs a GM grant)
             d.services.screenMgr->setServerCmd(std::move(adminSender));
@@ -1545,6 +1560,8 @@ void Game::startGame(const std::string& mission) {
             auto adminSender = makeNetworkAdminSender(*d.session.clientNet, d.services.operatorPassword);
             ctx.serverCommand = adminSender;
             ctx.reloadContent = reloadContent;
+            ctx.setArtChannel = setArtChannel;
+            ctx.clearArtChannels = clearArtChannels;
             registerConsoleCommands(d.services.cmdRegistry, ctx);
             // The game-master map (#861) sends its orders through the same admin channel.
             d.services.gmMapOverlay.setDeps(

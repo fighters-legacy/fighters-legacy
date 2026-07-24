@@ -153,6 +153,19 @@ void FlightIntegrator::advanceTvc(float dt, float commanded_deg) {
     angle = std::clamp(angle, tvc.min_angle_deg, tvc.max_angle_deg);
 }
 
+// Slew every actuator toward its command (#842). Shares the pure advanceArticulation with
+// ClientPrediction's replay by construction: if the two sides ever disagreed about where the gear is,
+// they would disagree about where the aircraft is, because gear position is drag.
+void FlightIntegrator::advanceArticulationState(float dt, const ControlInput& ctrl) {
+    ArticulationCommand cmd{};
+    cmd.gear_down = ctrl.gear_down;
+    cmd.flaps = ctrl.flaps;
+    cmd.speedbrake = ctrl.speedbrake;
+    cmd.hook_down = ctrl.hook_down;
+    cmd.canopy_open = ctrl.canopy_open;
+    advanceArticulation(m_state.articulation, cmd, m_data->articulation, dt);
+}
+
 void FlightIntegrator::integrateRotation(float dt) {
     // Integrate angular velocity into quaternion via small-angle approximation.
     float p = m_state.omega[0];
@@ -243,6 +256,10 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
 
     // 3. TVC
     advanceTvc(dt, ctrl.tvc_angle_deg);
+
+    // 3b. Actuator transit (#842): gear, flaps, speed-brake, hook and canopy slew toward their
+    // commands BEFORE the aero model runs, so this tick's drag reflects this tick's positions.
+    advanceArticulationState(dt, ctrl);
 
     // 4. Compute atmosphere at current geodetic altitude (uses gravity field for spherical planets).
     float altitude_m = static_cast<float>(m_gravity->geodeticAltitude(m_state.pos_world));
@@ -750,7 +767,15 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
         (m_gravity->geodeticAltitude(m_state.pos_world) - static_cast<double>(groundElev)) <= kGroundContactMarginM) {
         constexpr float kRollingResistG = 0.02f; // baseline tyre rolling resistance
         constexpr float kBrakeMaxG = 0.35f;      // full-pedal wheel-brake deceleration
-        const float decel = (kRollingResistG + kBrakeMaxG * std::clamp(ctrl.wheelBrake, 0.f, 1.f)) * kG0;
+        // Gear POSITION gates the wheels (#639). Brakes, tyre grip and nosewheel steering are things
+        // WHEELS do, so none of them exist when the gear is up: a belly landing scrapes to a stop on
+        // the airframe instead, at a far higher drag and with no steering at all. Interpolating on
+        // position rather than the command means a gear still travelling has partial authority, which
+        // is what a half-extended strut actually has.
+        const float gearDown = std::clamp(m_state.articulation.gear, 0.f, 1.f);
+        constexpr float kBellyScrapeG = 0.55f; // airframe on the surface: more drag than tyres, no control
+        const float decel = (kRollingResistG + kBrakeMaxG * std::clamp(ctrl.wheelBrake, 0.f, 1.f)) * gearDown * kG0 +
+                            kBellyScrapeG * (1.f - gearDown) * kG0;
         const float horizSpd =
             float(std::sqrt(m_state.vel_body[0] * m_state.vel_body[0] + m_state.vel_body[2] * m_state.vel_body[2]));
         if (horizSpd > 1e-4f) {
@@ -765,7 +790,7 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
         // without it the transport term (12b) keeps the world velocity inertially fixed and the nose
         // just crabs off the direction of travel instead of the aircraft actually turning.
         constexpr float kTireGripPerSec = 4.f; // lateral (body-z) skid decay rate on the ground
-        m_state.vel_body[2] *= std::max(0.f, 1.f - kTireGripPerSec * dt);
+        m_state.vel_body[2] *= std::max(0.f, 1.f - kTireGripPerSec * gearDown * dt);
 
         // Nosewheel steering: omega[1] is yaw about +Y with positive = nose LEFT, and rudder +1 = right
         // yaw, so the full-authority target is -rudder * kSteerRate. Blend the current yaw rate toward
@@ -775,7 +800,7 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
         constexpr float kSteerFadeMaxMps = 50.f; // no nosewheel authority at/above this ground speed
         constexpr float kSteerRateRadS = 0.35f;  // yaw rate at full rudder + full authority (~20 deg/s)
         const float authority =
-            std::clamp((kSteerFadeMaxMps - horizSpd) / (kSteerFadeMaxMps - kSteerFadeMinMps), 0.f, 1.f);
+            gearDown * std::clamp((kSteerFadeMaxMps - horizSpd) / (kSteerFadeMaxMps - kSteerFadeMinMps), 0.f, 1.f);
         if (authority > 0.f) {
             const float targetYaw = -ctrl.rudder * kSteerRateRadS;
             m_state.omega[1] += authority * (targetYaw - m_state.omega[1]);

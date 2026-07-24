@@ -540,6 +540,8 @@ struct ClientNetEventHandler : INetworkEventHandler {
     void handleCrewRoster(const void* data, std::size_t size);
     // Decode a SnapshotCrew TLV payload into m_crewTurretPoses (called from the WorldSnapshot handler).
     void applyCrewTurretTlv(const uint8_t* payload, std::size_t len);
+    // Actuator positions for remote entities (#843). Hold-last: absence means unchanged, not neutral.
+    void applyArticulationTlv(const uint8_t* payload, std::size_t len);
 };
 
 } // namespace fl

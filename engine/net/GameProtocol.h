@@ -237,8 +237,14 @@ struct MsgEntityTypeDef {
     float deckLengthM{0.f};
     float deckWidthM{0.f};
     float deckHeightM{0.f};
-}; // 348 bytes, align 4
-static_assert(sizeof(MsgEntityTypeDef) == 348u, "MsgEntityTypeDef wire size changed");
+    // --- appended at the tail (#882); additive, prior offsets unchanged ---
+    // Variant node-set selector (EntityDef::meshVariant): which tagged node-set of the shared family
+    // mesh this type draws. Empty = the untagged set, i.e. every mesh authored before variants
+    // existed. Purely a RENDER selection, resolved client-side at mesh upload — the server never
+    // needs it, but the client cannot ask the pack for an entity def it does not have.
+    char meshVariant[32]{};
+}; // 380 bytes, align 4
+static_assert(sizeof(MsgEntityTypeDef) == 380u, "MsgEntityTypeDef wire size changed");
 static_assert(alignof(MsgEntityTypeDef) == 4u, "MsgEntityTypeDef alignment changed");
 static_assert(sizeof(MsgEntityTypeDef) % alignof(MsgEntityTypeDef) == 0u, "MsgEntityTypeDef not record-aligned");
 static_assert(offsetof(MsgEntityTypeDef, id) == 4u, "MsgEntityTypeDef::id offset changed");
@@ -252,6 +258,7 @@ static_assert(offsetof(MsgEntityTypeDef, category) == 332u, "MsgEntityTypeDef::c
 static_assert(offsetof(MsgEntityTypeDef, projectileKind) == 333u, "MsgEntityTypeDef::projectileKind offset changed");
 static_assert(offsetof(MsgEntityTypeDef, deckLengthM) == 336u, "MsgEntityTypeDef::deckLengthM offset changed");
 static_assert(offsetof(MsgEntityTypeDef, deckHeightM) == 344u, "MsgEntityTypeDef::deckHeightM offset changed");
+static_assert(offsetof(MsgEntityTypeDef, meshVariant) == 348u, "MsgEntityTypeDef::meshVariant offset changed");
 
 // Faction index -> id/name, sent once after ConnectAck for every registered faction (#860). The
 // client maps a snapshot entity's factionIndex (carried on full records) to a display name for the
@@ -482,7 +489,14 @@ inline constexpr uint8_t kInputButtonEcm = 0x10;         // bit 4 = ECM jammer (
 inline constexpr uint8_t kInputButtonEject = 0x20;       // bit 5 = eject (edge, #672)
 inline constexpr uint8_t kInputButtonWheelBrake = 0x40;  // bit 6 = wheel brakes (level, #700, ground only)
 inline constexpr uint8_t kInputButtonRespawn = 0x80;     // bit 7 = respawn request (edge, #648) — LAST free
-                                                         // bit; the next button must open a uint16 field.
+
+// MsgClientInput::artButtons (#843). A separate byte rather than more `buttons` bits, because
+// `buttons` ran out at bit 7 and these are ABSOLUTE STATE, not edges: an edge lost on the unreliable
+// channel never converges; an absolute value does on the very next packet.
+inline constexpr uint8_t kArtButtonGearDown = 0x01;   // bit 0 = gear down
+inline constexpr uint8_t kArtButtonHookDown = 0x02;   // bit 1 = arresting hook down
+inline constexpr uint8_t kArtButtonCanopyOpen = 0x04; // bit 2 = canopy open
+                                                      // bit; the next button must open a uint16 field.
 
 struct MsgClientInput {
     uint8_t msgId{static_cast<uint8_t>(MsgId::ClientInput)};
@@ -509,8 +523,15 @@ struct MsgClientInput {
     // keep the current server-side mode (the default from an unaware client, so old clients and the
     // load bots leave the radar in its spawned Search mode). @49.
     uint8_t radarMode{255};
-    uint8_t reservedB[2]{}; // explicit padding — the layout rule forbids implicit holes
-    uint32_t reservedC{0};  // pads to the struct's 8-byte alignment; future fire fields land here
+
+    // ── articulation commands (#843) ─────────────────────────────────────────
+    // A human pilot could not raise the gear: only Lua AI ever set gear_down/speedbrake, server-side.
+    // These are ABSOLUTE STATE, not edges — the same reasoning as selectedStation above: an edge lost
+    // on the unreliable channel never converges, an absolute value does on the very next packet.
+    uint8_t flaps{0};       // @50 commanded flap position, 0..255 => 0..1
+    uint8_t speedbrake{0};  // @51 commanded speed-brake, 0..255 => 0..1 (the player's was not on the wire at all)
+    uint8_t artButtons{0};  // @52 bit 0 = gear down, bit 1 = hook down, bit 2 = canopy open
+    uint8_t reservedC[3]{}; // pads to the struct's 8-byte alignment; future fire fields land here
 
     // Camera eye world-position (#858). The client sends where it is LOOKING FROM each frame so the
     // server can center interest management on an entity-less peer (an observer ghost camera, or a
@@ -529,6 +550,9 @@ static_assert(offsetof(MsgClientInput, viewAxis) == 32u, "MsgClientInput::viewAx
 static_assert(offsetof(MsgClientInput, ackMask) == 44u, "MsgClientInput::ackMask offset changed");
 static_assert(offsetof(MsgClientInput, selectedStation) == 48u, "MsgClientInput::selectedStation offset changed");
 static_assert(offsetof(MsgClientInput, radarMode) == 49u, "MsgClientInput::radarMode offset changed");
+static_assert(offsetof(MsgClientInput, flaps) == 50u, "MsgClientInput::flaps offset changed");
+static_assert(offsetof(MsgClientInput, speedbrake) == 51u, "MsgClientInput::speedbrake offset changed");
+static_assert(offsetof(MsgClientInput, artButtons) == 52u, "MsgClientInput::artButtons offset changed");
 static_assert(offsetof(MsgClientInput, cameraEye) == 56u, "MsgClientInput::cameraEye offset changed");
 
 // Unreliable, server->client, broadcast every 10 sim ticks (~6 Hz at 60 Hz).
@@ -1319,17 +1343,27 @@ enum class ExtTag : uint16_t {
                               // kMaxEffectsPerSnapshot. Unreliable by design — a dropped packet loses cosmetics,
                               // never state. pos is float32 world position (particles do not need 0.125 m).
     SnapshotLastAckedSeqNum =
-        0x0105,            // uint32_t: seqNum of the last MsgClientInput the server drained + APPLIED for the receiving
-                           // peer (#427). Lets client prediction replay EXACTLY the inputs the server has not yet
-                           // reflected (history seqNum > this), instead of approximating the replay depth from
-                           // estimatedDelayTicks. Omitted until the first input is applied (a peer's first snapshots).
-    SnapshotCrew = 0x0106, // #972: live turret orientation for CREWED aircraft in the peer's interest set.
-                           // Payload: uint8 entryCount, then entryCount x { uint32 entityIdx (LE), uint8
-                           // turretCount, turretCount x { int16 azQ (LE), int16 elQ (LE) } }. az quantized
-                           // over [-pi,pi], el over [-pi/2,pi/2] to int16. Single-seat aircraft NEVER appear
-                           // (occupancy lives in the reliable MsgCrewRoster), so a world of only single-seat
-                           // entities emits no SnapshotCrew TLV and its snapshot is byte-identical to pre-#972.
-                           // Unreliable/interest-filtered: a dropped packet loses one tick of turret aim.
+        0x0105, // uint32_t: seqNum of the last MsgClientInput the server drained + APPLIED for the receiving
+                // peer (#427). Lets client prediction replay EXACTLY the inputs the server has not yet
+                // reflected (history seqNum > this), instead of approximating the replay depth from
+                // estimatedDelayTicks. Omitted until the first input is applied (a peer's first snapshots).
+    SnapshotArticulation = 0x0107, // #843: actuator positions for the ARTICULATED entities in the peer's
+                                   // interest set, so a remote aircraft's gear and flaps move. Payload:
+                                   // repeated { uint32 entityIdx (LE), uint16 channelMask (LE), uint8
+                                   // value[popcount(mask)] } — unsigned channel = round(v*255), signed =
+                                   // round(v*127)+128 (offset binary). QUANTIZATION IS COSMETIC-GRADE ON
+                                   // PURPOSE: 1/255 on a 0..1 actuator is 0.4%, visually exact, and it
+                                   // cannot affect flight because A PEER NEVER READS ITS OWN ENTITY'S
+                                   // CHANNELS FROM THE WIRE — ClientPrediction overwrites them with its
+                                   // own full-precision integration. An entity with all-default channels
+                                   // costs ZERO bytes, so a world of unarticulated meshes emits no TLV.
+    SnapshotCrew = 0x0106,         // #972: live turret orientation for CREWED aircraft in the peer's interest set.
+                                   // Payload: uint8 entryCount, then entryCount x { uint32 entityIdx (LE), uint8
+                                   // turretCount, turretCount x { int16 azQ (LE), int16 elQ (LE) } }. az quantized
+                                   // over [-pi,pi], el over [-pi/2,pi/2] to int16. Single-seat aircraft NEVER appear
+                                   // (occupancy lives in the reliable MsgCrewRoster), so a world of only single-seat
+                                   // entities emits no SnapshotCrew TLV and its snapshot is byte-identical to pre-#972.
+                                   // Unreliable/interest-filtered: a dropped packet loses one tick of turret aim.
 
     ConnectAckAuthority = 0x0201, // #949: granted-authority TLV appended to MsgConnectAck (after the
                                   // entity-type records). Payload = { uint64 caps (LE), uint16

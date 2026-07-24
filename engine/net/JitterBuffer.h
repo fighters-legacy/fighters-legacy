@@ -14,7 +14,12 @@ struct BufferedInput {
     uint8_t buttons{0};
     uint8_t selectedStation{255}; // absolute station selection (#625); 255 = no change
     uint8_t radarMode{255};       // absolute radar mode (#526); 255 = keep current server-side mode
-    uint32_t seqNum{0};           // MsgClientInput::seqNum this input came from (#427 acked-seqNum tracking)
+    // Articulation commands (#843), absolute state like selectedStation: an edge lost on the
+    // unreliable channel never converges, an absolute value does on the next packet.
+    uint8_t flaps{0};      // 0..255 => 0..1 commanded flap position
+    uint8_t speedbrake{0}; // 0..255 => 0..1 commanded speed-brake
+    uint8_t artButtons{0}; // kArtButton* bitmask: gear / hook / canopy
+    uint32_t seqNum{0};    // MsgClientInput::seqNum this input came from (#427 acked-seqNum tracking)
 };
 
 // Fixed-depth ring buffer for per-peer MsgClientInput delivery.
