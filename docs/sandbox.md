@@ -139,9 +139,20 @@ Active in all camera modes. All game inputs (flight controls and camera) are sup
 | Y | Open the chat input box on the **all** channel (#646). While it is open the keyboard is captured — type your line, `Enter` (or the Send button) sends, `Escape` cancels. The gamepad/HOTAS axes stay live. |
 | H | Open the chat input box on the **team** channel (#646; reaches only your faction) |
 | I | Hold to show the multiplayer scoreboard (#647). Auto-shown in the match end phase. |
+| V | **Push to talk** on the selected radio net (Epic J, #531). HELD, never latched. |
+| B | Push to talk on the **flight** net; wins if both PTT keys are held. |
+| M | Cycle the primary PTT key through the server's net table (TEAM / FLIGHT / ATC / PROX by default). |
 
 While the radio menu is open, Enter and the digit keys belong to the menu — the fire-store bit and
 station cycling are suppressed, the flight axes and gun trigger stay live.
+
+**Voice comms (Epic J).** The bottom-left HUD shows the net your PTT key will use, a `TX` indicator
+whose brightness follows the live mic level (the first thing to check when nobody answers), and who
+is currently on the air. Transmission is suppressed entirely while the console, the chat box or the
+GM map has focus — a PTT key that also fired while you were typing would send your keystrokes'
+worth of room noise to the whole team. With no microphone, no permission, or no Opus encoder the
+client is simply listen-only; none of those is an error you have to resolve before flying. Full
+reference: [voice.md](voice.md).
 
 The crew seat picker (`K` / `L` / `U`) is **non-modal** like the radio menu — the aircraft keeps flying
 while it is up. Only the `Fly` seat runs flight prediction and shows attitude; a gunner seat views the

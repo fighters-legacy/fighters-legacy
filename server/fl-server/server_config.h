@@ -250,6 +250,29 @@ struct ServerConfig {
     };
     ChatConfig chat;
 
+    // [voice]  — in-game voice comms (Epic J, #532)
+    //
+    // Nets are DATA, not code: an operator adds a "tanker" or "awacs" net without an engine change.
+    // Leave [[voice.nets]] out entirely and the compiled-in stack (team / flight / atc / proximity)
+    // is used, so voice works with zero configuration.
+    struct VoiceNetConfig {
+        std::string id;            // stable machine id; addressed by config and admin commands
+        std::string name;          // display label; empty = the id
+        std::string kind = "team"; // global | team | flight | proximity | atc
+        bool positional = false;   // mix at the speaker's world position instead of head-locked
+        double rangeM = 0.0;       // proximity radius / positional rolloff ceiling; 0 = unlimited
+        bool radioEffect = true;   // apply the radio DSP (#925)
+        double gain = 1.0;         // per-net trim; [0, 4]
+        bool defaultNet = false;   // pre-selected under the client's primary PTT key
+    };
+    struct VoiceConfig {
+        bool enabled = true;              // false = the server relays no audio and tells clients voice is off
+        int frameRateLimit = 60;          // frames/s/peer; [1, 200]. A BANDWIDTH bound, not anti-spam: a frame
+                                          // is fanned out to every recipient, so the cost is recipients x bytes
+        std::vector<VoiceNetConfig> nets; // empty = builtinRadioNets()
+    };
+    VoiceConfig voice;
+
     // [network]  — transport backend selection (#507)
     struct NetworkConfig {
         std::string transport = "gns"; // "gns" (GameNetworkingSockets, default) or "enet" (enet6)

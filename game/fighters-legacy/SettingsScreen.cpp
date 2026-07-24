@@ -117,11 +117,39 @@ static const char* drawDistLabel(DrawDistance d) {
     return "High";
 }
 
+static const char* voiceModeLabel(VoiceKeyMode m) {
+    switch (m) {
+    case VoiceKeyMode::PushToTalk:
+        return "Push-to-talk";
+    case VoiceKeyMode::Voice:
+        return "Voice activated";
+    case VoiceKeyMode::Open:
+        return "Open mic";
+    }
+    return "Push-to-talk";
+}
+
 SettingsScreen::SettingsScreen(UserConfig& config, IRenderer& renderer, IWindow& window, IDisplay& display)
     : m_userConfig(config), m_renderer(renderer), m_window(window), m_display(display) {
     m_graphics = config.graphics();
     m_audio = config.audio();
+    m_voice = config.voice();
     buildModes();
+}
+
+void SettingsScreen::setVoiceDevices(std::vector<std::string> devices) {
+    m_voiceDevices.assign(1, std::string{}); // index 0 = "Default" (the empty device name)
+    for (auto& d : devices) {
+        if (!d.empty())
+            m_voiceDevices.push_back(std::move(d));
+    }
+    m_voiceDeviceIdx = 0;
+    for (int i = 0; i < static_cast<int>(m_voiceDevices.size()); ++i) {
+        if (m_voiceDevices[static_cast<std::size_t>(i)] == m_voice.inputDevice) {
+            m_voiceDeviceIdx = i;
+            break;
+        }
+    }
 }
 
 void SettingsScreen::buildModes() {
@@ -156,6 +184,7 @@ void SettingsScreen::buildModes() {
 void SettingsScreen::applyAndSave() {
     m_userConfig.setGraphics(m_graphics);
     m_userConfig.setAudio(m_audio);
+    m_userConfig.setVoice(m_voice);
     m_userConfig.save();
 
     RendererSettings rs;
@@ -202,7 +231,7 @@ Screen SettingsScreen::update(IInput& input, IWindow& window) {
     if (fh > 0.f) {
         const float ny = static_cast<float>(my) / fh;
         for (int r = 0; r < kRowCount; ++r) {
-            const float ry = kRowY[static_cast<std::size_t>(r)];
+            const float ry = rowY(r);
             if (ny >= ry && ny < ry + kRowHitH)
                 m_focusedRow = r;
         }
@@ -277,7 +306,41 @@ Screen SettingsScreen::update(IInput& input, IWindow& window) {
         m_audio.sfxVolume = std::clamp(m_audio.sfxVolume + delta, 0.f, 1.f);
         break;
     }
-    case 12:
+    case 12: { // Voice volume
+        float delta = (right ? step : 0.f) + (left ? -step : 0.f) + scrollStep * scroll;
+        m_audio.voiceChatVolume = std::clamp(m_audio.voiceChatVolume + delta, 0.f, 1.f);
+        break;
+    }
+    case 13: // Voice comms on/off
+        if (left || right || scroll != 0.f)
+            m_voice.enabled = !m_voice.enabled;
+        break;
+    case 14: // Keying mode
+        if (left || right || scroll != 0.f)
+            m_voice.keyMode = static_cast<VoiceKeyMode>((static_cast<int>(m_voice.keyMode) + 1) % 3);
+        break;
+    case 15: // Input device
+        if ((left || right || scroll != 0.f) && !m_voiceDevices.empty()) {
+            const int n = static_cast<int>(m_voiceDevices.size());
+            m_voiceDeviceIdx = (right || scroll < 0.f) ? (m_voiceDeviceIdx + 1) % n : (m_voiceDeviceIdx - 1 + n) % n;
+            m_voice.inputDevice = m_voiceDevices[static_cast<std::size_t>(m_voiceDeviceIdx)];
+        }
+        break;
+    case 16: { // Mic gain
+        float delta = (right ? step : 0.f) + (left ? -step : 0.f) + scrollStep * scroll;
+        m_voice.micGain = std::clamp(m_voice.micGain + delta, 0.f, 4.f);
+        break;
+    }
+    case 17: // Radio effect
+        if (left || right || scroll != 0.f)
+            m_voice.radioEffect = !m_voice.radioEffect;
+        break;
+    case 18: { // Ducking
+        float delta = (right ? step : 0.f) + (left ? -step : 0.f) + scrollStep * scroll;
+        m_voice.duckingAmount = std::clamp(m_voice.duckingAmount + delta, 0.f, 1.f);
+        break;
+    }
+    case kRowBack:
         break; // Back — handled below
     }
 
@@ -286,7 +349,7 @@ Screen SettingsScreen::update(IInput& input, IWindow& window) {
                          input.isGamepadButtonJustPressed(0, GamepadButton::A);
     const bool back = input.isKeyJustPressed(Key::Escape) || input.isGamepadButtonJustPressed(0, GamepadButton::B);
 
-    if ((confirm && m_focusedRow == 12) || back) {
+    if ((confirm && m_focusedRow == kRowBack) || back) {
         applyAndSave();
         return m_returnTarget;
     }
@@ -335,7 +398,7 @@ std::span<const HudElement> SettingsScreen::buildElements() {
     // Returns two elements; consumes two string slots from si
     auto row = [&](int rowIdx, std::string label, std::string value) {
         const bool focused = (rowIdx == m_focusedRow);
-        const float y = kRowY[static_cast<std::size_t>(rowIdx)];
+        const float y = rowY(rowIdx);
 
         m_strings[static_cast<std::size_t>(si)] = std::move(label);
         {
@@ -386,6 +449,15 @@ std::span<const HudElement> SettingsScreen::buildElements() {
     row(9, "Master volume:", volStr(m_audio.masterVolume));
     row(10, "Music volume:", volStr(m_audio.musicVolume));
     row(11, "SFX volume:", volStr(m_audio.sfxVolume));
+    row(kRowVoiceVolume, "Radio volume:", volStr(m_audio.voiceChatVolume));
+
+    // Voice comms (Epic J)
+    row(13, "Voice comms:", m_voice.enabled ? "On" : "Off");
+    row(14, "Mic mode:", voiceModeLabel(m_voice.keyMode));
+    row(15, "Mic device:", m_voice.inputDevice.empty() ? std::string("Default") : m_voice.inputDevice);
+    row(16, "Mic gain:", volStr(m_voice.micGain)); // 100% = unity; the range runs to 400%
+    row(17, "Radio effect:", m_voice.radioEffect ? "On" : "Off");
+    row(18, "Radio ducking:", volStr(m_voice.duckingAmount));
 
     // Back button
     m_strings[static_cast<std::size_t>(si)] = "[ Back ]";
@@ -396,10 +468,10 @@ std::span<const HudElement> SettingsScreen::buildElements() {
         el.text = m_strings[static_cast<std::size_t>(si++)];
         el.x = 0.5f;
         el.align = HudAlign::Center;
-        el.y = kRowY[12];
-        el.r = (m_focusedRow == 12) ? 0.2f : 0.7f;
-        el.g = (m_focusedRow == 12) ? 1.0f : 0.7f;
-        el.b = (m_focusedRow == 12) ? 0.2f : 0.7f;
+        el.y = rowY(kRowBack);
+        el.r = (m_focusedRow == kRowBack) ? 0.2f : 0.7f;
+        el.g = (m_focusedRow == kRowBack) ? 1.0f : 0.7f;
+        el.b = (m_focusedRow == kRowBack) ? 0.2f : 0.7f;
         el.a = 1.f;
     }
 

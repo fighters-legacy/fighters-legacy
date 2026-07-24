@@ -11,6 +11,7 @@
 #include "net/GameProtocol.h"      // PeerRole, PackManifestEntry (connect handshake #853)
 #include "render/RadarView.h"      // RadarView / RadarTrack / RwrStrobe (datalink picture #528)
 #include "render/RenderSnapshot.h" // EntityRenderEntry (stored by value in the retention cache)
+#include "voice/RadioNet.h"        // the server-authoritative radio-net table (#532)
 #include "world/FactionDef.h"      // areFactionsHostile — client friend/foe fallback (#688)
 
 #include <algorithm>
@@ -426,7 +427,26 @@ struct ClientNetEventHandler : INetworkEventHandler {
     // Optional: called on a MsgRadioTransmission (#703) with (speaker, text, voiceKey, displaySeconds).
     // #704 wires it to the subtitle overlay + voice-callout pipeline. The line is always also printed to
     // the console. Null = console only. Main-thread only.
-    std::function<void(const char* speaker, const char* text, const char* voiceKey, uint16_t seconds)> radioCallback;
+    // `netId` (#925) is the radio net the line was spoken on, so synthetic traffic gets the same
+    // DSP, ducking and net gain as human voice — kInvalidRadioNet = no net (a dry cockpit callout).
+    std::function<void(const char* speaker, const char* text, const char* voiceKey, uint16_t seconds, uint8_t netId)>
+        radioCallback;
+
+    // ── voice comms (Epic J, #532) ──────────────────────────────────────────
+    // Optional: called once per MsgVoiceNetDef with the server's radio-net table (and whether voice
+    // is enabled at all). Game.cpp wires it to VoiceChat::setNets. Main-thread only.
+    std::function<void(const RadioNetTable&, bool enabled)> voiceNetsCallback;
+
+    // Optional: called per relayed voice frame. Args mirror MsgVoiceRelayHeader; `payload` is opaque
+    // Opus valid only for the duration of the call. Game.cpp wires it to VoiceChat::onRemoteFrame.
+    std::function<void(uint32_t senderPeerId, uint32_t senderEntityIdx, uint8_t netId, uint16_t seq,
+                       std::span<const uint8_t> payload, bool start, bool end)>
+        voiceFrameCallback;
+
+    // Send one locally captured Opus frame to the server (the VoiceChat frame sink). Rides the
+    // dedicated unreliable voice channel: a lost frame is 20 ms the receiver conceals, and a
+    // retransmit would arrive after the moment it belonged to.
+    void sendVoiceFrame(uint8_t netId, uint16_t seq, std::span<const uint8_t> payload, bool start, bool end);
 
   private:
     // Store f into *sessionFailure if it is still None (first-writer-wins via CAS); no-op if unset.

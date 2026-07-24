@@ -923,3 +923,64 @@ TEST_CASE("GameProtocol: radio channel messages (#703) sizes, offsets, round-tri
     CHECK(std::string(txOut.voiceKey) == "atc.cleared_to_land");
     CHECK(std::string(txOut.text) == "cleared to land");
 }
+
+TEST_CASE("voice comms wire layout (#532)", "[protocol][voice]") {
+    CHECK(static_cast<uint8_t>(fl::MsgId::VoiceNetDef) == 0x23u);
+    CHECK(static_cast<uint8_t>(fl::MsgId::VoiceFrame) == 0x24u);
+    CHECK(static_cast<uint8_t>(fl::MsgId::VoiceRelay) == 0x25u);
+    // Voice rides its OWN channel: ENet's unreliable sequencing is per channel, so sharing one with
+    // the snapshot stream would make the two cut each other to pieces.
+    CHECK(fl::kNetChVoice == 2u);
+    CHECK(fl::kNetChVoice != fl::kNetChUnreliable);
+
+    CHECK(sizeof(fl::MsgVoiceNetDefHeader) == 4u);
+    CHECK(offsetof(fl::MsgVoiceNetDefHeader, netCount) == 1u);
+    CHECK(offsetof(fl::MsgVoiceNetDefHeader, flags) == 2u);
+    // The record array starts right after the 4-byte header, so the header size must keep every
+    // record naturally aligned for the in-place read path.
+    CHECK(sizeof(fl::MsgVoiceNetDefHeader) % alignof(fl::MsgVoiceNetRecord) == 0u);
+
+    CHECK(sizeof(fl::MsgVoiceNetRecord) == 68u);
+    CHECK(offsetof(fl::MsgVoiceNetRecord, rangeM) == 4u);
+    CHECK(offsetof(fl::MsgVoiceNetRecord, gain) == 8u);
+    CHECK(offsetof(fl::MsgVoiceNetRecord, id) == 12u);
+    CHECK(offsetof(fl::MsgVoiceNetRecord, name) == 36u);
+
+    CHECK(sizeof(fl::MsgVoiceFrameHeader) == 8u);
+    CHECK(offsetof(fl::MsgVoiceFrameHeader, seq) == 2u);
+    CHECK(offsetof(fl::MsgVoiceFrameHeader, payloadBytes) == 4u);
+    CHECK(offsetof(fl::MsgVoiceFrameHeader, flags) == 6u);
+
+    CHECK(sizeof(fl::MsgVoiceRelayHeader) == 16u);
+    CHECK(offsetof(fl::MsgVoiceRelayHeader, seq) == 2u);
+    CHECK(offsetof(fl::MsgVoiceRelayHeader, senderPeerId) == 4u);
+    CHECK(offsetof(fl::MsgVoiceRelayHeader, senderEntityIdx) == 8u);
+    CHECK(offsetof(fl::MsgVoiceRelayHeader, payloadBytes) == 12u);
+    CHECK(offsetof(fl::MsgVoiceRelayHeader, flags) == 14u);
+
+    // #532 gave MsgRadioTransmission a netId so synthetic (ATC/TTS) traffic rides the same radio net
+    // as human voice and gets the same presentation.
+    CHECK(offsetof(fl::MsgRadioTransmission, netId) == 1u);
+    CHECK(sizeof(fl::MsgRadioTransmission) == 224u); // tail-append only; the layout did not move
+
+    fl::MsgVoiceRelayHeader rel{};
+    rel.netId = 3;
+    rel.seq = 40000; // past the uint16 half-window, to prove the field is not signed anywhere
+    rel.senderPeerId = 12;
+    rel.senderEntityIdx = fl::kNoVoiceEntity;
+    rel.payloadBytes = 57;
+    rel.flags = fl::kVoiceFlagStart;
+    fl::MsgVoiceRelayHeader out{};
+    {
+        std::vector<uint8_t> buf(sizeof(rel));
+        std::memcpy(buf.data(), &rel, sizeof(rel));
+        REQUIRE(fl::readMsg(buf.data(), buf.size(), out));
+    }
+    CHECK(out.netId == 3);
+    CHECK(out.seq == 40000);
+    CHECK(out.senderPeerId == 12u);
+    CHECK(out.senderEntityIdx == fl::kNoVoiceEntity);
+    CHECK(out.payloadBytes == 57u);
+    CHECK((out.flags & fl::kVoiceFlagStart) != 0u);
+    CHECK((out.flags & fl::kVoiceFlagEnd) == 0u);
+}

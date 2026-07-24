@@ -86,10 +86,37 @@ target_include_directories(engine-audio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-audio
     PUBLIC  platform-hal
             engine-content
+            engine-radio     # #925: synthetic radio voice runs the SAME DSP as human voice
     PRIVATE engine-i18n
             engine-config
             tomlplusplus::tomlplusplus
             vorbisfile
+)
+
+# The radio-net VOCABULARY + presentation DSP (Epic J): net kinds, defs, the ordered table, the
+# builtin net stack, and the radio filter / click / squelch cues.
+#
+# Its own target, stdlib-only, because THREE consumers need pieces of it and none of them wants the
+# others' dependencies: engine-net routes frames by net kind on the server, which must never link
+# libopus (it never decodes a single frame); engine-voice places and mixes human speech; and
+# engine-audio runs the SAME DSP on synthetic ATC/TTS voice, which is what makes a human and a
+# synthetic transmission indistinguishable in presentation (#925).
+add_library(engine-radio STATIC
+    voice/RadioNet.cpp
+    voice/RadioDsp.cpp
+)
+target_include_directories(engine-radio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+add_library(engine-voice STATIC
+    voice/VoiceCodec.cpp
+    voice/VoiceMixer.cpp
+    voice/VoiceChat.cpp
+)
+target_include_directories(engine-voice PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(engine-voice
+    PUBLIC  platform-hal
+            engine-radio
+    PRIVATE fl::opus
 )
 
 add_library(engine-render STATIC
@@ -409,6 +436,7 @@ add_library(engine-net STATIC
     net/CongestionController.cpp
     net/TickGovernor.cpp
     net/WorldState.cpp
+    net/VoiceRouter.cpp
     net/LobbyListClient.cpp
     net/LobbyRegistration.cpp
     net/ServerBrowserModel.cpp
@@ -423,6 +451,7 @@ target_link_libraries(engine-net
             engine-spatial
             engine-job
             engine-world
+            engine-radio     # the radio-net vocabulary voice frames are routed by (#532)
             platform-hal
     PRIVATE engine-flight
             engine-weather

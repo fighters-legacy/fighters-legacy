@@ -13,6 +13,7 @@
 #include "config/HudSettings.h"
 #include "config/PilotSettings.h"
 #include "config/PredictionSettings.h"
+#include "config/VoiceSettings.h"
 
 namespace fl {
 
@@ -71,6 +72,9 @@ class UserConfig {
     HeadTrackingSettings headTracking() const;
     void setHeadTracking(const HeadTrackingSettings& hts);
 
+    VoiceSettings voice() const;
+    void setVoice(const VoiceSettings& vs);
+
   private:
     static constexpr const char* kPath = "config/user.toml";
     static constexpr const char* kTmpPath = "config/user.toml.tmp";
@@ -90,6 +94,7 @@ class UserConfig {
     PilotSettings m_pilot{};
     PredictionSettings m_prediction{};
     HeadTrackingSettings m_headTracking{};
+    VoiceSettings m_voice{};
 };
 
 } // namespace fl

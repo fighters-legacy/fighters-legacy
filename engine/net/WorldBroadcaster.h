@@ -25,6 +25,7 @@
 #include "flight/AeroForces.h"
 #include "flight/IGravityField.h"
 #include "loop/ISimUpdate.h"
+#include "net/VoiceRouter.h" // radio-net routing for relayed voice frames (#532)
 #include "perf/TickProfiler.h"
 #include "sensor/SensorSystem.h"
 #include "spatial/SpatialIndex.h"
@@ -144,6 +145,15 @@ struct PeerInputState {
     uint32_t chatCount{0};
     bool chatRateLimitWarned{false};
     bool chatMuted{false};
+
+    // Voice channel (#532). The rate limit here is a BANDWIDTH bound, not an anti-spam measure: a
+    // frame is up to kMaxVoiceFrameBytes and is fanned out to every recipient on the net, so an
+    // unbounded sender costs the server (recipients x bytes), not (1 x bytes). Silent drop with no
+    // reply — answering a flood is amplifying it. voiceMuted is session-scoped (admin voice_mute)
+    // and gates TRANSMIT only; a muted peer still hears everyone.
+    std::chrono::steady_clock::time_point voiceWindowStart{};
+    uint32_t voiceFrameCount{0};
+    bool voiceMuted{false};
 
     // Connect handshake (#853/#857). Set when MsgConnectRequest is processed. Before that a connected
     // peer has an input slot (so idle-timeout covers it) but no entity, no role, and no snapshot
@@ -889,6 +899,33 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Participant ids of every currently muted peer (for the admin `mutes` command). Sim-thread.
     [[nodiscard]] std::vector<uint32_t> mutedPeers() const;
 
+    // ── in-game voice comms (Epic J, #532) — sim-thread only ────────────────
+    // The server relays OPAQUE Opus frames; it never decodes, mixes or transcodes audio. Everything
+    // here is routing policy and bandwidth policy.
+    //
+    // Replace the radio-net table. Call before gameLoop.start() (or via enqueueSimCallback for a
+    // reload); an EMPTY table with voice enabled falls back to builtinRadioNets(), so a server that
+    // configures nothing still has a working radio.
+    void setRadioNets(RadioNetTable nets);
+    [[nodiscard]] const RadioNetTable& radioNets() const noexcept {
+        return m_radioNets;
+    }
+    void setVoiceEnabled(bool enabled) noexcept {
+        m_voiceEnabled = enabled;
+    }
+    [[nodiscard]] bool voiceEnabled() const noexcept {
+        return m_voiceEnabled;
+    }
+    // Per-peer frame cap per second. 50 frames/s is one continuous 20 ms transmission; the default
+    // leaves headroom for jitter without letting one client fan out an unbounded stream.
+    void setVoiceFrameRateLimit(int framesPerSecond) noexcept {
+        m_voiceFrameRateLimit = framesPerSecond < 1 ? 1 : framesPerSecond;
+    }
+    // Session-scoped transmit mute (admin voice_mute/voice_unmute). Returns false if peer unknown.
+    bool setPeerVoiceMuted(uint32_t peerId, bool muted);
+    [[nodiscard]] bool isPeerVoiceMuted(uint32_t peerId) const;
+    [[nodiscard]] std::vector<uint32_t> voiceMutedPeers() const;
+
     // ── spectate (#403) — sim-thread only ───────────────────────────────────
     // Override a dead/observer peer's interest center onto a chosen live entity (admin `spectate <peer>
     // <idx>`). entityIdx == PeerInputState::kNoSpectateTarget clears it (`spectate <peer> off`). The
@@ -1301,6 +1338,13 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // text (BMP UTF-8, control chars stripped, truncated on a codepoint boundary), per-peer rate-limits,
     // honors mute + the moderation hook, then routes a MsgChatEvent to the channel's recipients.
     void handleChat(uint32_t peerId, const void* data, std::size_t size);
+    // Voice (#532): relay one received frame to the net's recipient set, and send a peer the net
+    // table at admit time.
+    void handleVoiceFrame(uint32_t peerId, const void* data, std::size_t size);
+    void sendVoiceNetDefs(uint32_t peerId);
+    // Snapshot every admitted peer into the flat view the pure router consumes.
+    void buildVoicePeerViews(std::vector<VoicePeerView>& out) const;
+    [[nodiscard]] VoicePeerView voicePeerView(uint32_t peerId) const;
     // Build + send one MsgChatEvent to a single peer. Sim-thread.
     void sendChatEvent(uint32_t peerId, uint8_t channel, uint32_t senderPeerId, std::string_view text);
 
@@ -1387,7 +1431,15 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     bool m_chatEnabled{true};                                          // #646: false = drop all chat
     int m_chatRateLimit{2};                                            // #646: chat lines per second per peer
     ChatModerationHook m_chatModerationHook;                           // #646: null = every line passes
-    uint32_t m_spectateDelayTicks{0};                                  // #403: spectator snapshot delay; 0 = off
+    // Voice comms (#532). The table is server-authoritative and replicated at admit time.
+    RadioNetTable m_radioNets;
+    bool m_voiceEnabled{true};
+    int m_voiceFrameRateLimit{60}; // frames/s/peer; 50 = one continuous transmission
+    // Scratch reused by the relay path so a 50 Hz hot path does not allocate per frame.
+    mutable std::vector<VoicePeerView> m_voicePeerScratch;
+    mutable std::vector<uint32_t> m_voiceRecipientScratch;
+    std::vector<uint8_t> m_voiceRelayScratch;
+    uint32_t m_spectateDelayTicks{0}; // #403: spectator snapshot delay; 0 = off
     // EntityId.index -> {sim, controller}. Replaces the old peerId-keyed flight-sim map: any control
     // source (peer, AI, script) registers here and is stepped uniformly in onTick.
     std::unordered_map<uint32_t, ControlledEntity> m_controlledEntities;

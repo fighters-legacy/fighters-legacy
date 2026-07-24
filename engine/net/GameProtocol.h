@@ -6,9 +6,16 @@
 
 namespace fl {
 
-// Channel assignments (ENet supports up to kChannelCount=2 per connection).
+// Channel assignments.
 static constexpr uint8_t kNetChReliable = 0;
 static constexpr uint8_t kNetChUnreliable = 1;
+// Voice gets its OWN unreliable channel (#532), and this is a correctness requirement rather than
+// tidiness. ENet sequences unreliable packets PER CHANNEL and discards one that arrives older than
+// the last received on that channel. Two independent streams sharing one unreliable channel
+// therefore knock each other out: at 50 voice frames/s against 60 snapshots/s, each stream's
+// packets look stale relative to the other's and both lose frames. INetwork::sendChannel routes
+// here; backends without a channel concept ignore it (see INetwork.h).
+static constexpr uint8_t kNetChVoice = 2;
 //
 // ---------------------------------------------------------------------------------------------
 // Wire-format compatibility model
@@ -121,6 +128,16 @@ enum class MsgId : uint8_t {
     GmWorldState = 0x22, // server->client, reliable: the game-master overview-map aggregate (#861),
                          // unicast at ~1 Hz to peers holding the GmMap capability. Whole-battlespace,
                          // NOT per-camera interest. Chunked; see MsgGmWorldStateHeader/GmEntityRecord.
+    // --- Epic J in-game voice comms (#499) ---
+    VoiceNetDef = 0x23, // server->client, reliable: the server's radio-net table (id/name/kind/profile),
+                        // sent once after ConnectAck beside FactionDef (#532). A net's INDEX in this
+                        // table is its wire netId on every voice frame, so net strings never travel
+                        // per frame. See MsgVoiceNetDefHeader / MsgVoiceNetRecord.
+    VoiceFrame = 0x24,  // client->server, UNRELIABLE on kNetChVoice: one 20 ms Opus frame the client
+                        // wants relayed on a net (#532). The server NEVER decodes it - that is what
+                        // keeps voice near-zero server CPU at 128 players.
+    VoiceRelay = 0x25,  // server->client, UNRELIABLE on kNetChVoice: the same opaque payload plus the
+                        // speaker's participant id and entity index (for a positional net's mix).
     // ENet message ids occupy 0x00-0x3F. The non-ENet (raw-UDP) boundary was raised from 0x20 to 0x40 in
     // #996 to make room for the Epic E ENet messages above (it was raised from 0x10 to 0x20 in #853). A
     // raw-UDP id lives at 0x40+ and is NEVER dispatched through the ENet onReceive path.
@@ -1225,7 +1242,11 @@ static_assert(offsetof(MsgRadioCommand, command) == 4u, "MsgRadioCommand::comman
 // audio, subtitle only — the docs/ai-architecture.md degradation path).
 struct MsgRadioTransmission {
     uint8_t msgId{static_cast<uint8_t>(MsgId::RadioTransmission)};
-    uint8_t reserved{0};
+    // The radio net this line was spoken on (#532/#925), or kInvalidRadioNet for a line with no net.
+    // Synthetic traffic (ATC, AWACS, Epic O TTS) routes through the SAME net as human voice so the
+    // presentation layer applies the same DSP, the same ducking and the same net gain to both - a
+    // human and a synthetic transmission must be indistinguishable in presentation.
+    uint8_t netId{0xFFu};
     uint16_t displaySeconds{6}; // subtitle dwell
     char speaker[28]{};         // e.g. "Riverside Tower"; 27 usable
     char voiceKey[32]{};        // stable TTS / OGG key; 31 usable; empty = subtitle only
@@ -1233,10 +1254,111 @@ struct MsgRadioTransmission {
 }; // 224 bytes, align 2
 static_assert(sizeof(MsgRadioTransmission) == 224u, "MsgRadioTransmission wire size changed");
 static_assert(alignof(MsgRadioTransmission) == 2u, "MsgRadioTransmission alignment changed");
+static_assert(offsetof(MsgRadioTransmission, netId) == 1u, "MsgRadioTransmission::netId offset changed");
 static_assert(offsetof(MsgRadioTransmission, displaySeconds) == 2u, "MsgRadioTransmission::displaySeconds offset");
 static_assert(offsetof(MsgRadioTransmission, speaker) == 4u, "MsgRadioTransmission::speaker offset changed");
 static_assert(offsetof(MsgRadioTransmission, voiceKey) == 32u, "MsgRadioTransmission::voiceKey offset changed");
 static_assert(offsetof(MsgRadioTransmission, text) == 64u, "MsgRadioTransmission::text offset changed");
+
+// ---------------------------------------------------------------------------------------------
+// Voice comms (#532)
+// ---------------------------------------------------------------------------------------------
+// Three messages, and the server understands exactly one thing about the audio: how many bytes it
+// is. Frames are relayed OPAQUE to a recipient set derived from the net's kind (see
+// engine/voice/RadioNet.h and engine/net/VoiceRouter.h). No decode, no mix, no transcode - which
+// is what makes 128 players on voice cost the server almost nothing, and what keeps the codec a
+// client-to-client contract that can change without a protocol change.
+
+// Hard cap on a relayed voice payload, mirrored from engine/voice/VoiceCodec.h's
+// kMaxVoicePayloadBytes. Duplicated as a literal here on purpose: engine-protocol is the
+// zero-dependency wire layer (fl_assert_zero_dep) and must not link engine-voice to learn a number.
+// The static_assert that keeps the two in step lives in engine/net/VoiceRouter.h, which sees both.
+inline constexpr std::size_t kMaxVoiceFrameBytes = 400;
+
+// Voice frame flags (both directions).
+inline constexpr uint8_t kVoiceFlagStart = 0x01u; // first frame of a transmission
+inline constexpr uint8_t kVoiceFlagEnd = 0x02u;   // last frame; an EMPTY payload with this set is a
+                                                  // pure end-of-transmission marker (the squelch cue)
+
+// One net in the server's table. Fixed-size record, concatenated after MsgVoiceNetDefHeader.
+struct MsgVoiceNetRecord {
+    uint8_t netId{0};    // @0 index in the table; also the wire net id on every voice frame
+    uint8_t kind{0};     // @1 RadioNetKind ordinal; gate with isRadioNetKindOrdinal before casting
+    uint8_t flags{0};    // @2 kVoiceNetFlag* below
+    uint8_t reserved{0}; // @3
+    float rangeM{0.f};   // @4 proximity radius / positional rolloff ceiling; 0 = unlimited
+    float gain{1.f};     // @8 authored per-net trim
+    char id[24]{};       // @12 stable machine id; 23 usable
+    char name[32]{};     // @36 display label; 31 usable
+}; // 68 bytes, align 4
+static_assert(sizeof(MsgVoiceNetRecord) == 68u, "MsgVoiceNetRecord wire size changed");
+static_assert(alignof(MsgVoiceNetRecord) == 4u, "MsgVoiceNetRecord alignment changed");
+static_assert(offsetof(MsgVoiceNetRecord, rangeM) == 4u, "MsgVoiceNetRecord::rangeM offset changed");
+static_assert(offsetof(MsgVoiceNetRecord, gain) == 8u, "MsgVoiceNetRecord::gain offset changed");
+static_assert(offsetof(MsgVoiceNetRecord, id) == 12u, "MsgVoiceNetRecord::id offset changed");
+static_assert(offsetof(MsgVoiceNetRecord, name) == 36u, "MsgVoiceNetRecord::name offset changed");
+
+inline constexpr uint8_t kVoiceNetFlagPositional = 0x01u;  // mix at the speaker's world position
+inline constexpr uint8_t kVoiceNetFlagRadioEffect = 0x02u; // apply the radio DSP (#925)
+inline constexpr uint8_t kVoiceNetFlagDefault = 0x04u;     // pre-select under the primary PTT key
+
+struct MsgVoiceNetDefHeader {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::VoiceNetDef)};
+    uint8_t netCount{0}; // number of MsgVoiceNetRecord following at offset 4
+    uint8_t flags{0};    // bit 0 = voice enabled server-wide; 0 nets + flag clear = voice off
+    uint8_t reserved{0};
+}; // 4 bytes, align 1 - records start at 4, which is 4-aligned for MsgVoiceNetRecord
+static_assert(sizeof(MsgVoiceNetDefHeader) == 4u, "MsgVoiceNetDefHeader wire size changed");
+static_assert(offsetof(MsgVoiceNetDefHeader, netCount) == 1u, "MsgVoiceNetDefHeader::netCount offset changed");
+static_assert(offsetof(MsgVoiceNetDefHeader, flags) == 2u, "MsgVoiceNetDefHeader::flags offset changed");
+
+inline constexpr uint8_t kVoiceServerEnabled = 0x01u;
+
+// Client->server, UNRELIABLE on kNetChVoice. `payloadBytes` of opaque Opus follow the header; the
+// server validates only the length and the net membership, then relays.
+struct MsgVoiceFrameHeader {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::VoiceFrame)};
+    uint8_t netId{0};         // @1 index into the table this client received in MsgVoiceNetDef
+    uint16_t seq{0};          // @2 per-(speaker, net) frame counter; wraps, compared half-window
+    uint16_t payloadBytes{0}; // @4 <= kMaxVoiceFrameBytes
+    uint8_t flags{0};         // @6 kVoiceFlag*
+    uint8_t reserved{0};      // @7
+}; // 8 bytes, align 2; opus payload at offset 8
+static_assert(sizeof(MsgVoiceFrameHeader) == 8u, "MsgVoiceFrameHeader wire size changed");
+static_assert(alignof(MsgVoiceFrameHeader) == 2u, "MsgVoiceFrameHeader alignment changed");
+static_assert(offsetof(MsgVoiceFrameHeader, seq) == 2u, "MsgVoiceFrameHeader::seq offset changed");
+static_assert(offsetof(MsgVoiceFrameHeader, payloadBytes) == 4u, "MsgVoiceFrameHeader::payloadBytes offset changed");
+static_assert(offsetof(MsgVoiceFrameHeader, flags) == 6u, "MsgVoiceFrameHeader::flags offset changed");
+
+// Server->client, UNRELIABLE on kNetChVoice. The relayed frame plus who said it.
+//
+// senderEntityIdx carries the speaker's entity POOL INDEX rather than a position: the receiving
+// client already has entity transforms from its snapshot, and shipping 24 bytes of double position
+// on every 20 ms frame would cost more than the audio does. A speaker the client cannot resolve
+// (interest-culled, or an observer with no aircraft) is mixed head-locked, which is the right
+// fallback for a radio anyway.
+struct MsgVoiceRelayHeader {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::VoiceRelay)};
+    uint8_t netId{0};            // @1
+    uint16_t seq{0};             // @2 forwarded unchanged from the sender
+    uint32_t senderPeerId{0};    // @4 participant id (matches MsgPlayerRoster)
+    uint32_t senderEntityIdx{0}; // @8 entity pool index, or kNoVoiceEntity
+    uint16_t payloadBytes{0};    // @12
+    uint8_t flags{0};            // @14
+    uint8_t reserved{0};         // @15
+}; // 16 bytes, align 4; opus payload at offset 16
+static_assert(sizeof(MsgVoiceRelayHeader) == 16u, "MsgVoiceRelayHeader wire size changed");
+static_assert(alignof(MsgVoiceRelayHeader) == 4u, "MsgVoiceRelayHeader alignment changed");
+static_assert(offsetof(MsgVoiceRelayHeader, seq) == 2u, "MsgVoiceRelayHeader::seq offset changed");
+static_assert(offsetof(MsgVoiceRelayHeader, senderPeerId) == 4u, "MsgVoiceRelayHeader::senderPeerId offset changed");
+static_assert(offsetof(MsgVoiceRelayHeader, senderEntityIdx) == 8u,
+              "MsgVoiceRelayHeader::senderEntityIdx offset changed");
+static_assert(offsetof(MsgVoiceRelayHeader, payloadBytes) == 12u, "MsgVoiceRelayHeader::payloadBytes offset changed");
+static_assert(offsetof(MsgVoiceRelayHeader, flags) == 14u, "MsgVoiceRelayHeader::flags offset changed");
+
+// "The speaker has no entity" - an observer, a dead peer, or a client whose aircraft this receiver
+// cannot see. Mixed head-locked.
+inline constexpr uint32_t kNoVoiceEntity = 0xFFFFFFFFu;
 
 // Raw UDP presence broadcast sent by fl-server on 255.255.255.255:<port> (IPv4 broadcast) and
 // [ff02::1]:<port> (IPv6 link-local multicast) every discoveryIntervalMs milliseconds.

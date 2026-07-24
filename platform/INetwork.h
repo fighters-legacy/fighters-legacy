@@ -86,6 +86,19 @@ class INetwork {
     // Sends data to all currently connected peers.
     virtual void broadcast(const void* data, std::size_t size, bool reliable) = 0;
 
+    // Send on an EXPLICIT transport channel. Optional: the base implementation forwards to send(),
+    // so a backend with no channel concept (and every mock) needs no change.
+    //
+    // This exists because ENet sequences unreliable packets per channel and discards one that
+    // arrives older than the last received on that channel: two independent unreliable streams
+    // sharing a channel knock each other out. Voice (#532) therefore rides its own channel. The
+    // channel number is a TRANSPORT index, not a protocol constant -- a backend may clamp or ignore
+    // it, and the caller must not assume ordering between channels.
+    virtual bool sendChannel(uint32_t peerId, const void* data, std::size_t size, bool reliable, uint8_t channel) {
+        (void)channel;
+        return send(peerId, data, size, reliable);
+    }
+
     // --- Frame pump ---
 
     // Drives the underlying I/O library; calls the event handler for each queued
