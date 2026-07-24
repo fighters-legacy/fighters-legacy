@@ -20,8 +20,15 @@ namespace fl {
 ClientPrediction::FlightModelResolver makeFlightModelResolver(const EntityTypeRegistry& registry, AssetManager& assets,
                                                               ILogger& log) {
     auto cache = std::make_shared<std::unordered_map<uint32_t, std::shared_ptr<const FlightModelData>>>();
+    auto lastGen = std::make_shared<uint64_t>(assets.cacheGeneration());
 
-    return [&registry, &assets, &log, cache](uint32_t typeIndex) -> std::shared_ptr<const FlightModelData> {
+    return [&registry, &assets, &log, cache, lastGen](uint32_t typeIndex) -> std::shared_ptr<const FlightModelData> {
+        // Hot-reload (#152): if the AssetManager evicted anything since we last resolved, drop the whole
+        // per-type cache so a changed flight-model TOML is re-parsed on the next lookup.
+        if (const uint64_t gen = assets.cacheGeneration(); gen != *lastGen) {
+            *lastGen = gen;
+            cache->clear();
+        }
         if (auto it = cache->find(typeIndex); it != cache->end())
             return it->second;
 

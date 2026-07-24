@@ -1,11 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "content/AssetTypes.h"
 #include "content/AssetValidator.h"
 #include "content/IContentPack.h"
 #include "content/LiveryDef.h"
+
+#include "IFilesystemWatcher.h" // IFilesystemWatcher::Event in mapEventsToAssets (#152)
+
+#include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -15,6 +21,21 @@ namespace fl {
 class IFilesystemWatcher;
 class ILogger;
 class IWindow;
+
+// One asset that a hot-reload run changed (#152): its type + lowercase asset name (may contain '/',
+// e.g. "f5e/f5e"). Callers evict the corresponding GPU/engine caches keyed on (type, name).
+struct ChangedAsset {
+    AssetType type;
+    std::string name;
+};
+
+// Result of a hot-reload poll: `changed` = the assets whose files changed (already evicted from the
+// byte cache); `unmatched` = event paths owned by no pack asset dir (locale files, editor temp files),
+// which the caller may route elsewhere (Localization::reload).
+struct HotReloadReport {
+    std::vector<ChangedAsset> changed;
+    std::vector<std::string> unmatched;
+};
 
 // Threading: all methods must be called from the main thread.
 class AssetManager {
@@ -45,7 +66,12 @@ class AssetManager {
     std::shared_ptr<ManualProse> loadManualProse(const char* name);
     std::shared_ptr<LiveryData> loadLivery(const char* name);
     std::shared_ptr<AirportDefData> loadAirportDef(const char* name);
-    std::shared_ptr<GameModeData> loadGameMode(const char* name); // #521
+    std::shared_ptr<GameModeData> loadGameMode(const char* name);  // #521
+    std::shared_ptr<TheaterDefData> loadTheater(const char* name); // #847
+
+    // Raw pack-relative file bytes, first pack in priority order that provides it (#847). Uncached
+    // (like loadConfig). nullopt if no pack has it.
+    std::optional<std::vector<uint8_t>> loadPackFile(const char* relPath);
 
     // The highest-priority livery (#845) targeting the given aircraft DEF ID (e.g. "fl-base:f5e"),
     // or nullopt if none is installed. Walks the installed liveries in priority order and returns the
@@ -96,11 +122,31 @@ class AssetManager {
     // in MsgConnectRequest (#853/#872).
     std::vector<PackManifestInfo> packManifest() const;
 
-    // Hot-reload support (sandbox/editor mode only). Pass the watcher from Platform.
-    // Registers each pack's rootDirectory() with the watcher (recursive).
-    // processHotReload() must be called once per frame from the game loop.
+    // Hot-reload support (sandbox/editor mode only, #152). Pass the watcher from Platform. Registers
+    // each pack's asset SUBDIRS (aircraft/, textures/, entities/, ... — NOT the pack root, and NOT
+    // terrain/, whose tile trees are huge and stream outside the asset cache) with the watcher
+    // recursively. processHotReload() must be called once per frame from the game loop.
     void enableHotReload(IFilesystemWatcher& watcher);
-    void processHotReload();
+
+    // Poll the watcher, map changed files to assets, evict them from the byte cache, and report both
+    // the changed assets and any unmatched paths. No implicit full clears (that thrashed on every
+    // editor temp-file write). Returns an empty report when no watcher or no events.
+    HotReloadReport processHotReload();
+
+    // Map watcher events to assets WITHOUT mutating the cache (pure w.r.t. the cache; reads only the
+    // immutable pack list, so it is safe to call from any thread — fl-server maps on the main thread
+    // and evicts on the sim thread).
+    [[nodiscard]] std::vector<ChangedAsset> mapEventsToAssets(std::span<const IFilesystemWatcher::Event> events) const;
+
+    // Evict specific assets / everything from the byte cache; bumps cacheGeneration().
+    void evict(std::span<const ChangedAsset> assets);
+    void evictAll();
+
+    // Monotonic counter bumped by every eviction. Downstream caches that cannot subscribe to the
+    // fine-grained report (the flight-model resolver) self-invalidate by watching this.
+    [[nodiscard]] uint64_t cacheGeneration() const noexcept {
+        return m_cacheGeneration;
+    }
 
   private:
     static std::string cacheKey(AssetType type, const char* name);
@@ -114,6 +160,7 @@ class AssetManager {
     ILogger& m_logger;
     AssetValidator m_validator;
     IFilesystemWatcher* m_watcher = nullptr;
+    uint64_t m_cacheGeneration = 0; // bumped by evict/evictAll (#152)
 };
 
 } // namespace fl

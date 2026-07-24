@@ -107,6 +107,15 @@ void ClientPrediction::init(PredictionSettings cfg, FlightModelResolver resolver
     m_planetRadiusKm = planetRadiusKm;
 }
 
+void ClientPrediction::invalidateModel() {
+    // Keep the history ring / resolver / idx-gen; only drop the resolved model so the next reconcile()
+    // re-resolves and re-seeds via the existing first-snapshot path (#152).
+    m_initialized = false;
+    m_integrator.reset();
+    m_model.reset();
+    m_customGravity.reset();
+}
+
 void ClientPrediction::reset() {
     m_initialized = false;
     m_integrator.reset();

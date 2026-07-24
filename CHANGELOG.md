@@ -7,6 +7,91 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **tools**: `validate-mod` (#651, Epic #836) — one command validates a whole content pack, so
+  fl-base-pack CI runs one gate instead of seven. It composes the existing per-asset validators by
+  LINKING their libs (never subprocessing): the manifest (through a new shared `parseModManifest` that
+  `ModLoader` now also delegates to, so the loader and the validator cannot drift), an optional
+  `[files]` SHA-256 integrity table (the cheap half of #246, via `engine-crypto`), pack-structure
+  checks, and every asset through `validateEntityPack` / `validatePackWeapons` / `validateLiveryPack`
+  / `validateSensor` / `validateMesh` / `validateFlightModel` / `validateMission` / `validateCampaign`
+  / `validateGameMode` / `parseAirportDef` / `parseTheaterManifest` / `validatePlaylist` / REUSE
+  licenses. Findings are domain-prefixed. `validate-mod <pack>` passes on fl-base-pack (the Phase 9
+  acceptance criterion, mechanized).
+- **tools**: `validate-campaign` (#847, Epic #836) — the campaign format's first validator, so a
+  campaign author's feedback loop is no longer "the engine failed to load it". It delegates the schema
+  to the engine's `parseCampaign` (anti-drift) and, with `--pack`, resolves every theater manifest,
+  story/template file, and frontline PNG raster (8-bit grayscale, dimensions == the theater's
+  `frontline_grid`) inside the pack. Theater manifests become real: a new `parseTheaterManifest`
+  (`theaters/<id>.toml` with geographic `bounds` + an optional `terrain`, default `"world"`), an
+  `AssetType::Theater`, an `IContentPack::loadPackFile` for raw pack-relative reads, and a hardened
+  8-bit-grayscale `FrontlinePng` codec (its own `engine-campaign-png` target). `parseCampaign` now
+  catches dangling `next.id`/`unlock`/`theater` references, duplicate ids, and warns on stories
+  unreachable from any trigger. fl-server finally consumes campaign rasters end-to-end: the previously
+  unset `FrontlineLoader` decodes them, and theater `bounds` map the raster onto real lat/lon.
+- **tools**: `fl-viewer` interactive model viewer (#838, Epic #836) — the DCS-Model-Viewer-shape tool
+  every established sim ships. `fl-viewer --entity fl-base:f5e` (or a bare `.glb`) opens a window
+  showing the aircraft exactly as the game draws it, with an orbit/pan/zoom camera, a glTF node-tree
+  panel (via the new `describeMeshNodes` in `validate-mesh-lib`), inline validate-mesh diagnostics, a
+  grid + engine-axis gizmo, damage-mesh toggle, and live hot-reload (#152) — edit the mesh on disk and
+  the view updates, the killer iteration feature. New renderer debug views back it: a **wireframe**
+  view (a LINE-polygon forward pipeline behind the newly enabled `fillModeNonSolid`) and a
+  **normals** view (`shadingMode 5` — visualize the final world-space normal to debug normal maps),
+  selectable in snapshot mode too (`--view wireframe|normals`). The IGui HAL gains `checkbox` /
+  `treeNode` / `treePop`. The single tinygltf+stb implementation is centralized into a shared
+  `tinygltf-impl` target so the viewer can link both the renderer and the mesh-validation lib.
+- **content**: asset hot-reload (#152, Epic #836). Editing a mesh, texture, livery, flight model or
+  localization file on disk now updates the running game live, no restart — gated behind
+  `FL_HOT_RELOAD=1` (all build configs; the env var is inherited by the single-player fl-server
+  subprocess, so one variable lights up both halves). A new polling `StdFilesystemWatcher`
+  (`platform-stdfs`) is the one production `IFilesystemWatcher` backend (two-scan settle defeats
+  partial writes with no timers; rename = delete + create). `AssetManager` gains fine-grained
+  eviction (`processHotReload` reports exactly which assets changed via a shared
+  `engine/content/AssetPaths` reverse-map, watches asset subdirs not the giant terrain tree, and
+  bumps a `cacheGeneration`); `SceneRenderer` gains `invalidateMesh/Texture/Liveries/AllAssets` with
+  texture->mesh dependency tracking; `IRenderer::destroyMesh` now cascades to the mesh's material +
+  textures so a re-upload cannot leak GPU memory; `FlightIntegrator::setFlightModel` swaps the model
+  in place preserving flight state; `WorldBroadcaster` gains `reloadFlightModels`/`replaceController`.
+  The `reload_content` console/admin command (previously a stub) forces a full reload on both client
+  and server.
+- **tools**: `fl-viewer`, a standalone model preview on the game renderer, and the session-free
+  preview bootstrap it shares (#666, Epic #836). A new `engine/render/PreviewScene` loads one entity
+  def or a bare `.glb` through the real content stack + renderer, resolves its glTF PBR material
+  through the same resolver `SceneRenderer` uses (the extracted `render/MeshTextureResolver.h`, so the
+  two cannot drift), computes the model bounds (`IRenderer::getMeshBounds`) and frames a camera on
+  them. This commit ships `fl-viewer`'s **headless snapshot** mode — `fl-viewer [--entity fl-base:f5e
+  | model.glb] [--assets <root>] --snapshot out.png [--size WxH] [--frames N] [--damaged] [--view
+  shaded|facecolor] [--require-content]` renders offscreen (no window, no server, no session — the
+  gap the game's full-session `--screenshot` left) and writes a PNG, the golden-image CLI pack CI
+  needs; run without `--snapshot` it points at the interactive window (#838). The game gains `--size
+  WxH` (headless resolution) and a `screenshot [path]` console command. A lavapipe headless snapshot
+  smoke runs in CI so the epic's render bootstrap is gated on every PR.
+
+### Changed
+
+- **tools**: `tex-compress` now emits **Basis Universal** KTX2, not raw block-compressed textures
+  (#846, Epic #836). This is a correctness fix as much as a portability one: the tool asked toktx for
+  `--encode bc7`, but toktx v4 has no raw-BCn encoder and *silently emitted an uncompressed texture*
+  (`vkFormat = VK_FORMAT_R8G8B8_SRGB`, not a block format) — so packs were shipping uncompressed,
+  desktop-only assets. The engine already transcodes Basis at load (`ktxTexture2_TranscodeBasis` →
+  BC7 on desktop / ASTC 4×4 on Apple Silicon), so a Basis KTX2 is the portable form every GPU wants.
+  `--type` now selects the encoding — base color → **ETC1S** (small), normal/ORM/emissive → **UASTC**
+  (high quality, zstd-supercompressed via `--zcmp`), the split `KHR_texture_basisu` exists for.
+  `--format` takes `etc1s|uastc` (the old `bc1|bc3|bc7` values parse as deprecated aliases with a
+  warning). The CI smoke now asserts the output is Basis (`vkFormat == 0`), not merely that a file
+  appeared. `gen_terrain_color.py` switches its satellite tiles to UASTC.
+- **docs**: rewrite `docs/modding/textures.md` around the source-vs-artifact split (#846, Epic #836).
+  The guide previously told authors to commit `.ktx2` and discard the source `.png` — backwards, and
+  self-contradicted by its own later sections. It now states the industry pattern plainly: **PNG
+  masters are the committed source** (under `aircraft/<id>/textures-src/`, the preferred-form-of-
+  modification a CC-BY pack must ship), and **`.ktx2` is a git-ignored build artifact** produced by
+  `tex-compress` in the pack's release workflow and shipped under `textures/`. A new local-dev section
+  documents the engine's `.png` fallback (`textures/<name>.ktx2` → `.png`), so an author can preview
+  and iterate — in-game and in `fl-viewer` — with no compressor installed. Straggler fixes: the
+  `3d-models.md` example URI depth (`../textures/` → `../../textures/`), and the "ships `.ktx2`" lines
+  in `formats.md` / `liveries.md` now say "built from committed PNG masters".
+
 ## [0.3.9] - 2026-07-23
 
 ### Fixed

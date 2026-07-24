@@ -95,11 +95,28 @@ class IContentPack {
         return std::nullopt;
     }
 
+    // Theater manifest TOML (#847). NON-pure with a nullopt default (loadLivery/loadGameMode pattern),
+    // so existing implementors keep compiling. FolderContentPack serves theaters/<name>.toml.
+    virtual std::optional<TheaterDefData> loadTheater(const char* name) {
+        (void)name;
+        return std::nullopt;
+    }
+
     virtual std::vector<std::string> listAssets(AssetType type) const = 0;
 
     // Returns the raw text of "<modDir>/data/<name>", or nullopt if not present.
     // Used for data-driven config files (e.g. difficulty.toml) that mods can override.
     virtual std::optional<std::string> loadConfig(const char* name) const = 0;
+
+    // Raw pack-relative file read (#847): the bytes of "<modDir>/<relPath>", or nullopt if absent /
+    // the path escapes the pack. Unlike the typed load* methods this takes a full pack-relative path
+    // (e.g. "frontlines/kharkiv.png", "missions/u01.yaml") — for campaign frontline rasters and the
+    // path-form story/template file references. NON-pure nullopt default (only FolderContentPack
+    // implements it).
+    virtual std::optional<std::vector<uint8_t>> loadPackFile(const char* relPath) const {
+        (void)relPath;
+        return std::nullopt;
+    }
 
     // Returns the path (relative to PathDomain::Assets) of the cube-sphere terrain tile file for
     // TileKey{face, level, i, j} and the given data layer, or nullopt if this pack does not provide

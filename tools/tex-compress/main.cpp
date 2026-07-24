@@ -13,14 +13,18 @@ static constexpr const char* kVersion = "0.0.1";
 static void printHelp() {
     std::printf("Usage: tex-compress [options] <input.png> [<output.ktx2>]\n"
                 "\n"
-                "Converts a PNG texture to KTX2 with BC block compression and mipmaps\n"
-                "using the toktx tool from the Khronos KTX-Software package.\n"
+                "Converts a PNG texture to a portable Basis Universal KTX2 with mipmaps, using the\n"
+                "toktx tool from the Khronos KTX-Software package. The output is transcodable: the\n"
+                "engine transcodes it to BC7 on desktop / ASTC on Apple Silicon at load time, so one\n"
+                "committed texture runs on every GPU.\n"
                 "\n"
                 "Options:\n"
-                "  --format bc1|bc3|bc7   Compression format (default: bc7)\n"
+                "  --format etc1s|uastc   Basis encoding (default: uastc)\n"
+                "                         etc1s = small, supercompressed (base color / albedo)\n"
+                "                         uastc = high quality + zstd (normal / ORM / emissive)\n"
                 "  --type diffuse|normal|orm|emissive\n"
-                "                         Selects a format preset (see docs/modding/textures.md)\n"
-                "                         diffuse -> bc1, normal/orm/emissive -> bc7\n"
+                "                         Selects an encoding preset (see docs/modding/textures.md)\n"
+                "                         diffuse -> etc1s, normal/orm/emissive -> uastc\n"
                 "                         Overridden by --format if both given\n"
                 "  --no-mipmaps           Skip mipmap generation\n"
                 "  --layers <in1> <in2>...  2D-ARRAY mode: pack N layer-major PNGs into one array\n"
@@ -85,14 +89,23 @@ int main(int argc, char* argv[]) {
                 return 2;
             }
             ++i;
-            if (std::strcmp(argv[i], "bc1") == 0)
-                opts.format = TexFormat::BC1;
-            else if (std::strcmp(argv[i], "bc3") == 0)
-                opts.format = TexFormat::BC3;
-            else if (std::strcmp(argv[i], "bc7") == 0)
-                opts.format = TexFormat::BC7;
-            else {
-                std::fprintf(stderr, "error: unknown format %s\n", argv[i]);
+            if (std::strcmp(argv[i], "etc1s") == 0) {
+                opts.encoding = TexEncoding::Etc1s;
+            } else if (std::strcmp(argv[i], "uastc") == 0) {
+                opts.encoding = TexEncoding::Uastc;
+            } else if (std::strcmp(argv[i], "bc1") == 0 || std::strcmp(argv[i], "bc3") == 0) {
+                // Legacy raw-BCn aliases (#846): toktx cannot emit raw BCn — it silently produced an
+                // uncompressed texture. Map to the portable Basis equivalent and warn.
+                opts.encoding = TexEncoding::Etc1s;
+                std::fprintf(stderr,
+                             "warning: --format %s is deprecated; using Basis etc1s (see docs/modding/textures.md)\n",
+                             argv[i]);
+            } else if (std::strcmp(argv[i], "bc7") == 0) {
+                opts.encoding = TexEncoding::Uastc;
+                std::fprintf(stderr,
+                             "warning: --format bc7 is deprecated; using Basis uastc (see docs/modding/textures.md)\n");
+            } else {
+                std::fprintf(stderr, "error: unknown format %s (expected etc1s or uastc)\n", argv[i]);
                 return 2;
             }
             formatSet = true;
@@ -103,15 +116,16 @@ int main(int argc, char* argv[]) {
             }
             ++i;
             if (!formatSet) {
-                // Apply preset — --format overrides this if given
+                // Apply preset — --format overrides this if given. ETC1S mangles normals, so only
+                // base color takes it; every other map keeps UASTC fidelity.
                 if (std::strcmp(argv[i], "diffuse") == 0)
-                    opts.format = TexFormat::BC1;
+                    opts.encoding = TexEncoding::Etc1s;
                 else if (std::strcmp(argv[i], "normal") == 0)
-                    opts.format = TexFormat::BC7;
+                    opts.encoding = TexEncoding::Uastc;
                 else if (std::strcmp(argv[i], "orm") == 0)
-                    opts.format = TexFormat::BC7;
+                    opts.encoding = TexEncoding::Uastc;
                 else if (std::strcmp(argv[i], "emissive") == 0)
-                    opts.format = TexFormat::BC7;
+                    opts.encoding = TexEncoding::Uastc;
                 else {
                     std::fprintf(stderr, "error: unknown type %s\n", argv[i]);
                     return 2;

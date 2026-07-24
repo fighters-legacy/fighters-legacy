@@ -204,6 +204,15 @@ else()
     endif()
 endif()
 
+# The single tinygltf + stb implementation TU for the whole build (#836). Both platform-vulkan and
+# validate-mesh-lib link this instead of each emitting their own implementation, so a binary that
+# pulls both (fl-viewer) gets exactly one copy and does not clash at link time. -w on the one vendored
+# TU (stb/tinygltf trip -Werror on -Wmissing-field-initializers etc.).
+add_library(tinygltf-impl STATIC ${CMAKE_SOURCE_DIR}/third_party/tinygltf_impl.cpp)
+target_include_directories(tinygltf-impl SYSTEM PUBLIC ${tinygltf_SOURCE_DIR})
+set_source_files_properties(${CMAKE_SOURCE_DIR}/third_party/tinygltf_impl.cpp PROPERTIES
+    COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>")
+
 # ---------------------------------------------------------------------------
 # yaml-cpp — YAML parser; system preferred, FetchContent fallback
 # Used only by tools/validate-mission.

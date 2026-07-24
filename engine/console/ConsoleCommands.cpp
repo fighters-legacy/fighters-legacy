@@ -280,12 +280,20 @@ void registerConsoleCommands(CommandRegistry& registry, CommandContext ctx) {
                              });
 
     // ------------------------------------------------------------------
-    // reload_content  (stub)
+    // reload_content (#152) — force a full client + server content reload
     // ------------------------------------------------------------------
-    registry.registerCommand("reload_content", "evict asset cache and reload from content packs  -- (stub, see #152)",
-                             [](std::span<std::string_view>) -> std::string {
-                                 return "reload_content: asset hot-reload not yet implemented (see issue #152)";
-                             });
+    registry.registerCommand(
+        "reload_content", "evict asset caches and reload from content packs",
+        [reload = ctx.reloadContent, server = ctx.serverCommand](std::span<std::string_view>) -> std::string {
+            std::string msg;
+            if (reload)
+                msg = reload(); // client-side: evict GPU/prediction caches, re-upload
+            if (server) {
+                server("reload_content"); // forward to the embedded/remote server (flight models, Lua AI)
+                msg += msg.empty() ? "reload_content: forwarded to server" : " (+ server)";
+            }
+            return msg.empty() ? "reload_content: not available" : msg;
+        });
 }
 
 } // namespace fl

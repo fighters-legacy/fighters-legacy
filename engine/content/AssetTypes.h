@@ -22,6 +22,7 @@ enum class AssetType : uint8_t {
     Livery,   // texture-set indirection by material slot (#845); re-skins an aircraft without a mesh
     Airport,  // airport/runway definitions (#699); placed on the sphere by AirportRegistry
     GameMode, // multiplayer game-mode definitions (#521); teams, scoring, respawn, win conditions
+    Theater,  // geographic theater manifest (#847); a campaign's dynamic.theaters[].id resolves to it
     Count
 };
 
@@ -47,5 +48,6 @@ struct ManualProse : AssetBase {};
 struct LiveryData : AssetBase {};
 struct AirportDefData : AssetBase {};
 struct GameModeData : AssetBase {};
+struct TheaterDefData : AssetBase {};
 
 } // namespace fl

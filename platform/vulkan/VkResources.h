@@ -42,6 +42,8 @@ struct GpuMesh {
     VmaAllocation indexAlloc{};
     uint32_t indexCount{0};
     MaterialHandle material{}; // material parsed from the glb (#833); invalid = none
+    glm::vec3 boundsMin{0.0f}; // object-space AABB in the engine body frame (#836), from createMesh
+    glm::vec3 boundsMax{0.0f};
     bool alive{false};
 };
 
@@ -97,6 +99,10 @@ class VkResourceManager {
 
     // Material createMesh built from the glb's own PBR material (#833); invalid when none.
     MaterialHandle getMeshMaterial(MeshHandle h) const;
+
+    // Object-space AABB of the mesh's primitive in the engine body frame (#836); false if the handle
+    // is stale.
+    bool getMeshBounds(MeshHandle h, glm::vec3& outMin, glm::vec3& outMax) const;
 
     // Default textures bound when a material omits a texture slot.
     TextureHandle defaultWhiteTexture() const {

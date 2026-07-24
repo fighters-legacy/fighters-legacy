@@ -219,6 +219,8 @@ static constexpr uint32_t kRenderFlagDebugFaceColor = 1u << 3; // per-face debug
 static constexpr uint32_t kRenderFlagRunway = 1u << 4; // paved runway: procedural markings in the forward pass (#487)
 static constexpr uint32_t kRenderFlagTerrainSatellite =
     1u << 5; // terrain tile with a satellite albedo texture (#488): sample baseColorTex, not the biomes
+static constexpr uint32_t kRenderFlagWireframe = 1u << 6;    // draw with the LINE-polygon forward variant (#838)
+static constexpr uint32_t kRenderFlagDebugNormals = 1u << 7; // shadingMode 5: visualize the world-space normal (#838)
 
 // ---------------------------------------------------------------------------
 // A single draw call submitted to the renderer each frame.

@@ -5,6 +5,7 @@
 
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -35,6 +36,14 @@ class NullGui : public IGui {
     // button(label) / selectable(label) return true when the map holds true for that label.
     std::unordered_map<std::string, bool> buttonClicks;
     std::unordered_map<std::string, bool> selectableClicks;
+    // checkbox(label): if the map holds a value for `label`, *value is set to it ONCE (consumed) and
+    // the call returns true (toggled). treeNode(id): open state / click by id (#838).
+    std::unordered_map<std::string, bool> checkboxToggles;
+    std::unordered_map<std::string, bool> treeOpen;   // treeNode(id) returns this (non-leaf)
+    std::unordered_map<std::string, bool> treeClicks; // treeNode(id) sets *selected true when set
+    std::vector<std::string> checkboxes;              // recorded checkbox labels this frame
+    std::vector<std::string> treeNodes;               // recorded treeNode ids this frame
+    int treeDepth{0};                                 // treeNode(open,non-leaf) +1, treePop() -1; sanity
     // inputText(label): if a value is queued for `label`, it is copied into the caller's buffer ONCE
     // (then consumed) and the call returns true (changed). Otherwise the buffer is left untouched.
     std::unordered_map<std::string, std::string> inputTextValues;
@@ -49,7 +58,10 @@ class NullGui : public IGui {
         selectables.clear();
         headers.clear();
         cells.clear();
+        checkboxes.clear();
+        treeNodes.clear();
         rowCount = 0;
+        treeDepth = 0;
     }
 
     void newFrame() override {
@@ -93,6 +105,35 @@ class NullGui : public IGui {
         selectables.emplace_back(lbl);
         const auto it = selectableClicks.find(std::string(lbl));
         return it != selectableClicks.end() && it->second;
+    }
+
+    bool checkbox(std::string_view lbl, bool* value) override {
+        checkboxes.emplace_back(lbl);
+        auto it = checkboxToggles.find(std::string(lbl));
+        if (it == checkboxToggles.end() || !value)
+            return false;
+        *value = it->second;
+        checkboxToggles.erase(it); // one-shot toggle, like a user clicking once
+        return true;
+    }
+
+    bool treeNode(std::string_view id, std::string_view, bool* selected, bool leaf) override {
+        treeNodes.emplace_back(id);
+        if (selected) {
+            auto ci = treeClicks.find(std::string(id));
+            if (ci != treeClicks.end() && ci->second)
+                *selected = true;
+        }
+        if (leaf)
+            return false; // leaves never push the tree stack
+        auto oi = treeOpen.find(std::string(id));
+        const bool open = oi != treeOpen.end() && oi->second;
+        if (open)
+            ++treeDepth;
+        return open;
+    }
+    void treePop() override {
+        --treeDepth; // must balance the +1 from an open non-leaf treeNode()
     }
 
     bool beginTable(std::string_view, int) override {

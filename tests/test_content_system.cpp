@@ -618,44 +618,132 @@ TEST_CASE("AssetManager passes normalized lowercase name to IContentPack methods
     CHECK(pack.lastQueried == "f22");
 }
 
-TEST_CASE("AssetManager::enableHotReload calls watch() for each pack with a rootDirectory") {
+TEST_CASE("AssetManager::enableHotReload watches asset SUBDIRS, not the pack root, and skips terrain") {
     MockContentPack pack;
     MockLogger logger;
     MockFilesystemWatcher watcher;
-    const char* rootDir = "mods/test-mod";
-    pack.packRootDir = rootDir;
+    pack.packRootDir = "mods/test-mod";
 
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
     am.enableHotReload(watcher);
 
-    REQUIRE(watcher.watchCalls.size() == 1);
-    CHECK(watcher.watchCalls[0].path == rootDir);
-    CHECK(watcher.watchCalls[0].recursive == true);
+    // 13 unique subdirs: aircraft (Mesh + FlightModel dedup'd), textures, audio, missions, ai,
+    // entities, sensors, weapons, manual, liveries, airports, modes, theaters — terrain excluded.
+    CHECK(watcher.watchCalls.size() == 13);
+    auto watched = [&](const std::string& p) {
+        for (auto& w : watcher.watchCalls)
+            if (w.path == p)
+                return true;
+        return false;
+    };
+    CHECK(watched("mods/test-mod/aircraft"));
+    CHECK(watched("mods/test-mod/entities"));
+    CHECK_FALSE(watched("mods/test-mod"));         // the bare root is NOT watched
+    CHECK_FALSE(watched("mods/test-mod/terrain")); // terrain tile trees are excluded
+    for (auto& w : watcher.watchCalls)
+        CHECK(w.recursive);
 }
 
-TEST_CASE("AssetManager::processHotReload clears cache when watcher reports a Modified event") {
+TEST_CASE("AssetManager::processHotReload fine-grained evicts the changed asset and reports it") {
     MockContentPack pack;
     MockLogger logger;
     MockFilesystemWatcher watcher;
+    pack.packRootDir = "mods/test-mod";
     pack.assets[{"f22", AssetType::Mesh}] = {'{'}; // valid JSON-glTF first byte
+    pack.assets[{"mig29", AssetType::Mesh}] = {'{'};
 
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
     am.enableHotReload(watcher);
 
-    // Populate cache
-    auto before = am.loadMesh("f22");
-    REQUIRE(before != nullptr);
+    auto f22Before = am.loadMesh("f22");
+    auto migBefore = am.loadMesh("mig29");
+    REQUIRE(f22Before != nullptr);
+    REQUIRE(migBefore != nullptr);
+    const uint64_t gen0 = am.cacheGeneration();
 
-    // Trigger hot-reload event
+    // Only f22's mesh file changed.
     watcher.pendingEvents.push_back({"mods/test-mod/aircraft/f22.glb", IFilesystemWatcher::EventType::Modified});
-    am.processHotReload();
+    HotReloadReport rep = am.processHotReload();
 
-    // New load must re-query the pack (different shared_ptr instance)
-    auto after = am.loadMesh("f22");
-    REQUIRE(after != nullptr);
-    REQUIRE(before.get() != after.get());
+    REQUIRE(rep.changed.size() == 1);
+    CHECK(rep.changed[0].type == AssetType::Mesh);
+    CHECK(rep.changed[0].name == "f22");
+    CHECK(am.cacheGeneration() == gen0 + 1);
+
+    // f22 re-queried the pack; mig29 kept its cached instance (not evicted).
+    auto f22After = am.loadMesh("f22");
+    auto migAfter = am.loadMesh("mig29");
+    REQUIRE(f22After != nullptr);
+    CHECK(f22Before.get() != f22After.get());
+    CHECK(migBefore.get() == migAfter.get());
+}
+
+TEST_CASE("AssetManager::processHotReload disambiguates aircraft/ .glb (Mesh) vs .toml (FlightModel)") {
+    MockContentPack pack;
+    MockLogger logger;
+    MockFilesystemWatcher watcher;
+    pack.packRootDir = "mods/test-mod";
+
+    AssetManager am(makePacks(&pack), logger);
+    am.initialize(nullptr);
+    am.enableHotReload(watcher);
+
+    watcher.pendingEvents.push_back({"mods/test-mod/aircraft/f5e/f5e.glb", IFilesystemWatcher::EventType::Modified});
+    watcher.pendingEvents.push_back({"mods/test-mod/aircraft/f5e/f5e.toml", IFilesystemWatcher::EventType::Modified});
+    HotReloadReport rep = am.processHotReload();
+
+    REQUIRE(rep.changed.size() == 2);
+    bool mesh = false, fm = false;
+    for (auto& c : rep.changed) {
+        if (c.type == AssetType::Mesh && c.name == "f5e/f5e")
+            mesh = true;
+        if (c.type == AssetType::FlightModel && c.name == "f5e/f5e")
+            fm = true;
+    }
+    CHECK(mesh);
+    CHECK(fm);
+}
+
+TEST_CASE("AssetManager::processHotReload ignores editor temp files and reports foreign paths as unmatched") {
+    MockContentPack pack;
+    MockLogger logger;
+    MockFilesystemWatcher watcher;
+    pack.packRootDir = "mods/test-mod";
+
+    AssetManager am(makePacks(&pack), logger);
+    am.initialize(nullptr);
+    am.enableHotReload(watcher);
+
+    // .swp under a watched subdir: matched to the pack but not a known asset extension -> neither
+    // changed nor unmatched (assetFromPackRelativePath returns nullopt, but it IS under a pack root).
+    watcher.pendingEvents.push_back({"mods/test-mod/aircraft/.f5e.glb.swp", IFilesystemWatcher::EventType::Modified});
+    // A path under no pack (a locale file) -> unmatched.
+    watcher.pendingEvents.push_back({"locale/en/strings.toml", IFilesystemWatcher::EventType::Modified});
+    HotReloadReport rep = am.processHotReload();
+
+    CHECK(rep.changed.empty());
+    REQUIRE(rep.unmatched.size() == 1);
+    CHECK(rep.unmatched[0] == "locale/en/strings.toml");
+}
+
+TEST_CASE("AssetManager::processHotReload evicts on Deleted so a lower-priority pack can resolve") {
+    MockContentPack pack;
+    MockLogger logger;
+    MockFilesystemWatcher watcher;
+    pack.packRootDir = "mods/test-mod";
+    pack.assets[{"f22", AssetType::Mesh}] = {'{'};
+
+    AssetManager am(makePacks(&pack), logger);
+    am.initialize(nullptr);
+    am.enableHotReload(watcher);
+    (void)am.loadMesh("f22");
+
+    watcher.pendingEvents.push_back({"mods/test-mod/aircraft/f22.glb", IFilesystemWatcher::EventType::Deleted});
+    HotReloadReport rep = am.processHotReload();
+    REQUIRE(rep.changed.size() == 1);
+    CHECK(rep.changed[0].name == "f22");
 }
 
 // ---------------------------------------------------------------------------

@@ -10,6 +10,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 
@@ -45,6 +46,41 @@ TEST_CASE("NullGui returns scripted button and selectable clicks") {
     CHECK_FALSE(gui.button("Cancel")); // not scripted → false
     CHECK(gui.selectable("server-2", false));
     CHECK_FALSE(gui.selectable("server-1", false));
+}
+
+TEST_CASE("NullGui checkbox toggles the bound value once (#838)") {
+    NullGui gui;
+    gui.checkboxToggles["Wireframe"] = true;
+
+    bool wire = false;
+    CHECK(gui.checkbox("Wireframe", &wire)); // scripted toggle -> returns true, sets the value
+    CHECK(wire);
+    CHECK_FALSE(gui.checkbox("Wireframe", &wire)); // one-shot: consumed, no further toggle
+    CHECK_FALSE(gui.checkbox("Normals", &wire));   // not scripted
+    CHECK(std::find(gui.checkboxes.begin(), gui.checkboxes.end(), "Wireframe") != gui.checkboxes.end());
+}
+
+TEST_CASE("NullGui treeNode open/leaf/selection and balanced depth (#838)") {
+    NullGui gui;
+    gui.treeOpen["root"] = true;    // an open non-leaf
+    gui.treeClicks["child"] = true; // a clicked leaf
+
+    // Open non-leaf pushes the tree stack (depth +1); the caller must treePop().
+    CHECK(gui.treeNode("root", "Root", nullptr, /*leaf=*/false));
+    CHECK(gui.treeDepth == 1);
+
+    // A leaf never opens and never pushes; its click sets *selected.
+    bool sel = false;
+    CHECK_FALSE(gui.treeNode("child", "Child", &sel, /*leaf=*/true));
+    CHECK(sel);
+    CHECK(gui.treeDepth == 1); // unchanged by the leaf
+
+    gui.treePop();
+    CHECK(gui.treeDepth == 0); // balanced
+
+    // A closed non-leaf returns false and does not push.
+    CHECK_FALSE(gui.treeNode("other", "Other", nullptr, /*leaf=*/false));
+    CHECK(gui.treeDepth == 0);
 }
 
 TEST_CASE("NullGui inputText copies a queued value once, then reports no change") {

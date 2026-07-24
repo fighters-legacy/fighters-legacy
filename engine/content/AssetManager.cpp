@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "content/AssetManager.h"
 
+#include "content/AssetPaths.h"
+
 #include "IFilesystemWatcher.h"
 #include "ILogger.h"
 #include "IWindow.h"
@@ -161,6 +163,17 @@ std::shared_ptr<GameModeData> AssetManager::loadGameMode(const char* name) {
     return loadAsset<GameModeData>(AssetType::GameMode, name, &IContentPack::loadGameMode);
 }
 
+std::shared_ptr<TheaterDefData> AssetManager::loadTheater(const char* name) {
+    return loadAsset<TheaterDefData>(AssetType::Theater, name, &IContentPack::loadTheater);
+}
+
+std::optional<std::vector<uint8_t>> AssetManager::loadPackFile(const char* relPath) {
+    for (auto& pack : m_packs)
+        if (auto bytes = pack->loadPackFile(relPath))
+            return bytes;
+    return std::nullopt;
+}
+
 std::optional<LiveryDef> AssetManager::liveryForAircraft(const char* aircraftDefId) {
     if (!aircraftDefId || !*aircraftDefId)
         return std::nullopt;
@@ -242,24 +255,108 @@ std::vector<std::string> AssetManager::listAssets(AssetType type) const {
 
 void AssetManager::enableHotReload(IFilesystemWatcher& watcher) {
     m_watcher = &watcher;
+    // Watch each pack's asset SUBDIRS, not the pack root (#152): the bundled base-terrain pack's root
+    // holds a huge terrain/ tile tree that would make every poll a full rescan, and terrain streams
+    // outside the asset cache anyway. Dedup repeated subdirs (aircraft/ serves Mesh + FlightModel);
+    // skip Terrain.
     for (auto& pack : m_packs) {
-        if (const char* dir = pack->rootDirectory())
-            watcher.watch(PathDomain::Assets, dir, true);
+        const char* root = pack->rootDirectory();
+        if (!root)
+            continue;
+        std::vector<std::string> seen;
+        for (uint8_t t = 0; t < static_cast<uint8_t>(AssetType::Count); ++t) {
+            const auto type = static_cast<AssetType>(t);
+            if (type == AssetType::Terrain)
+                continue;
+            const char* subdir = assetPathInfo(type).subdir;
+            std::string dir = std::string(root) + "/" + subdir;
+            if (std::find(seen.begin(), seen.end(), dir) != seen.end())
+                continue;
+            seen.push_back(dir);
+            watcher.watch(PathDomain::Assets, dir.c_str(), /*recursive=*/true);
+        }
     }
 }
 
-void AssetManager::processHotReload() {
-    if (!m_watcher)
-        return;
+std::vector<ChangedAsset> AssetManager::mapEventsToAssets(std::span<const IFilesystemWatcher::Event> events) const {
+    std::vector<ChangedAsset> out;
+    for (const auto& ev : events) {
+        // Longest-prefix match against each pack root, then reverse-map the remainder. Event paths are
+        // relative to PathDomain::Assets (the same space as pack roots), forward-slashed.
+        const IContentPack* bestPack = nullptr;
+        size_t bestLen = 0;
+        for (auto& pack : m_packs) {
+            const char* root = pack->rootDirectory();
+            if (!root || !*root)
+                continue;
+            std::string prefix = std::string(root) + "/";
+            if (ev.path.size() > prefix.size() && ev.path.compare(0, prefix.size(), prefix) == 0 &&
+                prefix.size() > bestLen) {
+                bestPack = pack.get();
+                bestLen = prefix.size();
+            }
+        }
+        if (!bestPack)
+            continue; // not under any pack — caller sees it in HotReloadReport::unmatched
+        std::string rel = ev.path.substr(bestLen);
+        if (auto mapped = assetFromPackRelativePath(rel)) {
+            // Dedup (multiple events for the same asset in one poll).
+            const ChangedAsset ca{mapped->first, mapped->second};
+            const bool dup = std::any_of(out.begin(), out.end(),
+                                         [&](const ChangedAsset& c) { return c.type == ca.type && c.name == ca.name; });
+            if (!dup)
+                out.push_back(ca);
+        }
+    }
+    return out;
+}
 
+void AssetManager::evict(std::span<const ChangedAsset> assets) {
+    for (const auto& a : assets)
+        m_cache.erase(cacheKey(a.type, a.name.c_str()));
+    if (!assets.empty())
+        ++m_cacheGeneration;
+}
+
+void AssetManager::evictAll() {
+    m_cache.clear();
+    ++m_cacheGeneration;
+}
+
+HotReloadReport AssetManager::processHotReload() {
+    HotReloadReport report;
+    if (!m_watcher)
+        return report;
     auto events = m_watcher->pollEvents();
     if (events.empty())
-        return;
+        return report;
 
-    // Phase 1: full cache clear on any filesystem event. Fine-grained eviction
-    // (path → asset name mapping) is a future improvement.
-    m_logger.log(LogLevel::Debug, __FILE__, __LINE__, "hot-reload: filesystem change detected, clearing asset cache");
-    m_cache.clear();
+    report.changed = mapEventsToAssets(events);
+    // Record paths that mapped to no asset (locale files, editor temp files) so the caller can route
+    // them (Localization::reload) or ignore them.
+    for (const auto& ev : events) {
+        bool underPack = false;
+        for (auto& pack : m_packs) {
+            const char* root = pack->rootDirectory();
+            if (root && *root) {
+                std::string prefix = std::string(root) + "/";
+                if (ev.path.size() > prefix.size() && ev.path.compare(0, prefix.size(), prefix) == 0) {
+                    underPack = true;
+                    break;
+                }
+            }
+        }
+        if (!underPack)
+            report.unmatched.push_back(ev.path);
+    }
+
+    if (!report.changed.empty()) {
+        evict(report.changed);
+        m_logger.log(
+            LogLevel::Debug, __FILE__, __LINE__,
+            (std::string("hot-reload: evicted ") + std::to_string(report.changed.size()) + " asset(s)").c_str());
+    }
+    return report;
 }
 
 } // namespace fl

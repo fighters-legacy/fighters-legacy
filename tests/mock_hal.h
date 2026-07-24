@@ -521,7 +521,21 @@ struct MockRenderer : public IRenderer {
         return MaterialHandle{nextMaterialId++};
     }
     MaterialHandle getMeshMaterial(MeshHandle) const override {
-        return MaterialHandle{}; // mock does not parse glb materials
+        return meshMaterialResult; // default invalid; a test can script a valid material
+    }
+    MaterialHandle meshMaterialResult{}; // returned by getMeshMaterial (#836 PreviewScene tests)
+
+    // Scripted mesh bounds (#836): when meshBoundsAvailable, getMeshBounds fills these and returns
+    // true; otherwise false (the non-supporting-backend default), so framing falls back.
+    bool meshBoundsAvailable{false};
+    glm::vec3 meshBoundsMin{0.0f};
+    glm::vec3 meshBoundsMax{0.0f};
+    bool getMeshBounds(MeshHandle, glm::vec3& outMin, glm::vec3& outMax) const override {
+        if (!meshBoundsAvailable)
+            return false;
+        outMin = meshBoundsMin;
+        outMax = meshBoundsMax;
+        return true;
     }
     void destroyMesh(MeshHandle) override {
         ++destroyMeshCount;

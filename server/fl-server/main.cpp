@@ -50,6 +50,8 @@
 #include <atc/AtcService.h>   // the deterministic ATC service (#706)
 #include <campaign/CampaignParser.h>
 #include <campaign/CampaignRunner.h>
+#include <campaign/FrontlinePng.h>
+#include <campaign/TheaterManifest.h>
 #include <config/ConfigFile.h>
 #include <console/CommandRegistry.h>
 #include <console/CommandShell.h>
@@ -86,6 +88,7 @@
 #include <script/WorldApi.h>
 #include <stdfs/StdAsyncFilesystem.h>
 #include <stdfs/StdFilesystem.h>
+#include <stdfs/StdFilesystemWatcher.h>
 #include <weapon/Loadout.h>
 #include <weapon/WeaponRegistry.h>
 #include <weather/WeatherController.h>
@@ -1199,9 +1202,51 @@ int main(int argc, char** argv) {
                 for (const std::string& e : cp.errors)
                     log->log(LogLevel::Error, __FILE__, __LINE__, e.c_str());
             } else {
-                // Per-mission/template content resolves through the same loader single missions use.
+                // Theater geographic bounds from each theater manifest (#847). A theater whose manifest
+                // is missing/unparseable keeps zero bounds (a warning) — the campaign still runs.
+                for (auto& th : cp.campaign.theaters) {
+                    auto tf = assets.loadTheater(th.id.c_str());
+                    if (!tf || tf->bytes.empty()) {
+                        char b[160];
+                        std::snprintf(b, sizeof(b), "campaign: theater '%.64s' has no manifest — bounds unset",
+                                      th.id.c_str());
+                        log->log(LogLevel::Warn, __FILE__, __LINE__, b);
+                        continue;
+                    }
+                    auto tr = fl::parseTheaterManifest(
+                        std::string_view(reinterpret_cast<const char*>(tf->bytes.data()), tf->bytes.size()));
+                    if (tr.ok)
+                        th.bounds = fl::theaterGeoBounds(tr.theater);
+                    else
+                        log->log(LogLevel::Warn, __FILE__, __LINE__,
+                                 ("campaign: theater '" + th.id + "' manifest invalid — bounds unset").c_str());
+                }
+                // Per-mission/template content: the mission-YAML loader first (builtin id / stem), then a
+                // raw pack-relative read for the path-form file references formats.md documents (#847).
                 auto content = [&assets, log](const std::string& path) -> std::optional<std::string> {
-                    return fl::loadMissionYaml(path, &assets, *log);
+                    if (auto y = fl::loadMissionYaml(path, &assets, *log))
+                        return y;
+                    if (auto bytes = assets.loadPackFile(path.c_str()))
+                        return std::string(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+                    return std::nullopt;
+                };
+                // Frontline raster loader (#847): decode the pack-relative 8-bit-grayscale PNG into the
+                // pre-sized Frontline. Previously left unset, so campaigns never consumed rasters.
+                auto frontlineLoader = [&assets, log](const std::string& path, fl::Frontline& out) -> bool {
+                    auto bytes = assets.loadPackFile(path.c_str());
+                    if (!bytes) {
+                        log->log(LogLevel::Warn, __FILE__, __LINE__,
+                                 ("campaign: frontline '" + path + "' not found").c_str());
+                        return false;
+                    }
+                    int w = 0, h = 0;
+                    std::vector<uint8_t> pixels = fl::decodeFrontlinePng(bytes->data(), bytes->size(), &w, &h);
+                    if (pixels.empty() || w != out.cols() || h != out.rows()) {
+                        log->log(LogLevel::Warn, __FILE__, __LINE__,
+                                 ("campaign: frontline '" + path + "' decode/dimension mismatch").c_str());
+                        return false;
+                    }
+                    return out.setPixels(std::move(pixels));
                 };
                 uint64_t seed = 1469598103934665603ull; // FNV-1a of the campaign name — stable, replayable
                 for (unsigned char ch : cp.campaign.name)
@@ -1212,7 +1257,8 @@ int main(int argc, char** argv) {
                 std::error_code ec;
                 std::filesystem::create_directories("cache", ec); // the save dir must exist before writeConfigFile
                 campaignSavePath = "cache/campaign_" + sanitized + ".flsave";
-                campaignRunner = std::make_unique<fl::CampaignRunner>(std::move(cp.campaign), seed, content);
+                campaignRunner =
+                    std::make_unique<fl::CampaignRunner>(std::move(cp.campaign), seed, content, frontlineLoader);
                 if (std::ifstream in{campaignSavePath, std::ios::binary}) {
                     std::string blob((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
                     if (campaignRunner->restore(blob))
@@ -1984,6 +2030,15 @@ int main(int argc, char** argv) {
         auto it = aiScriptCache.find(std::string(name));
         return (it != aiScriptCache.end()) ? it->second : std::pair<std::string, std::string>{};
     };
+    // reload_content (#152): evict the byte cache + the flight-model resolver cache, then re-resolve
+    // every live entity's flight model in place (mass/handling update mid-flight). Runs on the sim
+    // thread (the reload_content command enqueues this), where the resolver + m_controlledEntities are
+    // owned. Lua-controller live rebuild is a follow-on; flight models are the "feel new handling" case.
+    adminCtx.env.reloadContent = [&assets, fmCache, &broadcaster]() {
+        assets.evictAll();
+        fmCache->clear();
+        broadcaster.reloadFlightModels();
+    };
     adminCtx.bans.banlistPath = cfg.banlistPath.empty() ? nullptr : &cfg.banlistPath;
     adminCtx.bans.allowlistPath = cfg.allowlistPath.empty() ? nullptr : &cfg.allowlistPath;
     adminCtx.bans.saveBanlist = [&](const std::unordered_set<std::string>& b) {
@@ -2159,6 +2214,19 @@ int main(int argc, char** argv) {
         log->log(LogLevel::Info, __FILE__, __LINE__, mbuf);
     }
 
+    // Asset hot-reload (#152): the automatic server-side watcher. Opt-in via FL_HOT_RELOAD=1 (the
+    // client sets it and the LocalServer subprocess inherits it, so single-player lights up both
+    // ends). When a flight-model file changes, the authoritative sim re-resolves it onto every live
+    // entity in place — "edit the TOML, save, feel the new handling" with no console command. Mesh /
+    // texture / livery changes are the client's concern; the server holds no GPU caches.
+    std::unique_ptr<fl::StdFilesystemWatcher> contentWatcher;
+    if (const char* hr = std::getenv("FL_HOT_RELOAD"); hr && std::strcmp(hr, "1") == 0) {
+        contentWatcher = std::make_unique<fl::StdFilesystemWatcher>(assetsRoot, userDataRoot, /*pollIntervalMs=*/250,
+                                                                    /*maxFilesPerWatch=*/20000, log);
+        assets.enableHotReload(*contentWatcher);
+        log->log(LogLevel::Info, __FILE__, __LINE__, "hot-reload enabled (FL_HOT_RELOAD=1)");
+    }
+
     uint64_t lastDroppedTicks = 0; // for the sim-overrun drop-rate Warn (#514)
     // Baseline RSS captured once after all init, before the main loop; the soak leak gate tracks
     // the growth (rss_kb - rss_startup_kb) over the run (#707). 0 when unavailable on this platform.
@@ -2192,6 +2260,23 @@ int main(int argc, char** argv) {
             httpClient->service();
 
         p.asyncFilesystem->service();
+
+        // Hot-reload poll (#152): map events on this (main) thread, then apply on the sim thread. Only
+        // a flight-model change needs the authoritative live re-apply; ignore the rest (the server has
+        // no GPU caches). applyContentReload evicts + reloadFlightModels; it is the same lambda the
+        // reload_content admin command runs.
+        if (contentWatcher) {
+            auto events = contentWatcher->pollEvents();
+            if (!events.empty()) {
+                auto changed = assets.mapEventsToAssets(events);
+                const bool fmChanged = std::any_of(changed.begin(), changed.end(), [](const fl::ChangedAsset& c) {
+                    return c.type == fl::AssetType::FlightModel;
+                });
+                if (fmChanged && adminCtx.env.reloadContent)
+                    gameLoop.enqueueSimCallback([&adminCtx]() { adminCtx.env.reloadContent(); });
+            }
+        }
+
         // Follow the entity so terrain chunks are loaded at its current position.
         const double entityX = broadcaster.cachedEntityX();
         const double entityZ = broadcaster.cachedEntityZ();

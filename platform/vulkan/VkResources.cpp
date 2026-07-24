@@ -15,15 +15,17 @@
 #include <vk_mem_alloc.h>
 
 // ---------------------------------------------------------------------------
-// tinygltf + stb_image implementation — exactly one TU in this library.
-// TINYGLTF_HEADER_ONLY suppresses tinygltf's own compiled target; we define
-// TINYGLTF_IMPLEMENTATION here to pull in all definitions. stb_image is
-// included via this path (as a system header → warnings suppressed).
+// tinygltf + stb_image are DECLARATIONS only here — the single implementation lives in the shared
+// `tinygltf-impl` target (third_party/tinygltf_impl.cpp), which platform-vulkan links, so fl-viewer
+// can link BOTH this and validate-mesh-lib without the two implementations colliding (#836). The
+// direct stbi_load_from_memory / stbi_image_free calls below resolve against that TU (declared here,
+// as VkRenderer.cpp declares stbi_write_png — tiny_gltf.h no longer pulls stb_image.h without the impl).
 // ---------------------------------------------------------------------------
-#define TINYGLTF_IMPLEMENTATION
-#define STB_IMAGE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <tiny_gltf.h>
+
+extern "C" unsigned char* stbi_load_from_memory(const unsigned char* buffer, int len, int* x, int* y,
+                                                int* channels_in_file, int desired_channels);
+extern "C" void stbi_image_free(void* retval_from_stbi_load);
 
 // ---------------------------------------------------------------------------
 // KTX2 / Basis Universal
@@ -586,6 +588,8 @@ MeshHandle VkResourceManager::createMesh(const MeshUploadDesc& desc) {
     };
 
     std::vector<Vertex> vertices(vertexCount);
+    glm::vec3 bMin(std::numeric_limits<float>::max());
+    glm::vec3 bMax(std::numeric_limits<float>::lowest());
     for (uint32_t i = 0; i < vertexCount; ++i) {
         vertices[i].position = stridedVec3(posPtr, posIdx, i);
         vertices[i].normal = nrmPtr ? stridedVec3(nrmPtr, nrmIdx, i) : glm::vec3(0, 1, 0);
@@ -601,6 +605,10 @@ MeshHandle VkResourceManager::createMesh(const MeshUploadDesc& desc) {
             const glm::vec3 t = contentForwardToBody(glm::vec3(vertices[i].tangent));
             vertices[i].tangent = glm::vec4(t, vertices[i].tangent.w);
         }
+
+        // Accumulate the body-frame AABB for camera framing (#836) on the already-oriented position.
+        bMin = glm::min(bMin, vertices[i].position);
+        bMax = glm::max(bMax, vertices[i].position);
     }
 
     // ── Extract index data ───────────────────────────────────────────────
@@ -655,6 +663,10 @@ MeshHandle VkResourceManager::createMesh(const MeshUploadDesc& desc) {
     }
 
     mesh.indexCount = static_cast<uint32_t>(indices.size());
+    if (vertexCount > 0) {
+        mesh.boundsMin = bMin;
+        mesh.boundsMax = bMax;
+    }
     mesh.alive = true;
 
     // ── Material (#833) ──────────────────────────────────────────────────
@@ -999,9 +1011,24 @@ void VkResourceManager::destroyMesh(MeshHandle h) {
         m_deferredBuffers.push_back({mesh.vertexBuffer, mesh.vertexAlloc, release});
     if (mesh.indexBuffer != VK_NULL_HANDLE)
         m_deferredBuffers.push_back({mesh.indexBuffer, mesh.indexAlloc, release});
-    mesh = {};
 
+    // Cascade: createMesh built the material + uploaded its textures as one package (#833), so the
+    // symmetric destructor frees them here (#152) — otherwise every hot-reload leaks a material +
+    // its textures. Safe because createTexture does not dedupe by name (no cross-mesh sharing), and
+    // terrain/builtin meshes have no material (invalid handle -> no-op).
+    const MaterialHandle mat = mesh.material;
+    mesh = {};
     m_freeMeshSlots.push_back(h.id - 1);
+
+    if (mat.valid() && mat.id <= m_materials.size()) {
+        const GpuMaterial& gm = m_materials[mat.id - 1];
+        if (gm.alive) {
+            destroyTexture(gm.baseColorTexture); // each guards the shared default textures
+            destroyTexture(gm.normalTexture);
+            destroyTexture(gm.ormTexture);
+        }
+        destroyMaterial(mat);
+    }
 }
 
 void VkResourceManager::destroyTexture(TextureHandle h) {
@@ -1063,6 +1090,15 @@ const GpuMaterial* VkResourceManager::getMaterial(MaterialHandle h) const {
 MaterialHandle VkResourceManager::getMeshMaterial(MeshHandle h) const {
     const GpuMesh* m = getMesh(h);
     return m ? m->material : MaterialHandle{};
+}
+
+bool VkResourceManager::getMeshBounds(MeshHandle h, glm::vec3& outMin, glm::vec3& outMax) const {
+    const GpuMesh* m = getMesh(h);
+    if (!m)
+        return false;
+    outMin = m->boundsMin;
+    outMax = m->boundsMax;
+    return true;
 }
 
 } // namespace fl

@@ -8,36 +8,35 @@
 
 using namespace fl;
 
-TEST_CASE("BC7 with mipmaps produces correct toktx command", "[tex-compress]") {
+TEST_CASE("UASTC with mipmaps produces correct toktx command", "[tex-compress]") {
     TexCompressOptions opts;
-    opts.format = TexFormat::BC7;
+    opts.encoding = TexEncoding::Uastc;
     opts.genMipmaps = true;
     opts.toktxPath = "toktx";
     auto cmd = buildToktxCommand("in.png", "out.ktx2", opts);
-    CHECK(cmd.find("--encode bc7") != std::string::npos);
+    // UASTC is Basis (transcodable) and must be zstd-supercompressed.
+    CHECK(cmd.find("--encode uastc") != std::string::npos);
+    CHECK(cmd.find("--zcmp") != std::string::npos);
+    // No raw-BCn encode is ever emitted (toktx has none — it would silently emit uncompressed).
+    CHECK(cmd.find("bc1") == std::string::npos);
+    CHECK(cmd.find("bc7") == std::string::npos);
     CHECK(cmd.find("--genmipmap") != std::string::npos);
     CHECK(cmd.find("--t2") != std::string::npos);
     CHECK(cmd.find("out.ktx2") != std::string::npos);
     CHECK(cmd.find("in.png") != std::string::npos);
 }
 
-TEST_CASE("BC1 without mipmaps produces correct toktx command", "[tex-compress]") {
+TEST_CASE("ETC1S without mipmaps produces correct toktx command", "[tex-compress]") {
     TexCompressOptions opts;
-    opts.format = TexFormat::BC1;
+    opts.encoding = TexEncoding::Etc1s;
     opts.genMipmaps = false;
     opts.toktxPath = "toktx";
     auto cmd = buildToktxCommand("diffuse.png", "diffuse.ktx2", opts);
-    CHECK(cmd.find("--encode bc1") != std::string::npos);
+    CHECK(cmd.find("--encode etc1s") != std::string::npos);
+    // ETC1S is already supercompressed — no --zcmp.
+    CHECK(cmd.find("--zcmp") == std::string::npos);
     CHECK(cmd.find("--genmipmap") == std::string::npos);
     CHECK(cmd.find("--t2") != std::string::npos);
-}
-
-TEST_CASE("BC3 format produces correct toktx command", "[tex-compress]") {
-    TexCompressOptions opts;
-    opts.format = TexFormat::BC3;
-    opts.genMipmaps = true;
-    auto cmd = buildToktxCommand("canopy.png", "canopy.ktx2", opts);
-    CHECK(cmd.find("--encode bc3") != std::string::npos);
 }
 
 TEST_CASE("custom toktx path appears in command", "[tex-compress]") {
@@ -75,12 +74,13 @@ TEST_CASE("defaultOutputPath handles double extension", "[tex-compress]") {
 
 TEST_CASE("buildToktxLayersCommand emits array mode with layer order preserved", "[tex-compress]") {
     TexCompressOptions opts;
-    opts.format = TexFormat::BC7;
+    opts.encoding = TexEncoding::Uastc;
     opts.genMipmaps = true;
     const std::vector<std::string> inputs{"grass.png", "dirt.png", "rock.png", "snow.png"};
     const std::string cmd = buildToktxLayersCommand(inputs, "biome.ktx2", opts);
     CHECK(cmd.find("--layers 4") != std::string::npos);
-    CHECK(cmd.find("--encode bc7") != std::string::npos);
+    CHECK(cmd.find("--encode uastc") != std::string::npos);
+    CHECK(cmd.find("--zcmp") != std::string::npos);
     CHECK(cmd.find("--genmipmap") != std::string::npos);
     CHECK(cmd.find("--t2") != std::string::npos);
     // Output precedes the inputs, and the inputs keep their layer order (grass < dirt < rock < snow).
@@ -97,12 +97,12 @@ TEST_CASE("buildToktxLayersCommand emits array mode with layer order preserved",
 
 TEST_CASE("buildToktxLayersCommand quotes spaced paths and honors --no-mipmaps", "[tex-compress]") {
     TexCompressOptions opts;
-    opts.format = TexFormat::BC3;
+    opts.encoding = TexEncoding::Etc1s;
     opts.genMipmaps = false;
     const std::vector<std::string> inputs{"a b.png", "c d.png"};
     const std::string cmd = buildToktxLayersCommand(inputs, "out dir.ktx2", opts);
     CHECK(cmd.find("--layers 2") != std::string::npos);
-    CHECK(cmd.find("--encode bc3") != std::string::npos);
+    CHECK(cmd.find("--encode etc1s") != std::string::npos);
     CHECK(cmd.find("--genmipmap") == std::string::npos);
     CHECK(cmd.find("\"a b.png\"") != std::string::npos);
     CHECK(cmd.find("\"out dir.ktx2\"") != std::string::npos);

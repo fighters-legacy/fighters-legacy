@@ -5,6 +5,7 @@
 #include "render/BuiltinGeometry.h"
 #include "render/BuiltinTextures.h"
 #include "render/CameraController.h"
+#include "render/MeshTextureResolver.h"
 #include "render/RenderSnapshot.h"
 #include "render/SceneRenderer.h"
 #include "render/SimRenderBridge.h"
@@ -283,6 +284,68 @@ TEST_CASE("SceneRenderer submits one RenderItem when entity has loadable mesh") 
     // fallback material (no new createMaterial).
     CHECK(renderer.createMeshCount == 15); // ensureBuiltins (14) + "f15c" (1)
     CHECK(renderer.createMaterialCount == 8);
+}
+
+TEST_CASE("SceneRenderer::invalidateMesh destroys the handle and re-uploads next frame (#152)") {
+    MockLogger logger;
+    auto pack = std::make_unique<MockContentPack>();
+    pack->meshes["f15c"] = {'{', 2, 3, 4};
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::move(pack));
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockRenderer renderer;
+    SimRenderBridge bridge;
+    SceneRenderer sr{bridge, oneType(), assets, renderer};
+
+    RenderSnapshot snap = makeSnap();
+    snap.entries.push_back(makeEntry(0, {10.0, 0.0, 0.0}));
+    bridge.publish(std::move(snap));
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+    const int meshesAfterFirst = renderer.createMeshCount;
+    CHECK(renderer.destroyMeshCount == 0);
+
+    // The mesh file "changed" — evict it. The GPU handle is destroyed now.
+    sr.invalidateMesh("f15c");
+    CHECK(renderer.destroyMeshCount == 1);
+
+    // Next frame re-uploads exactly the evicted mesh (one more createMesh; builtins stay cached).
+    RenderSnapshot snap2 = makeSnap();
+    snap2.entries.push_back(makeEntry(0, {10.0, 0.0, 0.0}));
+    bridge.publish(std::move(snap2));
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+    CHECK(renderer.createMeshCount == meshesAfterFirst + 1);
+}
+
+TEST_CASE("SceneRenderer::invalidateAllAssets drops content but keeps builtins (#152)") {
+    MockLogger logger;
+    auto pack = std::make_unique<MockContentPack>();
+    pack->meshes["f15c"] = {'{', 2, 3, 4};
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::move(pack));
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockRenderer renderer;
+    SimRenderBridge bridge;
+    SceneRenderer sr{bridge, oneType(), assets, renderer};
+
+    RenderSnapshot snap = makeSnap();
+    snap.entries.push_back(makeEntry(0, {10.0, 0.0, 0.0}));
+    bridge.publish(std::move(snap));
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+
+    sr.invalidateAllAssets();
+    CHECK(renderer.destroyMeshCount == 1); // only the one content mesh; builtins untouched
+
+    // Re-render: the content mesh re-uploads; the type-name cache also re-resolves.
+    RenderSnapshot snap2 = makeSnap();
+    snap2.entries.push_back(makeEntry(0, {10.0, 0.0, 0.0}));
+    bridge.publish(std::move(snap2));
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+    REQUIRE(renderer.lastScene.renderItems.size() == 1);
+    CHECK(renderer.lastScene.renderItems[0].mesh.valid());
 }
 
 TEST_CASE("SceneRenderer falls back to builtin for entity with unknown typeIndex") {

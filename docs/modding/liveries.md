@@ -8,7 +8,8 @@ combat sim converged on this same texture-set-indirection design for exactly tha
 
 A livery is an ordinary content pack, so pack priority, the mod loader, and the distribution
 machinery all apply with no new mechanism. A livery pack can contain nothing but a `.toml` and a
-couple of `.ktx2` textures — it does **not** ship a mesh.
+couple of `.ktx2` skins (built from committed PNG masters — see
+[`textures.md`](textures.md)) — it does **not** ship a mesh.
 
 ## The file
 
