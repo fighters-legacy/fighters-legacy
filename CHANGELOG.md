@@ -9,6 +9,34 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **ai**: the LLM-vs-renderer GPU contention harness, and the measurements it exists to produce
+  (#782, follow-up to spike #609). #609 asked what a resident local model costs the frame budget on
+  each OS and could not answer it; the gap was recorded as "runs to schedule, not work to build",
+  except the work was not built. `tools/gpu_contention/` builds it: `driver.py` drives any
+  OpenAI-compatible endpoint on a phased schedule (idle baseline → alternating bursts and gaps →
+  idle tail), the game records per-frame timing and VRAM through the new `--frame-stats-json` flag,
+  and `analyze.py` attributes every frame to the phase that was running when it rendered. Both sides
+  stamp **wall-clock** epoch milliseconds rather than a monotonic clock, because a monotonic epoch is
+  per-process and two processes' timestamps cannot otherwise be put on one timeline. Per-OS runners
+  (`measure_linux.sh` / `measure_macos.sh` / `measure_windows.ps1`, the latter covering both Windows
+  inference backends) do the whole sequence unattended. Measured on an RTX 5080: inference leaves the
+  *mean* frame time flat (+0.01 ms) while p99 rises 1.51× and the worst 1 % of frames roughly triples
+  — the cost is hitching, not slowness — and a resident 14B cuts the driver-reported VRAM budget
+  offered to the renderer from 6.9 GB to 4.6 GB, which is the sharper constraint and one the renderer
+  cannot see (it observes a smaller ceiling, never a failed allocation). Full results and caveats
+  (notably: the measured client was vsync-limited, so these are a floor on the impact) in
+  `docs/ai-provider-evaluation.md`. CI never requires a model — only the pure schedule/join logic is
+  unit-tested.
+- **engine**: `engine/perf/FrameStatsRecorder.h` — the client-side render-perf artifact, the sibling
+  of fl-server's `--metrics-json`. Records one sample per rendered Flight frame (CPU frame time, GPU
+  time from timestamp queries, device-local VRAM usage and budget) and serialises a summary plus the
+  raw per-frame samples, flushed periodically so a run killed by an orchestrator still leaves a
+  usable file. Driven by the new `--frame-stats-json <path>` and `--run-seconds <n>` game flags;
+  `--run-seconds` is deliberately not `--screenshot-frames`, which counts frames and so cannot
+  bracket a fixed-duration external schedule exactly when the frame rate is the thing under
+  measurement. The tolerant JSON scanners shared with `ServerTickReport` were promoted to
+  `engine/perf/JsonScan.h` rather than copied.
+
 - **audio**: the radio-net presentation layer — radio DSP, PTT squelch, per-net ducking, subtitles
   (#925, Epic #499). What separates a combat flight sim's radio from lobby voice chat is almost
   entirely presentation; the bytes are the same Opus either way. `engine/voice/RadioDsp.h` adds a
@@ -259,6 +287,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **renderer**: `FrameStats::frameDtMs` is now reported uncapped. The particle simulation still
+  clamps its timestep at 50 ms (a long stall must not teleport every particle), but the *reported*
+  frame time shared that variable, so every frame worse than 50 ms read as exactly 50 — which
+  silently destroys any measurement of a stall, the one thing a perf capture is for (#782).
 - **network**: harden `SpatialIndex` against an extreme-but-finite world coordinate (#993, deep-fuzz
   `fuzz_server_msg`). A hostile `MsgClientInput::cameraEye` survives `WorldBroadcaster::onReceive`'s
   `isfinite()` guard, flows into an observer's interest center, and reaches `SpatialIndex::queryRadius`,

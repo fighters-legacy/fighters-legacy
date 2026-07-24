@@ -534,11 +534,15 @@ void VkRenderer::beginFrame() {
     m_frameAcquired = false;
     m_pendingScene = {};
 
-    // Track wall-clock frame dt for particle simulation (capped at 50 ms).
+    // Track wall-clock frame dt. The particle simulation timestep is capped at 50 ms (a long stall
+    // must not teleport every particle); the REPORTED frame time is not — a perf measurement whose
+    // worst frames all read exactly 50 ms cannot see a stall, which is the one thing it is for
+    // (#782: the GPU-contention harness measures frames far worse than 50 ms during model load).
     const uint64_t nowNs = SDL_GetTicksNS();
     if (m_lastFrameNs > 0) {
-        m_frameDt = std::min(float(nowNs - m_lastFrameNs) * 1e-9f, 0.05f);
-        m_frameStats.frameDtMs = m_frameDt * 1000.0f;
+        const float dt = float(nowNs - m_lastFrameNs) * 1e-9f;
+        m_frameDt = std::min(dt, 0.05f);
+        m_frameStats.frameDtMs = dt * 1000.0f;
     }
     m_lastFrameNs = nowNs;
 
