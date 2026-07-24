@@ -29,13 +29,12 @@ struct Condition {
 // Body-x and body-y aero+propulsive force at a given alpha, speed and throttle setting.
 std::array<float, 3> forcesAt(const FlightModelData& d, const PayloadEffect& payload, const Condition& c,
                               float alpha_deg, float speed, bool ab, float throttle) {
-    ControlInput ctrl{};
-    ctrl.throttle = throttle;
-    ctrl.afterburner = ab;
     const float mach = machNumber(speed, c.atmos.speed_of_sound_m_s);
     const float sweep = d.wing_sweep ? d.wing_sweep->ref_sweep_deg : 0.f;
-    return computeForces(alpha_deg * kDegToRad, 0.f, mach, speed, c.altitude_m, sweep, ab, throttle, ctrl, payload, d,
-                         c.atmos);
+    // Trim derives CLEAN performance: gear up, flaps up, brakes in (#842). Passing a default
+    // ArticulationState is the statement of that, not an omission.
+    return computeForces(alpha_deg * kDegToRad, 0.f, mach, speed, c.altitude_m, sweep, ab, throttle, payload, d,
+                         c.atmos, ArticulationState{});
 }
 
 // WIND AXES, NOT BODY AXES -- and the difference is the whole ballgame.

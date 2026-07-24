@@ -2,6 +2,7 @@
 #pragma once
 
 #include "flight/AeroForces.h"
+#include "flight/Articulation.h"
 #include "flight/CentralGravityField.h"
 #include "flight/FixedWingForceModel.h"
 #include "flight/FlightModelData.h"
@@ -44,6 +45,14 @@ struct FlightState {
     // clears; kEngineCompStall drops when it reaches zero. 0 = no surge in progress.
     float comp_stall_seconds{0.f};
     float tvc_angle_deg{0.f}; // current TVC nozzle angle
+
+    // ── actuator positions (#842) ────────────────────────────────────────────
+    // Gear, flaps, speed-brake, hook and canopy, each 0..1, slewed toward their ControlInput commands
+    // at the model's [articulation] transit rates. POSITIONS, not commands: the aero model reads
+    // these, so gear drag ramps in over its travel window instead of appearing whole in the tick the
+    // switch moved — and the animation is driven from the same number (#841). Wing sweep and TVC
+    // above have always worked this way; this is the rest of the airframe catching up.
+    ArticulationState articulation{};
 
     // ── [aero.limits] enforcement outputs (#816) ─────────────────────────────
     // These are OUTPUTS of step(), not inputs. Until now alpha_stall_deg, max_g_structural and
@@ -210,6 +219,7 @@ class FlightIntegrator {
     double m_earthRotationRate{0.0}; // #482: Ω for Coriolis/centrifugal; 0 = inertial frame (default)
 
     void advanceSpool(float dt, float commanded_throttle);
+    void advanceArticulationState(float dt, const ControlInput& ctrl);
     void advanceSweep(float dt, float commanded_sweep_deg);
     void advanceTvc(float dt, float commanded_tvc_deg);
     void integrateRotation(float dt);

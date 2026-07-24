@@ -404,6 +404,37 @@ static void validateDragPolar(const toml::table& tbl, FlightModelValidationResul
     checkNonNeg("gear_cd");
 }
 
+// [articulation] + [aero.flaps] (#842). Both optional with defaults, so a model that omits them is
+// valid; what the validator catches is a transit time that would make an actuator behave absurdly and
+// a flap that reduces parasite drag.
+static void validateArticulation(const toml::table& tbl, FlightModelValidationResult& r) {
+    if (auto art = tbl["articulation"]; art && art.as_table()) {
+        static const char* kKeys[] = {"gear_transit_s", "flap_transit_s", "speedbrake_transit_s", "hook_transit_s",
+                                      "canopy_transit_s"};
+        for (const char* key : kKeys) {
+            auto v = art[key].value<double>();
+            if (!v)
+                continue;
+            if (!(*v >= 0.0) || *v > 600.0) {
+                r.errors.push_back(std::string("articulation.") + key +
+                                   " must be in [0, 600] seconds (0 = instantaneous)");
+                r.ok = false;
+            } else if (*v > 0.0 && *v < 0.1) {
+                r.warnings.push_back(std::string("articulation.") + key + " = " + std::to_string(*v) +
+                                     " s is implausibly fast for a real actuator");
+            }
+        }
+    }
+    if (auto fl_ = tbl["aero"]["flaps"]; fl_ && fl_.as_table()) {
+        if (auto dcd = fl_["dcd"].value<double>(); dcd && *dcd < 0.0) {
+            r.errors.push_back("aero.flaps.dcd must be >= 0 (a flap cannot reduce parasite drag)");
+            r.ok = false;
+        }
+        if (auto dcl = fl_["dcl"].value<double>(); dcl && *dcl < 0.0)
+            r.warnings.push_back("aero.flaps.dcl is negative — a flap that REDUCES lift is unusual");
+    }
+}
+
 static void validateMoments(const toml::table& tbl, FlightModelValidationResult& r) {
     auto m = tbl["aero"]["moments"];
     if (!m) {
@@ -1179,6 +1210,7 @@ FlightModelValidationResult validateFlightModel(std::string_view tomlContent) {
     validateStallConsistency(tbl, r);
     validateCdTable(tbl, r);
     validateDragPolar(tbl, r);
+    validateArticulation(tbl, r);
     validateMoments(tbl, r);
     validateAeroLimits(tbl, r);
     validateAeroControls(tbl, r);

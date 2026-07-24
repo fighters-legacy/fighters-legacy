@@ -9,6 +9,23 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **flight**: articulation state — transit dynamics and gear/flap aero (#842, Epic #837, core of #639).
+  Gear and speedbrake existed only as **commands**: `AeroForces` added their full drag the instant the
+  command flipped, so gear that takes six seconds to travel produced all of its drag in one tick — and
+  there was no number an animation could have been driven from. Flaps, hook and canopy did not exist
+  at all. `FlightState` now carries five normalized actuator **positions**, slewed toward their
+  commands at the model's `[articulation]` transit rates (the same discipline `advanceSweep`/
+  `advanceTvc` always used for wing sweep and TVC, which is why those two were already right).
+  Reversing mid-travel reverses from the current position; drag follows the position, which is both
+  correct and the reason the animation reads the same number. A new optional `[aero.flaps]` adds
+  `dcl`/`dcd`/`alpha_shift_deg` — the alpha shift moves the CL-table lookup, so a flap gives more CL at
+  a given body AoA **and** stalls at a lower one, as a real flap does. `computeForces` no longer takes
+  `ControlInput` at all: once every device term reads a position, the force calculation depends on
+  state alone. Transit timing lives in the simulation, never in the clip — one number drives the
+  server, the client's prediction replay and the visual. Everything is optional with defaults, so
+  every existing flight model keeps parsing and (with no `[aero.flaps]`) flies identically with the
+  lever down. `validate-flight-model` range-checks the transit times;
+  `docs/modding/flight-model.md` documents both sections.
 - **renderer**: `SceneRenderer` populates `RenderItem::animPoses` (#841, Epic #837) — the renderer knew
   how to be told where an aircraft's parts are; nothing told it. `EntityRenderEntry` gains a normalized
   `artChannels[]` (all-zero is neutral, so an entity nobody articulates renders exactly as before), and

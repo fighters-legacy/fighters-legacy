@@ -153,6 +153,19 @@ void FlightIntegrator::advanceTvc(float dt, float commanded_deg) {
     angle = std::clamp(angle, tvc.min_angle_deg, tvc.max_angle_deg);
 }
 
+// Slew every actuator toward its command (#842). Shares the pure advanceArticulation with
+// ClientPrediction's replay by construction: if the two sides ever disagreed about where the gear is,
+// they would disagree about where the aircraft is, because gear position is drag.
+void FlightIntegrator::advanceArticulationState(float dt, const ControlInput& ctrl) {
+    ArticulationCommand cmd{};
+    cmd.gear_down = ctrl.gear_down;
+    cmd.flaps = ctrl.flaps;
+    cmd.speedbrake = ctrl.speedbrake;
+    cmd.hook_down = ctrl.hook_down;
+    cmd.canopy_open = ctrl.canopy_open;
+    advanceArticulation(m_state.articulation, cmd, m_data->articulation, dt);
+}
+
 void FlightIntegrator::integrateRotation(float dt) {
     // Integrate angular velocity into quaternion via small-angle approximation.
     float p = m_state.omega[0];
@@ -243,6 +256,10 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
 
     // 3. TVC
     advanceTvc(dt, ctrl.tvc_angle_deg);
+
+    // 3b. Actuator transit (#842): gear, flaps, speed-brake, hook and canopy slew toward their
+    // commands BEFORE the aero model runs, so this tick's drag reflects this tick's positions.
+    advanceArticulationState(dt, ctrl);
 
     // 4. Compute atmosphere at current geodetic altitude (uses gravity field for spherical planets).
     float altitude_m = static_cast<float>(m_gravity->geodeticAltitude(m_state.pos_world));
