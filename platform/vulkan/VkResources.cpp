@@ -584,7 +584,7 @@ MeshHandle VkResourceManager::createMesh(const MeshUploadDesc& desc) {
     // ── Node graph: parents, rest transforms, DFS order, damage classification ─
     GpuMesh mesh{};
     mesh.contentForward = desc.contentForward;
-    mesh.nodePlan = buildMeshNodePlan(model);
+    mesh.nodePlan = buildMeshNodePlan(model, desc.variant);
 
     // ── Material upload (#833), one GPU material per referenced glTF material ──
     // The glb references its textures by external URI; only the engine layer can turn a URI into file
@@ -720,8 +720,8 @@ MeshHandle VkResourceManager::createMesh(const MeshUploadDesc& desc) {
                         mesh.nodePlan.globalRest[mp.nodeIndex]);
     }
 
-    // Fallback for a glb with geometry that no scene-graph node references (a hand-built JSON):
-    // draw meshes[0].primitives[0] at identity, the pre-#839 rule.
+    // Fallback for a glb with geometry but no scene graph reaching it (hand-built JSON, or a variant
+    // selector that matched nothing): draw meshes[0].primitives[0] at identity, the pre-#839 rule.
     if (mesh.submeshes.empty() && !model.meshes[0].primitives.empty()) {
         mesh.nodePlan = MeshNodePlan{};
         appendPrimitive(model.meshes[0].primitives[0], 0u, glm::mat4(1.0f));

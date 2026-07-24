@@ -235,8 +235,14 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
             // Livery (#845): swaps textures per material slot, never geometry. The cache key folds in
             // the livery id so two liveries of the same mesh get distinct GPU materials.
             const LiveryTextureSet* livery = resolveLivery(entry.typeIndex);
-            const std::string cacheKey = livery ? (activeMesh + "@@" + livery->id) : activeMesh;
-            mesh = getOrUploadMesh(activeMesh, cacheKey, livery ? livery->overrides : m_noOverrides);
+            // Cache key folds in BOTH the livery id and the variant tag (#882): two liveries, or a
+            // single-seat and a two-seat variant of one family mesh, are distinct GPU meshes.
+            std::string cacheKey = activeMesh;
+            if (!resolved.variant.empty())
+                cacheKey += "#" + resolved.variant;
+            if (livery)
+                cacheKey += "@@" + livery->id;
+            mesh = getOrUploadMesh(activeMesh, cacheKey, livery ? livery->overrides : m_noOverrides, resolved.variant);
             if (mesh.valid())
                 mat = getOrUploadMaterial(cacheKey);
             else
@@ -386,11 +392,13 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
 }
 
 MeshHandle SceneRenderer::getOrUploadMesh(const std::string& name) {
-    return getOrUploadMesh(name, name, m_noOverrides);
+    static const std::string kNoVariant;
+    return getOrUploadMesh(name, name, m_noOverrides, kNoVariant);
 }
 
 MeshHandle SceneRenderer::getOrUploadMesh(const std::string& meshAssetName, const std::string& cacheKey,
-                                          const std::unordered_map<std::string, std::string>& liveryOverrides) {
+                                          const std::unordered_map<std::string, std::string>& liveryOverrides,
+                                          const std::string& variant) {
     auto it = m_meshCache.find(cacheKey);
     if (it != m_meshCache.end())
         return it->second;
@@ -412,6 +420,9 @@ MeshHandle SceneRenderer::getOrUploadMesh(const std::string& meshAssetName, cons
     }
 
     MeshUploadDesc desc{meshAssetName, data->bytes};
+    // Variant node-set (#882): upload only the nodes this entity type selects. Empty keeps the
+    // untagged set — the whole mesh, for every .glb authored before variants existed.
+    desc.variant = variant;
     // Pack-authored meshes are in the standard glTF/Blender content convention (nose +Z); the loader
     // rotates them into the engine body frame (nose +X) on upload (#906). The builtin placeholders and
     // terrain are engine-generated in the body/world frame and keep contentForward false.
@@ -510,11 +521,14 @@ void SceneRenderer::evictMeshCacheKey(const std::string& cacheKey) {
 
 void SceneRenderer::invalidateMesh(std::string_view meshAssetName) {
     const std::string base(meshAssetName);
-    // Evict the plain key and every "<name>@@<livery>" variant.
-    const std::string prefix = base + "@@";
+    // Evict the plain key and every derived key: "<name>#<variant>" (#882) and "<name>@@<livery>"
+    // (#845), in either combination. Both separators are illegal in an asset name, so a prefix match
+    // up to the first separator identifies exactly this mesh's keys.
+    const std::string livery = base + "@@";
+    const std::string variant = base + "#";
     std::vector<std::string> keys;
     for (const auto& [k, _] : m_meshCache)
-        if (k == base || k.compare(0, prefix.size(), prefix) == 0)
+        if (k == base || k.compare(0, livery.size(), livery) == 0 || k.compare(0, variant.size(), variant) == 0)
             keys.push_back(k);
     for (const auto& k : keys)
         evictMeshCacheKey(k);

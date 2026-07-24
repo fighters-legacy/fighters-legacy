@@ -33,13 +33,14 @@ TEST_CASE("GameProtocol: wire struct sizes match natural-aligned layout", "[game
     CHECK(sizeof(fl::PlayerRosterEntry) == 40u); // #996
     CHECK(offsetof(fl::PlayerRosterEntry, factionIndex) == 4u);
     CHECK(offsetof(fl::PlayerRosterEntry, callsign) == 8u);
-    CHECK(sizeof(fl::MsgEntityTypeDef) == 348u); // #38 tail-appended deck footprint (336 -> 348)
+    CHECK(sizeof(fl::MsgEntityTypeDef) == 380u); // #882 tail-appended meshVariant (348 -> 380)
     CHECK(sizeof(fl::MsgFactionDef) == 132u);    // #860: 1+1+2 + 64 + 64
     CHECK(offsetof(fl::MsgEntityTypeDef, name) == 268u);
     CHECK(offsetof(fl::MsgEntityTypeDef, category) == 332u);
     CHECK(offsetof(fl::MsgEntityTypeDef, projectileKind) == 333u);
     CHECK(offsetof(fl::MsgEntityTypeDef, deckLengthM) == 336u); // #38: deck footprint tail-append
     CHECK(offsetof(fl::MsgEntityTypeDef, deckHeightM) == 344u);
+    CHECK(offsetof(fl::MsgEntityTypeDef, meshVariant) == 348u); // #882: variant node-set tail-append
     CHECK(offsetof(fl::MsgFactionDef, factionIndex) == 2u);
     CHECK(offsetof(fl::MsgFactionDef, id) == 4u);
     CHECK(offsetof(fl::MsgFactionDef, name) == 68u);
@@ -201,6 +202,24 @@ TEST_CASE("GameProtocol: MsgEntityTypeDef field offsets (#811 tail-append is add
     CHECK(offsetof(fl::MsgEntityTypeDef, flightModel) == 196u); // starts where the struct used to end
     CHECK(offsetof(fl::MsgEntityTypeDef, payloadMassKg) == 260u);
     CHECK(offsetof(fl::MsgEntityTypeDef, payloadCd0) == 264u);
+}
+
+TEST_CASE("GameProtocol: MsgEntityTypeDef round-trips the variant node-set selector (#882)", "[game_protocol]") {
+    // The client has no pack entity def to read mesh_variant from, so it travels on the type record.
+    fl::MsgEntityTypeDef td{};
+    std::snprintf(td.id, sizeof(td.id), "fl-base:mig21u");
+    std::snprintf(td.mesh, sizeof(td.mesh), "mig21/mig21");
+    std::snprintf(td.meshVariant, sizeof(td.meshVariant), "two_seat");
+
+    std::vector<uint8_t> buf;
+    fl::appendMsg(buf, td);
+    fl::MsgEntityTypeDef out{};
+    REQUIRE(fl::readMsg(buf.data(), buf.size(), out));
+    CHECK(std::string(out.meshVariant) == "two_seat");
+
+    // Absent is the norm: an untagged mesh selects the whole (shared) node set.
+    fl::MsgEntityTypeDef plain{};
+    CHECK(plain.meshVariant[0] == '\0');
 }
 
 TEST_CASE("GameProtocol: MsgEntityTypeDef round-trips flightModel and payload", "[game_protocol]") {

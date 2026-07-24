@@ -212,6 +212,7 @@ target_link_libraries(validate-entity-lib
             engine-sensor
             engine-weapon
             platform-stdfs
+            validate-mesh-lib # #882: reads a mesh's fl_variant tags to cross-check mesh_variant
             tomlplusplus::tomlplusplus)
 target_include_directories(validate-entity-lib PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/validate-entity")

@@ -5795,6 +5795,9 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned, PeerRo
             typeDef.deckWidthM = def->deck->widthM;
             typeDef.deckHeightM = def->deck->heightM;
         }
+        // Variant node-set (#882): which tagged node-set of a shared family mesh the client draws.
+        // A render-only selection, but the client has no pack entity def to read it from.
+        std::snprintf(typeDef.meshVariant, sizeof(typeDef.meshVariant), "%s", def->meshVariant.c_str());
 
         appendMsg(buf, typeDef);
     }

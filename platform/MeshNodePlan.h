@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <glm/mat4x4.hpp>
 #include <span>
+#include <string_view>
 #include <vector>
 
 namespace tinygltf {
@@ -37,8 +38,8 @@ struct MeshPlanNode {
     bool damageVariant{false};
     // A "<name>_b" counterpart exists for this node (or an ancestor): hidden when kRenderFlagDamaged.
     bool shadowedByDamage{false};
-    // Reachable from the scene graph. An absent node keeps its default identity rest transform so a
-    // stale NodePose targeting it cannot move live geometry.
+    // Reachable from the scene graph AND selected by the variant filter. An absent node keeps its
+    // default identity rest transform so a stale NodePose targeting it cannot move live geometry.
     bool present{false};
 };
 
@@ -58,7 +59,13 @@ struct MeshNodePlan {
 };
 
 // Walk the default scene (or, absent a scene, every parentless node) depth-first.
-[[nodiscard]] MeshNodePlan buildMeshNodePlan(const tinygltf::Model& model);
+//
+// `variant` selects the #882 variant node-set: a node whose glTF `extras` carry `fl_variant` (a
+// string or an array of strings) is included only when that list contains `variant`; UNTAGGED NODES
+// ARE ALWAYS PRESENT (the shared airframe). An excluded node prunes its whole subtree. Empty
+// `variant` — the default — therefore selects exactly the untagged set, which is every mesh authored
+// before variants existed.
+[[nodiscard]] MeshNodePlan buildMeshNodePlan(const tinygltf::Model& model, std::string_view variant = {});
 
 // Compose each present node's global transform, letting `poses` replace a node's rest local TRS
 // (#841). `out` is resized to nodes.size(); absent nodes stay identity. One forward pass — `order`

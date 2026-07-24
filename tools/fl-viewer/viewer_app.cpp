@@ -335,6 +335,9 @@ class ViewerApp : public IWindowEventHandler {
             label += " [_b]";
         if (!node.engineDrawn && node.meshIndex >= 0)
             label += " (not drawn)";
+        // Variant node-set tags (#882): a tagged node draws only for an entity selecting that variant.
+        for (const std::string& tag : node.variantTags)
+            label += " {" + tag + "}";
         char id[32];
         std::snprintf(id, sizeof(id), "n%d", idx);
         std::vector<int> children;

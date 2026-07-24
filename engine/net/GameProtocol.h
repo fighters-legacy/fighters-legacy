@@ -237,8 +237,14 @@ struct MsgEntityTypeDef {
     float deckLengthM{0.f};
     float deckWidthM{0.f};
     float deckHeightM{0.f};
-}; // 348 bytes, align 4
-static_assert(sizeof(MsgEntityTypeDef) == 348u, "MsgEntityTypeDef wire size changed");
+    // --- appended at the tail (#882); additive, prior offsets unchanged ---
+    // Variant node-set selector (EntityDef::meshVariant): which tagged node-set of the shared family
+    // mesh this type draws. Empty = the untagged set, i.e. every mesh authored before variants
+    // existed. Purely a RENDER selection, resolved client-side at mesh upload — the server never
+    // needs it, but the client cannot ask the pack for an entity def it does not have.
+    char meshVariant[32]{};
+}; // 380 bytes, align 4
+static_assert(sizeof(MsgEntityTypeDef) == 380u, "MsgEntityTypeDef wire size changed");
 static_assert(alignof(MsgEntityTypeDef) == 4u, "MsgEntityTypeDef alignment changed");
 static_assert(sizeof(MsgEntityTypeDef) % alignof(MsgEntityTypeDef) == 0u, "MsgEntityTypeDef not record-aligned");
 static_assert(offsetof(MsgEntityTypeDef, id) == 4u, "MsgEntityTypeDef::id offset changed");
@@ -252,6 +258,7 @@ static_assert(offsetof(MsgEntityTypeDef, category) == 332u, "MsgEntityTypeDef::c
 static_assert(offsetof(MsgEntityTypeDef, projectileKind) == 333u, "MsgEntityTypeDef::projectileKind offset changed");
 static_assert(offsetof(MsgEntityTypeDef, deckLengthM) == 336u, "MsgEntityTypeDef::deckLengthM offset changed");
 static_assert(offsetof(MsgEntityTypeDef, deckHeightM) == 344u, "MsgEntityTypeDef::deckHeightM offset changed");
+static_assert(offsetof(MsgEntityTypeDef, meshVariant) == 348u, "MsgEntityTypeDef::meshVariant offset changed");
 
 // Faction index -> id/name, sent once after ConnectAck for every registered faction (#860). The
 // client maps a snapshot entity's factionIndex (carried on full records) to a display name for the

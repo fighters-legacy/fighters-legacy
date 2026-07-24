@@ -9,6 +9,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **renderer**: entity-selected variant node-sets (#882) — one `.glb` serves a whole airframe family.
+  Tag a glTF node with `extras: {"fl_variant": "two_seat"}` (a string or an array) and an entity def
+  picks its set with `mesh_variant = "two_seat"`; **untagged nodes are always drawn**, so the shared
+  airframe stays shared and every mesh authored before this is unaffected. A pack can now ship one
+  MiG-21 mesh serving both the bis and the two-seat U instead of N `.glb` + LOD + damage sets to keep
+  in sync. Purely load-time and static — node *presence*, never node *pose* (that is articulation,
+  #837): no per-frame cost, and the selector rides `MsgEntityTypeDef` as a tail-append because the
+  client has no pack entity def to read it from. `validate-entity --pack` errors when `mesh_variant`
+  matches no tag in the referenced mesh and lists the tags the file does declare — without it a typo
+  renders as the bare shared airframe with no diagnostic anywhere; `fl-viewer`'s node panel shows each
+  node's tags.
 - **renderer**: node-aware glTF loader and per-node submesh draws (#839, Epic #837) — the foundation
   articulation, the `_b` damage convention and LOD selection all needed. `createMesh` read only
   `meshes[0].primitives[0]` and ignored node transforms entirely, so a multi-node aircraft was

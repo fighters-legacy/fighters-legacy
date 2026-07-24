@@ -137,12 +137,15 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             td.dmgMesh[sizeof(td.dmgMesh) - 1] = '\0';
             td.flightModel[sizeof(td.flightModel) - 1] = '\0';
             td.name[sizeof(td.name) - 1] = '\0';
+            td.meshVariant[sizeof(td.meshVariant) - 1] = '\0';
             if (registry.findById(td.id))
                 continue; // already registered
             fl::EntityDef def;
             def.id = td.id;
             def.mesh = td.mesh;
             def.classicDamageMesh = td.dmgMesh;
+            // Variant node-set (#882): which tagged nodes of the shared family mesh this type draws.
+            def.meshVariant = td.meshVariant;
             // Friendly display name for the observer entity picker (#860); empty on the wire means the
             // picker falls back to the id.
             def.name = td.name[0] ? td.name : td.id;

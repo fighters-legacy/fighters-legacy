@@ -1168,6 +1168,8 @@ void Game::initGameSystems() {
                 return false;
             out.meshName = def->mesh;
             out.damageMeshName = def->classicDamageMesh;
+            // Variant node-set (#882): which tagged nodes of a shared family mesh this type draws.
+            out.variant = def->meshVariant;
             // Category + projectile kind arrive on MsgEntityTypeDef (#886); a mesh-less type
             // renders as its category's builtin placeholder silhouette.
             out.shape = fl::builtinShapeFor(def->category, def->projectileKind);

@@ -50,6 +50,10 @@ class SceneRenderer {
         std::string meshName;
         std::string damageMeshName;
         BuiltinShape shape{BuiltinShape::Unknown};
+        // Variant node-set selector (#882), from EntityDef::meshVariant. Empty = the untagged node
+        // set, i.e. the whole mesh for every .glb authored before variants existed. Folded into the
+        // mesh cache key, so two variants of one family mesh are two GPU meshes.
+        std::string variant;
     };
 
     // Fills `out` for a typeIndex. Returns true if the type is known; false leaves the
@@ -153,13 +157,15 @@ class SceneRenderer {
     void invalidateAllAssets();
 
   private:
-    // No-livery form: caches under the mesh asset name, no texture overrides.
+    // No-livery, no-variant form: caches under the mesh asset name, no texture overrides.
     MeshHandle getOrUploadMesh(const std::string& name);
-    // Livery-aware form (#845): loads bytes from `meshAssetName`, caches under `cacheKey` (mesh name
-    // plus livery id so two liveries of one mesh do not collide), and applies `liveryOverrides` in the
-    // texture resolver. `cacheKey` also keys the material.
+    // Livery- and variant-aware form (#845/#882): loads bytes from `meshAssetName`, caches under
+    // `cacheKey` (mesh name plus livery id and variant tag, so two liveries or two variants of one
+    // mesh do not collide), applies `liveryOverrides` in the texture resolver, and uploads only the
+    // node set `variant` selects. `cacheKey` also keys the material.
     MeshHandle getOrUploadMesh(const std::string& meshAssetName, const std::string& cacheKey,
-                               const std::unordered_map<std::string, std::string>& liveryOverrides);
+                               const std::unordered_map<std::string, std::string>& liveryOverrides,
+                               const std::string& variant);
     MaterialHandle getOrUploadMaterial(const std::string& cacheKey);
 
     // Resolve (and cache) the livery for an entity type index; nullptr = no livery.

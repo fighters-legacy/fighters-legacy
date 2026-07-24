@@ -4,6 +4,7 @@
 #include "mesh_validator.h"
 
 #include <string>
+#include <vector>
 
 using namespace fl;
 
@@ -50,7 +51,7 @@ TEST_CASE("describeMeshNodes walks the hierarchy and flags conventions (#838)") 
     const MeshNodeInfo& canopy = tree.nodes[1];
     CHECK(canopy.name == "canopy");
     CHECK(canopy.parent == 0);             // child of fuselage
-    CHECK_FALSE(canopy.engineDrawn);       // mesh 1 — the engine draws mesh 0 only
+    CHECK(canopy.engineDrawn);             // #839: every mesh-bearing node in the graph is drawn
     CHECK(canopy.localMatrix[12] == 1.0f); // translation x baked into the matrix
     CHECK(canopy.localMatrix[13] == 2.0f);
     CHECK(canopy.localMatrix[14] == 3.0f);
@@ -58,6 +59,34 @@ TEST_CASE("describeMeshNodes walks the hierarchy and flags conventions (#838)") 
     const MeshNodeInfo& dmg = tree.nodes[2];
     CHECK(dmg.name == "fuselage_b");
     CHECK(dmg.damageVariant); // "_b" convention
+}
+
+TEST_CASE("describeMeshNodes collects fl_variant tags (#882)") {
+    static const char* kVariantGltf = R"({
+      "asset": {"version": "2.0"},
+      "scenes": [{"nodes": [0, 1, 2]}],
+      "nodes": [
+        {"name": "fuselage", "mesh": 0},
+        {"name": "canopy_single", "mesh": 0, "extras": {"fl_variant": "single_seat"}},
+        {"name": "canopy_two", "mesh": 0, "extras": {"fl_variant": ["two_seat", "trainer"]}}
+      ],
+      "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+      "accessors": [{"componentType": 5126, "count": 3, "type": "VEC3"}]
+    })";
+    auto treeOpt = describeMeshNodesFromJson(kVariantGltf);
+    REQUIRE(treeOpt.has_value());
+
+    CHECK(treeOpt->nodes[0].variantTags.empty()); // untagged shared airframe
+    REQUIRE(treeOpt->nodes[1].variantTags.size() == 1);
+    CHECK(treeOpt->nodes[1].variantTags[0] == "single_seat");
+    CHECK(treeOpt->nodes[2].variantTags.size() == 2);
+
+    // The deduped, sorted tag vocabulary validate-entity checks mesh_variant against.
+    const std::vector<std::string> tags = meshVariantTags(*treeOpt);
+    REQUIRE(tags.size() == 3);
+    CHECK(tags[0] == "single_seat");
+    CHECK(tags[1] == "trainer");
+    CHECK(tags[2] == "two_seat");
 }
 
 TEST_CASE("describeMeshNodes returns nullopt on unparseable input (#838)") {

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// MeshNodePlan — the glTF scene-graph walk behind node-aware mesh loading (#839). Pure and GPU-free,
-// so the node hierarchy, damage classification and articulation-pose composition are all testable
-// without a Vulkan device.
+// MeshNodePlan — the glTF scene-graph walk behind node-aware mesh loading (#839) and the #882
+// variant node-set selector. Pure and GPU-free, so the node hierarchy, damage classification,
+// variant filtering and articulation-pose composition are all testable without a Vulkan device.
 
 #include <tiny_gltf.h>
 
@@ -124,6 +124,54 @@ TEST_CASE("buildMeshNodePlan terminates on a cyclic node reference (#839)") {
     })";
     const MeshNodePlan plan = buildMeshNodePlan(parse(json));
     CHECK(plan.order.size() == 2);
+}
+
+// ── #882 variant node-sets ───────────────────────────────────────────────────
+
+namespace {
+// One airframe carrying both canopies: the shared fuselage is untagged, the two canopies are tagged.
+const char* kVariantAircraft = R"({
+  "asset": {"version": "2.0"},
+  "scenes": [{"nodes": [0, 1, 2]}],
+  "nodes": [
+    {"name": "fuselage", "mesh": 0},
+    {"name": "canopy_single", "mesh": 0, "extras": {"fl_variant": "single_seat"}},
+    {"name": "canopy_two", "mesh": 0, "children": [3], "extras": {"fl_variant": ["two_seat", "trainer"]}},
+    {"name": "second_seat", "mesh": 0}
+  ],
+  "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+  "accessors": [{"componentType": 5126, "count": 3, "type": "VEC3"}]
+})";
+} // namespace
+
+TEST_CASE("variant selection keeps untagged nodes and drops non-matching tags (#882)") {
+    const tinygltf::Model model = parse(kVariantAircraft);
+
+    const MeshNodePlan none = buildMeshNodePlan(model, "");
+    CHECK(none.nodes[0].present);       // untagged shared airframe: ALWAYS present
+    CHECK_FALSE(none.nodes[1].present); // no selector -> no tagged node
+    CHECK_FALSE(none.nodes[2].present);
+    CHECK(none.primitives.size() == 1);
+
+    const MeshNodePlan single = buildMeshNodePlan(model, "single_seat");
+    CHECK(single.nodes[0].present);
+    CHECK(single.nodes[1].present);
+    CHECK_FALSE(single.nodes[2].present);
+    CHECK(single.primitives.size() == 2);
+}
+
+TEST_CASE("variant selection matches any tag in a list and prunes the subtree (#882)") {
+    const tinygltf::Model model = parse(kVariantAircraft);
+
+    const MeshNodePlan two = buildMeshNodePlan(model, "trainer"); // second tag of the array
+    CHECK(two.nodes[2].present);
+    CHECK(two.nodes[3].present); // the child rides along with its tagged parent
+    CHECK_FALSE(two.nodes[1].present);
+    CHECK(two.primitives.size() == 3); // fuselage + two-seat canopy + second seat
+
+    // The excluded canopy's subtree goes with it.
+    const MeshNodePlan single = buildMeshNodePlan(model, "single_seat");
+    CHECK_FALSE(single.nodes[3].present);
 }
 
 // ── articulation pose composition ────────────────────────────────────────────

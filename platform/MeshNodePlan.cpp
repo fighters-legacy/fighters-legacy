@@ -37,9 +37,30 @@ glm::mat4 nodeLocalMatrix(const tinygltf::Node& n) {
     return m;
 }
 
+// Variant node-set selection (#882). Untagged nodes are always present — that is the shared
+// airframe, and it is what keeps every mesh authored before this existed unaffected.
+bool nodeMatchesVariant(const tinygltf::Node& n, std::string_view variant) {
+    if (!n.extras.IsObject() || !n.extras.Has("fl_variant"))
+        return true;
+    const tinygltf::Value& tag = n.extras.Get("fl_variant");
+    if (tag.IsString())
+        return !variant.empty() && tag.Get<std::string>() == variant;
+    if (tag.IsArray()) {
+        if (variant.empty())
+            return false;
+        for (std::size_t i = 0; i < tag.ArrayLen(); ++i) {
+            const tinygltf::Value& e = tag.Get(static_cast<int>(i));
+            if (e.IsString() && e.Get<std::string>() == variant)
+                return true;
+        }
+        return false;
+    }
+    return true; // malformed tag: treat as untagged rather than silently dropping geometry
+}
+
 } // namespace
 
-MeshNodePlan buildMeshNodePlan(const tinygltf::Model& model) {
+MeshNodePlan buildMeshNodePlan(const tinygltf::Model& model, std::string_view variant) {
     MeshNodePlan plan;
     const std::size_t nodeCount = model.nodes.size();
     plan.nodes.resize(nodeCount);
@@ -109,6 +130,10 @@ MeshNodePlan buildMeshNodePlan(const tinygltf::Model& model) {
         if (f.node >= nodeCount || visited[f.node])
             continue;
         const tinygltf::Node& gn = model.nodes[f.node];
+        // Variant filtering prunes the whole subtree — a two-seat canopy's children belong to the
+        // two-seat set by construction.
+        if (!nodeMatchesVariant(gn, variant))
+            continue;
         visited[f.node] = true;
 
         MeshPlanNode& mn = plan.nodes[f.node];

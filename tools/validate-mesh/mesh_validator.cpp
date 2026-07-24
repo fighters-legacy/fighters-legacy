@@ -481,7 +481,17 @@ MeshNodeTree buildNodeTree(const tinygltf::Model& model) {
         info.name = node.name;
         info.meshIndex = node.mesh;
         info.damageVariant = node.name.size() >= 2 && node.name.compare(node.name.size() - 2, 2, "_b") == 0;
-        info.engineDrawn = (node.mesh == 0); // the engine draws meshes[0].primitives[0] only
+        info.engineDrawn = node.mesh >= 0; // the engine draws every mesh-bearing node's primitives (#839)
+        // Variant node-set tags (#882): `extras: {"fl_variant": "two_seat"}` or an array of tags.
+        if (node.extras.IsObject() && node.extras.Has("fl_variant")) {
+            const tinygltf::Value& tag = node.extras.Get("fl_variant");
+            if (tag.IsString())
+                info.variantTags.push_back(tag.Get<std::string>());
+            else if (tag.IsArray())
+                for (size_t t = 0; t < tag.ArrayLen(); ++t)
+                    if (const tinygltf::Value& e = tag.Get(static_cast<int>(t)); e.IsString())
+                        info.variantTags.push_back(e.Get<std::string>());
+        }
         composeLocalMatrix(node, info.localMatrix);
         if (node.mesh >= 0 && node.mesh < static_cast<int>(model.meshes.size())) {
             const tinygltf::Mesh& m = model.meshes[node.mesh];
@@ -519,6 +529,16 @@ MeshNodeTree buildNodeTree(const tinygltf::Model& model) {
     return tree;
 }
 } // namespace
+
+std::vector<std::string> meshVariantTags(const MeshNodeTree& tree) {
+    std::vector<std::string> tags;
+    for (const MeshNodeInfo& n : tree.nodes)
+        for (const std::string& t : n.variantTags)
+            tags.push_back(t);
+    std::sort(tags.begin(), tags.end());
+    tags.erase(std::unique(tags.begin(), tags.end()), tags.end());
+    return tags;
+}
 
 std::optional<MeshNodeTree> describeMeshNodesFromJson(std::string_view jsonContent) {
     tinygltf::TinyGLTF loader;

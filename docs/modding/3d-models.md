@@ -182,6 +182,50 @@ by the renderer when present.
 
 ---
 
+## Variant node-sets
+
+One `.glb` can carry the union of an airframe family's geometry, with each entity def selecting the
+node-set it draws. Use it when a variant's silhouette differs visibly — a two-seat trainer canopy, a
+reshaped nose, an enlarged spine — but the rest of the airframe is shared. Subtler differences are
+better handled with *variant-by-data* (one mesh, forked flight model / entity def / loadout).
+
+Tag a node by putting `fl_variant` in its glTF `extras`, as either a string or an array of strings:
+
+```json
+"nodes": [
+  { "name": "fuselage", "mesh": 0 },
+  { "name": "canopy_single", "mesh": 1, "extras": { "fl_variant": "single_seat" } },
+  { "name": "canopy_two",    "mesh": 2, "extras": { "fl_variant": ["two_seat", "trainer"] } }
+]
+```
+
+The entity def picks one tag:
+
+```toml
+[entity]
+mesh         = "mig21/mig21"
+mesh_variant = "two_seat"
+```
+
+Rules:
+
+1. **Untagged nodes are always drawn.** That is the shared airframe, and it is why every mesh
+   authored before this feature is unaffected — no `mesh_variant`, no tags, no change.
+2. A tagged node is drawn only when the entity's `mesh_variant` appears in its tag list. Excluding a
+   node excludes its whole subtree.
+3. This is node **presence**, chosen once at load. Node **pose** is
+   [articulation](#animation-channels) — a different axis. An animated canopy that opens is still a
+   single-seat canopy.
+4. `validate-entity --pack` errors when `mesh_variant` matches no tag in the referenced mesh, and
+   lists the tags the file does declare. Without that check a typo renders as the bare shared
+   airframe with no diagnostic anywhere.
+5. Damage variants compose: a tagged node named `<name>_b` is the damage geometry of that variant.
+
+In Blender, `extras` come from a node's **Custom Properties** (Object Properties → Custom
+Properties); the glTF exporter writes them through verbatim.
+
+---
+
 ## Material requirements
 
 *(Enforced by `validate-mesh`)*

@@ -113,6 +113,13 @@ struct MeshUploadDesc {
     std::string_view name;          // asset name for debug labels / dedup
     std::span<const uint8_t> bytes; // .glb file contents
 
+    // Variant node-set selector (#882). A glTF node tagged `extras: {"fl_variant": "two_seat"}` (or
+    // an array of tags) is uploaded only when its tag list contains this string; UNTAGGED NODES ARE
+    // ALWAYS PRESENT — that is the shared airframe. Empty (the default) selects the untagged set
+    // only, which is every mesh authored before this existed. Load-time and static: node PRESENCE,
+    // never node pose (that is articulation, #837) — no wire growth, no per-frame cost.
+    std::string_view variant{};
+
     // The .glb is authored in the standard glTF/Blender CONTENT convention (nose along +Z); rotate it
     // into the engine body frame (nose along +X) on upload — see platform/MeshOrient.h (#906). Set by
     // the entity-mesh loader for pack-authored aircraft/unit/cockpit/damage meshes. Engine-generated
