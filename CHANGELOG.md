@@ -9,6 +9,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **ai**: a GPU-contention run whose `analyze.py` emitted warnings no longer passes silently on
+  Windows (#1019). The harness README states analyze.py exits non-zero on warnings precisely so "a
+  run whose numbers are not trustworthy must not look like a clean pass", but `Invoke-Run` checked
+  only `driver.py`'s exit code, and the script's final `exit $LASTEXITCODE` reflects `aggregate.py`.
+  Warnings are now recorded per run and reported at the end — named run numbers plus a non-zero exit
+  — rather than thrown on the spot, because aborting run 3 of 5 would discard the runs that already
+  succeeded and skip the aggregate, and the across-run distribution is the entire point of
+  `--repeat`. The sibling `measure_linux.sh`/`measure_macos.sh` have the same missing check but the
+  opposite behaviour (`set -euo pipefail` aborts the loop mid-flight): loud rather than silent, so
+  not the same hazard, and left alone as untestable from this machine. Also removes an em dash from
+  the two new string literals: this file is BOM-less UTF-8, PowerShell 5.1 decodes such a file as
+  the ANSI codepage, and an em dash's third byte (0x94) becomes U+201D — which PowerShell honours as
+  a string delimiter, terminating the string early and breaking the parse. Em dashes are safe in
+  this file's `#` comments, which is where every existing one lives.
+
 - **script**: Lua is now compiled **as C++**, which fixes a crash and closes a whole class of
   undefined behaviour (#1015). Lua raises errors by unwinding from the failure point back to the
   enclosing `lua_pcall`; built as C it does that with `longjmp`, which cannot safely cross a C++
