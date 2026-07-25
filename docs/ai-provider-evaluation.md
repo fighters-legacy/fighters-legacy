@@ -288,8 +288,9 @@ it should still exist, because that is one sweep on one endpoint.
   Windows (CUDA/Vulkan) too. Not run — no such hardware was in reach that session. The harness is
   stdlib-only and OS-agnostic, so those are runs to schedule, not work to build. (The separate
   *contention* question is answered below — see [GPU contention](#gpu-contention-782).)
-- **Ollama only.** `llama-server` (llama.cpp) and vLLM are untested. Both are OpenAI-compatible, so
-  the harness needs only a `--base-url`.
+- **Ollama only for the accuracy/latency suites.** vLLM is untested; both are OpenAI-compatible, so
+  the harness needs only a `--base-url`. `llama-server` (llama.cpp) has since been exercised by the
+  *contention* legs (Windows/NVIDIA-Vulkan and Windows/Intel-Vulkan) but not by the accuracy suites.
 - **Small n.** 26 intent / 6 mission / 8 ops cases, single pass. Enough to separate a 1.5B from a
   14B and to expose a systematic blind spot; not enough to rank two good models a few points apart.
 - **The wingman grammar is provisional.** #610 owns the real vocabulary; the intent suite encodes a
@@ -330,6 +331,7 @@ baseline in the same session. Frame columns are **burst minus that run's own idl
 | Windows 11, RTX 5080 16 GB | Vulkan (llama.cpp) | `qwen2.5-coder:14b` — run 1 | 4.60 ms | 6.84 ms | **+2.24 ms (1.49×)** | +0.01 ms | +2.7 ms | 13 | ~9080 MB§ | 15209 MB‡ |
 | Windows 11, RTX 5080 16 GB | Vulkan (llama.cpp) | `qwen2.5-coder:14b` — run 2 | 4.58 ms | 11.36 ms | **+6.78 ms (2.48×)** | +0.02 ms | +6.9 ms | 11 | ~8940 MB§ | 15209 MB‡ |
 | Windows 11, RTX 5080 16 GB | Vulkan (llama.cpp) | `gemma2:9b` | 4.65 ms | 11.29 ms | **+6.64 ms (2.43×)** | +0.03 ms | +6.7 ms | 11 | ~6600 MB§ | 15209 MB‡ |
+| Windows 11, Intel Core Ultra 7 155U iGPU (32 GB unified) | Vulkan (llama.cpp) | `qwen2.5-3b-instruct-q4_k_m` — 4 runs¶ | 35.02 ms | 56.07 ms | **+20.93 ms (1.60×) [1.56–1.61]** | +1.90 ms | +21.4 ms | n/a‖ | ~2087 MB# | 17605 MB☆ |
 
 Raw artifacts (frame samples, driver phases, sysinfo) are written to
 `tools/gpu_contention/results/`, which is git-ignored — re-run to reproduce rather than reading a
@@ -350,6 +352,25 @@ figure. Treat it as approximate; the CUDA rows' numbers come from `/api/ps` dire
 The two `qwen2.5-coder:14b` Vulkan rows are the **same configuration measured twice**, listed
 separately rather than averaged because the spread between them is the most important thing the
 Windows leg found. See *Run-to-run variance* below.
+
+¶ The Intel row is the first cell measured with `--repeat` (#1019): 5 runs, reported as median
+[min–max]. It is **4 runs, not 5** — run 1 sat on a different vsync divisor for its entire duration
+and is a separate population, not an outlier to average in. The full 5-run aggregate and why the
+divisor matters are in *The Intel iGPU row is vsync-divisor-locked* below.
+
+‖ Not comparable. The analyzer's hitch counter is a fixed >33 ms threshold, and this client's
+*idle* frame cadence is 33.3 ms, so it counted 7757 of 14200 frames as hitches at idle. The metric
+is meaningful only when the frame interval is well under 33 ms. Its sibling `stalls_over_50ms` (182
+per run) is the usable signal here.
+
+\# `llama-server` exposes no `/api/ps` equivalent, so this is a direct per-process reading of the
+`\GPU Process Memory(<pid>)\Shared Usage` counter for the `llama-server` process (2086.6 MB), not a
+whole-device delta. It is the model's actual footprint, and it lives in *shared* memory — see below.
+
+☆ Unified memory, and the most misleading number in the table: 17605 MB is what
+`VK_EXT_memory_budget` reports on a machine whose GPU has **no dedicated VRAM at all**. It is a
+share of the 32 GB of system RAM, and it did not move by a single MB across any of the five runs
+with a 2 GB model resident.
 
 ### What the numbers mean
 
@@ -428,7 +449,76 @@ the measurement N times against the same warm model, and aggregates the runs int
 value instead of a lone number inviting the over-reading above. Whether the CUDA/Vulkan
 same-queue-family difference is real or below the noise floor is now a `--repeat 5` per backend
 away — ideally on a second GPU, since one card's driver behaviour is not a general answer. Until
-those runs are done the table above stays single-run and its backend ordering is not to be read.
+those runs are done the RTX 5080 rows above stay single-run and their backend ordering is not to be
+read.
+
+### The Intel iGPU row is vsync-divisor-locked, and that is the whole story (#1019)
+
+The first `--repeat 5` cell (Intel Core Ultra 7 155U integrated graphics, Vulkan/llama.cpp, a 3B
+model — the "second GPU, unified memory, no headroom" case #1016 asked for) produced a **5-run
+verdict of "unstable"**: p99 ratio median 1.59× with a range of [0.88–1.61], a spread of 0.73×
+against an effect of 0.59×, which the harness correctly refuses to call a point value.
+
+That verdict is right, and its cause is not noise. **This client is in FIFO/vsync on a 60 Hz panel
+and cannot hold 60 fps, so it sits on an integer divisor of the refresh interval.** Bucketing every
+post-settle frame to the nearest multiple of 16.67 ms:
+
+| | 2× (33.3 ms) | 3× (50.0 ms) | 4× (66.7 ms) | 5× (83.3 ms) |
+|---|---:|---:|---:|---:|
+| run 1 | — | 15.9 % | **73.6 %** | 9.2 % |
+| run 2 | **96.9 %** | 3.0 % | — | — |
+| run 5 | **96.9 %** | 3.1 % | — | — |
+
+Runs 2–5 sat at 30 fps; run 1 sat at 15 fps for its entire duration. Those are two different
+operating points, not one noisy one, and averaging across them is what produces the 0.73× spread.
+Aggregating the four same-divisor runs flips the harness's own verdict:
+
+```
+Frame p99 ratio | 1.60x [1.56–1.61]      p99 stability: p99 is stable across runs
+Frame p95 delta | 16.29ms [16.11–16.49]  (spread 0.05x vs 0.60x effect); the median is
+Frame mean delta| 1.90ms [1.81–1.91]     a defensible point value.
+```
+
+**So the tail cost here is exactly one missed vsync interval.** The Δ p95 of +16.29 ms is not an
+approximation of 16.67 ms — it *is* the refresh interval, because what a burst does is push ~3 % of
+frames from two intervals to three. This is the same flat-mean/heavy-tail signature as every other
+platform (mean +1.90 ms), expressed on a quantized frame clock.
+
+Three things follow, and they matter beyond this one machine:
+
+- **A cell is only aggregatable within one vsync divisor.** The refuse-to-blend guard in
+  `aggregate.py` compares model/GPU/OS/label; it cannot see that run 1 was at a different operating
+  point, so it blended them. On a client that can be vsync-pinned, the divisor is a cell-identity
+  field in fact if not in code. Recording the display refresh rate and the observed modal frame
+  interval per run would let this be checked rather than reconstructed afterwards.
+- **p95 was stable where p99 was not.** Across all five runs *including* the 15 fps one, Δ p95 stayed
+  within [15.16–16.49] ms while Δ p99 ranged over [−12.67, +21.40]. Quantized frame clocks put the
+  action at p95; p99 lands wherever the next divisor happens to be. #1016's conclusion — report the
+  range, not a lone p99 — holds, and on this hardware class p95 is the more informative statistic.
+- **A slower client can measure a *smaller* tail delta.** Run 1's p99 went **down** (0.88×): at a
+  66.7 ms cadence there are four refresh intervals of slack per frame for inference to hide in, and
+  its idle baseline already carried the 83 ms tail. A "we tested on a weak GPU and it was fine"
+  reading of such a run would be exactly backwards.
+
+Note this is a *different* failure mode from the RTX 5080 Vulkan pair above, which swung 1.49× →
+2.48× at an unchanged 240 Hz cadence. That remains unexplained run-to-run variance. This one has a
+mechanism.
+
+**Unified memory on Windows: the budget number is worse than useless.** The macOS row established
+that `VK_EXT_memory_budget` reports a *recommended working set* rather than a pool on unified
+memory; the Windows/Intel row sharpens it. This GPU has **no dedicated VRAM at all** — the
+`\GPU Process Memory\Dedicated Usage` counter is not zero on this box, it is
+**absent** (`dedicated=unavailable` in the sysinfo; the harness reports "could not measure" rather
+than fabricating a zero, per #1019's capture fix in 12e6786). Meanwhile the Vulkan budget reported a
+flat **17605 MB** — over half the machine's RAM, unmoved across all five runs with a 2 GB model
+resident and the renderer holding 657 MB. Shared usage, the counter that *can* see it, went
+3176 → 3960 MB across the run; note the model was already loaded when the runner took its `before`
+sample, so that +784 MB is the renderer arriving, not the model. The model's own 2086.6 MB was read
+separately, per-process, before the run. So the guidance from the Windows/NVIDIA row is not merely
+reaffirmed but strengthened: on the two
+platforms where the memory is genuinely shared, the Vulkan budget will happily tell a client it has
+17 GB free on hardware that has no VRAM whatsoever. **Any "can I fit a local model" check must read
+an OS-level per-process counter, and must distinguish "unavailable" from "zero".**
 
 **The VRAM budget does not shrink on Windows — which makes the capacity risk *less* visible, not
 less real.** On Linux a resident 14B cut the budget the driver offered the renderer from 6939 MB to
@@ -443,14 +533,23 @@ platform most players use.
 
 **None of this changes the #769 hosting decision**, which rests on accuracy, keep-warm cost and
 where the data already is. What it changes is the honesty of the surrounding claim: client-local
-inference is now measured rather than assumed on all three platforms #609 asked about, and the
-measurement says the cost is real but character-dependent: hitching on a discrete GPU with headroom
-— mild on Linux, up to 2.5× the p99 on Windows — VRAM-dominated on a card without headroom, and a
-sustained frame-time tax, roughly a halved frame rate for the burst's duration, on unified-memory
-Apple Silicon where GPU time rather than memory capacity is the scarce resource. Two Windows
-findings sharpen the picture without changing it: the tail cost varies enough run to run that a
-single measurement cannot rank inference backends, and the Vulkan memory budget stays flat under
-WDDM, so a client cannot use it to decide whether a local model fits.
+inference is now measured rather than assumed on all three platforms #609 asked about, and on two
+GPU classes rather than one. The cost is real but character-dependent: hitching on a discrete GPU
+with headroom — mild on Linux, up to 2.5× the p99 on Windows — VRAM-dominated on a card without
+headroom, a sustained frame-time tax of roughly a halved frame rate on unified-memory Apple Silicon
+where GPU time rather than capacity is scarce, and on an integrated GPU already vsync-pinned below
+refresh, **one additional missed refresh interval at p95** (+16.3 ms of a 16.67 ms interval, 1.60×
+the p99). Three findings sharpen the picture without changing it: the tail cost varies enough run to
+run that a single measurement cannot rank inference backends; the Vulkan memory budget stays flat
+under WDDM and is outright meaningless on an iGPU with no dedicated VRAM, so a client cannot use it
+to decide whether a local model fits; and on a vsync-pinned client the frame clock is quantized, so
+the divisor a run happens to land on — not the inference — can dominate the p99 it reports.
+
+The integrated-GPU row also retires one convenient assumption. "A weak GPU will show the effect
+most clearly" is false: the 15 fps run showed it *least* clearly, because a longer frame interval is
+a larger place to hide inference. The configuration that suffers is not the slowest one; it is the
+one sitting just barely inside its frame budget, which is where a divisor drop costs a visible half
+of the frame rate.
 
 ### Reading the VRAM columns
 
@@ -464,15 +563,20 @@ Two distinct measurements, and they are not interchangeable:
   with a 9 GB model resident. Do not build a "can I fit a local model" check on this number.
 - **Model VRAM** lives in the inference server's process, which the game's Vulkan view cannot see.
   It comes from Ollama's `/api/ps`, with `nvidia-smi --query-compute-apps` (Linux/Windows NVIDIA) or
-  the `\GPU Process Memory(*)\Dedicated Usage` counter (other Windows GPUs) captured alongside.
-  `llama-server` exposes nothing equivalent, so the Vulkan-backend rows fall back to whole-device
-  `nvidia-smi` readings differenced against a model-free baseline.
+  the `\GPU Process Memory(*)\Dedicated Usage` **and `Shared Usage`** counters (other Windows GPUs)
+  captured alongside. `llama-server` exposes nothing equivalent, so the Vulkan-backend rows fall back
+  to whole-device `nvidia-smi` readings differenced against a model-free baseline, or — on the Intel
+  row — to a direct per-process read of the shared-usage counter.
 
-**On Apple Silicon neither reading means what it means on a discrete GPU.** Unified memory has no
-separate VRAM pool and no per-process GPU memory API; the model and the renderer draw on the same
-system RAM, and what MoltenVK reports through `VK_EXT_memory_budget` is a Metal heap's *recommended
-working set*, not a dedicated allocation. Read the macOS row as a trend across phases, not as an
-absolute.
+**On unified memory neither reading means what it means on a discrete GPU**, and this now has two
+independent confirmations. Apple Silicon has no separate VRAM pool and no per-process GPU memory
+API; what MoltenVK reports through `VK_EXT_memory_budget` is a Metal heap's *recommended working
+set*, not a dedicated allocation. Windows-on-Intel-iGPU is the same situation with a different
+reporting quirk: `Dedicated Usage` is **absent rather than zero** (so an unguarded read of it
+records nothing and looks like success), `Shared Usage` is where both the model and the renderer
+actually appear, and the Vulkan budget advertises ~half of system RAM on a GPU with no VRAM at all.
+Read both unified-memory rows as trends across phases, never as absolutes — and when writing code
+against these counters, treat "the counter does not exist" as its own outcome.
 
 ## Recommended defaults
 

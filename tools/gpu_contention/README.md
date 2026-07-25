@@ -94,6 +94,26 @@ model/GPU/OS/label), which would manufacture a spread out of real differences.
 python3 tools/gpu_contention/aggregate.py --reports results/windows_vulkan_*_run*.json
 ```
 
+### On a vsync-pinned client, the divisor is part of the cell (#1019)
+
+The first `--repeat 5` run (Intel iGPU, 60 Hz panel) returned an *unstable* verdict for a reason the
+refuse-to-blend guard cannot see: the client could not hold 60 fps, so it sat on an integer divisor
+of the refresh interval — 30 fps for four runs, 15 fps for one — and those are two operating points,
+not one noisy one. Averaging across them manufactured the spread.
+
+Two practical consequences when reading a `--repeat` aggregate from any vsync-limited client:
+
+- **Check the modal frame interval per run before trusting the aggregate.** If the runs do not share
+  a divisor, aggregate them in groups that do (`--reports` takes an explicit list for exactly this).
+  Same-divisor runs from that machine agreed to within 0.05× on the p99 ratio.
+- **Prefer Δ p95 to Δ p99 on a quantized frame clock.** Δ p95 held within 1.3 ms across all five
+  runs *including* the odd one; Δ p99 ranged over 34 ms, because p99 lands wherever the next divisor
+  is. On that machine the real effect was exactly one missed refresh interval.
+
+Also note the hitch counter is a fixed >33 ms threshold, so it is meaningless when the frame cadence
+is itself ≥33 ms (it counted over half of all *idle* frames as hitches there); use
+`stalls_over_50ms`, or read the phase table's percentiles directly.
+
 ### Pin the model first
 
 ```bash
