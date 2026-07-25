@@ -103,16 +103,34 @@ not one noisy one. Averaging across them manufactured the spread.
 
 Two practical consequences when reading a `--repeat` aggregate from any vsync-limited client:
 
-- **Check the modal frame interval per run before trusting the aggregate.** If the runs do not share
-  a divisor, aggregate them in groups that do (`--reports` takes an explicit list for exactly this).
-  Same-divisor runs from that machine agreed to within 0.05× on the p99 ratio.
+- **Check the idle frame interval per run before trusting the aggregate.** Each report records
+  `idle_frame_interval_median_ms`, and the aggregate reports it as a row and **warns when the runs
+  disagree by more than 20 %** — that is the divisor showing up. Aggregate the runs that share a
+  cadence (`--reports` takes an explicit list for exactly this). Same-divisor runs from that machine
+  agreed to within 0.05× on the p99 ratio.
 - **Prefer Δ p95 to Δ p99 on a quantized frame clock.** Δ p95 held within 1.3 ms across all five
   runs *including* the odd one; Δ p99 ranged over 34 ms, because p99 lands wherever the next divisor
   is. On that machine the real effect was exactly one missed refresh interval.
 
-Also note the hitch counter is a fixed >33 ms threshold, so it is meaningless when the frame cadence
-is itself ≥33 ms (it counted over half of all *idle* frames as hitches there); use
-`stalls_over_50ms`, or read the phase table's percentiles directly.
+### The hitch counter is relative to the run's own baseline (#1022)
+
+A frame counts as a hitch when it exceeds **2× that run's median idle frame interval**, and the
+threshold is calibrated once off the idle phase and then applied to every phase (calibrating per
+phase would define the burst's hitches in terms of the burst's own slowness and could never show
+contention at all). Both numbers are in the report as `hitch_threshold_ms` and
+`idle_frame_interval_median_ms`, and the per-run markdown states them above the phase table.
+
+This replaced a fixed `>33.3 ms` threshold, which was degenerate on any client whose ordinary cadence
+already sat at or past it — on the #1019 iGPU it scored 7757 of 14200 *idle* frames as hitches. It
+also means **hitch counts from before this change are not comparable** with ones after it, which is
+why report `schema_version` went to 2 and `aggregate.py` refuses to blend the two.
+
+`stalls_over_50ms` is deliberately still absolute: it is the band a player reads as a stutter rather
+than as general slowness, which is a property of perception, not of the client's frame rate.
+
+With no idle phase there is nothing to calibrate against, so the hitch metrics report `null` / `n/a`
+rather than falling back to a fixed number — "could not measure" and "measured zero" are different
+findings.
 
 ### Pin the model first
 

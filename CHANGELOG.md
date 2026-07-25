@@ -7,6 +7,29 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **ai**: the GPU-contention hitch counter is now calibrated per run at **2× that run's median idle
+  frame interval**, replacing a fixed `>33.3 ms` threshold (#1022). The fixed threshold measured a
+  different thing on every row of the results table — on a client idling at 4.6 ms a 33 ms frame is a
+  severe stall, on one idling at 33.3 ms it is an ordinary frame — and on the #1019 Intel iGPU, whose
+  idle cadence *is* 33.3 ms, it scored 7757 of 14200 **idle** frames as hitches in phases with no
+  inference running at all. Relative to the baseline, "hitch" means the same thing on a 240 Hz client
+  and a 30 fps one. The threshold is calibrated once off the idle phase and applied to every phase:
+  calibrating per phase would define the burst's hitches in terms of the burst's own slowness and
+  could never show contention. `stalls_over_50ms` stays absolute, being a band of human perception
+  rather than a property of the frame rate. With no idle phase there is nothing to calibrate against,
+  so the hitch metrics report `null`/`n/a` rather than a fixed fallback — "could not measure" and
+  "measured zero" are different findings. **This invalidates the `Hitches` column of the #782 results
+  table**, whose values were all measured under the old threshold; they are retained, marked and
+  footnoted as not comparable across rows, and will be re-based as each cell is re-measured. Reports
+  gain `hitch_threshold_ms` and `idle_frame_interval_median_ms`, and `schema_version` goes to 2 so
+  `aggregate.py` refuses to blend pre- and post-change runs. That new frame-interval field also lets
+  the aggregate catch what the refuse-to-blend guard structurally could not (#1019): runs sitting on
+  different **vsync divisors** — every declared field identical, but a 15 fps run and a 30 fps run are
+  two populations, not one noisy cell — now warn when their idle cadences differ by more than 20 %,
+  and the interval is reported as an aggregate row.
+
 ### Fixed
 
 - **ai**: a GPU-contention run whose `analyze.py` emitted warnings no longer passes silently on
