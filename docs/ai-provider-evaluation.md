@@ -325,8 +325,11 @@ baseline in the same session. Frame columns are **burst minus that run's own idl
 | Linux, RTX 5080 16 GB | CUDA (Ollama) | `qwen2.5-coder:14b` | 4.42 ms | 6.68 ms | **+2.26 ms (1.51×)** | +0.01 ms | +13.8 ms | 22 | 9031 MB | 4556 MB |
 | Linux, RTX 5080 16 GB | CUDA (Ollama) | `gemma2:9b` | 4.41 ms | 6.67 ms | **+2.26 ms (1.51×)** | +0.06 ms | +5.1 ms | 8 | 5971 MB | 6939 MB |
 | macOS 26.5, Apple M4 Pro 64 GB | Metal (Ollama) | `qwen2.5-coder:14b` | 14.45 ms | 27.29 ms | **+12.84 ms (1.89×)** | **+9.53 ms** | +13.8 ms | 3 | 14558 MB | 53084 MB† |
-| Windows, RTX 5080 | CUDA (Ollama) | — | | | | | | | | *pending run* |
-| Windows, RTX 5080 | Vulkan (llama.cpp) | — | | | | | | | | *pending run* |
+| Windows 11, RTX 5080 16 GB | CUDA (Ollama) | `qwen2.5-coder:14b` | 4.59 ms | 8.46 ms | **+3.87 ms (1.84×)** | +0.02 ms | +6.3 ms | 12 | 9031 MB | 15209 MB‡ |
+| Windows 11, RTX 5080 16 GB | CUDA (Ollama) | `gemma2:9b` | 4.63 ms | 8.55 ms | **+3.92 ms (1.85×)** | +0.01 ms | +4.3 ms | 13 | 5971 MB | 15209 MB‡ |
+| Windows 11, RTX 5080 16 GB | Vulkan (llama.cpp) | `qwen2.5-coder:14b` — run 1 | 4.60 ms | 6.84 ms | **+2.24 ms (1.49×)** | +0.01 ms | +2.7 ms | 13 | ~9080 MB§ | 15209 MB‡ |
+| Windows 11, RTX 5080 16 GB | Vulkan (llama.cpp) | `qwen2.5-coder:14b` — run 2 | 4.58 ms | 11.36 ms | **+6.78 ms (2.48×)** | +0.02 ms | +6.9 ms | 11 | ~8940 MB§ | 15209 MB‡ |
+| Windows 11, RTX 5080 16 GB | Vulkan (llama.cpp) | `gemma2:9b` | 4.65 ms | 11.29 ms | **+6.64 ms (2.43×)** | +0.03 ms | +6.7 ms | 11 | ~6600 MB§ | 15209 MB‡ |
 
 Raw artifacts (frame samples, driver phases, sysinfo) are written to
 `tools/gpu_contention/results/`, which is git-ignored — re-run to reproduce rather than reading a
@@ -335,6 +338,18 @@ committed blob.
 † Apple Silicon has unified memory: the "Game VRAM budget" is what MoltenVK reports as the Metal
 heap's *recommended working set* (≈ the whole 64 GB machine), not a dedicated pool that a resident
 model shrinks. See *Reading the VRAM columns* below.
+
+‡ The Windows budget figure is **not** a typo for the Linux one on the same card: WDDM reports the
+full heap regardless of what another process holds. See *The VRAM budget does not shrink on Windows*
+below — it is a difference in what the driver reports, not in what is available.
+
+§ `llama-server` exposes no equivalent of Ollama's `/api/ps`, so the Vulkan rows' model footprint is
+an `nvidia-smi` delta against a measured model-free desktop baseline of 2928 MB, not a per-process
+figure. Treat it as approximate; the CUDA rows' numbers come from `/api/ps` directly.
+
+The two `qwen2.5-coder:14b` Vulkan rows are the **same configuration measured twice**, listed
+separately rather than averaged because the spread between them is the most important thing the
+Windows leg found. See *Run-to-run variance* below.
 
 ### What the numbers mean
 
@@ -383,24 +398,67 @@ across the run. Capacity is a non-issue where there is 64 GB to share; what is s
 which is exactly what the mean shift measures. On an 8 GB Apple Silicon machine the balance would
 swing back toward capacity, as it does on the 8 GB discrete card.
 
+**Windows reproduces the Linux shape and roughly doubles its magnitude.** Same card, same scene,
+same workload: the mean stays flat (+0.01 to +0.03 ms across all five Windows runs, matching Linux's
++0.01) while the tail takes a much larger hit — Δ p99 between **+2.2 and +6.8 ms (1.49× to 2.48×)**
+against Linux's +2.26 ms (1.51×), and burst hitch rates 8–15/min against idle baselines that mostly
+record none. So the qualitative finding is platform-independent on a discrete NVIDIA GPU — *the cost
+of local inference is hitching, not slowness* — and Linux's numbers are the optimistic end of it,
+not a representative one. Note these idle baselines are again vsync-pinned (4.17 ms mean at 239 Hz),
+so the Windows rows carry the same "floor, not typical case" caveat as the Linux row.
+
+**Run-to-run variance: this data cannot rank CUDA against Vulkan.** #782 expected the Vulkan backend
+to be the interesting one — inference and the renderer on the same API and the same queue family is
+the configuration most likely to contend. It may well be, but *these runs cannot show it*. The two
+CUDA rows agree almost exactly (1.84× and 1.85×), which invites reading the first Vulkan row's 1.49×
+as "Vulkan contends less". Re-running that identical cell produced **2.48×** — a 3× swing in the
+delta, from the same binary, model, scene and machine minutes apart. The spread *within* one cell is
+larger than the gap *between* backends, so any CUDA-vs-Vulkan ordering read off this table is noise.
+The CUDA pair's agreement is then better explained as coincidence than as precision.
+
+What this does establish: **every** Windows configuration measured — both backends, both model
+sizes, five runs — shows the same flat-mean, heavy-tail signature, with Δ p99 never below +2.2 ms.
+That is the finding. Ranking the backends would need repeated runs per cell and a reported
+distribution rather than a single number; at n=1 the tail statistic is not reproducible enough to
+support it, and the harness's single-run report invites exactly the over-reading described above.
+
+**The VRAM budget does not shrink on Windows — which makes the capacity risk *less* visible, not
+less real.** On Linux a resident 14B cut the budget the driver offered the renderer from 6939 MB to
+4556 MB; that shrinking number is what made the capacity constraint legible from inside the game. On
+Windows the same card with the same 9 GB model resident reported a flat **15209 MB** budget in all
+five runs, because WDDM manages residency and reports the full heap rather than a
+competition-adjusted figure. The memory is no less contended — it is simply not visible through
+`VK_EXT_memory_budget` on this platform. A client that decided whether to load a local model by
+querying its VRAM budget would read "14.5 GB free" on Windows while a 9 GB model sat on the card.
+Any such check must consult an OS-level source, not the Vulkan budget, or it will be wrong on the
+platform most players use.
+
 **None of this changes the #769 hosting decision**, which rests on accuracy, keep-warm cost and
 where the data already is. What it changes is the honesty of the surrounding claim: client-local
-inference is now measured rather than assumed, and the measurement says the cost is real but
-character-dependent: modest hitching on a discrete GPU with headroom, VRAM-dominated on one without,
-and a sustained frame-time tax — roughly a halved frame rate for the burst's duration — on
-unified-memory Apple Silicon, where GPU time rather than memory capacity is the scarce resource.
+inference is now measured rather than assumed on all three platforms #609 asked about, and the
+measurement says the cost is real but character-dependent: hitching on a discrete GPU with headroom
+— mild on Linux, up to 2.5× the p99 on Windows — VRAM-dominated on a card without headroom, and a
+sustained frame-time tax, roughly a halved frame rate for the burst's duration, on unified-memory
+Apple Silicon where GPU time rather than memory capacity is the scarce resource. Two Windows
+findings sharpen the picture without changing it: the tail cost varies enough run to run that a
+single measurement cannot rank inference backends, and the Vulkan memory budget stays flat under
+WDDM, so a client cannot use it to decide whether a local model fits.
 
 ### Reading the VRAM columns
 
 Two distinct measurements, and they are not interchangeable:
 
 - **Game VRAM / budget** is what `VK_EXT_memory_budget` reports for device-local heaps — the
-  renderer's own usage, and what the driver says is available *to it*. Note that the budget is not a
-  constant: a driver reduces it when another process holds memory, so a resident model shows up
-  here as a **shrunken budget** rather than as usage.
+  renderer's own usage, and what the driver says is available *to it*. On Linux the budget is not a
+  constant: the driver reduces it when another process holds memory, so a resident model shows up
+  here as a **shrunken budget** rather than as usage. **This is driver behaviour, not a portable
+  guarantee** — the same card under WDDM reported its full 15209 MB throughout every Windows run
+  with a 9 GB model resident. Do not build a "can I fit a local model" check on this number.
 - **Model VRAM** lives in the inference server's process, which the game's Vulkan view cannot see.
   It comes from Ollama's `/api/ps`, with `nvidia-smi --query-compute-apps` (Linux/Windows NVIDIA) or
   the `\GPU Process Memory(*)\Dedicated Usage` counter (other Windows GPUs) captured alongside.
+  `llama-server` exposes nothing equivalent, so the Vulkan-backend rows fall back to whole-device
+  `nvidia-smi` readings differenced against a model-free baseline.
 
 **On Apple Silicon neither reading means what it means on a discrete GPU.** Unified memory has no
 separate VRAM pool and no per-process GPU memory API; the model and the renderer draw on the same
@@ -525,6 +583,28 @@ then measured as contention):
 Each runner prints the analyzed Markdown and writes it to `tools/gpu_contention/results/`
 (git-ignored). **The analyzer exits non-zero when it emits warnings** — a run whose numbers are not
 trustworthy must not look like a clean pass.
+
+**Windows notes** (from the #782 runs above):
+
+- The Vulkan leg needs an OpenAI-compatible `llama-server` built with `-DGGML_VULKAN=ON`; the
+  prebuilt `llama-*-bin-win-vulkan-x64` release works. It can load the GGUF Ollama already
+  downloaded, so the CUDA and Vulkan legs can share one model file — resolve the blob from
+  `%USERPROFILE%\.ollama\models\manifests\registry.ollama.ai\library\<model>\<tag>` (the layer whose
+  `mediaType` is `application/vnd.ollama.image.model`) and pass it as `-m`:
+
+      llama-server.exe -m <blob> --host 127.0.0.1 --port 8080 -ngl 99 --device Vulkan0 -c 4096 --alias local
+
+- **Stop Ollama before the Vulkan leg and confirm the VRAM actually came back.** Killing `ollama` and
+  `ollama app` leaves its `llama-server.exe` runner alive holding the model; check
+  `nvidia-smi --query-compute-apps` rather than assuming.
+- Run one model per resident server. Two models loaded at once do not fit a 16 GB card, and Ollama
+  will evict one mid-run — evict explicitly with a `keep_alive: 0` request instead.
+- The runner settles for 60 s (`-SettleSeconds`) between the first frame-stats flush and the driver's
+  first phase. The client is not in steady state when recording starts, and the idle phase is the
+  baseline every burst is measured against.
+- **Take more than one sample per cell before comparing backends.** Two runs of one identical
+  configuration minutes apart gave Δ p99 of +2.24 ms and +6.78 ms. A single run is enough to
+  establish the *shape* of the cost and not enough to rank anything.
 
 ### ⚠ `--merge-system`: the trap that produces a confidently wrong number
 
