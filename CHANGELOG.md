@@ -295,6 +295,27 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **renderer**: `VkRenderer::beginFrame` reset the current frame's in-flight fence *before* the
+  per-image wait that observes it, so whenever `m_imagesInFlight[imageIndex]` was the current slot's
+  own fence the wait could never be satisfied and burned its full 100 ms timeout — pinning the
+  renderer at **10 fps** regardless of what it was drawing (#1013). `vkWaitForFences` returning
+  `VK_TIMEOUT` is ignored there, so frames still rendered and GPU time still read a healthy 2.2 ms;
+  only the wall clock showed it. Headless hit this every frame by construction (`m_currentImageIndex`
+  *is* `m_currentFrame`), and windowed hit it whenever an image index recurred on the same frame
+  slot — every frame at the swapchain image count Windows returns on the reference box, which is why
+  it went unnoticed on Linux. Moving the reset after the wait-and-assign restores the canonical
+  order: `hello_triangle` 10 → 240 fps, and the game's observer client 100.5 ms → 4.33 ms mean
+  (232 fps, vsync-pinned at 239 Hz). Found while running the Windows leg of #782, which cannot
+  measure anything while a 2.2 ms GPU workload sits behind a 100 ms stall.
+- **tools**: `measure_windows.ps1` invoked a bare `python`, which on a stock Windows box resolves to
+  the Microsoft Store app-execution alias — it prints "Python was not found" and exits without
+  running the script, so the runner failed before its first phase. It now probes `py -3`, `python3`
+  and `python` by executing each and keeps the first that returns 0. Two further Windows fixes: the
+  default build directory falls back to `build\release-msvc` (the preset `docs/development.md` tells
+  Windows developers to build) instead of requiring `-BuildDir`, and a `-SettleSeconds` window
+  (default 60 s) now runs between the first frame-stats flush and the driver's first phase —
+  starting the baseline at first-flush folded the client's startup settling into the idle
+  distribution, which is what every burst is compared against (#782).
 - **renderer**: `FrameStats::frameDtMs` is now reported uncapped. The particle simulation still
   clamps its timestep at 50 ms (a long stall must not teleport every particle), but the *reported*
   frame time shared that variable, so every frame worse than 50 ms read as exactly 50 — which
