@@ -154,6 +154,7 @@ $ServerLog = Join-Path $WorkDir "server.log"
 $serverProc = $null
 $gameProc = $null
 $reports = @()
+$warnedRuns = @()
 
 # One measurement pass: fresh game, settle, drive, per-run analyze. Sets $script:gameProc so the
 # finally block can reap whatever is live, and appends the run's report JSON path to $script:reports.
@@ -220,6 +221,14 @@ function Invoke-Run {
     $cellLabel = if ($Label) { $Label } else { $Model }
     & $PythonCmd.Exe @($PythonCmd.Pre) "$ScriptDir\analyze.py" --frame-stats $frames --driver $driver `
         --scene $Mission --label $cellLabel --out $reportPrefix
+    # analyze.py exits non-zero when it emits warnings — a run whose numbers are not trustworthy must
+    # not look like a clean pass. Recorded rather than thrown: throwing on run 3 of 5 would discard
+    # the runs that already succeeded AND skip the aggregate, and the distribution is the entire point
+    # of --repeat. Every run finishes; the script's exit code carries the fact (see the tail below).
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  [run $Run/$Repeat] analyze.py exited $LASTEXITCODE - it emitted warnings; see $reportPrefix.md"
+        $script:warnedRuns += $Run
+    }
     $script:reports += "$reportPrefix.json"
 }
 
@@ -256,4 +265,10 @@ if ($Repeat -gt 1) {
     & $PythonCmd.Exe @($PythonCmd.Pre) "$ScriptDir\aggregate.py" --reports @($reports) `
         --out (Join-Path $Results "${Cell}_${Stamp}_agg")
 }
-exit $LASTEXITCODE
+$aggExit = $LASTEXITCODE
+
+if ($warnedRuns.Count -gt 0) {
+    Write-Host "-- analyze.py emitted warnings on run(s) $($warnedRuns -join ', ') of $Repeat - read those per-run reports before quoting any of these numbers"
+    exit 1
+}
+exit $aggExit

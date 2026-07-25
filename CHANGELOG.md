@@ -9,6 +9,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **ai**: a GPU-contention run whose `analyze.py` emitted warnings no longer passes silently on
+  Windows (#1019). The harness README states analyze.py exits non-zero on warnings precisely so "a
+  run whose numbers are not trustworthy must not look like a clean pass", but `Invoke-Run` checked
+  only `driver.py`'s exit code, and the script's final `exit $LASTEXITCODE` reflects `aggregate.py`.
+  Warnings are now recorded per run and reported at the end — named run numbers plus a non-zero exit
+  — rather than thrown on the spot, because aborting run 3 of 5 would discard the runs that already
+  succeeded and skip the aggregate, and the across-run distribution is the entire point of
+  `--repeat`. The sibling `measure_linux.sh`/`measure_macos.sh` have the same missing check but the
+  opposite behaviour (`set -euo pipefail` aborts the loop mid-flight): loud rather than silent, so
+  not the same hazard, and left alone as untestable from this machine. Also removes an em dash from
+  the two new string literals: this file is BOM-less UTF-8, PowerShell 5.1 decodes such a file as
+  the ANSI codepage, and an em dash's third byte (0x94) becomes U+201D — which PowerShell honours as
+  a string delimiter, terminating the string early and breaking the parse. Em dashes are safe in
+  this file's `#` comments, which is where every existing one lives.
+
 - **script**: Lua is now compiled **as C++**, which fixes a crash and closes a whole class of
   undefined behaviour (#1015). Lua raises errors by unwinding from the failure point back to the
   enclosing `lua_pcall`; built as C it does that with `longjmp`, which cannot safely cross a C++
@@ -46,6 +61,33 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **docs**: filled the second-GPU / unified-memory row of the GPU-contention table (#1019) — the
+  first cell measured with `--repeat` (#1016), on an Intel Core Ultra 7 155U integrated GPU
+  (Vulkan/llama.cpp, `qwen2.5-3b-instruct-q4_k_m`, 32 GB unified, 60 Hz panel), and the first
+  execution of the `-Repeat` path on real hardware. The 5-run verdict was *unstable* (p99 ratio
+  median 1.59× over [0.88–1.61]), and the cause turned out to be mechanical rather than noise: the
+  client cannot hold 60 fps, so it sits on an **integer divisor of the refresh interval** — 73.6 % of
+  run 1's frames at 4 × 16.67 ms (15 fps) against 96.9 % of runs 2–5's at 2 × 16.67 ms (30 fps).
+  Those are two operating points, and aggregating the four that share a divisor flips the harness's
+  own verdict to *stable*: **p99 ratio 1.60× [1.56–1.61]**, Δ p95 **+16.29 ms [16.11–16.49]**, Δ mean
+  +1.90 ms. The tail cost is therefore exactly **one missed vsync interval** — a burst pushes ~3 % of
+  frames from two intervals to three — the familiar flat-mean/heavy-tail signature expressed on a
+  quantized frame clock. Three findings generalize past this machine: a cell is only aggregatable
+  *within* one vsync divisor (the refuse-to-blend guard compares model/GPU/OS/label and cannot see
+  the operating point); **Δ p95 is the informative statistic on a quantized clock** (it held within
+  1.3 ms across all five runs while Δ p99 ranged over 34 ms); and a *slower* client can measure a
+  *smaller* tail delta (run 1's p99 fell to 0.88× — a 66.7 ms frame interval is a large place to hide
+  inference), so "we tested on a weak GPU and it was fine" is exactly backwards. On memory, the
+  unified-memory case is now confirmed twice over and is worse than the macOS row suggested: this GPU
+  has no dedicated VRAM, `\GPU Process Memory\Dedicated Usage` is **absent rather than zero** (so an
+  unguarded read records nothing and looks like success — the reason 12e6786 captures shared usage and
+  reports `unavailable` distinctly), and `VK_EXT_memory_budget` advertised a flat **17605 MB** across
+  every run with a 2 GB model resident. A "can I fit a local model" check must read an OS-level
+  per-process counter and must distinguish "unavailable" from "zero". Also documents that the
+  analyzer's fixed >33 ms hitch counter is degenerate when the frame cadence is itself ≥33 ms (it
+  scored 7757 of 14200 *idle* frames as hitches); `stalls_over_50ms` is the usable signal there.
+  Harness README gains the same guidance for anyone reading a `--repeat` aggregate off a vsync-limited
+  client. No engine or tool code changed.
 - **ai**: repeat-and-aggregate mode for the GPU-contention harness (#1016). The Windows runs (#782)
   showed a single run's p99 is not a measurement: re-running the identical Vulkan cell on an RTX 5080
   moved the p99 ratio from 1.49× to 2.48× — the run-to-run spread within one cell exceeded the gap
