@@ -321,7 +321,7 @@ Scene `builtin:sandbox`, observer camera, windowed, Release build. Workload `int
 wingman prompt, prompt-eval dominated. One request in flight, 5 × 20 s bursts against a 60 s idle
 baseline in the same session. Frame columns are **burst minus that run's own idle baseline**.
 
-| OS / GPU | Backend | Model | Idle p99 | Burst p99 | Δ p99 | Δ mean | Worst 1% | Hitches (76 s burst) | Model VRAM | Game VRAM budget |
+| OS / GPU | Backend | Model | Idle p99 | Burst p99 | Δ p99 | Δ mean | Worst 1% | Hitches (76 s burst)◊ | Model VRAM | Game VRAM budget |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
 | Linux, RTX 5080 16 GB | CUDA (Ollama) | `qwen2.5-coder:14b` | 4.42 ms | 6.68 ms | **+2.26 ms (1.51×)** | +0.01 ms | +13.8 ms | 22 | 9031 MB | 4556 MB |
 | Linux, RTX 5080 16 GB | CUDA (Ollama) | `gemma2:9b` | 4.41 ms | 6.67 ms | **+2.26 ms (1.51×)** | +0.06 ms | +5.1 ms | 8 | 5971 MB | 6939 MB |
@@ -349,6 +349,16 @@ below — it is a difference in what the driver reports, not in what is availabl
 an `nvidia-smi` delta against a measured model-free desktop baseline of 2928 MB, not a per-process
 figure. Treat it as approximate; the CUDA rows' numbers come from `/api/ps` directly.
 
+◊ **The Hitches column is retired and is not comparable across these rows (#1022).** Every value
+here was counted against a fixed `>33.3 ms` threshold, which measures a different thing on each row:
+on a client idling at 4.6 ms a 33 ms frame is a severe stall, and on one idling at 33.3 ms it is an
+ordinary frame. The counter is now calibrated per run at **2× that run's own idle median frame
+interval**, so the numbers above cannot be compared with anything measured after that change, or
+with each other across different frame rates. They are left in place rather than deleted because
+they are real counts of frames over 33.3 ms — they are simply not a cross-row statistic. Each row's
+value will be re-based when that cell is next measured; until then read Δ p95 / Δ p99 / worst-1%,
+which are unaffected.
+
 The two `qwen2.5-coder:14b` Vulkan rows are the **same configuration measured twice**, listed
 separately rather than averaged because the spread between them is the most important thing the
 Windows leg found. See *Run-to-run variance* below.
@@ -358,10 +368,12 @@ Windows leg found. See *Run-to-run variance* below.
 and is a separate population, not an outlier to average in. The full 5-run aggregate and why the
 divisor matters are in *The Intel iGPU row is vsync-divisor-locked* below.
 
-‖ Not comparable. The analyzer's hitch counter is a fixed >33 ms threshold, and this client's
-*idle* frame cadence is 33.3 ms, so it counted 7757 of 14200 frames as hitches at idle. The metric
-is meaningful only when the frame interval is well under 33 ms. Its sibling `stalls_over_50ms` (182
-per run) is the usable signal here.
+‖ Not measurable at the time of the run, and the reason the counter was changed. The analyzer's
+hitch threshold was then a fixed >33 ms, and this client's *idle* frame cadence is 33.3 ms, so it
+counted 7757 of 14200 frames as hitches at idle — in phases with no inference running. `#1022`
+replaced the fixed threshold with 2× the run's own idle median, which reads 0 idle hitches on this
+hardware; the cell will carry a real number when it is next measured. `stalls_over_50ms` (182 per
+run) was the usable signal at the time and is unchanged, being an absolute perception band.
 
 \# `llama-server` exposes no `/api/ps` equivalent, so this is a direct per-process reading of the
 `\GPU Process Memory(<pid>)\Shared Usage` counter for the `llama-server` process (2086.6 MB), not a
@@ -394,7 +406,10 @@ per-request GPU work competing for the same device, not a constant tax.
 **Hitching persists past the burst.** Idle recorded zero hitches; the gaps and tail recorded a few
 (3 and 7 for the 14B). Small absolute counts on short windows, so this is a weak signal rather than
 a finding — but recovery is not instantaneous, and a "the model is idle so the frame budget is
-clean" assumption is not supported.
+clean" assumption is not supported. Note these counts predate the relative hitch threshold (◊): on
+this client (4.4 ms idle) the retired 33.3 ms threshold was far *above* the baseline, so it counted
+only severe outliers. A re-measured run will report more hitches here, not fewer, and the
+persists-past-the-burst shape is what to re-check rather than the counts.
 
 **VRAM is the sharper constraint, and it is invisible from inside the renderer.** A resident 14B
 holds 9 GB of a 16 GB card, and the driver responds by cutting what it offers the *game*: the

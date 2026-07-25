@@ -27,9 +27,17 @@ import sys
 import time
 from pathlib import Path
 
-# Matches engine/perf/FrameStatsRecorder.h. A frame slower than this dropped below 30 fps; the
-# stall threshold is the band a player reads as a stutter rather than as general slowness.
-HITCH_MS = 33.3
+# A hitch is measured RELATIVE to the run's own idle baseline: a frame taking more than this
+# multiple of the idle median frame interval. The threshold used to be a fixed 33.3 ms, which is
+# degenerate on any client whose ordinary cadence already sits at or past it — on a 60 Hz panel
+# vsync-locked to 30 fps (a 33.3 ms idle cadence) it scored 7757 of 14200 *idle* frames as hitches,
+# in phases with no inference running at all (#1022). Relative to the baseline, "hitch" means the
+# same thing on a 240 Hz client and a 30 fps one: a frame that took markedly longer than this
+# machine's normal one.
+#
+# The stall threshold stays ABSOLUTE. It is the band a player reads as a stutter rather than as
+# general slowness, and that is a property of human perception, not of the client's frame rate.
+HITCH_IDLE_MULTIPLE = 2.0
 STALL_MS = 50.0
 
 # Frames within this many seconds of a phase start are discarded. A phase boundary is not
@@ -131,6 +139,26 @@ def hitch_rate_per_min(frame_ms_values, threshold_ms):
     return round(over / (total_s / 60.0), 2)
 
 
+def median_frame_ms(frame_ms_values):
+    """The run's typical frame interval. None when there are no frames to characterise."""
+    if not frame_ms_values:
+        return None
+    return round(statistics.median(frame_ms_values), 3)
+
+
+def hitch_threshold_ms(idle_median_ms, multiple=HITCH_IDLE_MULTIPLE):
+    """The hitch threshold for a run: `multiple` × the idle baseline's median frame interval.
+
+    Returns None when there is no idle baseline to calibrate against. The caller then reports the
+    hitch metrics as unavailable rather than substituting a fixed number, because "we could not
+    measure it" and "it measured zero" are different findings — and a fixed number is precisely
+    what #1022 removed.
+    """
+    if not idle_median_ms or idle_median_ms <= 0:
+        return None
+    return round(idle_median_ms * multiple, 3)
+
+
 def model_vram_mb(driver):
     """The model's own VRAM footprint in MB from the endpoint probe, or None if unavailable."""
     for key in ("loaded_models_after", "loaded_models_before"):
@@ -209,6 +237,12 @@ def contention_metrics(frame_report, driver, settle_s=SETTLE_S, scene="", label=
     phases = driver.get("phases", [])
     buckets, outside = classify_samples(samples, phases, settle_s)
 
+    # The hitch threshold is calibrated once, off the idle baseline, and then applied to EVERY phase
+    # — including idle itself. Calibrating per phase would define the burst's hitches in terms of the
+    # burst's own slowness and could not show contention at all.
+    idle_median_ms = median_frame_ms(buckets.get("idle", {}).get("frame_ms", []))
+    hitch_ms = hitch_threshold_ms(idle_median_ms)
+
     per_phase = {}
     for kind, b in buckets.items():
         per_phase[kind] = {
@@ -219,10 +253,10 @@ def contention_metrics(frame_report, driver, settle_s=SETTLE_S, scene="", label=
             # Rate AND count. The rate makes phases of different lengths comparable; the count keeps
             # the reader from over-reading a rate extrapolated from a short window (7 hitches in a
             # 25 s tail is "17/min", which reads far more alarming than it is).
-            "hitches": sum(1 for v in b["frame_ms"] if v > HITCH_MS),
+            "hitches": (sum(1 for v in b["frame_ms"] if v > hitch_ms) if hitch_ms else None),
             "stalls": sum(1 for v in b["frame_ms"] if v > STALL_MS),
             "seconds": round(sum(b["frame_ms"]) / 1000.0, 1),
-            "hitches_per_min": hitch_rate_per_min(b["frame_ms"], HITCH_MS),
+            "hitches_per_min": (hitch_rate_per_min(b["frame_ms"], hitch_ms) if hitch_ms else None),
             "stalls_per_min": hitch_rate_per_min(b["frame_ms"], STALL_MS),
         }
 
@@ -236,7 +270,11 @@ def contention_metrics(frame_report, driver, settle_s=SETTLE_S, scene="", label=
             "frame_mean_ms": round(burst["frame_ms"]["mean"] - base["frame_ms"]["mean"], 3),
             "gpu_mean_ms": round(burst["gpu_ms"]["mean"] - base["gpu_ms"]["mean"], 3),
             "worst_1pct_ms": round(burst["worst_1pct_frame_ms"] - base["worst_1pct_frame_ms"], 3),
-            "hitches_per_min": round(burst["hitches_per_min"] - base["hitches_per_min"], 2),
+            "hitches_per_min": (
+                round(burst["hitches_per_min"] - base["hitches_per_min"], 2)
+                if burst["hitches_per_min"] is not None and base["hitches_per_min"] is not None
+                else None
+            ),
             # Ratio as well as difference: a +4 ms p99 means something very different on a 6 ms
             # baseline than on a 30 ms one.
             "frame_p99_ratio": (
@@ -259,7 +297,10 @@ def contention_metrics(frame_report, driver, settle_s=SETTLE_S, scene="", label=
     }
 
     return {
-        "schema_version": 1,
+        # 2 (#1022): the hitch counter became relative to the idle baseline, so a v1 report's
+        # hitch numbers mean something different and must not be averaged with a v2's. aggregate.py
+        # treats this as a cell-identity field for exactly that reason.
+        "schema_version": 2,
         "gpu_info": frame_report.get("gpu_info", ""),
         # In observer mode the client joined a server that owns the mission, so the game has no
         # scene name of its own to record; the runner passes what it launched the server with.
@@ -279,6 +320,12 @@ def contention_metrics(frame_report, driver, settle_s=SETTLE_S, scene="", label=
         # sanity_warnings.
         "frames_outside_schedule": outside,
         "settle_s": settle_s,
+        # The client's operating point. Recorded because a vsync-limited client settles on an
+        # integer divisor of the refresh interval, and two runs of the "same" cell that landed on
+        # different divisors are two populations rather than one noisy one (#1019). It is also the
+        # calibration input for hitch_threshold_ms, so both live next to each other in the report.
+        "idle_frame_interval_median_ms": idle_median_ms,
+        "hitch_threshold_ms": hitch_ms,
         "requests": driver.get("total_requests", 0),
         "request_errors": driver.get("total_errors", 0),
         "per_phase": per_phase,
@@ -303,6 +350,16 @@ def render_markdown(report):
         f"{report['request_errors']} errors, warm-up {report['model_load_probe_s']} s"
     )
     lines.append("")
+    hitch_ms = report.get("hitch_threshold_ms")
+    idle_median = report.get("idle_frame_interval_median_ms")
+    if hitch_ms:
+        lines.append(
+            f"- Idle frame interval (median) `{idle_median:.2f} ms` — hitch threshold "
+            f"`>{hitch_ms:.2f} ms` ({HITCH_IDLE_MULTIPLE:g}x the baseline), stall `>{STALL_MS:.0f} ms`"
+        )
+    else:
+        lines.append("- Hitch threshold unavailable: no idle baseline to calibrate against")
+    lines.append("")
     lines.append("| Phase | Frames | Secs | Frame mean | Frame p95 | Frame p99 | Worst 1% | GPU mean | Hitches |")
     lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
     for kind in ("idle", "burst", "gap", "tail"):
@@ -310,10 +367,13 @@ def render_markdown(report):
         if not p:
             continue
         f, g = p["frame_ms"], p["gpu_ms"]
+        hitches = (
+            f"{p['hitches']} ({p['hitches_per_min']:.1f}/min)" if p["hitches"] is not None else "n/a"
+        )
         lines.append(
             f"| {kind} | {f['n']} | {p['seconds']:.0f} | {f['mean']:.2f} ms | {f['p95']:.2f} ms | "
             f"{f['p99']:.2f} ms | {p['worst_1pct_frame_ms']:.2f} ms | {g['mean']:.2f} ms | "
-            f"{p['hitches']} ({p['hitches_per_min']:.1f}/min) |"
+            f"{hitches} |"
         )
     lines.append("")
 
@@ -327,7 +387,10 @@ def render_markdown(report):
             f"mean {d['frame_mean_ms']:+.2f} ms"
         )
         lines.append(f"- Worst 1% {d['worst_1pct_ms']:+.2f} ms, GPU mean {d['gpu_mean_ms']:+.2f} ms")
-        lines.append(f"- Hitches/min {d['hitches_per_min']:+.2f}")
+        hitch_delta = (
+            f"{d['hitches_per_min']:+.2f}" if d.get("hitches_per_min") is not None else "n/a"
+        )
+        lines.append(f"- Hitches/min {hitch_delta}")
         lines.append("")
 
     v = report["vram"]

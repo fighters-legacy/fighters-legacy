@@ -307,13 +307,26 @@ def test_render_markdown_surfaces_warnings_when_present():
 # ---- aggregate.py (repeat-and-aggregate, #1016) --------------------------------------------------
 
 
-def _agg_report(ratio, p99, mean, *, label="vulkan", model="qwen2.5-coder:14b", gpu="RTX 5080", warnings=None):
+def _agg_report(
+    ratio,
+    p99,
+    mean,
+    *,
+    label="vulkan",
+    model="qwen2.5-coder:14b",
+    gpu="RTX 5080",
+    warnings=None,
+    schema_version=2,
+    idle_interval_ms=4.6,
+):
     """A minimal analyze.py-shaped report carrying just what aggregate.py reads."""
     return {
+        "schema_version": schema_version,
         "os": "Windows 10.0.26100",
         "gpu_info": gpu,
         "model": model,
         "label": label,
+        "idle_frame_interval_median_ms": idle_interval_ms,
         "endpoint": "http://localhost:8080",
         "workload": "intent",
         "scene": "builtin:sandbox",
@@ -412,3 +425,99 @@ def test_aggregate_empty_raises():
 
     with pytest.raises(ValueError):
         agg.aggregate_reports([])
+
+
+# ---- relative hitch threshold (#1022) ------------------------------------------------------------
+
+
+def test_hitch_threshold_is_a_multiple_of_the_idle_baseline():
+    assert an.hitch_threshold_ms(8.0) == 16.0
+    assert an.hitch_threshold_ms(33.33) == round(33.33 * 2, 3)
+
+
+def test_hitch_threshold_is_unavailable_without_an_idle_baseline():
+    # None rather than a fixed fallback: "could not measure" is not "measured zero".
+    assert an.hitch_threshold_ms(None) is None
+    assert an.hitch_threshold_ms(0.0) is None
+    assert an.median_frame_ms([]) is None
+
+
+def test_idle_frames_are_not_hitches_on_a_slow_client():
+    """The #1022 defect: a 33.3 ms idle cadence scored every ordinary frame as a hitch.
+
+    Under the old fixed >33.3 ms threshold this run's idle phase counted ~all of its frames. Against
+    its own baseline it counts none, and the burst's genuinely-doubled frames still do.
+    """
+    report = an.contention_metrics(
+        _frame_report(_synthetic_run(idle_ms=33.3, burst_ms=70.0)), _driver_report(_phases())
+    )
+    assert report["idle_frame_interval_median_ms"] == 33.3
+    assert report["hitch_threshold_ms"] == 66.6
+    assert report["per_phase"]["idle"]["hitches"] == 0
+    assert report["per_phase"]["burst"]["hitches"] == report["per_phase"]["burst"]["frame_ms"]["n"]
+    assert report["delta_burst_vs_idle"]["hitches_per_min"] > 0
+
+
+def test_hitch_threshold_scales_with_the_client_so_fast_and_slow_runs_agree():
+    """The same relative slowdown reads the same on a 240 Hz client and a 30 fps one."""
+    fast = an.contention_metrics(
+        _frame_report(_synthetic_run(idle_ms=4.0, burst_ms=12.0)), _driver_report(_phases())
+    )
+    slow = an.contention_metrics(
+        _frame_report(_synthetic_run(idle_ms=40.0, burst_ms=120.0)), _driver_report(_phases())
+    )
+    for r in (fast, slow):
+        assert r["per_phase"]["idle"]["hitches"] == 0
+        assert r["per_phase"]["burst"]["hitches"] == r["per_phase"]["burst"]["frame_ms"]["n"]
+
+
+def test_hitch_metrics_report_unavailable_when_there_is_no_idle_phase():
+    phases = [{"phase": "burst", "index": 0, "start_ms": 0.0, "end_ms": 20_000.0}]
+    samples = [[float(t), 20.0, 18.0, 3000.0] for t in range(6000, 20_000, 100)]
+    report = an.contention_metrics(_frame_report(samples), _driver_report(phases))
+    assert report["hitch_threshold_ms"] is None
+    assert report["per_phase"]["burst"]["hitches"] is None
+    assert report["per_phase"]["burst"]["hitches_per_min"] is None
+    # The stall counter is absolute and keeps working — it is a perception band, not a frame-rate one.
+    assert report["per_phase"]["burst"]["stalls"] == 0
+    md = an.render_markdown(report)
+    assert "n/a" in md and "Hitch threshold unavailable" in md
+
+
+def test_markdown_states_the_calibrated_threshold():
+    report = an.contention_metrics(_frame_report(_synthetic_run()), _driver_report(_phases()))
+    md = an.render_markdown(report)
+    assert "Idle frame interval (median)" in md
+    assert "hitch threshold" in md
+
+
+def test_report_schema_version_is_2_so_old_reports_are_not_blended():
+    report = an.contention_metrics(_frame_report(_synthetic_run()), _driver_report(_phases()))
+    assert report["schema_version"] == 2
+
+
+def test_aggregate_refuses_to_blend_reports_from_different_schema_versions():
+    reports = [_agg_report(2.0, 6.0, 0.05), _agg_report(2.1, 6.2, 0.05, schema_version=1)]
+    a = agg.aggregate_reports(reports)
+    assert any("schema_version" in w for w in a["warnings"])
+
+
+def test_aggregate_flags_runs_that_sat_on_different_vsync_divisors():
+    """The #1019 cell: one run at 15 fps, four at 30 fps, every declared field identical."""
+    reports = [_agg_report(1.6, 21.0, 1.9, idle_interval_ms=33.33) for _ in range(4)]
+    reports.append(_agg_report(0.88, -12.67, 4.38, idle_interval_ms=66.08))
+    a = agg.aggregate_reports(reports)
+    assert any("different frame cadences" in w for w in a["warnings"])
+
+
+def test_aggregate_tolerates_ordinary_cadence_jitter():
+    reports = [_agg_report(2.0, 6.0, 0.05, idle_interval_ms=ms) for ms in (4.58, 4.60, 4.65, 4.72)]
+    a = agg.aggregate_reports(reports)
+    assert a["warnings"] == []
+    assert a["run_metrics"]["idle_frame_interval_median_ms"]["n"] == 4
+
+
+def test_aggregate_markdown_reports_the_idle_frame_interval():
+    reports = [_agg_report(2.0, 6.0, 0.05, idle_interval_ms=4.6) for _ in range(3)]
+    md = agg.render_aggregate_markdown(agg.aggregate_reports(reports))
+    assert "Idle frame interval" in md

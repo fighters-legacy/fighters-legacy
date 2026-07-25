@@ -47,9 +47,22 @@ VRAM_METRICS = [
     ("budget_mb", "Game VRAM budget", "MB"),
 ]
 
+# Top-level per-run fields worth reporting as a distribution. The idle frame interval is the client's
+# operating point — see frame_interval_warnings.
+RUN_METRICS = [
+    ("idle_frame_interval_median_ms", "Idle frame interval", "ms"),
+]
+
 # The cell-identity fields. Two reports with different values here are different cells and must not
-# be aggregated together.
-IDENTITY_FIELDS = ("os", "gpu_info", "model", "label")
+# be aggregated together. `schema_version` is one of them (#1022): v1 counted hitches against a fixed
+# 33.3 ms threshold and v2 counts them against the run's own idle baseline, so the two are different
+# statistics sharing a name — averaging them is a category error, not a wide spread.
+IDENTITY_FIELDS = ("schema_version", "os", "gpu_info", "model", "label")
+
+# How far the runs' idle frame intervals may differ before they are treated as different operating
+# points rather than one cell. Generous enough to absorb ordinary jitter in an unlocked client, far
+# below the smallest possible divisor step (2x) on a vsync-locked one.
+FRAME_INTERVAL_TOLERANCE = 0.20
 
 
 # ---- pure aggregation --------------------------------------------------------------------------
@@ -83,6 +96,33 @@ def identity_warnings(reports):
                 "should not be aggregated into one distribution."
             )
     return warns
+
+
+def frame_interval_warnings(reports):
+    """Refuse to blend runs whose clients sat at different operating points (#1019/#1022).
+
+    A vsync-limited client that cannot hold the refresh rate settles on an INTEGER DIVISOR of the
+    refresh interval. A run at 15 fps and four runs at 30 fps are two populations, not one noisy
+    cell, and averaging across them manufactures a spread out of a mechanical difference — which is
+    exactly what produced the Intel iGPU cell's "unstable" verdict.
+
+    The identity guard cannot catch this: every declared field (os/gpu/model/label) matches, because
+    the difference is not something the operator declared. It is in the measurement, so this checks
+    the measurement.
+    """
+    vals = [r.get("idle_frame_interval_median_ms") for r in reports]
+    vals = [v for v in vals if v]
+    if len(vals) < 2:
+        return []
+    lo, hi = min(vals), max(vals)
+    if lo <= 0 or (hi - lo) / lo <= FRAME_INTERVAL_TOLERANCE:
+        return []
+    return [
+        f"Runs sat at different frame cadences (idle median {lo:.2f}–{hi:.2f} ms, {hi / lo:.2f}x apart). "
+        "On a vsync-limited client that is an integer divisor of the refresh interval — different "
+        "operating points, not one noisy cell. Aggregate the runs that share a cadence (pass them "
+        "explicitly to --reports) rather than all of them."
+    ]
 
 
 def p99_stability_verdict(ratio_stats, mean_stats):
@@ -135,8 +175,11 @@ def aggregate_reports(reports):
     vram = {}
     for key, _label, _unit in VRAM_METRICS:
         vram[key] = across_run_stats([r.get("vram", {}).get(key) for r in reports])
+    run_stats = {}
+    for key, _label, _unit in RUN_METRICS:
+        run_stats[key] = across_run_stats([r.get(key) for r in reports])
 
-    warns = identity_warnings(reports)
+    warns = identity_warnings(reports) + frame_interval_warnings(reports)
     # A run that itself warned (early exit, clock skew, dirty burst) should not silently dilute the
     # aggregate — surface the count so the reader knows some inputs were flagged.
     dirty = sum(1 for r in reports if r.get("warnings"))
@@ -157,6 +200,7 @@ def aggregate_reports(reports):
         "scene": first.get("scene", ""),
         "delta_burst_vs_idle": deltas,
         "vram": vram,
+        "run_metrics": run_stats,
         "p99_verdict": verdict,
         "warnings": warns,
     }
@@ -185,6 +229,8 @@ def render_aggregate_markdown(agg):
         lines.append(f"| {label} | {_fmt(agg['delta_burst_vs_idle'].get(key), unit)} |")
     for key, label, unit in VRAM_METRICS:
         lines.append(f"| {label} | {_fmt(agg['vram'].get(key), unit)} |")
+    for key, label, unit in RUN_METRICS:
+        lines.append(f"| {label} | {_fmt(agg.get('run_metrics', {}).get(key), unit)} |")
     lines.append("")
 
     v = agg["p99_verdict"]
