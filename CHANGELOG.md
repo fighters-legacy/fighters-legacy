@@ -295,6 +295,28 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **script**: Lua is now compiled **as C++**, which fixes a crash and closes a whole class of
+  undefined behaviour (#1015). Lua raises errors by unwinding from the failure point back to the
+  enclosing `lua_pcall`; built as C it does that with `longjmp`, which cannot safely cross a C++
+  frame. MSVC implements `longjmp` by *unwinding* the frames it passes, so a `lua_CFunction` written
+  in C++ has its destructor funclets executed against an EH state that no longer describes live
+  objects — faulting inside `~ifstream`, which is how this surfaced: two `LuaSandbox` require-
+  rejection tests died with SIGSEGV on Windows/MSVC. Itanium-ABI platforms fail the opposite way,
+  skipping destructors and leaking. The previous mitigation — confine every C++ object to an inner
+  scope that ends before Lua can raise — was both insufficient (the frame still carries unwind data
+  MSVC will act on) and unenforceable: it is a rule no compiler checks, repeated by hand across the
+  22 registered functions in `LuaController.cpp`, and `LuaSandbox.cpp` was already breaking it while
+  carrying a comment claiming it was safe. Compiled as C++, `ldo.c` selects `throw`/`catch` — the
+  option upstream documents first — and a Lua error becomes an ordinary C++ exception that unwinds
+  correctly and destroys each object exactly once. `luaRequireLoader` is rewritten as plain
+  straight-line C++ now that the contortion has no purpose. Two consequences, both deliberate:
+  **there is no longer a system-Lua path** (a distro `liblua` is built as C, so linking one would
+  restore the unsafe semantics on some machines and not others — the worst outcome for a
+  memory-safety property, and Lua is ~30 small files to build), and translation units including
+  `<lua.h>` must **not** wrap it in `extern "C"` or use `lua.hpp`. `tests/test_lua_sandbox.cpp` now
+  guards the property itself rather than only the symptom: it raises a Lua error from a C function
+  holding a live C++ object and asserts the destructor ran, so a future revert to a C-built Lua fails
+  the suite instead of crashing months later.
 - **renderer**: `FrameStats::frameDtMs` is now reported uncapped. The particle simulation still
   clamps its timestep at 50 ms (a long stall must not teleport every particle), but the *reported*
   frame time shared that variable, so every frame worse than 50 ms read as exactly 50 — which

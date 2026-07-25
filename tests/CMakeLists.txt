@@ -1060,7 +1060,10 @@ target_include_directories(test_asset_validator PRIVATE ${CMAKE_CURRENT_SOURCE_D
 catch_discover_tests(test_asset_validator)
 
 add_executable(test_lua_sandbox test_lua_sandbox.cpp)
-target_link_libraries(test_lua_sandbox PRIVATE Catch2::Catch2WithMain engine-script)
+# lua::lua is linked directly (engine-script keeps it PRIVATE) so this suite can
+# register a probe C function and assert that a Lua error unwinds C++ frames —
+# the property the whole build-Lua-as-C++ decision rests on (#1015).
+target_link_libraries(test_lua_sandbox PRIVATE Catch2::Catch2WithMain engine-script lua::lua)
 target_include_directories(test_lua_sandbox PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_lua_sandbox)
 

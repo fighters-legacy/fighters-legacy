@@ -5,8 +5,10 @@
 #include <string>
 #include <string_view>
 
-// Forward declaration — callers that dereference the returned pointer
-// must include <lua.h> (with extern "C" guard) in their own .cpp files.
+// Forward declaration — callers that dereference the returned pointer must
+// include <lua.h> in their own .cpp files. Do NOT wrap it in extern "C" (and do
+// not use lua.hpp): Lua is compiled as C++ so that its errors unwind as C++
+// exceptions rather than longjmps, which gives its symbols C++ linkage (#1015).
 struct lua_State;
 
 namespace fl {
