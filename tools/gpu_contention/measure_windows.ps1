@@ -117,20 +117,33 @@ $lines += "os: $($os.Caption) $($os.Version)"
 $lines += "cpu: $((Get-CimInstance Win32_Processor | Select-Object -First 1).Name)"
 $lines += "mem_total_kb: $($os.TotalVisibleMemorySize)"
 $nvidiaSmi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+
+# Non-NVIDIA per-process GPU memory (dedicated + shared), summed across processes, in MB. Intel
+# integrated graphics is UNIFIED memory, so a resident model + the renderer show up mostly under
+# Shared Usage, not Dedicated -- capture both or the Intel run records nothing useful. Best-effort:
+# these perf counters can be localized or absent, in which case the field reads "unavailable".
+function Get-GpuMemLine {
+    param([string]$Phase)
+    $parts = @()
+    foreach ($ctr in @('Dedicated Usage', 'Shared Usage')) {
+        try {
+            $sum = (Get-Counter "\GPU Process Memory(*)\$ctr" -ErrorAction Stop).CounterSamples |
+                Where-Object { $_.CookedValue -gt 0 } | Measure-Object -Property CookedValue -Sum
+            $parts += "$($ctr.Split(' ')[0].ToLower())=$([math]::Round(($sum.Sum) / 1MB, 1))MB"
+        }
+        catch { $parts += "$($ctr.Split(' ')[0].ToLower())=unavailable" }
+    }
+    return "gpu_mem_${Phase}: $($parts -join ' ')"
+}
+
 if ($nvidiaSmi) {
     $lines += "gpu: $(& nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader)"
     $lines += "vram_before_mb: $(& nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits)"
     $lines += "compute_apps_before: $((& nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader) -join ';')"
 }
 else {
-    # Non-NVIDIA: the per-process dedicated-usage counter is the closest equivalent.
     $lines += "gpu: $((Get-CimInstance Win32_VideoController | Select-Object -First 1).Name)"
-    try {
-        $ded = (Get-Counter '\GPU Process Memory(*)\Dedicated Usage' -ErrorAction Stop).CounterSamples |
-        Where-Object { $_.CookedValue -gt 0 } | Measure-Object -Property CookedValue -Sum
-        $lines += "gpu_dedicated_before_mb: $([math]::Round($ded.Sum / 1MB, 1))"
-    }
-    catch { $lines += "gpu_dedicated_before_mb: unavailable" }
+    $lines += (Get-GpuMemLine 'before')
 }
 $lines | Set-Content -Path $SysInfo -Encoding utf8
 Write-Host "  sysinfo  : $SysInfo"
@@ -187,10 +200,17 @@ function Invoke-Run {
         --gap-seconds $GapSeconds --tail-seconds $TailSeconds --out $driver
     if ($LASTEXITCODE -ne 0) { throw "driver.py failed with exit code $LASTEXITCODE" }
 
-    # VRAM at peak load — captured on the first run (representative; the model is resident for all).
-    if ($Run -eq 1 -and $nvidiaSmi) {
-        Add-Content -Path $SysInfo -Value "vram_after_mb: $(& nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits)"
-        Add-Content -Path $SysInfo -Value "compute_apps_after: $((& nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader) -join ';')"
+    # GPU memory at peak load (model resident + game rendering) — captured on the first run; the
+    # model is resident for all repeats. The non-NVIDIA/Intel path is the load-bearing one here,
+    # since the Ollama /api/ps model-VRAM probe reads "--" on llama-server.
+    if ($Run -eq 1) {
+        if ($nvidiaSmi) {
+            Add-Content -Path $SysInfo -Value "vram_after_mb: $(& nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits)"
+            Add-Content -Path $SysInfo -Value "compute_apps_after: $((& nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader) -join ';')"
+        }
+        else {
+            Add-Content -Path $SysInfo -Value (Get-GpuMemLine 'after')
+        }
     }
 
     Write-Host "  [run $Run/$Repeat] waiting for the game to finish its run..."
