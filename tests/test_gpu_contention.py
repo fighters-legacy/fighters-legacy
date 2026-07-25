@@ -24,6 +24,7 @@ def _load(name):
 
 drv = _load("driver")
 an = _load("analyze")
+agg = _load("aggregate")
 
 
 # ---- build_schedule ----------------------------------------------------------------------------
@@ -301,3 +302,113 @@ def test_render_markdown_surfaces_warnings_when_present():
     samples = [[float(t), 8.0, 6.0, 3000.0] for t in range(6000, 10_000, 100)]
     report = an.contention_metrics(_frame_report(samples), _driver_report(_phases()))
     assert "**Warnings**" in an.render_markdown(report)
+
+
+# ---- aggregate.py (repeat-and-aggregate, #1016) --------------------------------------------------
+
+
+def _agg_report(ratio, p99, mean, *, label="vulkan", model="qwen2.5-coder:14b", gpu="RTX 5080", warnings=None):
+    """A minimal analyze.py-shaped report carrying just what aggregate.py reads."""
+    return {
+        "os": "Windows 10.0.26100",
+        "gpu_info": gpu,
+        "model": model,
+        "label": label,
+        "endpoint": "http://localhost:8080",
+        "workload": "intent",
+        "scene": "builtin:sandbox",
+        "delta_burst_vs_idle": {
+            "frame_p99_ratio": ratio,
+            "frame_p99_ms": p99,
+            "frame_p95_ms": round(p99 * 0.8, 3),
+            "frame_mean_ms": mean,
+            "worst_1pct_ms": round(p99 * 2, 3),
+            "gpu_mean_ms": 0.7,
+            "hitches_per_min": 10.0,
+        },
+        "vram": {"model_vram_mb": 9031.0, "budget_mb": 4556.0},
+        "warnings": warnings or [],
+    }
+
+
+def test_across_run_stats_reports_median_and_range():
+    s = agg.across_run_stats([1.49, 2.48, 2.43, 1.85, 2.10])
+    assert s["n"] == 5
+    assert s["min"] == 1.49 and s["max"] == 2.48
+    assert s["median"] == 2.10
+    assert s["spread"] == round(2.48 - 1.49, 4)
+
+
+def test_across_run_stats_drops_none_and_handles_empty():
+    assert agg.across_run_stats([]) == {"median": None, "min": None, "max": None, "mean": None, "spread": None, "n": 0}
+    s = agg.across_run_stats([3.0, None, 5.0])
+    assert s["n"] == 2 and s["min"] == 3.0 and s["max"] == 5.0
+
+
+def test_aggregate_folds_runs_into_a_distribution():
+    reports = [_agg_report(r, p, 0.05) for r, p in [(1.49, 2.24), (2.48, 6.78), (2.43, 6.64), (1.85, 3.9), (2.10, 4.5)]]
+    a = agg.aggregate_reports(reports)
+    assert a["runs"] == 5
+    ratio = a["delta_burst_vs_idle"]["frame_p99_ratio"]
+    assert ratio["min"] == 1.49 and ratio["max"] == 2.48
+    # The whole #1016 point: mean is stable while p99 wanders.
+    assert a["delta_burst_vs_idle"]["frame_mean_ms"]["spread"] < 0.1
+    assert a["warnings"] == []
+
+
+def test_p99_verdict_flags_noise_when_spread_exceeds_effect():
+    # Spread 0.99x on a median effect of ~1.1x above baseline -> "wide" (quote the range).
+    reports = [_agg_report(r, p, 0.05) for r, p in [(1.49, 2.24), (2.48, 6.78), (2.43, 6.64), (1.85, 3.9), (2.10, 4.5)]]
+    v = agg.aggregate_reports(reports)["p99_verdict"]
+    assert v["level"] in ("wide", "noise")
+
+
+def test_p99_verdict_calls_it_noise_when_spread_dominates():
+    # Median 1.5x (effect 0.5x), spread 1.4x -> spread >> effect.
+    reports = [_agg_report(r, 5.0, 0.05) for r in [1.1, 1.5, 2.5]]
+    v = agg.aggregate_reports(reports)["p99_verdict"]
+    assert v["level"] == "noise"
+    assert "not a measurement" in v["text"]
+
+
+def test_p99_verdict_calls_it_stable_when_runs_agree():
+    reports = [_agg_report(r, 6.0, 0.05) for r in [2.00, 2.02, 1.99, 2.01]]
+    v = agg.aggregate_reports(reports)["p99_verdict"]
+    assert v["level"] == "stable"
+
+
+def test_p99_verdict_needs_at_least_two_runs():
+    v = agg.aggregate_reports([_agg_report(1.5, 3.0, 0.05)])["p99_verdict"]
+    assert v["level"] == "insufficient"
+
+
+def test_aggregate_refuses_to_blend_different_cells():
+    mixed = [_agg_report(1.5, 2.2, 0.05, label="cuda"), _agg_report(2.4, 6.6, 0.05, label="vulkan")]
+    a = agg.aggregate_reports(mixed)
+    assert any("different cells" in w for w in a["warnings"])
+
+
+def test_aggregate_flags_a_mismatched_gpu_or_model():
+    mixed = [_agg_report(1.5, 2.2, 0.05, gpu="RTX 5080"), _agg_report(1.6, 2.3, 0.05, gpu="RTX 4090")]
+    assert any("gpu_info" in w for w in agg.aggregate_reports(mixed)["warnings"])
+
+
+def test_aggregate_surfaces_dirty_input_runs():
+    reports = [_agg_report(2.0, 6.0, 0.05), _agg_report(2.1, 6.2, 0.05, warnings=["client stopped rendering"])]
+    a = agg.aggregate_reports(reports)
+    assert any("carried their own warnings" in w for w in a["warnings"])
+
+
+def test_render_aggregate_markdown_shows_ranges_and_verdict():
+    reports = [_agg_report(r, p, 0.05) for r, p in [(1.49, 2.24), (2.48, 6.78), (2.10, 4.5)]]
+    md = agg.render_aggregate_markdown(agg.aggregate_reports(reports))
+    assert "aggregate, 3 runs" in md
+    assert "[1.49–2.48]" in md  # the min–max range is shown, not just a point
+    assert "p99 stability:" in md
+
+
+def test_aggregate_empty_raises():
+    import pytest
+
+    with pytest.raises(ValueError):
+        agg.aggregate_reports([])

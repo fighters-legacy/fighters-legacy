@@ -203,7 +203,7 @@ def sanity_warnings(frame_report, driver, buckets, samples, phases, settle_s=SET
     return warns
 
 
-def contention_metrics(frame_report, driver, settle_s=SETTLE_S, scene=""):
+def contention_metrics(frame_report, driver, settle_s=SETTLE_S, scene="", label=""):
     """The full report: per-phase distributions, baseline-vs-burst deltas, VRAM headroom."""
     samples = frame_report.get("samples", [])
     phases = driver.get("phases", [])
@@ -265,6 +265,10 @@ def contention_metrics(frame_report, driver, settle_s=SETTLE_S, scene=""):
         # scene name of its own to record; the runner passes what it launched the server with.
         "scene": frame_report.get("scene") or scene,
         "os": f"{platform.system()} {platform.release()}",
+        # The cell label (e.g. "cuda"/"vulkan") the runner was invoked with. It is the ONLY thing
+        # that distinguishes two backends on the same box+model (endpoint aside), so aggregate.py
+        # keys on it to refuse mixing runs from different cells into one distribution (#1016).
+        "label": label,
         "endpoint": driver.get("endpoint", ""),
         "model": driver.get("model", ""),
         "workload": driver.get("workload", ""),
@@ -354,12 +358,13 @@ def main(argv=None):
     ap.add_argument("--driver", required=True, help="driver.py's phase report")
     ap.add_argument("--settle-s", type=float, default=SETTLE_S, help="seconds discarded after each phase boundary")
     ap.add_argument("--scene", default="", help="scene label when the client joined a server that owns the mission")
+    ap.add_argument("--label", default="", help="cell label (e.g. cuda/vulkan); recorded so aggregate.py can group runs")
     ap.add_argument("--out", default="", help="output path prefix (writes <prefix>.json and <prefix>.md)")
     args = ap.parse_args(argv)
 
     frame_report = json.loads(Path(args.frame_stats).read_text(encoding="utf-8"))
     driver = json.loads(Path(args.driver).read_text(encoding="utf-8"))
-    report = contention_metrics(frame_report, driver, args.settle_s, args.scene)
+    report = contention_metrics(frame_report, driver, args.settle_s, args.scene, args.label)
     md = render_markdown(report)
     print(md)
 

@@ -7,6 +7,11 @@
 # timing (--frame-stats-json), drives a local LLM on a phased burst schedule alongside it, and
 # joins the two by wall-clock timestamp to report what inference did to the frame time.
 #
+# With --repeat N (>1) it runs the measurement N times against the same warm server and aggregates
+# the runs into a distribution — because a single run's p99 is not a measurement (#1016): re-running
+# the identical cell minutes apart moved the p99 ratio from 1.49x to 2.48x. The mean is stable; the
+# tail is not. Report the range.
+#
 # Mirror pair: measure_macos.sh (Metal) and measure_windows.ps1 (CUDA + Vulkan llama.cpp). Keep
 # the three in step — the whole value of the comparison is that the runs are the same run.
 #
@@ -19,7 +24,8 @@
 #   --bursts <n>        burst count (default: 5)
 #   --burst-seconds <n> seconds per burst (default: 20)
 #   --idle-seconds <n>  baseline idle window before the first burst (default: 60)
-#   --label <text>      suffix for the results filenames (e.g. cuda, vulkan)
+#   --repeat <n>        repeat the whole measurement n times and aggregate (default: 1; use 5+ #1016)
+#   --label <text>      suffix for the results filenames + the aggregated cell name (e.g. cuda)
 #   BUILD_DIR           build tree with the binaries (default: build/release)
 #
 # Env: FL_CONTENTION_PORT (default 4796), FL_AI_BASE_URL, FL_AI_API_KEY.
@@ -42,6 +48,7 @@ BURST_SECONDS=20
 IDLE_SECONDS=60
 GAP_SECONDS=20
 TAIL_SECONDS=30
+REPEAT=1
 LABEL=""
 BUILD_DIR="$REPO_ROOT/build/release"
 
@@ -57,8 +64,9 @@ while [[ $# -gt 0 ]]; do
     --idle-seconds) IDLE_SECONDS="$2"; shift ;;
     --gap-seconds) GAP_SECONDS="$2"; shift ;;
     --tail-seconds) TAIL_SECONDS="$2"; shift ;;
+    --repeat) REPEAT="$2"; shift ;;
     --label) LABEL="$2"; shift ;;
-    -h | --help) sed -n '3,28p' "$0"; exit 0 ;;
+    -h | --help) sed -n '3,32p' "$0"; exit 0 ;;
     *) BUILD_DIR="$1" ;;
     esac
     shift
@@ -90,8 +98,8 @@ RUN_SECONDS="$(python3 -c "import sys; print(int(float(sys.argv[1])) + 150)" "$S
 
 echo "── GPU contention (#782), Linux ──"
 echo "  endpoint : $BASE_URL   model: $MODEL   workload: $WORKLOAD (concurrency $CONCURRENCY)"
-echo "  scene    : $MISSION    schedule: ${SCHEDULE_S}s   game run: ${RUN_SECONDS}s"
-echo "  results  : $RESULTS/*_$SUFFIX.*"
+echo "  scene    : $MISSION    schedule: ${SCHEDULE_S}s   game run: ${RUN_SECONDS}s   repeat: ${REPEAT}"
+echo "  results  : $RESULTS/*_$SUFFIX*.*"
 
 # ── System info + VRAM before anything is loaded ─────────────────────────────────────────────
 SYSINFO="$RESULTS/sysinfo_$SUFFIX.txt"
@@ -110,9 +118,10 @@ SYSINFO="$RESULTS/sysinfo_$SUFFIX.txt"
 } >"$SYSINFO"
 echo "  sysinfo  : $SYSINFO"
 
-# ── Boot the server ──────────────────────────────────────────────────────────────────────────
+# ── Boot the server ONCE; all repeats run against the same warm server + model ────────────────
 WORKDIR="$(mktemp -d)"
 SERVER_LOG="$WORKDIR/server.log"
+GAME_PID=""
 cleanup() {
     kill "${GAME_PID:-0}" 2>/dev/null || true
     kill "${SERVER_PID:-0}" 2>/dev/null || true
@@ -129,43 +138,59 @@ for _ in $(seq 1 50); do
 done
 grep -q "listening on" "$SERVER_LOG" || { echo "ERROR: fl-server never came up:"; tail -5 "$SERVER_LOG"; exit 1; }
 
-# ── Launch the game ──────────────────────────────────────────────────────────────────────────
-# Observer, not pilot: a spectator ghost holds a fixed camera over a streamed-in scene, so the
-# render load is repeatable. A pilot aircraft flies off, changes what is on screen, and eventually
-# hits the ground — none of which is a controlled baseline.
-#
-# Windowed, not --headless: present and the compositor are part of what contends for the GPU.
-FRAMES_JSON="$RESULTS/frames_$SUFFIX.json"
-"$GAME" --connect "127.0.0.1:$PORT" --observer --auto \
-    --frame-stats-json "$FRAMES_JSON" --run-seconds "$RUN_SECONDS" >"$WORKDIR/game.log" 2>&1 &
-GAME_PID=$!
+# ── One measurement pass: fresh game (observer ghost, windowed — see the comments in git history
+#    of this file for why), a burst schedule alongside it, and a per-run analysis. Writes the run's
+#    report JSON path to stdout's last line via REPORT_OUT. ─────────────────────────────────────
+REPORTS=()
+run_once() {
+    local run="$1" tag frames driver report
+    tag="${SUFFIX}$([[ "$REPEAT" -gt 1 ]] && printf '_run%02d' "$run")"
+    frames="$RESULTS/frames_$tag.json"
+    driver="$RESULTS/driver_$tag.json"
+    report="$RESULTS/linux${LABEL:+_$LABEL}_${STAMP}$([[ "$REPEAT" -gt 1 ]] && printf '_run%02d' "$run")"
 
-echo "  waiting for the client to reach Flight and start recording..."
-for _ in $(seq 1 150); do
-    [[ -s "$FRAMES_JSON" ]] && break
-    kill -0 "$GAME_PID" 2>/dev/null || { echo "ERROR: game exited early:"; tail -20 "$WORKDIR/game.log"; exit 1; }
-    sleep 1
+    "$GAME" --connect "127.0.0.1:$PORT" --observer --auto \
+        --frame-stats-json "$frames" --run-seconds "$RUN_SECONDS" >"$WORKDIR/game_$run.log" 2>&1 &
+    GAME_PID=$!
+
+    echo "  [run $run/$REPEAT] waiting for the client to reach Flight and start recording..."
+    local i
+    for i in $(seq 1 150); do
+        [[ -s "$frames" ]] && break
+        kill -0 "$GAME_PID" 2>/dev/null || { echo "ERROR: game exited early:"; tail -20 "$WORKDIR/game_$run.log"; exit 1; }
+        sleep 1
+    done
+    [[ -s "$frames" ]] || { echo "ERROR: no frame stats after 150 s:"; tail -20 "$WORKDIR/game_$run.log"; exit 1; }
+
+    python3 "$SCRIPT_DIR/driver.py" \
+        --base-url "$BASE_URL" --model "$MODEL" --workload "$WORKLOAD" --concurrency "$CONCURRENCY" \
+        --idle-seconds "$IDLE_SECONDS" --bursts "$BURSTS" --burst-seconds "$BURST_SECONDS" \
+        --gap-seconds "$GAP_SECONDS" --tail-seconds "$TAIL_SECONDS" --out "$driver"
+
+    # VRAM at peak load — captured on the first run (representative; the model is resident for all).
+    if [[ "$run" -eq 1 ]] && command -v nvidia-smi >/dev/null 2>&1; then
+        {
+            echo "vram_after_mb: $(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits)"
+            echo "compute_apps_after: $(nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader | tr '\n' ';')"
+        } >>"$SYSINFO"
+    fi
+
+    echo "  [run $run/$REPEAT] waiting for the game to finish its run..."
+    wait "$GAME_PID" 2>/dev/null || true
+    GAME_PID=""
+
+    python3 "$SCRIPT_DIR/analyze.py" --frame-stats "$frames" --driver "$driver" \
+        --scene "$MISSION" --label "${LABEL:-$MODEL}" --out "$report"
+    REPORTS+=("$report.json")
+}
+
+for run in $(seq 1 "$REPEAT"); do
+    run_once "$run"
 done
-[[ -s "$FRAMES_JSON" ]] || { echo "ERROR: no frame stats after 150 s:"; tail -20 "$WORKDIR/game.log"; exit 1; }
 
-# ── Drive the bursts ─────────────────────────────────────────────────────────────────────────
-DRIVER_JSON="$RESULTS/driver_$SUFFIX.json"
-python3 "$SCRIPT_DIR/driver.py" \
-    --base-url "$BASE_URL" --model "$MODEL" --workload "$WORKLOAD" --concurrency "$CONCURRENCY" \
-    --idle-seconds "$IDLE_SECONDS" --bursts "$BURSTS" --burst-seconds "$BURST_SECONDS" \
-    --gap-seconds "$GAP_SECONDS" --tail-seconds "$TAIL_SECONDS" --out "$DRIVER_JSON"
-
-# ── VRAM at peak load (model resident, game rendering), then tear down ────────────────────────
-if command -v nvidia-smi >/dev/null 2>&1; then
-    {
-        echo "vram_after_mb: $(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits)"
-        echo "compute_apps_after: $(nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader | tr '\n' ';')"
-    } >>"$SYSINFO"
+# ── Aggregate (only meaningful for repeated runs) ─────────────────────────────────────────────
+if [[ "$REPEAT" -gt 1 ]]; then
+    echo "── aggregate of $REPEAT runs ──"
+    python3 "$SCRIPT_DIR/aggregate.py" --reports "${REPORTS[@]}" \
+        --out "$RESULTS/linux${LABEL:+_$LABEL}_${STAMP}_agg"
 fi
-
-echo "  waiting for the game to finish its run..."
-wait "$GAME_PID" 2>/dev/null || true
-
-# ── Analyze ──────────────────────────────────────────────────────────────────────────────────
-python3 "$SCRIPT_DIR/analyze.py" --frame-stats "$FRAMES_JSON" --driver "$DRIVER_JSON" --scene "$MISSION" \
-    --out "$RESULTS/linux${LABEL:+_$LABEL}_$STAMP"

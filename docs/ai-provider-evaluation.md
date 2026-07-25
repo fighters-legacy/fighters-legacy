@@ -420,7 +420,15 @@ What this does establish: **every** Windows configuration measured — both back
 sizes, five runs — shows the same flat-mean, heavy-tail signature, with Δ p99 never below +2.2 ms.
 That is the finding. Ranking the backends would need repeated runs per cell and a reported
 distribution rather than a single number; at n=1 the tail statistic is not reproducible enough to
-support it, and the harness's single-run report invites exactly the over-reading described above.
+support it.
+
+The harness now does exactly that (#1016): `--repeat N` on any runner boots the server once, runs
+the measurement N times against the same warm model, and aggregates the runs into a **median
+[min–max]** per metric plus a p99-stability verdict, so a cell's spread is reported next to its
+value instead of a lone number inviting the over-reading above. Whether the CUDA/Vulkan
+same-queue-family difference is real or below the noise floor is now a `--repeat 5` per backend
+away — ideally on a second GPU, since one card's driver behaviour is not a general answer. Until
+those runs are done the table above stays single-run and its backend ordering is not to be read.
 
 **The VRAM budget does not shrink on Windows — which makes the capacity risk *less* visible, not
 less real.** On Linux a resident 14B cut the budget the driver offered the renderer from 6939 MB to
