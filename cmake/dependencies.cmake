@@ -499,50 +499,71 @@ unset(INSTALL_DOCS)
 set_target_properties(ogg vorbis vorbisenc vorbisfile PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
 
 # ---------------------------------------------------------------------------
-# Lua 5.5 — system preferred, FetchContent fallback
-# Used by engine/script/LuaSandbox for sandboxed AI and mission script execution.
-# FindLua provides variables, not targets; create a uniform lua::lua INTERFACE
-# target in both paths so downstream CMakeLists can always link lua::lua.
+# Lua 5.5 — always built from source, and always compiled AS C++.
+#
+# The "as C++" part is a correctness requirement, not a preference (#1015).
+# Lua raises errors by unwinding from the point of failure back to the enclosing
+# lua_pcall. Built as C it does that with longjmp, which cannot safely cross a
+# C++ frame: MSVC's longjmp runs the unwind handlers of the frames it passes, so
+# a lua_CFunction written in C++ has its destructor funclets executed against an
+# EH state that no longer describes live objects — an access violation in an
+# iostream destructor, which is exactly how #1015 presented. The reverse failure
+# mode (longjmp SKIPPING destructors, leaking) is what the Itanium ABI platforms
+# do instead. Neither is acceptable, and "write every lua_CFunction so no C++
+# object is ever alive when Lua raises" is an invariant no compiler checks and
+# that 22 registered functions across engine/script cannot be trusted to hold.
+#
+# Compiled as C++, ldo.c selects `throw`/`catch` instead (upstream's documented
+# first choice: "Lua handles errors with exceptions when compiling as C++ code"),
+# and a Lua error becomes an ordinary C++ exception that unwinds our frames
+# correctly and destroys each object exactly once.
+#
+# Two consequences follow, and both are deliberate:
+#   * There is no system-Lua path. A distro's liblua is built as C, so linking it
+#     would silently restore longjmp semantics on some machines and not others —
+#     the worst possible outcome for a memory-safety property. Building from
+#     source is also nearly free here (Lua is ~30 small files), and Lua 5.5 is
+#     new enough that distro packages barely exist yet.
+#   * Lua's symbols get C++ linkage, so translation units including <lua.h> must
+#     NOT wrap it in extern "C" (and must not use lua.hpp, which does exactly
+#     that). See engine/script/*.cpp.
 # ---------------------------------------------------------------------------
-find_package(Lua 5.5.0 QUIET)
-if(LUA_FOUND)
-    message(STATUS "Lua: system (${LUA_VERSION_STRING})")
-    add_library(lua_system_iface INTERFACE)
-    target_include_directories(lua_system_iface INTERFACE ${LUA_INCLUDE_DIR})
-    target_link_libraries(lua_system_iface INTERFACE ${LUA_LIBRARIES})
-    add_library(lua::lua ALIAS lua_system_iface)
-else()
-    message(STATUS "Lua: FetchContent (lua/lua v5.5.0)")
-    FetchContent_Declare(lua_src
-        GIT_REPOSITORY https://github.com/lua/lua.git
-        GIT_TAG        v5.5.0
-        GIT_SHALLOW    TRUE
-        GIT_PROGRESS   TRUE
-        SYSTEM
-    )
-    FetchContent_GetProperties(lua_src)
-    if(NOT lua_src_POPULATED)
-        FetchContent_Populate(lua_src)
-    endif()
-    file(GLOB LUA_C_SOURCES "${lua_src_SOURCE_DIR}/*.c")
-    # Exclude the standalone interpreter (lua.c), compiler (luac.c), and the
-    # single-file amalgamation (onelua.c) which #includes every other .c file —
-    # including it alongside the individual sources causes duplicate symbol
-    # definitions that produce LNK4006 warnings and crash MSVC test binaries.
-    list(FILTER LUA_C_SOURCES EXCLUDE REGEX ".*/lua\\.c$")
-    list(FILTER LUA_C_SOURCES EXCLUDE REGEX ".*/luac\\.c$")
-    list(FILTER LUA_C_SOURCES EXCLUDE REGEX ".*/onelua\\.c$")
-    add_library(lua54_static STATIC ${LUA_C_SOURCES})
-    set_target_properties(lua54_static PROPERTIES C_STANDARD 99)
-    # Prevent Lua's own C sources from inheriting CMAKE_COMPILE_WARNING_AS_ERROR=ON.
-    set_target_properties(lua54_static PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
-    target_compile_options(lua54_static PRIVATE
-        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-w>
-        $<$<CXX_COMPILER_ID:MSVC>:/W0>
-    )
-    target_include_directories(lua54_static PUBLIC ${lua_src_SOURCE_DIR})
-    add_library(lua::lua ALIAS lua54_static)
+message(STATUS "Lua: FetchContent (lua/lua v5.5.0, compiled as C++)")
+FetchContent_Declare(lua_src
+    GIT_REPOSITORY https://github.com/lua/lua.git
+    GIT_TAG        v5.5.0
+    GIT_SHALLOW    TRUE
+    GIT_PROGRESS   TRUE
+    SYSTEM
+)
+FetchContent_GetProperties(lua_src)
+if(NOT lua_src_POPULATED)
+    FetchContent_Populate(lua_src)
 endif()
+file(GLOB LUA_SOURCES "${lua_src_SOURCE_DIR}/*.c")
+# Exclude the standalone interpreter (lua.c), compiler (luac.c), and the
+# single-file amalgamation (onelua.c) which #includes every other .c file —
+# including it alongside the individual sources causes duplicate symbol
+# definitions that produce LNK4006 warnings and crash MSVC test binaries.
+list(FILTER LUA_SOURCES EXCLUDE REGEX ".*/lua\\.c$")
+list(FILTER LUA_SOURCES EXCLUDE REGEX ".*/luac\\.c$")
+list(FILTER LUA_SOURCES EXCLUDE REGEX ".*/onelua\\.c$")
+# The .c files are compiled as C++ (see above). This is what makes ldo.c pick
+# the `throw`/`catch` branch of its LUAI_THROW/LUAI_TRY selection.
+set_source_files_properties(${LUA_SOURCES} PROPERTIES LANGUAGE CXX)
+add_library(lua_static STATIC ${LUA_SOURCES})
+set_target_properties(lua_static PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+# Prevent Lua's own sources from inheriting CMAKE_COMPILE_WARNING_AS_ERROR=ON.
+set_target_properties(lua_static PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
+target_compile_options(lua_static PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-w>
+    # /EHsc is CMake's default for C++ on MSVC, but state it explicitly: without
+    # unwind semantics the `throw` above cannot run our destructors, which is the
+    # entire point of building Lua this way.
+    $<$<CXX_COMPILER_ID:MSVC>:/W0;/EHsc>
+)
+target_include_directories(lua_static PUBLIC ${lua_src_SOURCE_DIR})
+add_library(lua::lua ALIAS lua_static)
 
 # ---------------------------------------------------------------------------
 # tomlplusplus — header-only TOML parser; system preferred, FetchContent fallback

@@ -3,10 +3,10 @@
 #include "script/LuaSandbox.h"
 #include "script/WorldApi.h"
 
-extern "C" {
+// Lua is compiled as C++ (see cmake/dependencies.cmake), so its symbols have C++
+// linkage — no extern "C" wrapper, and never lua.hpp (#1015).
 #include <lauxlib.h>
 #include <lua.h>
-}
 
 #include "ai/Guidance.h"
 #include "atc/AtcService.h" // atc.* Lua module (#705)
@@ -75,7 +75,14 @@ struct LuaController::Impl {
 };
 
 // ---------------------------------------------------------------------------
-// Stack helpers (no C++ objects with non-trivial dtors — longjmp-safe)
+// Stack helpers
+//
+// These may hold C++ objects freely. Lua is compiled as C++ (see
+// cmake/dependencies.cmake), so an error raised anywhere below unwinds to the
+// enclosing lua_pcall as a C++ exception and destroys locals on the way out.
+// Before #1015 this file maintained a hand-checked "no live C++ object when Lua
+// raises" rule across all 22 registered functions; nothing enforced it, and the
+// equivalent rule in LuaSandbox.cpp was being violated silently.
 // ---------------------------------------------------------------------------
 
 static void readVec3(lua_State* L, int idx, double out[3]) {
@@ -184,7 +191,7 @@ static bool readBoolField(lua_State* L, int idx, const char* field) {
 }
 
 // ---------------------------------------------------------------------------
-// guidance.* C closures (pure math, no C++ objects — longjmp-safe)
+// guidance.* C closures (pure math)
 // ---------------------------------------------------------------------------
 
 // heading_error(quat, own_pos, target_pos, [radius_m]) — radius defaults to Earth.

@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "script/LuaSandbox.h"
 
+// Lua is compiled as C++, so no extern "C" wrapper (#1015).
+#include <lauxlib.h>
+#include <lua.h>
+
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
 #include <fstream>
@@ -106,6 +110,140 @@ TEST_CASE("LuaSandbox: require for in-pack file that does not exist returns erro
     bool ok = sb->loadScript("require('mylib')");
     CHECK_FALSE(ok);
     CHECK_FALSE(sb->lastError().empty());
+
+    std::filesystem::remove_all(tmpDir);
+}
+
+// #1015: the require loader raises its "not found" error from a C++ frame that
+// owns a std::filesystem::path, a std::ifstream and a std::ostringstream. Built
+// as C, Lua raises by longjmp — which MSVC implements by *unwinding* the frames
+// it passes, running those destructors against an EH state that no longer
+// describes live objects, faulting inside ~ifstream. Building Lua as C++ turns
+// the raise into a C++ exception that unwinds correctly.
+//
+// These cases hammer that path rather than touching it once: a single failed
+// require can get lucky with stack layout (the original bug reproduced only in
+// some builds of the very same source), so repetition is the point.
+TEST_CASE("LuaSandbox: repeated failing requires unwind cleanly (#1015)") {
+    auto sb = makeSandbox();
+    for (int i = 0; i < 200; ++i) {
+        CHECK_FALSE(sb->loadScript("require('no_such_module')"));
+        CHECK_FALSE(sb->lastError().empty());
+    }
+}
+
+TEST_CASE("LuaSandbox: every require rejection path unwinds cleanly (#1015)") {
+    // Each reaches a different raise site in the loader, and all of them are
+    // reached with C++ objects owned by the enclosing frame.
+    auto sb = makeSandbox();
+
+    SECTION("module not found") {
+        CHECK_FALSE(sb->loadScript("require('absent')"));
+        CHECK(sb->lastError().find("not found") != std::string::npos);
+    }
+    SECTION("path separator rejected") {
+        CHECK_FALSE(sb->loadScript("require('sub/mod')"));
+        CHECK(sb->lastError().find("disallowed") != std::string::npos);
+    }
+    SECTION("parent traversal rejected") {
+        CHECK_FALSE(sb->loadScript("require('..evil')"));
+        CHECK(sb->lastError().find("disallowed") != std::string::npos);
+    }
+    SECTION("bytecode rejected") {
+        auto tmpDir = std::filesystem::temp_directory_path() / "fl_lua_test_bytecode";
+        std::filesystem::create_directories(tmpDir / "ai");
+        {
+            std::ofstream out(tmpDir / "ai" / "precompiled.lua", std::ios::binary);
+            out << "\x1bLua fake bytecode";
+        }
+        auto sb2 = makeSandbox(tmpDir.string());
+        CHECK_FALSE(sb2->loadScript("require('precompiled')"));
+        CHECK(sb2->lastError().find("bytecode") != std::string::npos);
+        std::filesystem::remove_all(tmpDir);
+    }
+    SECTION("syntax error inside the required module") {
+        auto tmpDir = std::filesystem::temp_directory_path() / "fl_lua_test_badsyntax";
+        std::filesystem::create_directories(tmpDir / "ai");
+        {
+            std::ofstream out(tmpDir / "ai" / "broken.lua");
+            out << "this is not @@@ valid lua";
+        }
+        auto sb2 = makeSandbox(tmpDir.string());
+        CHECK_FALSE(sb2->loadScript("require('broken')"));
+        CHECK_FALSE(sb2->lastError().empty());
+        std::filesystem::remove_all(tmpDir);
+    }
+    SECTION("runtime error raised inside the required module") {
+        auto tmpDir = std::filesystem::temp_directory_path() / "fl_lua_test_runtimeerr";
+        std::filesystem::create_directories(tmpDir / "ai");
+        {
+            std::ofstream out(tmpDir / "ai" / "thrower.lua");
+            out << "error('from inside the module')";
+        }
+        auto sb2 = makeSandbox(tmpDir.string());
+        CHECK_FALSE(sb2->loadScript("require('thrower')"));
+        CHECK(sb2->lastError().find("from inside the module") != std::string::npos);
+        std::filesystem::remove_all(tmpDir);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The invariant the fix rests on
+// ---------------------------------------------------------------------------
+
+// This is the guard rail for #1015. Everything above tests the *symptom* — the
+// require paths that happened to crash. This tests the *property*: that a Lua
+// error unwinds C++ frames and runs their destructors exactly once.
+//
+// If Lua is ever built as C again (a reintroduced system-Lua path, a toolchain
+// that ignores LANGUAGE CXX), errors go back to longjmp and this fails loudly:
+// on the Itanium ABI the destructor is skipped and `destroyed` stays false; on
+// MSVC the unwind runs it against a dead frame and the process faults. Either
+// way the build mode is caught here rather than in a crash months later.
+namespace {
+
+bool g_probeDestroyed = false;
+
+struct DestructorProbe {
+    ~DestructorProbe() {
+        g_probeDestroyed = true;
+    }
+};
+
+int raiseWithLiveCxxObject(lua_State* L) {
+    DestructorProbe probe; // deliberately alive across the raise
+    (void)probe;
+    return luaL_error(L, "raised while a C++ object was alive");
+}
+
+} // namespace
+
+TEST_CASE("LuaSandbox: a Lua error unwinds C++ frames and runs destructors (#1015)") {
+    auto sb = makeSandbox();
+    lua_State* L = sb->luaState();
+    REQUIRE(L != nullptr);
+
+    g_probeDestroyed = false;
+    lua_pushcfunction(L, raiseWithLiveCxxObject);
+    lua_setglobal(L, "raise_probe");
+
+    CHECK_FALSE(sb->loadScript("raise_probe()"));
+    CHECK(sb->lastError().find("raised while a C++ object was alive") != std::string::npos);
+    CHECK(g_probeDestroyed);
+}
+
+TEST_CASE("LuaSandbox: a successful require still works (#1015)") {
+    auto tmpDir = std::filesystem::temp_directory_path() / "fl_lua_test_goodmod";
+    std::filesystem::create_directories(tmpDir / "ai");
+    {
+        std::ofstream out(tmpDir / "ai" / "mathmod.lua");
+        out << "return { double = function(x) return x * 2 end }";
+    }
+
+    auto sb = makeSandbox(tmpDir.string());
+    CHECK(sb->loadScript("local m = require('mathmod')\n"
+                         "if m.double(21) ~= 42 then error('wrong result') end"));
+    CHECK(sb->lastError().empty());
 
     std::filesystem::remove_all(tmpDir);
 }
