@@ -36,6 +36,7 @@ BURST_SECONDS=20
 IDLE_SECONDS=60
 GAP_SECONDS=20
 TAIL_SECONDS=30
+REPEAT=1
 LABEL=""
 BUILD_DIR="$REPO_ROOT/build/release"
 
@@ -51,6 +52,7 @@ while [[ $# -gt 0 ]]; do
     --idle-seconds) IDLE_SECONDS="$2"; shift ;;
     --gap-seconds) GAP_SECONDS="$2"; shift ;;
     --tail-seconds) TAIL_SECONDS="$2"; shift ;;
+    --repeat) REPEAT="$2"; shift ;;
     --label) LABEL="$2"; shift ;;
     -h | --help) sed -n '3,25p' "$0"; exit 0 ;;
     *) BUILD_DIR="$1" ;;
@@ -82,8 +84,8 @@ RUN_SECONDS="$(python3 -c "import sys; print(int(float(sys.argv[1])) + 150)" "$S
 
 echo "── GPU contention (#782), macOS / Metal ──"
 echo "  endpoint : $BASE_URL   model: $MODEL   workload: $WORKLOAD (concurrency $CONCURRENCY)"
-echo "  scene    : $MISSION    schedule: ${SCHEDULE_S}s   game run: ${RUN_SECONDS}s"
-echo "  results  : $RESULTS/*_$SUFFIX.*"
+echo "  scene    : $MISSION    schedule: ${SCHEDULE_S}s   game run: ${RUN_SECONDS}s   repeat: ${REPEAT}"
+echo "  results  : $RESULTS/*_$SUFFIX*.*"
 
 # ── System info + memory before anything is loaded ───────────────────────────────────────────
 SYSINFO="$RESULTS/sysinfo_$SUFFIX.txt"
@@ -100,9 +102,10 @@ SYSINFO="$RESULTS/sysinfo_$SUFFIX.txt"
 } >"$SYSINFO"
 echo "  sysinfo  : $SYSINFO"
 
-# ── Boot the server ──────────────────────────────────────────────────────────────────────────
+# ── Boot the server ONCE; all repeats run against the same warm server + model ────────────────
 WORKDIR="$(mktemp -d)"
 SERVER_LOG="$WORKDIR/server.log"
+GAME_PID=""
 cleanup() {
     kill "${GAME_PID:-0}" 2>/dev/null || true
     kill "${SERVER_PID:-0}" 2>/dev/null || true
@@ -119,34 +122,57 @@ for _ in $(seq 1 50); do
 done
 grep -q "listening on" "$SERVER_LOG" || { echo "ERROR: fl-server never came up:"; tail -5 "$SERVER_LOG"; exit 1; }
 
-# ── Launch the game (observer ghost, windowed — see measure_linux.sh for why) ─────────────────
-FRAMES_JSON="$RESULTS/frames_$SUFFIX.json"
-"$GAME" --connect "127.0.0.1:$PORT" --observer --auto \
-    --frame-stats-json "$FRAMES_JSON" --run-seconds "$RUN_SECONDS" >"$WORKDIR/game.log" 2>&1 &
-GAME_PID=$!
+# ── One measurement pass (observer ghost, windowed — see measure_linux.sh for why) ────────────
+REPORTS=()
+run_once() {
+    local run="$1" tag frames driver report
+    tag="${SUFFIX}$([[ "$REPEAT" -gt 1 ]] && printf '_run%02d' "$run")"
+    frames="$RESULTS/frames_$tag.json"
+    driver="$RESULTS/driver_$tag.json"
+    report="$RESULTS/macos${LABEL:+_$LABEL}_${STAMP}$([[ "$REPEAT" -gt 1 ]] && printf '_run%02d' "$run")"
 
-echo "  waiting for the client to reach Flight and start recording..."
-for _ in $(seq 1 150); do
-    [[ -s "$FRAMES_JSON" ]] && break
-    kill -0 "$GAME_PID" 2>/dev/null || { echo "ERROR: game exited early:"; tail -20 "$WORKDIR/game.log"; exit 1; }
-    sleep 1
+    "$GAME" --connect "127.0.0.1:$PORT" --observer --auto \
+        --frame-stats-json "$frames" --run-seconds "$RUN_SECONDS" >"$WORKDIR/game_$run.log" 2>&1 &
+    GAME_PID=$!
+
+    echo "  [run $run/$REPEAT] waiting for the client to reach Flight and start recording..."
+    local i
+    for i in $(seq 1 150); do
+        [[ -s "$frames" ]] && break
+        kill -0 "$GAME_PID" 2>/dev/null || { echo "ERROR: game exited early:"; tail -20 "$WORKDIR/game_$run.log"; exit 1; }
+        sleep 1
+    done
+    [[ -s "$frames" ]] || { echo "ERROR: no frame stats after 150 s:"; tail -20 "$WORKDIR/game_$run.log"; exit 1; }
+
+    python3 "$SCRIPT_DIR/driver.py" \
+        --base-url "$BASE_URL" --model "$MODEL" --workload "$WORKLOAD" --concurrency "$CONCURRENCY" \
+        --idle-seconds "$IDLE_SECONDS" --bursts "$BURSTS" --burst-seconds "$BURST_SECONDS" \
+        --gap-seconds "$GAP_SECONDS" --tail-seconds "$TAIL_SECONDS" --out "$driver"
+
+    # Unified memory has no per-process VRAM query — record system-wide pressure on the first run.
+    if [[ "$run" -eq 1 ]]; then
+        {
+            echo "memory_pressure_after: $(memory_pressure 2>/dev/null | tail -1)"
+            echo "ollama_ps_after: $(ollama ps 2>/dev/null | tail -n +2 | tr '\n' ';')"
+        } >>"$SYSINFO"
+    fi
+
+    echo "  [run $run/$REPEAT] waiting for the game to finish its run..."
+    wait "$GAME_PID" 2>/dev/null || true
+    GAME_PID=""
+
+    python3 "$SCRIPT_DIR/analyze.py" --frame-stats "$frames" --driver "$driver" \
+        --scene "$MISSION" --label "${LABEL:-$MODEL}" --out "$report"
+    REPORTS+=("$report.json")
+}
+
+for run in $(seq 1 "$REPEAT"); do
+    run_once "$run"
 done
-[[ -s "$FRAMES_JSON" ]] || { echo "ERROR: no frame stats after 150 s:"; tail -20 "$WORKDIR/game.log"; exit 1; }
 
-# ── Drive the bursts ─────────────────────────────────────────────────────────────────────────
-DRIVER_JSON="$RESULTS/driver_$SUFFIX.json"
-python3 "$SCRIPT_DIR/driver.py" \
-    --base-url "$BASE_URL" --model "$MODEL" --workload "$WORKLOAD" --concurrency "$CONCURRENCY" \
-    --idle-seconds "$IDLE_SECONDS" --bursts "$BURSTS" --burst-seconds "$BURST_SECONDS" \
-    --gap-seconds "$GAP_SECONDS" --tail-seconds "$TAIL_SECONDS" --out "$DRIVER_JSON"
-
-{
-    echo "memory_pressure_after: $(memory_pressure 2>/dev/null | tail -1)"
-    echo "ollama_ps_after: $(ollama ps 2>/dev/null | tail -n +2 | tr '\n' ';')"
-} >>"$SYSINFO"
-
-echo "  waiting for the game to finish its run..."
-wait "$GAME_PID" 2>/dev/null || true
-
-python3 "$SCRIPT_DIR/analyze.py" --frame-stats "$FRAMES_JSON" --driver "$DRIVER_JSON" --scene "$MISSION" \
-    --out "$RESULTS/macos${LABEL:+_$LABEL}_$STAMP"
+# ── Aggregate (only meaningful for repeated runs) ─────────────────────────────────────────────
+if [[ "$REPEAT" -gt 1 ]]; then
+    echo "── aggregate of $REPEAT runs ──"
+    python3 "$SCRIPT_DIR/aggregate.py" --reports "${REPORTS[@]}" \
+        --out "$RESULTS/macos${LABEL:+_$LABEL}_${STAMP}_agg"
+fi

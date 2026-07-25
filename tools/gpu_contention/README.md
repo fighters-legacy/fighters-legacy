@@ -67,6 +67,33 @@ as the scene, the `intent` workload, 5 × 20 s bursts, one request in flight. Re
 `sysinfo_*.txt`, and the analyzed `<os>_<stamp>.{json,md}`. **`analyze.py` exits non-zero when it
 emits warnings** — a run whose numbers are not trustworthy must not look like a clean pass.
 
+### One run is not a measurement — use `--repeat` (#1016)
+
+A single run gives one number per metric, which *looks* like a measurement. For the mean it nearly
+is. For **p99 — the statistic the whole finding rests on — it is not**: re-running the identical
+Vulkan cell on an RTX 5080 (same binary, model, scene, machine, minutes apart) moved the p99 ratio
+from 1.49× to 2.48×. The run-to-run spread within one cell exceeded the gap between backends, so no
+backend ordering could be read off single runs.
+
+So for anything you intend to conclude from, repeat the cell and let the harness aggregate:
+
+```bash
+tools/gpu_contention/measure_linux.sh --model qwen2.5-coder:14b --label cuda --repeat 5
+```
+
+`--repeat N` boots the server once, runs the measurement N times against the same warm model, and
+calls `aggregate.py` over the N reports. The aggregate reports each metric as **median [min–max]
+across the runs**, so a cell's spread sits next to its value, and prints a p99-stability verdict —
+whether the spread is small enough for the median to be a defensible point value, or large enough
+that only the range is honest. It refuses to blend runs from different cells (different
+model/GPU/OS/label), which would manufacture a spread out of real differences.
+
+`aggregate.py` also runs standalone over any set of same-cell report JSONs:
+
+```bash
+python3 tools/gpu_contention/aggregate.py --reports results/windows_vulkan_*_run*.json
+```
+
 ### Pin the model first
 
 ```bash

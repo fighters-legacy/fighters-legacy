@@ -398,7 +398,7 @@ jobs:
 
       # Schedule arithmetic + the frame/phase join only — no model, no GPU, no game binary. Same
       # policy as ai_eval above: the contention runs themselves are local/per-OS (#782).
-      - name: Unit test gpu_contention/{driver,analyze}.py (Ubuntu)
+      - name: Unit test gpu_contention/{driver,analyze,aggregate}.py (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         run: python3 -m pytest tests/test_gpu_contention.py -v
 
@@ -425,6 +425,7 @@ jobs:
         run: |
           python3 tools/gpu_contention/driver.py --help
           python3 tools/gpu_contention/analyze.py --help
+          python3 tools/gpu_contention/aggregate.py --help
           python3 tools/gpu_contention/driver.py --model none --print-schedule
 
       - name: Smoke test terrain-chunk-io gen-procedural (Ubuntu)

@@ -46,6 +46,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **ai**: repeat-and-aggregate mode for the GPU-contention harness (#1016). The Windows runs (#782)
+  showed a single run's p99 is not a measurement: re-running the identical Vulkan cell on an RTX 5080
+  moved the p99 ratio from 1.49× to 2.48× — the run-to-run spread within one cell exceeded the gap
+  between backends, so no backend ordering could be read off single runs. The mean, by contrast, was
+  stable to ±0.02 ms. `--repeat N` on any runner now boots the server once, runs the measurement N
+  times against the same warm model, and calls a new `aggregate.py` over the reports, which reports
+  each metric as **median [min–max] across the runs** and prints a p99-stability verdict comparing
+  the run-to-run spread against the effect being measured. It refuses to blend runs from different
+  cells (model/GPU/OS/label), which would fabricate a spread from real differences. `analyze.py` now
+  stamps each report with its cell `--label` so the aggregator can group and guard. Reproduced on the
+  RTX 5080: three runs of one cell gave p99 ratios 1.21×/1.82×/2.02× while the mean moved 0.11 ms —
+  the verdict correctly reports the range rather than a point. CI never requires a model; only the
+  aggregation logic is unit-tested.
 - **ai**: the LLM-vs-renderer GPU contention harness, and the measurements it exists to produce
   (#782, follow-up to spike #609). #609 asked what a resident local model costs the frame budget on
   each OS and could not answer it; the gap was recorded as "runs to schedule, not work to build",

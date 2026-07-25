@@ -30,6 +30,7 @@ param(
     [double]$GapSeconds = 20,
     [double]$TailSeconds = 30,
     [double]$SettleSeconds = 60,
+    [int]$Repeat = 1,
     [string]$Label = "",
     [Parameter(Position = 0)][string]$BuildDir = ""
 )
@@ -54,7 +55,8 @@ $Game = Join-Path $BuildDir "game\fighters-legacy\fighters-legacy.exe"
 $FlServer = Join-Path $BuildDir "server\fl-server\fl-server.exe"
 $Results = Join-Path $ScriptDir "results"
 $Stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
-$Suffix = if ($Label) { "windows_${Label}_$Stamp" } else { "windows_$Stamp" }
+$Cell = if ($Label) { "windows_$Label" } else { "windows" }
+$Suffix = "${Cell}_$Stamp"
 New-Item -ItemType Directory -Force -Path $Results | Out-Null
 
 # MSVC multi-config generators nest binaries under a per-config directory.
@@ -104,8 +106,8 @@ $RunSeconds = [int]$ScheduleS + [int]$SettleSeconds + 150
 
 Write-Host "-- GPU contention (#782), Windows --"
 Write-Host "  endpoint : $BaseUrl   model: $Model   workload: $Workload (concurrency $Concurrency)"
-Write-Host "  scene    : $Mission   schedule: ${ScheduleS}s   game run: ${RunSeconds}s"
-Write-Host "  results  : $Results\*_$Suffix.*"
+Write-Host "  scene    : $Mission   schedule: ${ScheduleS}s   game run: ${RunSeconds}s   repeat: $Repeat"
+Write-Host "  results  : $Results\*_$Suffix*.*"
 
 # ── System info + VRAM before anything is loaded ─────────────────────────────────────────────
 $SysInfo = Join-Path $Results "sysinfo_$Suffix.txt"
@@ -136,14 +138,73 @@ Write-Host "  sysinfo  : $SysInfo"
 $WorkDir = Join-Path ([System.IO.Path]::GetTempPath()) ("flgpu_" + [System.Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
 $ServerLog = Join-Path $WorkDir "server.log"
-$GameLog = Join-Path $WorkDir "game.log"
-$FramesJson = Join-Path $Results "frames_$Suffix.json"
-$DriverJson = Join-Path $Results "driver_$Suffix.json"
 $serverProc = $null
 $gameProc = $null
+$reports = @()
+
+# One measurement pass: fresh game, settle, drive, per-run analyze. Sets $script:gameProc so the
+# finally block can reap whatever is live, and appends the run's report JSON path to $script:reports.
+# Observer, not pilot: a spectator ghost holds a fixed camera over a streamed-in scene, so the
+# render load is repeatable. Windowed, not --headless: present and the compositor contend for the GPU.
+function Invoke-Run {
+    param([int]$Run)
+    $runTag = if ($Repeat -gt 1) { "_run{0:D2}" -f $Run } else { "" }
+    $tag = "$Suffix$runTag"
+    $frames = Join-Path $Results "frames_$tag.json"
+    $driver = Join-Path $Results "driver_$tag.json"
+    $reportPrefix = Join-Path $Results "${Cell}_${Stamp}$runTag"
+    $gameLog = Join-Path $WorkDir "game_$Run.log"
+
+    $script:gameProc = Start-Process -FilePath $Game `
+        -ArgumentList @("--connect", "127.0.0.1:$Port", "--observer", "--auto",
+        "--frame-stats-json", $frames, "--run-seconds", $RunSeconds) `
+        -RedirectStandardOutput $gameLog -RedirectStandardError "$gameLog.err" `
+        -PassThru
+
+    Write-Host "  [run $Run/$Repeat] waiting for the client to reach Flight and start recording..."
+    $recording = $false
+    for ($i = 0; $i -lt 150; $i++) {
+        if ((Test-Path $frames) -and ((Get-Item $frames).Length -gt 0)) { $recording = $true; break }
+        if ($script:gameProc.HasExited) { throw "game exited early: $(Get-Content $gameLog -Tail 20)" }
+        Start-Sleep -Seconds 1
+    }
+    if (-not $recording) { throw "no frame stats after 150 s: $(Get-Content $gameLog -Tail 20)" }
+
+    # ── Let the client settle before the baseline starts ─────────────────────────────────────
+    # The first stats flush arrives ~5 s into Flight, but the client is not in steady state yet:
+    # a 240 Hz run on this reference box showed multi-second episodes of ~11 ms frames scattered
+    # through the first ~55 s (terrain still streaming, pipelines still warming). Starting the
+    # driver at first-flush folds those into the idle baseline, the one number every burst is
+    # compared against. Per-run, because every fresh game launch has this startup transient.
+    if ($SettleSeconds -gt 0) {
+        Write-Host "  [run $Run/$Repeat] settling for ${SettleSeconds}s before the baseline..."
+        Start-Sleep -Seconds $SettleSeconds
+    }
+
+    & $PythonCmd.Exe @($PythonCmd.Pre) "$ScriptDir\driver.py" `
+        --base-url $BaseUrl --model $Model --workload $Workload --concurrency $Concurrency `
+        --idle-seconds $IdleSeconds --bursts $Bursts --burst-seconds $BurstSeconds `
+        --gap-seconds $GapSeconds --tail-seconds $TailSeconds --out $driver
+    if ($LASTEXITCODE -ne 0) { throw "driver.py failed with exit code $LASTEXITCODE" }
+
+    # VRAM at peak load — captured on the first run (representative; the model is resident for all).
+    if ($Run -eq 1 -and $nvidiaSmi) {
+        Add-Content -Path $SysInfo -Value "vram_after_mb: $(& nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits)"
+        Add-Content -Path $SysInfo -Value "compute_apps_after: $((& nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader) -join ';')"
+    }
+
+    Write-Host "  [run $Run/$Repeat] waiting for the game to finish its run..."
+    $script:gameProc.WaitForExit()
+    $script:gameProc = $null
+
+    $cellLabel = if ($Label) { $Label } else { $Model }
+    & $PythonCmd.Exe @($PythonCmd.Pre) "$ScriptDir\analyze.py" --frame-stats $frames --driver $driver `
+        --scene $Mission --label $cellLabel --out $reportPrefix
+    $script:reports += "$reportPrefix.json"
+}
 
 try {
-    # ── Boot the server ──────────────────────────────────────────────────────────────────────
+    # ── Boot the server ONCE; all repeats run against the same warm server + model ─────────────
     $serverProc = Start-Process -FilePath $FlServer `
         -ArgumentList @($Port, "8", "--bind", "127.0.0.1", "--mission", $Mission) `
         -RedirectStandardOutput $ServerLog -RedirectStandardError "$ServerLog.err" `
@@ -159,57 +220,7 @@ try {
     }
     if (-not $up) { throw "fl-server never came up: $(Get-Content $ServerLog -Tail 5)" }
 
-    # ── Launch the game ──────────────────────────────────────────────────────────────────────
-    # Observer, not pilot: a spectator ghost holds a fixed camera over a streamed-in scene, so the
-    # render load is repeatable. Windowed, not --headless: present and the compositor are part of
-    # what contends for the GPU.
-    $gameProc = Start-Process -FilePath $Game `
-        -ArgumentList @("--connect", "127.0.0.1:$Port", "--observer", "--auto",
-        "--frame-stats-json", $FramesJson, "--run-seconds", $RunSeconds) `
-        -RedirectStandardOutput $GameLog -RedirectStandardError "$GameLog.err" `
-        -PassThru
-
-    Write-Host "  waiting for the client to reach Flight and start recording..."
-    $recording = $false
-    for ($i = 0; $i -lt 150; $i++) {
-        if ((Test-Path $FramesJson) -and ((Get-Item $FramesJson).Length -gt 0)) {
-            $recording = $true
-            break
-        }
-        if ($gameProc.HasExited) { throw "game exited early: $(Get-Content $GameLog -Tail 20)" }
-        Start-Sleep -Seconds 1
-    }
-    if (-not $recording) { throw "no frame stats after 150 s: $(Get-Content $GameLog -Tail 20)" }
-
-    # ── Let the client settle before the baseline starts ─────────────────────────────────────
-    # The first stats flush arrives ~5 s into Flight, but the client is not in steady state yet:
-    # a 240 Hz run on this reference box showed three multi-second episodes of ~11 ms frames
-    # scattered through the first ~55 s (terrain still streaming, pipelines still warming), and
-    # then nothing for the rest of the run. Starting the driver at first-flush folds those into
-    # the idle baseline, which is the one number every burst is compared against -- it inflated
-    # idle p95 to 11 ms against a 4.18 ms mean and made bursts look *faster* than idle.
-    # analyze.py's --settle-s only trims phase boundaries; it cannot fix a baseline placed on top
-    # of startup noise.
-    if ($SettleSeconds -gt 0) {
-        Write-Host "  settling for ${SettleSeconds}s before the baseline..."
-        Start-Sleep -Seconds $SettleSeconds
-    }
-
-    # ── Drive the bursts ─────────────────────────────────────────────────────────────────────
-    & $PythonCmd.Exe @($PythonCmd.Pre) "$ScriptDir\driver.py" `
-        --base-url $BaseUrl --model $Model --workload $Workload --concurrency $Concurrency `
-        --idle-seconds $IdleSeconds --bursts $Bursts --burst-seconds $BurstSeconds `
-        --gap-seconds $GapSeconds --tail-seconds $TailSeconds --out $DriverJson
-    if ($LASTEXITCODE -ne 0) { throw "driver.py failed with exit code $LASTEXITCODE" }
-
-    # ── VRAM at peak load (model resident, game rendering) ────────────────────────────────────
-    if ($nvidiaSmi) {
-        Add-Content -Path $SysInfo -Value "vram_after_mb: $(& nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits)"
-        Add-Content -Path $SysInfo -Value "compute_apps_after: $((& nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader) -join ';')"
-    }
-
-    Write-Host "  waiting for the game to finish its run..."
-    $gameProc.WaitForExit()
+    for ($run = 1; $run -le $Repeat; $run++) { Invoke-Run -Run $run }
 }
 finally {
     foreach ($p in @($gameProc, $serverProc)) {
@@ -219,6 +230,10 @@ finally {
     Remove-Item -Recurse -Force $WorkDir -ErrorAction SilentlyContinue
 }
 
-$outPrefix = if ($Label) { Join-Path $Results "windows_${Label}_$Stamp" } else { Join-Path $Results "windows_$Stamp" }
-& $PythonCmd.Exe @($PythonCmd.Pre) "$ScriptDir\analyze.py" --frame-stats $FramesJson --driver $DriverJson --scene $Mission --out $outPrefix
+# ── Aggregate (only meaningful for repeated runs) ─────────────────────────────────────────────
+if ($Repeat -gt 1) {
+    Write-Host "-- aggregate of $Repeat runs --"
+    & $PythonCmd.Exe @($PythonCmd.Pre) "$ScriptDir\aggregate.py" --reports @($reports) `
+        --out (Join-Path $Results "${Cell}_${Stamp}_agg")
+}
 exit $LASTEXITCODE
