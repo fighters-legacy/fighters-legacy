@@ -29,6 +29,7 @@ param(
     [double]$IdleSeconds = 60,
     [double]$GapSeconds = 20,
     [double]$TailSeconds = 30,
+    [double]$SettleSeconds = 60,
     [string]$Label = "",
     [Parameter(Position = 0)][string]$BuildDir = ""
 )
@@ -38,7 +39,15 @@ $ErrorActionPreference = "Stop"
 
 $ScriptDir = $PSScriptRoot
 $RepoRoot = (Resolve-Path (Join-Path $ScriptDir "..\..")).Path
-if (-not $BuildDir) { $BuildDir = Join-Path $RepoRoot "build\release" }
+# `release` is the Clang/GCC-on-Windows preset; `release-msvc` is the one docs/development.md tells
+# Windows developers to build, so fall back to it rather than making -BuildDir mandatory here.
+if (-not $BuildDir) {
+    $BuildDir = Join-Path $RepoRoot "build\release"
+    if (-not (Test-Path (Join-Path $BuildDir "game"))) {
+        $msvc = Join-Path $RepoRoot "build\release-msvc"
+        if (Test-Path (Join-Path $msvc "game")) { $BuildDir = $msvc }
+    }
+}
 
 $Port = if ($env:FL_CONTENTION_PORT) { $env:FL_CONTENTION_PORT } else { "4796" }
 $Game = Join-Path $BuildDir "game\fighters-legacy\fighters-legacy.exe"
@@ -66,14 +75,32 @@ foreach ($probe in @("/v1/models", "/api/tags")) {
 }
 if (-not $endpointOk) { throw "no OpenAI-compatible endpoint answering at $BaseUrl" }
 
+# ── Python launcher ──────────────────────────────────────────────────────────────────────────
+# Bare `python` is not a safe assumption on Windows: a stock box resolves it to the Microsoft
+# Store app-execution alias, which prints "Python was not found" and exits WITHOUT running the
+# script. Probe each candidate by actually executing it and keep the first that returns 0.
+$PythonCmd = $null
+foreach ($cand in @(
+        @{ Exe = "py"; Pre = @("-3") },
+        @{ Exe = "python3"; Pre = @() },
+        @{ Exe = "python"; Pre = @() }
+    )) {
+    $found = Get-Command $cand.Exe -CommandType Application -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+    if (-not $found) { continue }
+    & $found.Source @($cand.Pre + "--version") *> $null
+    if ($LASTEXITCODE -eq 0) { $PythonCmd = @{ Exe = $found.Source; Pre = $cand.Pre }; break }
+}
+if (-not $PythonCmd) { throw "no working Python interpreter found (tried: py -3, python3, python)" }
+
 # The driver owns the schedule arithmetic; the game's run length is derived from it rather than
 # recomputed here, so the two cannot drift apart.
-$ScheduleS = [double](& python "$ScriptDir\driver.py" --model $Model --print-schedule `
+$ScheduleS = [double](& $PythonCmd.Exe @($PythonCmd.Pre) "$ScriptDir\driver.py" --model $Model --print-schedule `
         --idle-seconds $IdleSeconds --bursts $Bursts --burst-seconds $BurstSeconds `
         --gap-seconds $GapSeconds --tail-seconds $TailSeconds)
-# Margin covers connect + terrain streaming before the first Flight frame, and the warm-up probe
-# (which may be a full cold model load) that runs before the schedule starts.
-$RunSeconds = [int]$ScheduleS + 150
+# Margin covers connect + terrain streaming before the first Flight frame, the settle window below,
+# and the warm-up probe (which may be a full cold model load) that runs before the schedule starts.
+$RunSeconds = [int]$ScheduleS + [int]$SettleSeconds + 150
 
 Write-Host "-- GPU contention (#782), Windows --"
 Write-Host "  endpoint : $BaseUrl   model: $Model   workload: $Workload (concurrency $Concurrency)"
@@ -154,8 +181,22 @@ try {
     }
     if (-not $recording) { throw "no frame stats after 150 s: $(Get-Content $GameLog -Tail 20)" }
 
+    # ── Let the client settle before the baseline starts ─────────────────────────────────────
+    # The first stats flush arrives ~5 s into Flight, but the client is not in steady state yet:
+    # a 240 Hz run on this reference box showed three multi-second episodes of ~11 ms frames
+    # scattered through the first ~55 s (terrain still streaming, pipelines still warming), and
+    # then nothing for the rest of the run. Starting the driver at first-flush folds those into
+    # the idle baseline, which is the one number every burst is compared against -- it inflated
+    # idle p95 to 11 ms against a 4.18 ms mean and made bursts look *faster* than idle.
+    # analyze.py's --settle-s only trims phase boundaries; it cannot fix a baseline placed on top
+    # of startup noise.
+    if ($SettleSeconds -gt 0) {
+        Write-Host "  settling for ${SettleSeconds}s before the baseline..."
+        Start-Sleep -Seconds $SettleSeconds
+    }
+
     # ── Drive the bursts ─────────────────────────────────────────────────────────────────────
-    & python "$ScriptDir\driver.py" `
+    & $PythonCmd.Exe @($PythonCmd.Pre) "$ScriptDir\driver.py" `
         --base-url $BaseUrl --model $Model --workload $Workload --concurrency $Concurrency `
         --idle-seconds $IdleSeconds --bursts $Bursts --burst-seconds $BurstSeconds `
         --gap-seconds $GapSeconds --tail-seconds $TailSeconds --out $DriverJson
@@ -179,5 +220,5 @@ finally {
 }
 
 $outPrefix = if ($Label) { Join-Path $Results "windows_${Label}_$Stamp" } else { Join-Path $Results "windows_$Stamp" }
-& python "$ScriptDir\analyze.py" --frame-stats $FramesJson --driver $DriverJson --scene $Mission --out $outPrefix
+& $PythonCmd.Exe @($PythonCmd.Pre) "$ScriptDir\analyze.py" --frame-stats $FramesJson --driver $DriverJson --scene $Mission --out $outPrefix
 exit $LASTEXITCODE

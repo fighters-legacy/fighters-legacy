@@ -634,11 +634,19 @@ void VkRenderer::beginFrame() {
             m_framebufferResized = true;
     }
 
-    vkResetFences(m_device, 1, &m_inFlightFences[m_currentFrame]);
-
+    // Wait out whichever frame slot last rendered into THIS image, then take ownership of it.
+    // Order matters: the reset below must come after every wait that can observe this fence.
+    // Resetting first makes the wait unsatisfiable whenever the image's owner is the current
+    // slot's own fence — it has just been unsignaled and only the not-yet-recorded submit can
+    // signal it again, so the wait burns its full timeout and pins the renderer at 1/timeout
+    // (10 fps at 100 ms). Headless hits this every single frame, where m_currentImageIndex is
+    // m_currentFrame by construction; windowed hits it whenever an image index recurs on the
+    // same frame slot.
     if (m_imagesInFlight[m_currentImageIndex] != VK_NULL_HANDLE)
         vkWaitForFences(m_device, 1, &m_imagesInFlight[m_currentImageIndex], VK_TRUE, 100'000'000ULL);
     m_imagesInFlight[m_currentImageIndex] = m_inFlightFences[m_currentFrame];
+
+    vkResetFences(m_device, 1, &m_inFlightFences[m_currentFrame]);
 
     vkResetCommandBuffer(m_commandBuffers[m_currentFrame], 0);
     m_frameAcquired = true;
