@@ -633,6 +633,15 @@ backends cost the same" would be over-reading it. Note also that this normalisat
 threshold-sensitive: quoting a single "misses per request" figure without saying at which depth
 would have produced either 1.17× or 1.84× at will.
 
+> **Reproducing the per-request rows: both sides must cover the settled window.** `classify_samples`
+> discards `--settle-s` (5 s) of each phase, so the frame counts above span 15 s of each 20 s burst,
+> while the driver report's `requests` are per **whole** phase. Dividing settled frames by whole-phase
+> requests silently understates every per-request figure by the settle fraction — here 75 %, a uniform
+> 1.33×, which looks like a real disagreement rather than a units error because it scales every row
+> equally. Scale the request count to the settled span (or count requests inside it) before dividing.
+> The ratios between backends are unaffected, which is why the conclusion above survives the mistake;
+> the absolute figures are not.
+
 **Linux is the other shape entirely, on the same card.** There the renderer's GPU span *does*
 stretch — and stretches **more** under Vulkan (+1.07 ms) than under CUDA (+0.79 ms) — while the
 residual goes *negative*. The backend that costs the frame nothing is the one doing more damage to
