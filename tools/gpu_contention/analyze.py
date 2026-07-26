@@ -46,6 +46,13 @@ STALL_MS = 50.0
 # the very difference the run is measuring.
 SETTLE_S = 5.0
 
+# A frame shorter than this fraction of the run's idle cadence is a CATCH-UP frame: on a vsync-
+# limited client with images queued, a frame that waited an extra refresh interval is followed by
+# one that was already finished and returns immediately. The share of these is how you tell a
+# renderer that WAITED from a renderer whose work got SLOWER (#1025) — slower work cannot produce
+# short frames, and it lowers throughput, which a wait followed by a drain does not.
+SHORT_FRAME_FRACTION = 0.5
+
 
 # ---- pure analysis -----------------------------------------------------------------------------
 
@@ -121,6 +128,68 @@ def classify_samples(samples, phases, settle_s=SETTLE_S):
         idx = hit.get("index", 0)
         b["windows"][idx] = b["windows"].get(idx, 0) + 1
     return buckets, outside
+
+
+def residual_ms(frame_ms_values, gpu_ms_values):
+    """Per-frame `frame_ms - gpu_ms`: the part of the frame the renderer was NOT executing on the GPU.
+
+    `gpu_ms` is the renderer's own timestamp-query span, so the remainder is CPU frame work, waiting
+    to be scheduled, and present. Splitting the burst-vs-idle delta across these two is what
+    separates "the renderer's work got slower" from "the renderer waited" (#1025) — two mechanisms
+    that look identical in frame time and call for completely different fixes.
+
+    Computed PER FRAME, then summarised, so it is a real distribution rather than a subtraction of
+    two summaries. Note the split is exact only at the mean, where the two components are additive;
+    at p95/p99 each component's percentile is taken independently, so the rows localise the tail
+    rather than forming an identity.
+
+    Pairs positionally: both lists come from the same bucket and are appended together in
+    classify_samples, so index i is one frame. Extra entries on either side are ignored.
+    """
+    return [f - g for f, g in zip(frame_ms_values, gpu_ms_values)]
+
+
+def short_frame_pct(frame_ms_values, idle_median_ms, fraction=SHORT_FRAME_FRACTION):
+    """Share of frames shorter than `fraction` x the idle cadence — the catch-up drain (#1025).
+
+    None when there is no idle baseline to calibrate against, on the same principle as the hitch
+    threshold: "could not measure" is not "measured zero".
+    """
+    if not frame_ms_values or not idle_median_ms or idle_median_ms <= 0:
+        return None
+    cutoff = idle_median_ms * fraction
+    return round(100.0 * sum(1 for v in frame_ms_values if v < cutoff) / len(frame_ms_values), 2)
+
+
+def drain_after_hitch_pct(frame_ms_values, hitch_ms, idle_median_ms, fraction=SHORT_FRAME_FRACTION):
+    """Of the frames over the hitch threshold, the share whose successor was a catch-up frame.
+
+    The unconditional short-frame share says short frames and long frames both became common; this
+    says they are the SAME event — a frame that waited, followed by the queued image that was
+    already finished. That is what a slowdown cannot produce, and it is why the pair is reported
+    rather than either alone (#1025).
+
+    Reuses the run's calibrated hitch threshold rather than inventing a second "long" cutoff, so
+    "hitch" means one thing in the report. None when either calibration is unavailable, or when the
+    phase contains no hitch to condition on — an empty conditional is not zero.
+    """
+    if not frame_ms_values or not hitch_ms or not idle_median_ms or idle_median_ms <= 0:
+        return None
+    cutoff = idle_median_ms * fraction
+    pairs = [(a, b) for a, b in zip(frame_ms_values, frame_ms_values[1:]) if a > hitch_ms]
+    if not pairs:
+        return None
+    return round(100.0 * sum(1 for _a, b in pairs if b < cutoff) / len(pairs), 2)
+
+
+def frames_per_second(frame_ms_values):
+    """Throughput over the frames in a bucket. A genuine slowdown lowers it; a wait+drain does not."""
+    if not frame_ms_values:
+        return 0.0
+    total_s = sum(frame_ms_values) / 1000.0
+    if total_s <= 0:
+        return 0.0
+    return round(len(frame_ms_values) / total_s, 2)
 
 
 def hitch_rate_per_min(frame_ms_values, threshold_ms):
@@ -248,8 +317,16 @@ def contention_metrics(frame_report, driver, settle_s=SETTLE_S, scene="", label=
         per_phase[kind] = {
             "frame_ms": summarize_ms(b["frame_ms"]),
             "gpu_ms": summarize_ms(b["gpu_ms"]),
+            # frame_ms minus the renderer's own GPU execution span, per frame. See residual_ms:
+            # this is what says whether a burst made the renderer's work slower or made it wait.
+            "residual_ms": summarize_ms(residual_ms(b["frame_ms"], b["gpu_ms"])),
             "gpu_mem_used_mb": summarize_ms(b["mem_mb"]),
             "worst_1pct_frame_ms": worst_percent_mean(b["frame_ms"]),
+            # The two halves of the wait-vs-slowdown test: catch-up frames (a blocked frame's queued
+            # successor returning immediately) and throughput (which a wait+drain preserves).
+            "short_frames_pct": short_frame_pct(b["frame_ms"], idle_median_ms),
+            "drain_after_hitch_pct": drain_after_hitch_pct(b["frame_ms"], hitch_ms, idle_median_ms),
+            "fps": frames_per_second(b["frame_ms"]),
             # Rate AND count. The rate makes phases of different lengths comparable; the count keeps
             # the reader from over-reading a rate extrapolated from a short window (7 hitches in a
             # 25 s tail is "17/min", which reads far more alarming than it is).
@@ -269,6 +346,21 @@ def contention_metrics(frame_report, driver, settle_s=SETTLE_S, scene="", label=
             "frame_p99_ms": round(burst["frame_ms"]["p99"] - base["frame_ms"]["p99"], 3),
             "frame_mean_ms": round(burst["frame_ms"]["mean"] - base["frame_ms"]["mean"], 3),
             "gpu_mean_ms": round(burst["gpu_ms"]["mean"] - base["gpu_ms"]["mean"], 3),
+            # The frame delta split into the renderer's own GPU execution and everything else
+            # (#1025). Reported at the same three statistics as the frame delta so the split can be
+            # read where the cost actually lives — on a client with vsync slack the mean absorbs it
+            # and only the tail moves.
+            "gpu_p95_ms": round(burst["gpu_ms"]["p95"] - base["gpu_ms"]["p95"], 3),
+            "gpu_p99_ms": round(burst["gpu_ms"]["p99"] - base["gpu_ms"]["p99"], 3),
+            "residual_mean_ms": round(burst["residual_ms"]["mean"] - base["residual_ms"]["mean"], 3),
+            "residual_p95_ms": round(burst["residual_ms"]["p95"] - base["residual_ms"]["p95"], 3),
+            "residual_p99_ms": round(burst["residual_ms"]["p99"] - base["residual_ms"]["p99"], 3),
+            "short_frames_pct": (
+                round(burst["short_frames_pct"] - base["short_frames_pct"], 2)
+                if burst["short_frames_pct"] is not None and base["short_frames_pct"] is not None
+                else None
+            ),
+            "fps_ratio": (round(burst["fps"] / base["fps"], 3) if base["fps"] else None),
             "worst_1pct_ms": round(burst["worst_1pct_frame_ms"] - base["worst_1pct_frame_ms"], 3),
             "hitches_per_min": (
                 round(burst["hitches_per_min"] - base["hitches_per_min"], 2)
@@ -392,6 +484,49 @@ def render_markdown(report):
         )
         lines.append(f"- Hitches/min {hitch_delta}")
         lines.append("")
+
+        # Where the delta lives. Emitted only when the device produced real timestamps — without
+        # them gpu_ms is 0, the "split" is definitionally frame == residual, and printing it would
+        # dress a missing measurement up as a finding (the warnings block says so separately).
+        burst_phase = report["per_phase"].get("burst", {})
+        if burst_phase.get("gpu_ms", {}).get("max", 0) > 0:
+            lines.append("**Where the delta lives** — frame = renderer GPU execution + everything else")
+            lines.append("")
+            lines.append("| | Δ frame | Δ renderer-GPU | Δ residual |")
+            lines.append("|---|---:|---:|---:|")
+            for q, gkey, rkey, fkey in (
+                ("mean", "gpu_mean_ms", "residual_mean_ms", "frame_mean_ms"),
+                ("p95", "gpu_p95_ms", "residual_p95_ms", "frame_p95_ms"),
+                ("p99", "gpu_p99_ms", "residual_p99_ms", "frame_p99_ms"),
+            ):
+                lines.append(f"| {q} | {d[fkey]:+.3f} ms | {d[gkey]:+.3f} ms | {d[rkey]:+.3f} ms |")
+            lines.append("")
+            lines.append(
+                "Residual is per-frame `frame_ms - gpu_ms` — CPU frame work, queue wait and present. "
+                "A delta that lands in the GPU column is the renderer's work getting slower; one that "
+                "lands in the residual is the renderer waiting. The columns are additive at the mean "
+                "only; at p95/p99 each percentile is taken independently."
+            )
+            lines.append("")
+            base_p, burst_p = report["per_phase"].get("idle", {}), burst_phase
+            if base_p.get("short_frames_pct") is not None and burst_p.get("short_frames_pct") is not None:
+                lines.append(
+                    f"- Catch-up frames (<{SHORT_FRAME_FRACTION:g}x the idle cadence): "
+                    f"{base_p['short_frames_pct']:.2f}% idle -> {burst_p['short_frames_pct']:.2f}% burst; "
+                    f"throughput {base_p['fps']:.2f} -> {burst_p['fps']:.2f} fps "
+                    f"({d['fps_ratio']:.3f}x)"
+                )
+                if burst_p.get("drain_after_hitch_pct") is not None:
+                    lines.append(
+                        f"- Hitches immediately followed by a catch-up frame: "
+                        f"{burst_p['drain_after_hitch_pct']:.1f}% of burst hitches"
+                        + (
+                            f" (idle {base_p['drain_after_hitch_pct']:.1f}%)"
+                            if base_p.get("drain_after_hitch_pct") is not None
+                            else ""
+                        )
+                    )
+                lines.append("")
 
     v = report["vram"]
     model_vram = f"{v['model_vram_mb']:.0f} MB" if v.get("model_vram_mb") else "not reported by endpoint"

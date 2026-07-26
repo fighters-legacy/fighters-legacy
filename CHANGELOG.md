@@ -9,6 +9,45 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **ai**: the GPU-contention analyzer now splits the burst-vs-idle delta into the renderer's own GPU
+  execution and the residual, which resolved spike #1025 from artifacts already on disk instead of
+  the two days of GPU-scheduler tracing it budgeted. A frame time cannot distinguish "inference made
+  the renderer's work slower" from "inference made the renderer wait" — the two are the same number
+  in the frame column and want opposite fixes — but every sample already carried `gpu_ms`, the
+  renderer's own timestamp-query span, so each frame splits into execution and everything else
+  (`Δ frame = Δ renderer-GPU + Δ residual`). Reports gain `residual_ms` per phase,
+  `residual_mean/p95/p99_ms` and `gpu_p95/p99_ms` deltas, `short_frames_pct` (catch-up frames under
+  half the idle cadence — a blocked frame's queued successor returns immediately, which slower work
+  cannot manufacture), `drain_after_hitch_pct` (the share of hitches immediately followed by one,
+  which says the long frame and the short one are the same event rather than two coincidences) and
+  `fps`/`fps_ratio` (throughput, which a wait-then-drain preserves and a
+  slowdown does not); the per-run markdown prints a *Where the delta lives* table, omitted when the
+  device reports no timestamps rather than dressing `frame == residual` up as a split. Fields are
+  additive, so `schema_version` stays at 2 and older reports aggregate unchanged — the shared
+  metrics keep their meaning, and making the refuse-to-blend guard reject the mix would be worse
+  than allowing it. What that would have left silent, `aggregate.py` now warns about: a metric only
+  *some* of the input reports carried was rendering exactly like one every report carried, because
+  `across_run_stats` drops the missing entries and the markdown prints no `n` — so a row computed
+  from 2 of 5 runs sat under a header reading "aggregate, 5 runs", its range looking tight because
+  it was two runs rather than because the metric was stable. Mixed-version inputs now name the thin
+  rows and their shortfall; a metric absent from *every* report is untouched, since that is a cell
+  which never had it rather than a mixed set. **The finding: on
+  Windows the renderer's GPU execution is untouched (+0.01 ms mean, +0.19 ms p99 against a 1.25 ms
+  span) while the residual carries the entire +4.4 ms p95 / +7 ms p99 — by both backends.** Throughput
+  holds at 0.99×, catch-up frames rise 15–27 points, and 56–57 % of burst hitches are followed
+  immediately by one: the renderer is waiting and then draining a queued present, not doing
+  slower work, and it is not being preempted mid-command-buffer either (that would land inside
+  `gpu_ms`). Linux is the opposite shape on the same card — the GPU column carries +0.8 to +1.1 ms
+  and the residual goes negative. Normalised by request rate, how *often* the renderer is stalled
+  agrees across the two Windows backends within 17 % (6.3 vs 5.4 missed flips per inference request)
+  — the per-contender reading's falsifiable prediction holding — while how *deeply* does not
+  (1.8×: Vulkan stalls more often, CUDA deeper), which is what the Δ p99 gap between them is made
+  of. The headline 4.38 ms is **one 4.16 ms refresh interval**,
+  so the two backends' "identical to two decimals" agreement is the resolution of a quantized
+  statistic rather than a measured equality. Still not established, and stated as such: whether the
+  wait sits in WDDM queue arbitration or the present/DWM path — that needs ETW, and no decision turns
+  on it, so no follow-on issue opens.
+
 - **docs**: recorded the Linux CUDA-vs-Vulkan contention pair and corrected a claim the Windows
   write-up made about it (#1021). The results table carried no Linux Vulkan row at all, while the
   prose already leaned on its numbers to draw the Linux-vs-Windows comparison — so the headline

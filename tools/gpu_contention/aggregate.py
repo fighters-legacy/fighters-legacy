@@ -39,6 +39,16 @@ DELTA_METRICS = [
     ("worst_1pct_ms", "Worst 1% delta", "ms"),
     ("gpu_mean_ms", "GPU mean delta", "ms"),
     ("hitches_per_min", "Hitches/min delta", ""),
+    # The wait-vs-slowdown split (#1025). Aggregated because it is the pair that has to be read
+    # across runs to mean anything: one run's residual is a number, five runs' residual against
+    # five runs' GPU delta is what says which mechanism the platform is showing.
+    ("gpu_p95_ms", "GPU p95 delta", "ms"),
+    ("gpu_p99_ms", "GPU p99 delta", "ms"),
+    ("residual_p95_ms", "Residual p95 delta", "ms"),
+    ("residual_p99_ms", "Residual p99 delta", "ms"),
+    ("residual_mean_ms", "Residual mean delta", "ms"),
+    ("short_frames_pct", "Catch-up frames delta", "%"),
+    ("fps_ratio", "Throughput ratio", "x"),
 ]
 
 # VRAM metrics (from the `vram` block) — usually stable across runs, reported for completeness.
@@ -125,6 +135,38 @@ def frame_interval_warnings(reports):
     ]
 
 
+def coverage_warnings(reports, groups):
+    """Flag any metric that only SOME of the reports carried (#1025).
+
+    `across_run_stats` drops the missing entries and `_fmt` prints no `n`, so a row computed from 2
+    of 5 runs renders exactly like one computed from all 5 — under a header that says
+    "aggregate, 5 runs", with a range that looks tight because it is two runs rather than because
+    the metric is stable.
+
+    This became reachable when #1025 added fields ADDITIVELY without bumping `schema_version`, which
+    is the right call: the metrics the two versions share keep their meaning, so making the identity
+    guard reject the mix would be worse than allowing it. But allowing it silently is the failure
+    mode the rest of this harness exists to prevent — a number that is not trustworthy must not look
+    like a clean pass. So name the thin rows instead of refusing the aggregate.
+
+    A metric absent from EVERY report (n == 0) is NOT flagged: that is a cell which never had it —
+    model VRAM on an endpoint with no `/api/ps`, say — and it already renders as an em dash.
+    """
+    total = len(reports)
+    thin = []
+    for stats_by_key, metrics in groups:
+        for key, label, _unit in metrics:
+            n = (stats_by_key.get(key) or {}).get("n", 0)
+            if 0 < n < total:
+                thin.append(f"{label} ({n}/{total})")
+    if not thin:
+        return []
+    return [
+        "Computed from fewer runs than this aggregate reports: " + ", ".join(thin) + ". The input "
+        "set mixes report versions — re-run the cell, or aggregate one version at a time."
+    ]
+
+
 def p99_stability_verdict(ratio_stats, mean_stats):
     """The #1016 conclusion, computed: is a single run's p99 a measurement on this hardware?
 
@@ -179,7 +221,14 @@ def aggregate_reports(reports):
     for key, _label, _unit in RUN_METRICS:
         run_stats[key] = across_run_stats([r.get(key) for r in reports])
 
-    warns = identity_warnings(reports) + frame_interval_warnings(reports)
+    warns = (
+        identity_warnings(reports)
+        + frame_interval_warnings(reports)
+        + coverage_warnings(
+            reports,
+            [(deltas, DELTA_METRICS), (vram, VRAM_METRICS), (run_stats, RUN_METRICS)],
+        )
+    )
     # A run that itself warned (early exit, clock skew, dirty burst) should not silently dilute the
     # aggregate — surface the count so the reader knows some inputs were flagged.
     dirty = sum(1 for r in reports if r.get("warnings"))

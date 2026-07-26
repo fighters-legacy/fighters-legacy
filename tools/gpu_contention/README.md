@@ -153,6 +153,42 @@ With no idle phase there is nothing to calibrate against, so the hitch metrics r
 rather than falling back to a fixed number — "could not measure" and "measured zero" are different
 findings.
 
+### Split the delta before interpreting it (#1025)
+
+A frame time cannot tell you whether inference made the renderer's **work slower** or made it
+**wait** — the two are the same number in the frame column and want opposite fixes. Every sample
+also carries `gpu_ms`, the renderer's own timestamp-query span, so each frame splits:
+
+    Δ frame  =  Δ renderer-GPU-execution  +  Δ residual        (residual = frame_ms − gpu_ms)
+
+The report carries `residual_ms` per phase and `residual_mean/p95/p99_ms` + `gpu_p95/p99_ms` in the
+delta block, and the per-run markdown prints them as a *Where the delta lives* table. A delta in the
+GPU column is contention *inside* the renderer's execution; a delta in the residual is the renderer
+not executing — CPU work, queue wait, or present.
+
+Two companions decide between "waited" and "got slower" when the delta is in the residual:
+
+- **`short_frames_pct`** — frames under half the idle cadence. A blocked frame's queued successor
+  returns immediately, so a wait-then-drain *manufactures* short frames. Slower work cannot.
+- **`drain_after_hitch_pct`** — of the frames over the run's hitch threshold, the share whose
+  successor was one of those short frames. The unconditional share says both became common; this
+  says they are the **same event**. `null` when the phase carries no hitch to condition on, which is
+  not the same as zero.
+- **`fps` / `fps_ratio`** — throughput. A genuine slowdown lowers it; a wait followed by a drain
+  does not.
+
+This is what resolved #1025 from artifacts already on disk instead of a tracing session: on Windows
+the GPU column was +0.01 ms while the residual carried the whole +4.4 ms at p95, with throughput at
+0.99× and catch-up frames up 15–27 points — the renderer waiting. On Linux the same split put the
+delta in the GPU column with the residual *negative* — the renderer executing longer inside a frame
+that had slack. Same card, opposite mechanisms.
+
+The columns are additive **at the mean only**. Means are additive; percentiles are not, so the
+p95/p99 rows localise the tail rather than forming an identity. The residual is nonetheless computed
+per frame, which is what makes it more than a subtraction of two summaries. When the device does not
+support timestamp queries `gpu_ms` is 0, the split degenerates to `frame == residual`, and the
+markdown omits the table rather than presenting a missing measurement as a finding.
+
 ### Pin the model first
 
 ```bash
