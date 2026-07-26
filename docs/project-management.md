@@ -296,14 +296,30 @@ Every one of these was earned by a real defect found in the 2026-07-26 audit of 
 
 `.github/workflows/release-notes-gate.yml` enforces steps 6 and 7. It checks that a release body
 leads with prose rather than a git-cliff heading, and that it carries no section heading for another
-version. It runs on `workflow_run` when `release.yml` completes (the publish path — `release:
-published` never fires for our own releases, because events created by `GITHUB_TOKEN` do not trigger
-workflows), on `release: edited` (so fixing the body clears it), and **weekly over every release** —
-a publish-time check cannot see a release that rotted afterwards, which is how v0.3.8 and v0.3.9
-survived for months.
+version.
 
-Expect it to **fail** right after a tag: the body is still git-cliff's at that point. It goes green
-once step 6 lands, and closes the tracking issue it opened.
+Two GitHub behaviours shape when it runs, both confirmed empirically on v0.3.10:
+
+- **Events created by `GITHUB_TOKEN` do not trigger workflows.** `release.yml` publishes with
+  `GITHUB_TOKEN`, so `release: published` never fires for our own releases.
+- **A `release` event runs the workflow file from the release's *tag*,** not from the default
+  branch. Every other trigger runs the default-branch copy.
+
+| Trigger | Runs the copy on | Covers |
+|---|---|---|
+| `workflow_run` on **Release** | default branch | the publish path — this is what caught v0.3.10 |
+| `release: edited` | **the release's tag** | clears the gate when the body is fixed |
+| `schedule`, weekly | default branch | every release, forever — **the actual safety net** |
+
+The `release: edited` trigger is convenience, not the guarantee: a release tagged before a fix to
+the gate keeps running the old copy of the gate indefinitely. v0.3.10 is permanently in that state,
+since it was tagged before the injection fix. The **weekly sweep** is what makes the gate reliable —
+it runs current logic over every release and so is immune to both behaviours above. It is also the
+only thing that can catch a release that rotted *after* publication, which is how v0.3.8 and v0.3.9
+each stayed wrong for months.
+
+Expect the gate to **fail** right after a tag: the body is still git-cliff's at that point. It goes
+green once step 6 lands, and closes the tracking issue it opened.
 
 ## Adopting this in a new project
 

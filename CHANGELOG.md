@@ -7,6 +7,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **ci**: `lint_workflow_expressions` — reject Actions expressions carrying free text inside `run:` blocks (#1034)
+
+### Fixed
+
+- **ci**: pass composite-action inputs through `env:` rather than interpolating them into the script (#1034)
+- **ci**: the release-notes gate no longer lists `release: published`, which cannot fire for our own releases (#1034)
+
+### Changed
+
+- **docs**: record that a `release` event runs the workflow file from the release's tag, so the weekly sweep — not `release: edited` — is the gate's safety net (#1034)
+
 ## [0.3.10] - 2026-07-26
 
 ### Added
