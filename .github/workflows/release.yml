@@ -147,8 +147,15 @@ jobs:
 
       - name: Fallback release notes
         id: notes
+        # CLIFF arrives as an environment variable, NOT as an Actions expression inside the script.
+        # Actions substitutes expressions before the script is written, so git-cliff's output —
+        # which is built from commit messages and PR titles, i.e. text any contributor can choose —
+        # would become shell source. A PR title carrying a quote and a command substitution would
+        # execute here. Passing it through env keeps it data.
+        env:
+          CLIFF: ${{ steps.cliff.outputs.content }}
         run: |
-          body="${{ steps.cliff.outputs.content }}"
+          body="$CLIFF"
           if [ -z "${body// }" ]; then
             body="Infrastructure and CI improvements — no user-facing changes."
           fi

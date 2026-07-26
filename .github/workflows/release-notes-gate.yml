@@ -86,9 +86,13 @@ jobs:
 
           for tag in $TAGS; do
             [ -n "$tag" ] || continue
-            # Read the body through the API rather than interpolating
-            # ${{ github.event.release.body }} into this script — release bodies are
-            # attacker-influenced text and would be a shell-injection vector.
+            # Read the body through the API. NEVER reference the release body as an Actions
+            # expression inside a run block: Actions substitutes those BEFORE the script is
+            # written, so the body's text becomes shell source. That is a code-execution vector,
+            # and it is not hypothetical — this comment previously spelled the expression out and
+            # broke the gate on the first release it ran against (the body's parentheses became
+            # a syntax error). A body containing a command substitution would have executed.
+            # The rule: no Actions expressions in a run block, not even in a comment.
             body=$(gh release view "$tag" --json body --jq '.body' 2>/dev/null) || continue
             version="${tag#v}"
             c1=✅; c2=✅
