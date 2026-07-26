@@ -758,6 +758,15 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             fd.name[sizeof(fd.name) - 1] = '\0';
             m_factionNames[fd.factionIndex] = fd.name[0] ? fd.name : fd.id;
         }
+    } else if (msgId == static_cast<uint8_t>(fl::MsgId::AlertLevelChange)) {
+        // A faction's airspace readiness posture (#162), sent per faction after ConnectAck and again
+        // on every change. Gate the ordinal before casting -- a server-supplied byte is untrusted.
+        fl::MsgAlertLevelChange al;
+        if (!fl::readMsg(data, size, al))
+            return;
+        if (!fl::isAlertLevelOrdinal(al.level))
+            return;
+        m_factionAlertLevels[al.factionIndex] = static_cast<fl::AlertLevel>(al.level);
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::PlayerRoster)) {
         // Match roster upsert/leave stream (#996): header + count records. Dedup by participantId; a
         // kRosterLeave entry removes the row. The single name source for chat/kill feed/scoreboard.

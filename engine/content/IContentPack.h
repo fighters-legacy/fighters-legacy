@@ -102,6 +102,13 @@ class IContentPack {
         return std::nullopt;
     }
 
+    // Airspace escalation-policy TOML (#162). NON-pure with a nullopt default (loadLivery/loadTheater
+    // pattern), so existing implementors keep compiling. FolderContentPack serves zones/<name>.toml.
+    virtual std::optional<ZonePolicyData> loadZonePolicy(const char* name) {
+        (void)name;
+        return std::nullopt;
+    }
+
     virtual std::vector<std::string> listAssets(AssetType type) const = 0;
 
     // Returns the raw text of "<modDir>/data/<name>", or nullopt if not present.

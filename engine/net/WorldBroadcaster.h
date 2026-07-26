@@ -452,6 +452,11 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Lua WorldApi hook calls it during the tick).
     void broadcastMusicState(uint8_t state);
 
+    // Broadcast a faction's new airspace readiness posture to every connected peer (#162). `level` is
+    // an AlertLevel ordinal. Reliable. Sim-thread only (AlertSystem's onAlertLevelChange hook calls it
+    // during the tick; an off-thread caller must go through GameLoop::enqueueSimCallback).
+    void broadcastAlertLevelChange(uint16_t factionIndex, uint8_t level);
+
     // Broadcast a scripted haptic event to every connected peer (#128). `kind` is a HapticKind ordinal;
     // a/b/durationMs are already clamped by the engine binding. Each client plays it on its local
     // gamepad. Reliable. Sim-thread only.

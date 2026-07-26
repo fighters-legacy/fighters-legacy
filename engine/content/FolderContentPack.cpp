@@ -103,6 +103,10 @@ std::optional<TheaterDefData> FolderContentPack::loadTheater(const char* name) {
     return loadBytes<TheaterDefData>(name, AssetType::Theater);
 }
 
+std::optional<ZonePolicyData> FolderContentPack::loadZonePolicy(const char* name) {
+    return loadBytes<ZonePolicyData>(name, AssetType::ZonePolicy);
+}
+
 std::optional<std::vector<uint8_t>> FolderContentPack::loadPackFile(const char* relPath) const {
     if (!relPath || !*relPath)
         return std::nullopt;

@@ -331,6 +331,16 @@ void WorldBroadcaster::broadcastMusicState(uint8_t state) {
     }
 }
 
+void WorldBroadcaster::broadcastAlertLevelChange(uint16_t factionIndex, uint8_t level) {
+    MsgAlertLevelChange msg;
+    msg.factionIndex = factionIndex;
+    msg.level = level;
+    for (const auto& [peerId, pin] : m_peerInputs) {
+        (void)pin;
+        m_net.send(peerId, &msg, sizeof(msg), /*reliable=*/true);
+    }
+}
+
 void WorldBroadcaster::broadcastHaptic(uint8_t kind, float a, float b, uint16_t durationMs) {
     MsgHaptic msg;
     msg.kind = kind;
@@ -6121,6 +6131,17 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned, PeerRo
             }
             if (!fbuf.empty())
                 m_net.send(peerId, fbuf.data(), fbuf.size(), /*reliable=*/true);
+
+            // Current airspace posture per faction (#162). MsgAlertLevelChange is broadcast on
+            // change, so without this a peer joining after the change sits at Peacetime while the
+            // war is on. Sent as individual messages rather than a table: the same message serves
+            // both paths, so there is one decode branch on the client instead of two.
+            for (uint16_t fi = 0; fi < factionCount; ++fi) {
+                MsgAlertLevelChange amsg;
+                amsg.factionIndex = fi;
+                amsg.level = static_cast<uint8_t>(m_factionRegistry->alertLevel(fi));
+                m_net.send(peerId, &amsg, sizeof(amsg), /*reliable=*/true);
+            }
         }
     }
 

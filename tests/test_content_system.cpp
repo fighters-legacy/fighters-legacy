@@ -628,9 +628,9 @@ TEST_CASE("AssetManager::enableHotReload watches asset SUBDIRS, not the pack roo
     am.initialize(nullptr);
     am.enableHotReload(watcher);
 
-    // 13 unique subdirs: aircraft (Mesh + FlightModel dedup'd), textures, audio, missions, ai,
-    // entities, sensors, weapons, manual, liveries, airports, modes, theaters — terrain excluded.
-    CHECK(watcher.watchCalls.size() == 13);
+    // 14 unique subdirs: aircraft (Mesh + FlightModel dedup'd), textures, audio, missions, ai,
+    // entities, sensors, weapons, manual, liveries, airports, modes, theaters, zones — terrain excluded.
+    CHECK(watcher.watchCalls.size() == 14);
     auto watched = [&](const std::string& p) {
         for (auto& w : watcher.watchCalls)
             if (w.path == p)

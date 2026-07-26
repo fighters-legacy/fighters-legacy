@@ -114,6 +114,14 @@ struct ClientNetEventHandler : INetworkEventHandler {
         return it != m_factionNames.end() ? it->second : std::string{};
     }
 
+    // A faction's current airspace readiness posture (#162), from MsgAlertLevelChange. Peacetime for
+    // an unknown faction, which is also the server-side default -- so a client that has received no
+    // message yet reports the same thing the server believes.
+    fl::AlertLevel factionAlertLevel(uint16_t factionIndex) const {
+        const auto it = m_factionAlertLevels.find(factionIndex);
+        return it != m_factionAlertLevels.end() ? it->second : fl::AlertLevel::Peacetime;
+    }
+
     // ── client-side IFF (#688) ──────────────────────────────────────────────
     // This client's own faction index. The server never sends it as a dedicated field, so derive it:
     // prefer the assigned aircraft's cached faction (gen-checked), fall back to the self roster entry,
@@ -517,6 +525,10 @@ struct ClientNetEventHandler : INetworkEventHandler {
     // Faction index -> display name, from MsgFactionDef sent once after ConnectAck (#860). Used by the
     // observer entity picker to label an entity's faction.
     std::unordered_map<uint16_t, std::string> m_factionNames;
+
+    // Faction index -> airspace readiness posture, from MsgAlertLevelChange (#162): sent per faction
+    // after ConnectAck and again on every change. Absent = Peacetime, the server-side default.
+    std::unordered_map<uint16_t, fl::AlertLevel> m_factionAlertLevels;
 
     // Mission object id -> {entityIdx, entityGen}, from MsgMissionRoster after ConnectAck + late deltas
     // (#914). Lets the cinematic recorder resolve an entity-relative camera shot's target to an entity.

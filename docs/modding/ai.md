@@ -412,6 +412,10 @@ thread and are routed through the host, so an unavailable capability is a safe n
 | `world.despawn(entity_idx)` | Destroy the entity at `entity_idx`. |
 | `world.set_relationship(a, b, rel)` | Set the symmetric relationship between faction ids `a` and `b`. `rel` = `"friendly"` / `"neutral"` / `"hostile"`. |
 | `world.set_music_state(state)` | Ask connected clients to change music. `state` = `"menu"` / `"patrol"` / `"combat"` / `"success"` / `"debrief"`. |
+| `world.set_alert_level(faction_id, level)` | Set a coalition's airspace readiness posture. `level` = `"peacetime"` / `"elevated"` / `"conflict"` / `"war_state"`. Server-authoritative and broadcast to clients; retunes every airspace zone that coalition owns at once. |
+| `world.get_alert_level(faction_id)` | That coalition's current posture, same vocabulary. `"peacetime"` for an unknown faction or a server with no alert system, so a script can branch on it without checking first. |
+| `world.get_zone_stage(entity_idx, zone_id)` | How far an intruder has escalated in an airspace zone: `"clean"` / `"in_zone"` / `"warned"` / `"intercept"` / `"hostile"`. `"clean"` for an unknown entity or zone. |
+| `world.is_in_zone(entity_idx, zone_id)` | Whether that entity is inside the zone right now. |
 | `world.mission_success()` / `world.mission_failure()` | End the current mission with the given outcome (drives the objective state machine). |
 | `world.get_elapsed_time()` | Seconds since this controller started. |
 | `world.on_trigger(predicate_fn, callback_fn)` | Fire `callback_fn` **once**, the first tick `predicate_fn()` returns true, then forget it. |

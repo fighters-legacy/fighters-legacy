@@ -840,6 +840,37 @@ TEST_CASE("GameProtocol: MsgSeatRequest / MsgSeatResult round-trip (#974)", "[ga
     CHECK_FALSE(fl::isSeatResultOrdinal(7));
 }
 
+TEST_CASE("GameProtocol: MsgAlertLevelChange round-trips (#162)", "[game_protocol]") {
+    CHECK(sizeof(fl::MsgAlertLevelChange) == 4u);
+    CHECK(alignof(fl::MsgAlertLevelChange) == 2u);
+    CHECK(static_cast<uint8_t>(fl::MsgId::AlertLevelChange) == 0x26u);
+    CHECK(offsetof(fl::MsgAlertLevelChange, level) == 1u);
+    CHECK(offsetof(fl::MsgAlertLevelChange, factionIndex) == 2u);
+
+    // The ordinal guard is what the client calls before casting a server-supplied byte to AlertLevel.
+    CHECK(fl::isAlertLevelOrdinal(0));
+    CHECK(fl::isAlertLevelOrdinal(3));
+    CHECK_FALSE(fl::isAlertLevelOrdinal(4));
+
+    fl::MsgAlertLevelChange al{};
+    al.factionIndex = 2;
+    al.level = static_cast<uint8_t>(fl::AlertLevel::Conflict);
+    fl::MsgAlertLevelChange alOut{};
+    {
+        std::vector<uint8_t> buf(sizeof(al));
+        std::memcpy(buf.data(), &al, sizeof(al));
+        REQUIRE(fl::readMsg(buf.data(), buf.size(), alOut));
+    }
+    CHECK(alOut.msgId == static_cast<uint8_t>(fl::MsgId::AlertLevelChange));
+    CHECK(alOut.factionIndex == 2);
+    CHECK(alOut.level == static_cast<uint8_t>(fl::AlertLevel::Conflict));
+
+    // A truncated packet must fail closed rather than reading past the buffer.
+    std::vector<uint8_t> shortBuf(sizeof(al) - 1);
+    std::memcpy(shortBuf.data(), &al, shortBuf.size());
+    CHECK_FALSE(fl::readMsg(shortBuf.data(), shortBuf.size(), alOut));
+}
+
 TEST_CASE("GameProtocol: epic #584 messages have stable sizes and round-trip", "[game_protocol]") {
     // Music state (#413/#166)
     CHECK(sizeof(fl::MsgMusicState) == 4u);

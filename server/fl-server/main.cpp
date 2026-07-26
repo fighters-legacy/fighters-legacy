@@ -94,7 +94,9 @@
 #include <weather/WeatherController.h>
 #include <world/AirportBootstrap.h>
 #include <world/AirportRegistry.h>
+#include <world/AlertSystem.h>
 #include <world/BuiltinAirport.h>
+#include <world/EscalationPolicy.h>
 #include <world/FactionRegistry.h>
 
 #include <array>
@@ -121,6 +123,10 @@
 #include <vector>
 
 using namespace fl;
+
+// The fixed sim rate. Named because two places need to agree on it: the GameLoop that drives the
+// tick, and the end-of-tick hook that hands sim systems their timestep.
+static constexpr double kSimTickRateHz = 60.0;
 
 // ---------------------------------------------------------------------------
 // Signal handling
@@ -1110,6 +1116,10 @@ int main(int argc, char** argv) {
     // objects registered as joinable slots. missionFactions outlives gameLoop (the broadcaster holds a
     // pointer to it), so it is declared here in main's scope.
     fl::FactionRegistry missionFactions;
+    // Airspace enforcement (#162). Declared beside missionFactions because it holds a reference to it
+    // and, like it, must outlive gameLoop (the composite tick hook and the world.* Lua hooks capture
+    // it). Inert until a mission supplies zones -- a zoneless server pays one empty-vector check a tick.
+    fl::AlertSystem alertSystem(missionFactions);
     // The objective/trigger evaluator (#633). Constructed below when a mission loads; declared here so
     // it outlives gameLoop (the broadcaster's tick hook captures a pointer into it).
     std::unique_ptr<fl::MissionRuntime> missionRuntime;
@@ -1194,6 +1204,24 @@ int main(int argc, char** argv) {
         else
             return; // unknown state name
         broadcaster.broadcastMusicState(static_cast<uint8_t>(gs));
+    };
+    // Airspace posture + zone queries (#162). setAlertLevel goes through AlertSystem rather than
+    // straight to the registry, because the system is what fires the change hook that reaches the wire.
+    worldApi.setAlertLevel = [&](const std::string& factionId, const std::string& level) {
+        fl::AlertLevel lvl{};
+        if (!fl::alertLevelFromString(level, lvl))
+            return; // unrecognised level name
+        alertSystem.setAlertLevel(factionId, lvl);
+    };
+    worldApi.getAlertLevel = [&](const std::string& factionId) {
+        return std::string(fl::alertLevelName(alertSystem.getAlertLevel(factionId)));
+    };
+    worldApi.getZoneStage = [&](int entityIdx, const std::string& zoneId) {
+        return std::string(
+            fl::escalationStageName(alertSystem.getIntruderStage(static_cast<uint32_t>(entityIdx), zoneId)));
+    };
+    worldApi.isInZone = [&](int entityIdx, const std::string& zoneId) {
+        return alertSystem.isInZone(static_cast<uint32_t>(entityIdx), zoneId);
     };
     worldApi.setMissionOutcome = [&](bool success) {
         if (missionRuntime)
@@ -1494,6 +1522,62 @@ int main(int argc, char** argv) {
                                      cfg.planetRadiusM, onSpawned, groundHeight);
                 broadcaster.setFactionRegistry(&missionFactions);
 
+                // ---- Airspace alert system (#162) ----
+                // Zones come from the mission; escalation policies from the content pack. Both are
+                // installed AFTER applyMission, because a zone's `owner:` resolves against the faction
+                // registry applyMission has just populated.
+                if (!parsed.mission.airspaceZones.empty()) {
+                    std::vector<fl::EscalationPolicy> zonePolicies;
+                    const uint32_t packPolicies = fl::registerPackZonePolicies(assets, zonePolicies, *log);
+                    for (fl::EscalationPolicy& policy : zonePolicies)
+                        alertSystem.addPolicy(std::move(policy));
+                    for (const fl::AirspaceZone& z : parsed.mission.airspaceZones)
+                        alertSystem.addZone(z);
+                    alertSystem.setPlanetRadius(cfg.planetRadiusM);
+
+                    // A zone whose owner does not resolve enforces nothing, and that is invisible in
+                    // play -- so say so rather than letting the mission look like it is working.
+                    for (const std::string& zid : alertSystem.unresolvedZoneIds()) {
+                        char zbuf[256];
+                        std::snprintf(zbuf, sizeof(zbuf),
+                                      "airspace zone '%s' names an owner that is not in the mission's "
+                                      "sides list; it will not enforce",
+                                      zid.c_str());
+                        log->log(LogLevel::Warn, __FILE__, __LINE__, zbuf);
+                    }
+
+                    // The zone pass reads a flat POD list rather than EntityManager directly, so
+                    // engine-world needs no engine-entity dependency (the setGroundElevationQuery seam).
+                    alertSystem.setEntitySampler([&entityManager](std::vector<fl::ZoneEntitySample>& out) {
+                        entityManager.forEach([&out](const fl::EntityState& e) {
+                            if (e.dead)
+                                return;
+                            fl::ZoneEntitySample s;
+                            s.entityIdx = e.id.index;
+                            s.entityGen = static_cast<uint16_t>(e.id.generation);
+                            s.factionIndex = e.factionIndex;
+                            s.pos = glm::dvec3(e.transform.pos[0], e.transform.pos[1], e.transform.pos[2]);
+                            out.push_back(s);
+                        });
+                    });
+
+                    alertSystem.onAlertLevelChange = [&broadcaster](uint16_t fi, fl::AlertLevel lvl) {
+                        broadcaster.broadcastAlertLevelChange(fi, static_cast<uint8_t>(lvl));
+                    };
+                    alertSystem.onEscalate = [&log](uint32_t entityIdx, const std::string& zoneId,
+                                                    fl::EscalationStage stage) {
+                        char ebuf[256];
+                        std::snprintf(ebuf, sizeof(ebuf), "airspace zone '%s': entity %u -> %s", zoneId.c_str(),
+                                      entityIdx, std::string(fl::escalationStageName(stage)).c_str());
+                        log->log(LogLevel::Info, __FILE__, __LINE__, ebuf);
+                    };
+
+                    char abuf[192];
+                    std::snprintf(abuf, sizeof(abuf), "airspace: %zu zone(s), %u pack policy/policies loaded",
+                                  alertSystem.zoneCount(), packPolicies);
+                    log->log(LogLevel::Info, __FILE__, __LINE__, abuf);
+                }
+
                 std::vector<fl::WorldBroadcaster::MissionSpawnSlot> slots;
                 slots.reserve(setup.playerSlots.size());
                 for (const fl::PlayerSlot& ps : setup.playerSlots) {
@@ -1751,11 +1835,14 @@ int main(int argc, char** argv) {
     // tick, then publish MsgMatchState whenever the controller's state version changes (a phase
     // transition or a team score). Reading the mode fields from the controller keeps it correct across
     // a rotation. Runs at the end of onTick on the sim thread.
-    broadcaster.setMissionTickHook([rt = missionRuntime.get(), &matchController, &broadcaster, &botRoster,
-                                    lastVer = uint64_t{0}](uint64_t t) mutable {
+    broadcaster.setMissionTickHook([rt = missionRuntime.get(), &matchController, &broadcaster, &botRoster, &alertSystem,
+                                    simDt = 1.0 / kSimTickRateHz, lastVer = uint64_t{0}](uint64_t t) mutable {
         if (rt)
             rt->step(t);
         matchController.step(t);
+        // Airspace enforcement (#162). Runs at the END of the tick, on the stepped world, so a zone
+        // test sees where everyone actually is this tick rather than where they were last tick.
+        alertSystem.onTick(simDt, t);
         // AI bot backfill (#87), stepped ~1 Hz. humans ~= connected peers.
         if (botRoster && t % 60u == 0u)
             botRoster->step(static_cast<int>(broadcaster.getPeerCount()));
@@ -1824,7 +1911,7 @@ int main(int argc, char** argv) {
     // broadcaster holds a raw pointer to it). Constructed + wired below, after gameLoop exists.
     std::unique_ptr<fl::atc::AtcService> atcService;
 
-    GameLoop gameLoop(broadcaster, *log, 60.0, cfg.maxCatchupTicks);
+    GameLoop gameLoop(broadcaster, *log, kSimTickRateHz, cfg.maxCatchupTicks);
 
     // Match rotation (#523): on match end, reset the world, advance to the next rotation item's mode,
     // and re-admit the connected pilots — all serial on the sim thread via enqueueSimCallback (hence

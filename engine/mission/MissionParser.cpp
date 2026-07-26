@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "mission/MissionParser.h"
 
+#include "world/ZoneGeometry.h" // isConvexPolygonXZ — airspace_zones convexity check (#162)
+
 #include <yaml-cpp/yaml.h>
 
 #include <regex>
@@ -24,6 +26,8 @@ static constexpr int kObjectsMinCount = 1;
 static constexpr float kShotFovMin = 20.f;
 static constexpr float kShotFovMax = 120.f;
 static constexpr int kMoveKeyframesMinCount = 2;
+static constexpr int kZoneVertexComponents = 2; // airspace_zones polygon vertices are [x, z] (#162)
+static constexpr int kZonePolygonMinVertices = 3;
 
 // ── helpers ────────────────────────────────────────────────────────────────────────────────────
 
@@ -215,6 +219,16 @@ MissionParseResult parseMission(std::string_view yamlContent) {
                             side.allies.push_back(a.as<std::string>(""));
                     }
                 }
+                // Starting readiness posture (#162); absent = peacetime.
+                if (hasKey(s, "alert")) {
+                    const std::string lvl = s["alert"].as<std::string>("");
+                    if (!alertLevelFromString(lvl, side.alert)) {
+                        r.errors.push_back("sides[" + std::to_string(sidx) +
+                                           "].alert must be peacetime|elevated|conflict|war_state (got \"" + lvl +
+                                           "\")");
+                        r.ok = false;
+                    }
+                }
             } else {
                 r.errors.push_back("sides[" + std::to_string(sidx) + "] must be a string or a mapping");
                 r.ok = false;
@@ -236,6 +250,148 @@ MissionParseResult parseMission(std::string_view yamlContent) {
                                        "\"");
                     r.ok = false;
                 }
+            }
+        }
+    }
+
+    // ── airspace_zones (optional, #162) ───────────────────────────────────────
+    // Restricted-airspace regions the AlertSystem enforces. Placed after `sides:` so each zone's
+    // `owner:` cross-checks against the side set the same way `objects[].side` does.
+    if (hasKey(doc, "airspace_zones")) {
+        if (!doc["airspace_zones"].IsSequence()) {
+            r.errors.push_back("airspace_zones must be a sequence");
+            r.ok = false;
+        } else {
+            std::set<std::string> knownZoneIds;
+            std::size_t zidx = 0;
+            for (const auto& zn : doc["airspace_zones"]) {
+                const std::string zp = "airspace_zones[" + std::to_string(zidx) + "]";
+                ++zidx;
+                if (!zn.IsMap()) {
+                    r.errors.push_back(zp + " must be a mapping");
+                    r.ok = false;
+                    continue;
+                }
+
+                AirspaceZone zone;
+                if (!hasKey(zn, "id")) {
+                    r.errors.push_back(zp + " missing required field: id");
+                    r.ok = false;
+                } else {
+                    zone.id = zn["id"].as<std::string>("");
+                    if (!knownZoneIds.insert(zone.id).second) {
+                        r.errors.push_back(zp + ".id \"" + zone.id + "\" is duplicated");
+                        r.ok = false;
+                    }
+                }
+
+                // Shape dispatch drives which placement fields are required, the `cameras.type`
+                // precedent.
+                bool shapeValid = false;
+                if (!hasKey(zn, "type")) {
+                    r.errors.push_back(zp + " missing required field: type");
+                    r.ok = false;
+                } else {
+                    const std::string t = zn["type"].as<std::string>("");
+                    if (t == "circle") {
+                        zone.shape = ZoneShape::Circle;
+                        shapeValid = true;
+                    } else if (t == "polygon") {
+                        zone.shape = ZoneShape::Polygon;
+                        shapeValid = true;
+                    } else {
+                        r.errors.push_back(zp + ".type must be circle|polygon (got \"" + t + "\")");
+                        r.ok = false;
+                    }
+                }
+
+                if (shapeValid && zone.shape == ZoneShape::Circle) {
+                    // `center` is authored as [x, y, z] for symmetry with `objects[].pos`, but the
+                    // zone test is XZ + an altitude band, so the Y component is deliberately unused
+                    // — alt_floor / alt_ceiling own the vertical extent.
+                    if (!hasKey(zn, "center")) {
+                        r.errors.push_back(zp + " missing required field: center");
+                        r.ok = false;
+                    } else if (!zn["center"].IsSequence() || static_cast<int>(zn["center"].size()) != kPosComponents) {
+                        r.errors.push_back(zp + ".center must have exactly " + std::to_string(kPosComponents) +
+                                           " components [x, y, z]");
+                        r.ok = false;
+                    } else {
+                        zone.centerX = zn["center"][0].as<double>(0.0);
+                        zone.centerZ = zn["center"][2].as<double>(0.0);
+                    }
+
+                    if (!hasKey(zn, "radius")) {
+                        r.errors.push_back(zp + " missing required field: radius");
+                        r.ok = false;
+                    } else {
+                        zone.radiusM = zn["radius"].as<double>(-1.0);
+                        if (zone.radiusM <= 0.0) {
+                            r.errors.push_back(zp + ".radius must be > 0 metres (got " + std::to_string(zone.radiusM) +
+                                               ")");
+                            r.ok = false;
+                        }
+                    }
+                } else if (shapeValid) {
+                    if (!hasKey(zn, "vertices")) {
+                        r.errors.push_back(zp + " missing required field: vertices");
+                        r.ok = false;
+                    } else if (!zn["vertices"].IsSequence()) {
+                        r.errors.push_back(zp + ".vertices must be a sequence of [x, z] pairs");
+                        r.ok = false;
+                    } else {
+                        std::size_t vi = 0;
+                        for (const auto& v : zn["vertices"]) {
+                            if (!v.IsSequence() || static_cast<int>(v.size()) != kZoneVertexComponents) {
+                                r.errors.push_back(zp + ".vertices[" + std::to_string(vi) + "] must have exactly " +
+                                                   std::to_string(kZoneVertexComponents) + " components [x, z]");
+                                r.ok = false;
+                            } else {
+                                zone.vertices.emplace_back(v[0].as<double>(0.0), v[1].as<double>(0.0));
+                            }
+                            ++vi;
+                        }
+                        if (static_cast<int>(zone.vertices.size()) < kZonePolygonMinVertices) {
+                            r.errors.push_back(zp + ".vertices needs at least " +
+                                               std::to_string(kZonePolygonMinVertices) + " points");
+                            r.ok = false;
+                        } else if (!isConvexPolygonXZ(zone.vertices)) {
+                            // AirspaceZone documents polygons as convex. A concave or
+                            // self-intersecting ring still gets a defined answer at runtime
+                            // (crossing-number), but it is far more often a slip than an intent.
+                            r.errors.push_back(zp + ".vertices must form a convex polygon");
+                            r.ok = false;
+                        }
+                    }
+                }
+
+                if (hasKey(zn, "alt_floor"))
+                    zone.altFloorM = zn["alt_floor"].as<double>(zone.altFloorM);
+                if (hasKey(zn, "alt_ceiling"))
+                    zone.altCeilingM = zn["alt_ceiling"].as<double>(zone.altCeilingM);
+                if (zone.altCeilingM <= zone.altFloorM) {
+                    r.errors.push_back(zp + ".alt_ceiling must be greater than alt_floor");
+                    r.ok = false;
+                }
+
+                if (!hasKey(zn, "owner")) {
+                    r.errors.push_back(zp + " missing required field: owner");
+                    r.ok = false;
+                } else {
+                    zone.ownerFactionId = zn["owner"].as<std::string>("");
+                    if (!knownSides.empty() && knownSides.find(zone.ownerFactionId) == knownSides.end()) {
+                        r.errors.push_back(zp + ".owner \"" + zone.ownerFactionId + "\" is not in the sides list");
+                        r.ok = false;
+                    }
+                }
+
+                // `policy` names a content-pack escalation policy. It is optional and NOT
+                // cross-checked here: the pack is not loaded at parse time, and a zone with no
+                // resolvable policy falls back to the builtin default rather than going inert.
+                if (hasKey(zn, "policy"))
+                    zone.policyId = zn["policy"].as<std::string>("");
+
+                m.airspaceZones.push_back(std::move(zone));
             }
         }
     }

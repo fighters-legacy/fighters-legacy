@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **engine**: airspace alert system — missions declare enforced airspace via `airspace_zones:`, and an intruder escalates through warned → intercept → weapons-free on dwell. The zone owner's alert level (`sides[].alert`, `world.set_alert_level()`) selects the escalation schedule, so raising a coalition's posture tightens every zone it owns at once. Escalation policies are content-pack `zones/*.toml`; posture changes reach clients as the new reliable `MsgAlertLevelChange` (`0x26`) (#162)
 - **ci**: `lint_workflow_expressions` — reject Actions expressions carrying free text inside `run:` blocks (#1034)
 
 ### Fixed

@@ -16,6 +16,7 @@ class ILogger;
 class WeaponRegistry;
 struct AirportDef;
 struct EntityDef;
+struct EscalationPolicy;
 
 namespace sensor {
 struct SensorDef;
@@ -46,6 +47,14 @@ uint32_t registerPackAirportDefs(AssetManager& assets, std::vector<AirportDef>& 
 //
 // Call BEFORE registerPackEntityDefs, so an entity's hardpoints have weapons to resolve against.
 // Main thread, before GameLoop::start(). Returns the number of weapons registered.
+// Loads every content-pack airspace escalation policy (#162) and APPENDS the parsed policies to
+// `out`, the same collect-don't-register shape as registerPackAirportDefs (AlertSystem::addPolicy is
+// the registration step, and the caller merges pack policies with any it synthesizes). A policy that
+// fails to load or parse logs a Warn and is skipped; a zone naming a policy that never arrived falls
+// back to the builtin default rather than going inert. Enumerated via listAssets(AssetType::ZonePolicy)
+// -- a pack ships them as zones/<id>.toml. Main thread, before GameLoop::start(). Returns the count.
+uint32_t registerPackZonePolicies(AssetManager& assets, std::vector<EscalationPolicy>& out, ILogger& log);
+
 uint32_t registerPackWeaponDefs(AssetManager& assets, WeaponRegistry& registry, ILogger& log);
 
 // Registers a projectile ENTITY type ("projectile:<weapon id>", ObjectCategory::Projectile) for

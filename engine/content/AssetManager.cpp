@@ -163,6 +163,10 @@ std::shared_ptr<GameModeData> AssetManager::loadGameMode(const char* name) {
     return loadAsset<GameModeData>(AssetType::GameMode, name, &IContentPack::loadGameMode);
 }
 
+std::shared_ptr<ZonePolicyData> AssetManager::loadZonePolicy(const char* name) {
+    return loadAsset<ZonePolicyData>(AssetType::ZonePolicy, name, &IContentPack::loadZonePolicy);
+}
+
 std::shared_ptr<TheaterDefData> AssetManager::loadTheater(const char* name) {
     return loadAsset<TheaterDefData>(AssetType::Theater, name, &IContentPack::loadTheater);
 }

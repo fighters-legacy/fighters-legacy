@@ -1,9 +1,11 @@
-# World-systems foundation types: faction registry, alert levels, airspace zones,
-# the formation/command hierarchy (#610), and airport/runway definitions (#699).
-# Foundation only — AlertSystem (#162) and IWorldAiProvider (#163) build on top of this.
+# World systems: faction registry, alert levels, the airspace alert system (#162), the
+# formation/command hierarchy (#610), and airport/runway definitions (#699).
+# IWorldAiProvider (#163) builds on top of this.
 add_library(engine-world STATIC
     FactionRegistry.cpp
     FormationRegistry.cpp
+    AlertSystem.cpp
+    EscalationPolicyParser.cpp
     AirportRegistry.cpp
     AirportDefParser.cpp
     AirportCsvImport.cpp

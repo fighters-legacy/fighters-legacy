@@ -10,9 +10,9 @@ namespace fl {
 
 enum class ZoneShape : uint8_t { Circle = 0, Polygon = 1 };
 
-// POD descriptor for a restricted-airspace region. Zone tests run in the XZ plane with
-// a separate altitude band. Consumed by AlertSystem (#162) and WorldEvolutionDelta (#163);
-// mission-YAML parsing is deferred to #162.
+// POD descriptor for a restricted-airspace region. Zone tests run in the XZ plane with a separate
+// altitude band. Parsed from a mission's `airspace_zones:` section (MissionParser is the schema
+// owner), enforced by AlertSystem (#162), and mutated by WorldEvolutionDelta (#163).
 struct AirspaceZone {
     std::string id;
     ZoneShape shape{ZoneShape::Circle};

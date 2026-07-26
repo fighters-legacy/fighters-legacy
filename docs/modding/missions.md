@@ -49,6 +49,7 @@ triggers:
 |---|---|---|---|
 | `weather.preset` | string | `clear` | Initial weather: `clear`, `partly_cloudy`, `overcast`, `rain`, `storm`, `snow`, `blizzard`. Gust amplitude and turbulence intensity scale with the preset. `snow` and `blizzard` produce snow precipitation at any altitude. |
 | `time_scale` | float | server default (10) | Game seconds per real second for this mission. Overrides `[world] time_scale` in `server.toml`. Use `1.0` for real-time cinematic missions. |
+| `airspace_zones` | sequence | none | Restricted airspace the server enforces. See [`airspace_zones`](#airspace_zones--restricted-airspace-optional). |
 
 Example:
 ```yaml
@@ -84,6 +85,7 @@ sides:
 |---|---|---|---|---|
 | `id` | string | yes (map form) | non-empty | Coalition id; referenced by each object's `side` |
 | `allies` | sequence | no | each must name another side in `sides` | Sides this coalition is friendly with |
+| `alert` | string | no | `peacetime` \| `elevated` \| `conflict` \| `war_state` | Starting airspace readiness posture (default `peacetime`). See [`airspace_zones`](#airspace_zones--restricted-airspace-optional). |
 
 An ally that names an unknown side is a hard error; listing yourself as your own ally is ignored with
 a warning. The engine loads these into the faction registry so AI decides friend-from-foe by the
@@ -264,6 +266,81 @@ Non-terminal actions (everything except `mission_success`/`mission_failure`) are
 server-side through the **same validated command path the admin console uses** — a mission can do
 exactly what an operator could, and nothing more. Unknown action strings are logged and skipped
 (or handled by a Lua script's `world.on_trigger()`), never a hard error.
+
+---
+
+## `airspace_zones` — restricted airspace (optional)
+
+The optional `airspace_zones:` block declares regions of airspace a coalition **enforces**. It is
+server-authoritative: an aircraft of another side that enters a zone starts a dwell timer and
+escalates through *warned* → *interceptors scrambled* → *weapons free* the longer it stays. Clients
+are told about posture changes but decide nothing.
+
+A zone is a shape in the **XZ plane crossed with an altitude band** — the same planar `(x, z)`
+vocabulary `[spawn]` points use. Circles take a `center`/`radius`; polygons take a convex `vertices`
+ring. (`center` is written `[x, y, z]` for symmetry with an object's `pos`, but the Y component is
+ignored: `alt_floor`/`alt_ceiling` own the vertical extent.)
+
+```yaml
+sides:
+  - { id: nato }
+  - { id: russia, alert: elevated }   # starting posture; default peacetime
+
+airspace_zones:
+  - id: capital_airspace
+    type: circle
+    center: [15000, 0, 8000]   # world XYZ; the zone test is in the XZ plane
+    radius: 5000               # metres
+    alt_floor: 0               # metres above the datum
+    alt_ceiling: 12000
+    owner: russia              # the coalition that enforces the zone
+    policy: military_intercept # a zones/<id>.toml in the content pack
+
+  - id: border_region
+    type: polygon              # convex ring in XZ
+    vertices: [[0,0],[10000,0],[15000,5000],[10000,10000],[0,10000]]
+    alt_ceiling: 999999
+    owner: russia              # no `policy:` — the builtin default posture applies
+```
+
+| Field | Type | Applies to | Required | Default | Description |
+|---|---|---|---|---|---|
+| `id` | string | all | yes | — | Zone id, unique within the mission; referenced by Lua zone queries |
+| `type` | string | all | yes | — | `circle` \| `polygon` |
+| `owner` | string | all | yes | — | The enforcing side; must appear in `sides` |
+| `center` | `[x,y,z]` | circle | yes | — | Centre in world metres; the Y component is ignored |
+| `radius` | number | circle | yes | — | Zone radius in metres (> 0) |
+| `vertices` | sequence | polygon | yes | — | ≥ 3 `[x, z]` pairs forming a **convex** ring |
+| `alt_floor` | number | all | no | 0 | Band floor, metres above the datum (inclusive) |
+| `alt_ceiling` | number | all | no | 999999 | Band ceiling, metres (inclusive); must exceed `alt_floor` |
+| `policy` | string | all | no | builtin default | Escalation policy id — a `zones/<id>.toml` in a content pack |
+
+### How escalation works
+
+Every zone owner has an **alert level** — `peacetime`, `elevated`, `conflict` or `war_state` — set by
+`sides[].alert` and changed at runtime by `world.set_alert_level()`. The owner's *current* level
+picks which row of the zone's escalation policy applies, so raising a coalition's alert level tightens
+every zone it owns at once without editing a single zone.
+
+Within a zone an intruder passes through five stages: `clean` → `in_zone` → `warned` → `intercept` →
+`hostile`. Dwell thresholds are cumulative from the moment of entry, and a threshold of `0` means the
+stage is already satisfied on entry — which is how the `war_state` row means "weapons free the instant
+you cross the line, no warning". Two shortcuts apply: a side already **hostile** to the owner (per the
+coalition graph) is weapons-free on entry regardless of dwell, and the owner is never an intruder in
+its own airspace.
+
+Leaving the zone fires a zone-exit event. Whether that *helps* is the policy's call: with
+`compliance_reset` the zone forgets the intruder after a cooldown, so turning back works; without it
+the stage sticks, which is the point of a wartime posture. Lowering the alert level relaxes the
+schedule for the next intruder — it never revokes a weapons-free call already made on this one.
+
+A zone whose `owner` does not name a side is a hard error at parse time. A zone whose `policy` names a
+file the loaded packs do not ship is **not** an error: it falls back to the builtin default posture, so
+a missing pack degrades the zone rather than silently switching enforcement off. Escalation policy TOML
+is documented in [`formats.md`](formats.md#airspace-escalation-policy-toml).
+
+Zone state is readable from Lua via `world.get_zone_stage(entity_idx, zone_id)` and
+`world.is_in_zone(entity_idx, zone_id)`; see [`ai.md`](ai.md).
 
 ---
 
