@@ -318,8 +318,35 @@ def _agg_report(
     warnings=None,
     schema_version=2,
     idle_interval_ms=4.6,
+    with_split=False,
 ):
-    """A minimal analyze.py-shaped report carrying just what aggregate.py reads."""
+    """A minimal analyze.py-shaped report carrying just what aggregate.py reads.
+
+    `with_split` adds the #1025 wait-vs-slowdown fields. They were added additively without a
+    schema bump, so a set can legitimately mix reports that have them with reports that do not —
+    which is exactly what coverage_warnings exists to surface.
+    """
+    delta = {
+        "frame_p99_ratio": ratio,
+        "frame_p99_ms": p99,
+        "frame_p95_ms": round(p99 * 0.8, 3),
+        "frame_mean_ms": mean,
+        "worst_1pct_ms": round(p99 * 2, 3),
+        "gpu_mean_ms": 0.7,
+        "hitches_per_min": 10.0,
+    }
+    if with_split:
+        delta.update(
+            {
+                "gpu_p95_ms": 0.03,
+                "gpu_p99_ms": 0.18,
+                "residual_p95_ms": 4.27,
+                "residual_p99_ms": 7.10,
+                "residual_mean_ms": 0.03,
+                "short_frames_pct": 15.1,
+                "fps_ratio": 0.99,
+            }
+        )
     return {
         "schema_version": schema_version,
         "os": "Windows 10.0.26100",
@@ -330,15 +357,7 @@ def _agg_report(
         "endpoint": "http://localhost:8080",
         "workload": "intent",
         "scene": "builtin:sandbox",
-        "delta_burst_vs_idle": {
-            "frame_p99_ratio": ratio,
-            "frame_p99_ms": p99,
-            "frame_p95_ms": round(p99 * 0.8, 3),
-            "frame_mean_ms": mean,
-            "worst_1pct_ms": round(p99 * 2, 3),
-            "gpu_mean_ms": 0.7,
-            "hitches_per_min": 10.0,
-        },
+        "delta_burst_vs_idle": delta,
         "vram": {"model_vram_mb": 9031.0, "budget_mb": 4556.0},
         "warnings": warnings or [],
     }
@@ -666,3 +685,53 @@ def test_aggregate_tolerates_reports_predating_the_split():
     assert a["warnings"] == []
     assert a["delta_burst_vs_idle"]["residual_p95_ms"]["median"] is None
     assert "—" in agg.render_aggregate_markdown(a)
+
+
+# ---- partial-coverage guard (#1025) --------------------------------------------------------------
+
+
+def test_mixed_report_versions_warn_instead_of_aggregating_silently():
+    """A metric only SOME runs carried must not render like one every run carried.
+
+    `across_run_stats` drops the missing entries and `_fmt` prints no `n`, so without this guard a
+    row computed from 2 of 5 runs is indistinguishable from a full one — under a header that says
+    "aggregate, 5 runs", with a range that looks tight because it is two runs rather than because
+    the metric is stable.
+    """
+    reports = [_agg_report(2.0, 6.0, 0.05, with_split=True) for _ in range(2)]
+    reports += [_agg_report(2.0, 6.0, 0.05) for _ in range(3)]
+    a = agg.aggregate_reports(reports)
+    assert a["runs"] == 5
+    assert a["delta_burst_vs_idle"]["residual_p95_ms"]["n"] == 2  # the silent part
+    thin = [w for w in a["warnings"] if "fewer runs" in w]
+    assert len(thin) == 1
+    # Names the metric AND the shortfall, so the reader can act without re-deriving it.
+    assert "Residual p95 delta (2/5)" in thin[0]
+    assert "Throughput ratio (2/5)" in thin[0]
+
+
+def test_uniform_report_sets_do_not_warn_either_way():
+    """Present in all, or absent from all — both are clean. Only the MIX is a problem."""
+    every = agg.aggregate_reports([_agg_report(2.0, 6.0, 0.05, with_split=True) for _ in range(4)])
+    none = agg.aggregate_reports([_agg_report(2.0, 6.0, 0.05) for _ in range(4)])
+    assert every["warnings"] == []
+    assert none["warnings"] == []
+    # Absent-from-all stays n == 0 and renders as an em dash rather than being called out.
+    assert none["delta_burst_vs_idle"]["residual_p95_ms"]["n"] == 0
+
+
+def test_a_metric_absent_from_every_report_is_not_flagged():
+    """Model VRAM is null on an endpoint with no /api/ps — a real cell, not a mixed input set."""
+    reports = [_agg_report(2.0, 6.0, 0.05) for _ in range(3)]
+    for r in reports:
+        r["vram"]["model_vram_mb"] = None
+    a = agg.aggregate_reports(reports)
+    assert a["vram"]["model_vram_mb"]["n"] == 0
+    assert a["warnings"] == []
+
+
+def test_the_coverage_warning_reaches_the_rendered_markdown():
+    reports = [_agg_report(2.0, 6.0, 0.05, with_split=True)] + [_agg_report(2.0, 6.0, 0.05)] * 3
+    md = agg.render_aggregate_markdown(agg.aggregate_reports(reports))
+    assert "**Warnings**" in md
+    assert "fewer runs" in md

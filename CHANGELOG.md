@@ -23,7 +23,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `fps`/`fps_ratio` (throughput, which a wait-then-drain preserves and a
   slowdown does not); the per-run markdown prints a *Where the delta lives* table, omitted when the
   device reports no timestamps rather than dressing `frame == residual` up as a split. Fields are
-  additive, so `schema_version` stays at 2 and older reports aggregate unchanged. **The finding: on
+  additive, so `schema_version` stays at 2 and older reports aggregate unchanged — the shared
+  metrics keep their meaning, and making the refuse-to-blend guard reject the mix would be worse
+  than allowing it. What that would have left silent, `aggregate.py` now warns about: a metric only
+  *some* of the input reports carried was rendering exactly like one every report carried, because
+  `across_run_stats` drops the missing entries and the markdown prints no `n` — so a row computed
+  from 2 of 5 runs sat under a header reading "aggregate, 5 runs", its range looking tight because
+  it was two runs rather than because the metric was stable. Mixed-version inputs now name the thin
+  rows and their shortfall; a metric absent from *every* report is untouched, since that is a cell
+  which never had it rather than a mixed set. **The finding: on
   Windows the renderer's GPU execution is untouched (+0.01 ms mean, +0.19 ms p99 against a 1.25 ms
   span) while the residual carries the entire +4.4 ms p95 / +7 ms p99 — by both backends.** Throughput
   holds at 0.99×, catch-up frames rise 15–27 points, and 56–57 % of burst hitches are followed
