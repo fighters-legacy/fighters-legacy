@@ -900,6 +900,13 @@ TEST_CASE("EntityManager: kill fires Died event and reaps entity after tick", "[
 
     fl::EntityTransform t{};
     auto id = mgr.spawn("mgr:c", t);
+    // spawn() raises Spawned (#600), so assert on the events this case is about rather than on a
+    // total count that a new event type moves.
+    REQUIRE(collector.events.size() == 1);
+    CHECK(collector.events[0].type == fl::EntityEventType::Spawned);
+    CHECK(collector.events[0].subject == id);
+    collector.events.clear();
+
     mgr.kill(id);
 
     REQUIRE(collector.events.size() == 1);
@@ -1608,6 +1615,7 @@ TEST_CASE("applyPointDamage: instigator attribution flows through to the kill", 
     auto victim = mgr.spawn("ff:b", t);
     mgr.get(shooter)->factionIndex = 1;
     mgr.get(victim)->factionIndex = 2;
+    collector.events.clear(); // drop the two Spawned events (#600); this case is about the kill
 
     CHECK(fl::applyPointDamage(mgr, victim, 200.f, shooter, fl::DamageRules{}));
 

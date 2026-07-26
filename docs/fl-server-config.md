@@ -1656,7 +1656,7 @@ commands over the ENet channel with an *empty* token (authenticated by its grant
 password); a command it lacks the capability for is refused with a clear "permission denied: <cmd>
 requires <cap>" message. Grants are **ephemeral** — lost on disconnect (persistence across reconnect is
 planned, #950). The stdin console, RCON, and single-player `--admin-token` sessions are always
-implicit-Admin. Public commands (`help`/`status`/`peers`/`tickstats`/`mutes`/`seats`/`atc_status`) run
+implicit-Admin. Public commands (`help`/`status`/`peers`/`tickstats`/`worldstate`/`events`/`mutes`/`seats`/`atc_status`) run
 for any authenticated caller.
 
 | Command | Args | Description |
@@ -1666,6 +1666,8 @@ for any authenticated caller.
 | `help` | `[command]` | List all commands, or show usage for a specific one |
 | `status` | — | Show uptime, peer count, entity count, the real tick rate (Hz + mean/p99 ms), and the overrun-governor load (`load: NN%`, `[DEGRADED]` when shedding) |
 | `tickstats` | — | Per-phase sim tick budget (integrate/ai/collision/serialize/total; ms mean/p95/p99/max), actual tick Hz, and the overrun-governor state (`load`, effective snapshot Hz, AI stride) |
+| `worldstate` | — | The ~1 Hz aggregated world state as JSON: entities, the faction table with alert levels and the relationship matrix, peers, mission/objective state, weather and wind (#600). Reads the published off-thread snapshot, so it is safe from RCON. Empty for the first second of a server's life |
+| `events` | `[after_seq] [max]` | The match event stream as JSON — kills (with attribution and weapon class), spawns, damage transitions, joins/leaves, chat, admin commands and alert-level changes (#600). With no `after_seq` it returns the recent tail; with one it returns everything newer, plus `next_seq` to pass next time and `gap: true` if records you had not read were already dropped |
 | `peers` | — | List connected peers (peer ID, address, entity index/generation, one-way delay in ticks/ms, input queue buffer fill/max, adaptive snapshot send rate `rate=NN Hz`, ENet packet loss `loss=N.N%`) |
 | `kick` | `<peerId\|IP>` | Disconnect a peer by numeric ID, or all peers from an IP address |
 | `ban` | `<peerId\|IP>` | Add IP to the ban list and kick matching peers; saves to `banlist_path` if configured |

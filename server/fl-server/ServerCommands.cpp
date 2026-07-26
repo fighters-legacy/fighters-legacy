@@ -15,6 +15,7 @@
 #include <loop/TimeRate.h>
 #include <net/DiscoveryBeacon.h>
 #include <net/WorldBroadcaster.h>
+#include <net/WorldStateJson.h> // worldstate/events JSON (#600)
 #include <weather/WeatherController.h>
 #include <weather/WeatherTypes.h>
 
@@ -220,6 +221,50 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         });
 
     // tickstats — per-phase server tick budget (integrate/ai/collision/serialize/total).
+    registry.registerCommand(
+        "worldstate",
+        "worldstate  -- the ~1 Hz aggregated world state as JSON (entities, factions, peers, mission, weather)", 0,
+        [ctx](std::span<std::string_view>) -> std::string {
+            if (!ctx.sim.broadcaster)
+                return "worldstate: not available";
+            // Read the PUBLISHED snapshot, not broadcaster->worldState(): this handler runs on the
+            // RCON thread or the stdin thread, never the sim thread, and the published copy is the
+            // whole point of #600's off-thread publication.
+            const auto snap = ctx.sim.broadcaster->worldStatePublisher().get();
+            if (!snap)
+                return "worldstate: no snapshot yet (the first rebuild is one second in)";
+            return fl::toJson(*snap);
+        });
+
+    registry.registerCommand(
+        "events", "events [after_seq] [max]  -- match event stream as JSON; omit after_seq for the recent tail", 0,
+        [ctx](std::span<std::string_view> args) -> std::string {
+            if (!ctx.sim.broadcaster)
+                return "events: not available";
+            fl::MatchEventLog& log = ctx.sim.broadcaster->matchEventLog();
+
+            // No cursor = "show me what just happened"; a cursor = "everything I have not seen",
+            // which is the shape a polling agent needs to avoid re-reading the same kills forever.
+            std::vector<fl::MatchEvent> evs;
+            uint64_t after = 0;
+            bool gap = false;
+            if (args.empty()) {
+                constexpr std::size_t kDefaultTail = 32;
+                evs = log.tail(kDefaultTail);
+            } else {
+                after = static_cast<uint64_t>(std::strtoull(std::string(args[0]).c_str(), nullptr, 10));
+                gap = log.hasGapBefore(after);
+                evs = log.since(after);
+            }
+            if (args.size() >= 2) {
+                const std::size_t maxN =
+                    static_cast<std::size_t>(std::strtoull(std::string(args[1]).c_str(), nullptr, 10));
+                if (maxN > 0 && evs.size() > maxN)
+                    evs.resize(maxN);
+            }
+            return fl::matchEventsToJson(std::span<const fl::MatchEvent>(evs), log.nextSeq(), gap);
+        });
+
     registry.registerCommand(
         "tickstats", "tickstats  -- per-phase sim tick budget (ms: mean/p95/p99/max) + actual tick Hz", 0,
         [ctx](std::span<std::string_view>) -> std::string {

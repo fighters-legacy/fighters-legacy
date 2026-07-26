@@ -1563,6 +1563,13 @@ int main(int argc, char** argv) {
 
                     alertSystem.onAlertLevelChange = [&broadcaster](uint16_t fi, fl::AlertLevel lvl) {
                         broadcaster.broadcastAlertLevelChange(fi, static_cast<uint8_t>(lvl));
+                        // Also record it (#600): a posture change is a match event, and the replay
+                        // and the agent audit both want it in the same stream as the kills.
+                        fl::MatchEvent me;
+                        me.type = fl::MatchEventType::AlertLevel;
+                        me.factionIndex = fi;
+                        me.value = static_cast<int32_t>(lvl);
+                        broadcaster.matchEventLog().append(std::move(me));
                     };
                     alertSystem.onEscalate = [&log](uint32_t entityIdx, const std::string& zoneId,
                                                     fl::EscalationStage stage) {
@@ -1836,7 +1843,8 @@ int main(int argc, char** argv) {
     // transition or a team score). Reading the mode fields from the controller keeps it correct across
     // a rotation. Runs at the end of onTick on the sim thread.
     broadcaster.setMissionTickHook([rt = missionRuntime.get(), &matchController, &broadcaster, &botRoster, &alertSystem,
-                                    simDt = 1.0 / kSimTickRateHz, lastVer = uint64_t{0}](uint64_t t) mutable {
+                                    &loadedMissionName, simDt = 1.0 / kSimTickRateHz,
+                                    lastVer = uint64_t{0}](uint64_t t) mutable {
         if (rt)
             rt->step(t);
         matchController.step(t);
@@ -1846,6 +1854,25 @@ int main(int argc, char** argv) {
         // AI bot backfill (#87), stepped ~1 Hz. humans ~= connected peers.
         if (botRoster && t % 60u == 0u)
             botRoster->step(static_cast<int>(broadcaster.getPeerCount()));
+        // Mission/objective state into the ~1 Hz world-state snapshot (#600). Pushed rather than
+        // pulled because engine-net does not link engine-mission. Refreshed just under the rebuild
+        // cadence so the snapshot never carries a stale outcome.
+        if (rt && t % 30u == 0u) {
+            const fl::MissionOutcome& mo = rt->outcome();
+            fl::WorldStateMission wm;
+            wm.active = true;
+            wm.name = loadedMissionName;
+            // MissionState {Active, Complete, Failed} maps onto the MissionResultCode the wire and
+            // the debrief already use, so an agent reading the snapshot and a client reading
+            // MsgMissionOutcome see the same vocabulary rather than two spellings of one fact.
+            wm.outcome =
+                static_cast<uint8_t>(mo.state == fl::MissionState::Complete ? fl::MissionResultCode::Success
+                                     : mo.state == fl::MissionState::Failed ? fl::MissionResultCode::Failure
+                                                                            : fl::MissionResultCode::Incomplete);
+            wm.triggersFired = mo.triggersFired;
+            wm.elapsedSeconds = mo.elapsedSeconds;
+            broadcaster.setWorldStateMission(std::move(wm));
+        }
         {
             const uint64_t ver = matchController.stateVersion();
             if (ver != lastVer) {

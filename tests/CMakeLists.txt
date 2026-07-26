@@ -906,6 +906,13 @@ add_executable(test_world_state test_world_state.cpp)
 target_link_libraries(test_world_state PRIVATE Catch2::Catch2WithMain engine-net)
 catch_discover_tests(test_world_state)
 
+# The match event log (#600): ring bounds + gap detection, JSON schema stability, string escaping,
+# and a concurrent append/read case. Links only engine-net (no SDL/ENet), so it joins the TSan set
+# alongside test_world_state -- the log is written on the sim thread and read from another.
+add_executable(test_match_event_log test_match_event_log.cpp)
+target_link_libraries(test_match_event_log PRIVATE Catch2::Catch2WithMain engine-net)
+catch_discover_tests(test_match_event_log)
+
 # Engine-layer snapshot payload codec (#775; zstd wrapper in engine-compress).
 add_executable(test_snapshot_compression test_snapshot_compression.cpp)
 target_link_libraries(test_snapshot_compression PRIVATE Catch2::Catch2WithMain engine-compress)

@@ -331,6 +331,21 @@ void WorldBroadcaster::broadcastMusicState(uint8_t state) {
     }
 }
 
+void WorldBroadcaster::recordParticipant(uint32_t participantId, uint16_t faction, bool isBot, bool joined) {
+    if (m_matchParticipantSink)
+        m_matchParticipantSink(participantId, faction, isBot, joined);
+
+    MatchEvent me;
+    me.tick = m_currentTick;
+    me.type = joined ? MatchEventType::Join : MatchEventType::Leave;
+    me.actor = participantId;
+    me.factionIndex = faction;
+    // isBot rides in `value` rather than a dedicated field: it is the only bool any participant
+    // record needs, and a bool field on every record type to serve two of them is not worth it.
+    me.value = isBot ? 1 : 0;
+    m_matchEventLog.append(std::move(me));
+}
+
 void WorldBroadcaster::broadcastAlertLevelChange(uint16_t factionIndex, uint8_t level) {
     MsgAlertLevelChange msg;
     msg.factionIndex = factionIndex;
@@ -2602,8 +2617,8 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
         rec.isBot = false;
         upsertRoster(peerId, rec);
         // A pilot (not an observer) is a match participant with a scoreboard row (#523).
-        if (grantedRole == PeerRole::Pilot && m_matchParticipantSink)
-            m_matchParticipantSink(peerId, myFaction, /*isBot=*/false, /*joined=*/true);
+        if (grantedRole == PeerRole::Pilot)
+            recordParticipant(peerId, myFaction, /*isBot=*/false, /*joined=*/true);
     }
 
     // Reconnection (#524): restore the held score tallies, then consume the grace entry. The dirty flag
@@ -2707,15 +2722,22 @@ void WorldBroadcaster::rebuildWorldState(uint64_t tickIndex) {
         peers.push_back(wp);
     }
 
-    uint8_t weatherPreset = 0;
-    float timeOfDay = 12.f;
+    WorldStateEnvironment env;
     if (m_weather) {
-        weatherPreset = static_cast<uint8_t>(m_weather->preset());
-        timeOfDay = m_weather->timeOfDay();
+        env.weatherPreset = static_cast<uint8_t>(m_weather->preset());
+        env.timeOfDayHours = m_weather->timeOfDay();
+        const EnvironmentState es = m_weather->computeEnvironment();
+        env.windX = es.windX;
+        env.windZ = es.windZ;
     }
 
-    m_worldState = buildWorldStateSnapshot(tickIndex, m_entityManager, m_registry, &m_formations, std::move(peers),
-                                           weatherPreset, timeOfDay);
+    m_worldState = buildWorldStateSnapshot(tickIndex, m_entityManager, m_registry, &m_formations, m_factionRegistry,
+                                           std::move(peers), env, &m_worldStateMission);
+
+    // Publish an immutable copy for off-thread readers (#600). The copy is the cost of letting REST,
+    // MCP and the recorder read without touching sim-thread state; at ~1 Hz that is not a budget
+    // anyone can measure, and it is what makes those consumers race-free by construction.
+    m_worldStatePublisher.publish(std::make_shared<const WorldStateSnapshot>(m_worldState));
 }
 
 void WorldBroadcaster::broadcastGmWorldState() {
@@ -2801,8 +2823,8 @@ void WorldBroadcaster::setPeerFaction(uint32_t peerId, uint16_t faction) {
     rec.factionIndex = faction;
     upsertRoster(peerId, rec);
     // Re-key the participant's team in the match (#523): participantJoined updates the faction.
-    if (m_matchParticipantSink && rec.role == PeerRole::Pilot)
-        m_matchParticipantSink(peerId, faction, /*isBot=*/false, /*joined=*/true);
+    if (rec.role == PeerRole::Pilot)
+        recordParticipant(peerId, faction, /*isBot=*/false, /*joined=*/true);
 }
 
 void WorldBroadcaster::despawnPeerEntity(uint32_t peerId) {
@@ -2895,8 +2917,7 @@ void WorldBroadcaster::onDisconnect(uint32_t peerId) {
     std::snprintf(msg, sizeof(msg), "peer %u disconnected", peerId);
     m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
 
-    if (m_matchParticipantSink)
-        m_matchParticipantSink(peerId, 0, false, /*joined=*/false); // match participant left (#523)
+    recordParticipant(peerId, 0, false, /*joined=*/false); // match participant left (#523)
     clearSeatOccupant(peerId); // a gunner (#974) reverts its non-fly seat to its bot + re-broadcasts
     despawnPeerEntity(peerId); // a pilot's own aircraft is torn down (no-op for observer/gunner)
     removeRoster(peerId);      // broadcast the leave + drop the roster record (#996; before m_peerInputs erase)
@@ -3859,6 +3880,40 @@ void WorldBroadcaster::onEntityEvent(const EntityEvent& event) {
         rec.a = killerPeer;
         rec.b = victimPeer;
         m_pendingKillEvents.push_back(rec);
+
+        // Mirror into the match event log (#600). This carries the RICH payload (entity handles +
+        // weapon class), not the three scalars MatchEventSink gets -- the sink exists to score a
+        // match, the log exists to say what happened.
+        {
+            MatchEvent me;
+            me.tick = m_currentTick;
+            me.type = MatchEventType::Kill;
+            me.subjectIdx = event.subject.index;
+            me.subjectGen = static_cast<uint16_t>(event.subject.generation);
+            if (event.instigator.valid()) {
+                me.instigatorIdx = event.instigator.index;
+                me.instigatorGen = static_cast<uint16_t>(event.instigator.generation);
+            }
+            me.actor = killerPeer;
+            me.target = victimPeer;
+            me.weaponClass = m_currentWeaponClass;
+            if (const EntityState* v = m_entityManager.get(event.subject))
+                me.factionIndex = v->factionIndex;
+            m_matchEventLog.append(std::move(me));
+        }
+        break;
+    }
+    case EntityEventType::Spawned: {
+        // The event that did not exist before #600: without it the log could say what died but never
+        // where anything came from.
+        MatchEvent me;
+        me.tick = m_currentTick;
+        me.type = MatchEventType::Spawn;
+        me.subjectIdx = event.subject.index;
+        me.subjectGen = static_cast<uint16_t>(event.subject.generation);
+        if (const EntityState* s = m_entityManager.get(event.subject))
+            me.factionIndex = s->factionIndex;
+        m_matchEventLog.append(std::move(me));
         break;
     }
     case EntityEventType::ScoreAwarded: {
@@ -4364,6 +4419,18 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         // command against issuer.caps and refuses with a clear message when insufficient.
         // Mutating commands enqueue via gameLoop.enqueueSimCallback() internally.
         std::string result = m_adminDispatch(cmdView, issuer);
+
+        // The audit record docs/ai-architecture.md §4 requires (#600): until now the only trace an admin
+        // command left was the Info log line below, which no consumer can read.
+        {
+            MatchEvent me;
+            me.tick = m_currentTick;
+            me.type = MatchEventType::AdminCommand;
+            me.actor = issuer.peerId;
+            me.factionIndex = issuer.factionIndex;
+            me.text = std::string(cmdView);
+            m_matchEventLog.append(std::move(me));
+        }
 
         {
             char lmsg[256];
@@ -4981,6 +5048,19 @@ void WorldBroadcaster::handleChat(uint32_t peerId, const void* data, std::size_t
     // Moderation hook: false = suppress (fl-server default logs an audit line and allows).
     if (m_chatModerationHook && !m_chatModerationHook(peerId, hdr.channel, text))
         return;
+
+    // Record what was actually said (#600) -- after the veto, so a suppressed line is absent from
+    // the log rather than present-but-unsent, which would make the log disagree with the match.
+    {
+        MatchEvent me;
+        me.tick = m_currentTick;
+        me.type = MatchEventType::Chat;
+        me.actor = peerId;
+        me.channel = hdr.channel;
+        me.factionIndex = factionForPeer(peerId);
+        me.text = std::string(text);
+        m_matchEventLog.append(std::move(me));
+    }
 
     const auto channel = static_cast<ChatChannel>(hdr.channel);
     const uint16_t senderFaction = (channel == ChatChannel::Team) ? factionForPeer(peerId) : kNoFaction;
@@ -6339,8 +6419,7 @@ void WorldBroadcaster::readmitPilots() {
             rec.factionIndex = myFaction;
             upsertRoster(peerId, rec);
         }
-        if (m_matchParticipantSink)
-            m_matchParticipantSink(peerId, myFaction, /*isBot=*/false, /*joined=*/true);
+        recordParticipant(peerId, myFaction, /*isBot=*/false, /*joined=*/true);
     }
 }
 
@@ -6357,8 +6436,7 @@ void WorldBroadcaster::registerBotParticipant(uint32_t participantId, EntityId e
     upsertRoster(participantId, rec);
     m_scores[participantId] = PeerScore{};
     m_scoreboardDirty = true;
-    if (m_matchParticipantSink)
-        m_matchParticipantSink(participantId, faction, /*isBot=*/true, /*joined=*/true);
+    recordParticipant(participantId, faction, /*isBot=*/true, /*joined=*/true);
 }
 
 void WorldBroadcaster::removeBotParticipant(uint32_t participantId) {
@@ -6371,8 +6449,7 @@ void WorldBroadcaster::removeBotParticipant(uint32_t participantId) {
     removeRoster(participantId);
     m_scores.erase(participantId);
     m_scoreboardDirty = true;
-    if (m_matchParticipantSink)
-        m_matchParticipantSink(participantId, 0, /*isBot=*/true, /*joined=*/false);
+    recordParticipant(participantId, 0, /*isBot=*/true, /*joined=*/false);
 }
 
 // ── respawn (#648) ───────────────────────────────────────────────────────────
@@ -6406,8 +6483,7 @@ void WorldBroadcaster::respawnParticipant(uint32_t participantId) {
         rec.factionIndex = myFaction;
         upsertRoster(participantId, rec);
     }
-    if (m_matchParticipantSink)
-        m_matchParticipantSink(participantId, myFaction, /*isBot=*/false, /*joined=*/true);
+    recordParticipant(participantId, myFaction, /*isBot=*/false, /*joined=*/true);
 
     m_respawn.erase(participantId);
 }

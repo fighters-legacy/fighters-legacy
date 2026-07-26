@@ -9,6 +9,7 @@
 #include "INetwork.h"
 #include "InputTraceWriter.h"
 #include "JitterBuffer.h"
+#include "MatchEventLog.h" // the one append-only match record (#600)
 #include "RequiredPackPolicy.h"
 #include "SnapshotScheduler.h"
 #include "TickGovernor.h"
@@ -687,6 +688,35 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // rebuild tick.
     [[nodiscard]] const WorldStateSnapshot& worldState() const noexcept {
         return m_worldState;
+    }
+
+    // The off-thread publication of that same snapshot (#600). Any thread may call
+    // worldStatePublisher().get(); the sim thread republishes on each rebuild. This is what REST
+    // (#233), MCP (#601), the replay recorder (#643) and the AI provider (#163) read -- worldState()
+    // above stays the sim-thread-only fast path for the in-process GM feed.
+    [[nodiscard]] const WorldStatePublisher& worldStatePublisher() const noexcept {
+        return m_worldStatePublisher;
+    }
+
+    // The match event log (#600): one append-only record of kills, spawns, chat, admin commands,
+    // joins and posture changes. Readable from any thread (the log takes its own lock).
+    [[nodiscard]] MatchEventLog& matchEventLog() noexcept {
+        return m_matchEventLog;
+    }
+    [[nodiscard]] const MatchEventLog& matchEventLog() const noexcept {
+        return m_matchEventLog;
+    }
+
+    // Fire the match-participant sink AND record the join/leave in the event log (#600). Every
+    // participant transition routes through here so the two cannot drift -- there are seven call
+    // sites, and seven places to remember a second call is six too many.
+    void recordParticipant(uint32_t participantId, uint16_t faction, bool isBot, bool joined);
+
+    // Push the current mission/objective state into the next world-state rebuild (#600). engine-net
+    // does not link engine-mission, so the mission runtime pushes rather than the snapshot pulling.
+    // Sim-thread only; fl-server calls it from the end-of-tick hook.
+    void setWorldStateMission(WorldStateMission m) {
+        m_worldStateMission = std::move(m);
     }
 
     // Seconds until the scheduled shutdown; 0 if none active (sim-thread-only read).
@@ -1526,6 +1556,9 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // consume it. Rebuild cadence matched to the ~1 Hz agent/GM-map cadence, not the 60 Hz tick.
     static constexpr uint64_t kWorldStateIntervalTicks = 60;
     WorldStateSnapshot m_worldState;
+    WorldStatePublisher m_worldStatePublisher;  // #600: the off-thread copy readers take
+    WorldStateMission m_worldStateMission;      // #600: pushed by the host, read at rebuild
+    MatchEventLog m_matchEventLog;              // #600: the one append-only match record
     void rebuildWorldState(uint64_t tickIndex); // gather peers + weather, call buildWorldStateSnapshot
     void broadcastGmWorldState();               // #861: chunked GM-map feed to peers holding GmMap
     void broadcastMatchState();                 // send m_matchState to every handshake-complete peer

@@ -12,6 +12,8 @@ enum class EntityEventType : uint8_t {
     Died,               // entity.dead became true
     DamageLevelChanged, // damage level transitioned (inspect newDamageLevel)
     ScoreAwarded,       // a kill score was credited to instigator's owner
+    Spawned,            // entity entered the sim (#600). Appended at the tail: the ordinals are read
+                        // by handlers that switch on them, and renumbering would silently remap.
 };
 
 struct EntityEvent {
