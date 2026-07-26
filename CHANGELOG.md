@@ -9,6 +9,26 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **docs**: recorded the Linux CUDA-vs-Vulkan contention pair and corrected a claim the Windows
+  write-up made about it (#1021). The results table carried no Linux Vulkan row at all, while the
+  prose already leaned on its numbers to draw the Linux-vs-Windows comparison — so the headline
+  finding could not be checked against the table it came from. Both Linux cells are now rows (4-run
+  CUDA, 5-run Vulkan on the same physical RTX 5080 as the Windows rows, since that machine
+  dual-boots), with the older single-run CUDA row kept beneath and marked superseded rather than
+  deleted: the gap between them (1.51× vs 1.75× [1.01–1.88]) is itself the #1016 point about what a
+  lone run is worth. Both backends served **byte-identical weights** — `llama-server` was pointed at
+  Ollama's own GGUF blob — so that row needs no `~approximate` VRAM caveat, and the quoted Vulkan run
+  is the **flag-matched** one: re-running with Ollama's exact server flags changed Δ p95 by nothing
+  to two decimals and throughput by one request per run, because the `intent` prompts are ~31 tokens
+  and fit in one batch at either bound. Since Δ p95 is not a table column and is the statistic that
+  separates the backends on Linux, both figures are now recorded in the footnote instead of living
+  only in git-ignored artifacts. **Correction:** the harness README said the p95 preference came from
+  a "lightly loaded" Linux cell. It did not — Linux served 373 and 540 requests per run against 351
+  and 535 on the corrected Windows runs (45 on the defective ones), a fact the same change had
+  already written into the docs footnote. Both operating systems ran at comparable full load on one
+  card and still disagree about which statistic is trustworthy, so the condition on "prefer Δ p95" is
+  not load; it is a per-cell property to read from the harness's own stability verdict.
+
 - **ai**: the GPU-contention hitch counter is now calibrated per run at **2× that run's median idle
   frame interval**, replacing a fixed `>33.3 ms` threshold (#1022). The fixed threshold measured a
   different thing on every row of the results table — on a client idling at 4.6 ms a 33 ms frame is a

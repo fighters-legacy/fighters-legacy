@@ -119,12 +119,19 @@ Two practical consequences when reading a `--repeat` aggregate from any vsync-li
   runs *including* the odd one; Δ p99 ranged over 34 ms, because p99 lands wherever the next divisor
   is. On that machine the real effect was exactly one missed refresh interval.
 
-  **That preference is conditional, not general (#1021).** It was drawn from a quantized 30 fps clock,
-  and the Linux cell that echoed it turned out to be lightly loaded. On a 240 fps client under full
-  burst load — ~350 requests/run rather than 45 — the ordering reverses: p99 was the *stable*
-  statistic on both Windows backends (spreads 0.18× and 0.06× against 1.61× and 1.50× effects, both
-  verdicts "defensible point value") while Δ p95 was the noisier one. Read the harness's own
-  per-cell stability verdict rather than assuming either statistic wins everywhere.
+  **That preference is conditional, not general, and the condition is not load (#1021).** On Windows
+  under full burst load, p99 was the *stable* statistic on both backends (spreads 0.18× and 0.06×
+  against 1.61× and 1.50× effects, both verdicts "defensible point value") while Δ p95 was the
+  noisier one — the reverse of the iGPU cell above.
+
+  The obvious explanation is that the p95 preference came from lightly-loaded cells, and it is wrong:
+  **the Linux runs were at full load too** (373 and 540 requests/run, against 351 and 535 on the
+  corrected Windows runs and 45 on the defective ones), and Linux still had noisy p99 with a cleanly
+  separating Δ p95. Two OSes, one physical card, comparable load, opposite answers about which
+  statistic is trustworthy. Whatever drives it is not how hard the model was driven.
+
+  So do not carry a rule of thumb between platforms. **Read the harness's own per-cell stability
+  verdict**, which is computed from that cell's actual spread, and quote the range when it says to.
 
 ### The hitch counter is relative to the run's own baseline (#1022)
 

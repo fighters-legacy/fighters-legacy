@@ -323,8 +323,10 @@ baseline in the same session. Frame columns are **burst minus that run's own idl
 
 | OS / GPU | Backend | Model | Idle p99 | Burst p99 | Δ p99 | Δ mean | Worst 1% | Hitches (76 s burst)◊ | Model VRAM | Game VRAM budget |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Linux, RTX 5080 16 GB | CUDA (Ollama) | `qwen2.5-coder:14b` | 4.42 ms | 6.68 ms | **+2.26 ms (1.51×)** | +0.01 ms | +13.8 ms | 22 | 9031 MB | 4556 MB |
-| Linux, RTX 5080 16 GB | CUDA (Ollama) | `gemma2:9b` | 4.41 ms | 6.67 ms | **+2.26 ms (1.51×)** | +0.06 ms | +5.1 ms | 8 | 5971 MB | 6939 MB |
+| Linux, RTX 5080 16 GB | CUDA (Ollama) | `qwen2.5-coder:14b` — 4 runs✧ | 4.68 ms | 8.08 ms | **+3.45 ms (1.75×) [1.01–1.88]** | +0.20 ms | +4.0 ms | +5.7/min◊ | 9031 MB | 4711 MB |
+| Linux, RTX 5080 16 GB | Vulkan (llama.cpp b10107) | `qwen2.5-coder:14b` — 5 runs✧ | 4.31 ms | 5.38 ms | **+1.03 ms (1.24×) [1.02–1.49]** | +0.04 ms | +3.9 ms | +35.7/min◊ | n/a✧ | 4979 MB |
+| Linux, RTX 5080 16 GB | CUDA (Ollama) | `qwen2.5-coder:14b` — single run✧ | 4.42 ms | 6.68 ms | **+2.26 ms (1.51×)** | +0.01 ms | +13.8 ms | 22 | 9031 MB | 4556 MB |
+| Linux, RTX 5080 16 GB | CUDA (Ollama) | `gemma2:9b` — single run | 4.41 ms | 6.67 ms | **+2.26 ms (1.51×)** | +0.06 ms | +5.1 ms | 8 | 5971 MB | 6939 MB |
 | macOS 26.5, Apple M4 Pro 64 GB | Metal (Ollama) | `qwen2.5-coder:14b` | 14.45 ms | 27.29 ms | **+12.84 ms (1.89×)** | **+9.53 ms** | +13.8 ms | 3 | 14558 MB | 53084 MB† |
 | Windows 11, RTX 5080 16 GB | CUDA (Ollama) | `qwen2.5-coder:14b` — 5 runs✦ | 4.43 ms | 11.57 ms | **+7.11 ms (2.61×) [2.48–2.66]** | +0.03 ms | +8.3 ms | +939/min◊ | 9031 MB | 15209 MB‡ |
 | Windows 11, RTX 5080 16 GB | Vulkan (llama.cpp b10107) | `qwen2.5-coder:14b` — 5 runs✦ | 4.48 ms | 11.21 ms | **+6.73 ms (2.50×) [2.49–2.55]** | +0.04 ms | +8.2 ms | +779/min◊ | ~8880 MB§ | 15209 MB‡ |
@@ -362,6 +364,41 @@ over IPv4 at full load (5 runs each, median [min–max], zero analyzer warnings,
 they carry the same defect and have not been re-measured; they will return when that cell is re-run.
 The Linux and macOS rows are unaffected (their request counts, 373 and 540 per run, confirm they ran
 under full load).
+
+✧ **The Linux CUDA-vs-Vulkan pair (#1021).** Measured on the same physical RTX 5080 as the Windows
+rows — that machine dual-boots — so the two operating systems are compared on identical hardware with
+nothing else varying. Both backends served **byte-identical weights**: Ollama stores model layers as
+plain GGUF, so `llama-server` was pointed at Ollama's own blob rather than a second download, which
+is also why this Vulkan row needs no `~approximate` VRAM caveat. Model VRAM reads `n/a` because
+`llama-server` exposes no `/api/ps` equivalent; the process held 9060 MiB by `nvidia-smi`.
+
+**Δ p95 is not a column in this table, and on Linux it is the statistic that separates the two
+backends** — CUDA **+1.72 ms [1.16–1.85]** against Vulkan **+0.02 ms [0.01–0.06]**, disjoint by a wide
+margin, while Δ p99, the p99 ratio and worst-1% all overlap. The prose below leans on those two
+figures, so they are recorded here rather than left in the artifacts. Note the harness's own
+p99-stability verdict reads *noise* for **both** Linux legs, which is why the p99 ratio column above
+should be read as a range and not a ranking.
+
+The Vulkan row is the **flag-matched** run. Ollama does not merely "use CUDA" — it launches its own
+bundled `llama-server` with `-c 4096 -np 1 --flash-attn auto -b 512 -ub 512 --context-shift --keep 4`,
+so a first pass at llama.cpp's defaults varied the backend *and* the batch configuration together.
+Re-running with Ollama's exact flags changed **nothing** — Δ p95 identical to two decimals (0.02 ms)
+and throughput identical to within one request per run (541 vs 540) — because the `intent` prompts
+are ~31 tokens and fit in one batch either way. The confound was worth testing and turned out empty,
+so the row below quotes the flag-matched run and the two are interchangeable.
+
+The older single-run Linux CUDA row is kept directly beneath, superseded rather than deleted: it is a
+valid measurement of the same cell, and the gap between it and the 4-run row (1.51× vs 1.75×
+[1.01–1.88]) is itself the #1016 point about what a lone run is worth. Its run 4 was excluded on the
+#1019 cadence criterion — it idled at 31.36 ms against ~4.17 ms for the other four and produced a
+burst *faster* than its own baseline. It carried no warnings of its own; only #1022's cross-run
+cadence guard caught it.
+
+Two confounds remain on both OSes and are not removable without building llama.cpp against CUDA from
+source (llama.cpp publishes no CUDA prebuilt for Linux): Ollama's bundled llama.cpp is not b10107,
+and Ollama adds its own scheduling layer — worth ~125 ms of `load_duration` charged per request
+despite a resident pinned model. So these rows compare **two deployments**, not the CUDA API path in
+the abstract.
 
 ◊ **The Hitches column is retired and is not comparable across these rows (#1022).** Every value
 here was counted against a fixed `>33.3 ms` threshold, which measures a different thing on each row:
@@ -484,6 +521,13 @@ under Windows, on the same card with the same binary, weights and flags. The nat
 WDDM's compute-vs-graphics scheduling imposes a per-contender cost that swamps the API-path
 difference, so under Windows it stops mattering which API the inference uses. **That is inference
 from the pattern, not a measurement** — confirming it needs GPU-scheduler-level tracing (#1025).
+
+**It is not a load difference**, which is the first thing to suspect after the `localhost` defect:
+the Linux runs served 373 and 540 requests per run against 351 and 535 on the corrected Windows runs
+(45 on the defective ones). Both OSes ran at comparable full load on one physical card and still
+disagree about which statistic is trustworthy — Linux gave noisy p99 with a cleanly separating Δ p95,
+Windows the reverse. So "prefer Δ p95" is a per-cell property to be read from the harness's own
+stability verdict, not a rule that transfers between platforms.
 
 What survives unchanged: **every** configuration measured on either OS shows the same flat-mean,
 heavy-tail signature. That is still the finding, and it is what bears on #769 — client-local
