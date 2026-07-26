@@ -895,13 +895,18 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
             ctx.sim.gameLoop->enqueueSimCallback([ctx, ip]() {
                 bool adminWasLocked = ctx.sim.broadcaster->unlockAdminAuth(ip);
                 bool rconWasLocked = ctx.rcon.clearRconLockout ? ctx.rcon.clearRconLockout(ip) : false;
-                bool anyWasLocked = adminWasLocked || rconWasLocked;
-                char m[128];
+                // The REST channel keeps its own per-IP lockout (#233); unlocking an operator on two
+                // of three channels and leaving the third would be worse than not unlocking at all.
+                bool httpWasLocked = ctx.httpAdmin.clearLockout ? ctx.httpAdmin.clearLockout(ip) : false;
+                bool anyWasLocked = adminWasLocked || rconWasLocked || httpWasLocked;
+                char m[160];
                 if (anyWasLocked) {
+                    std::string channels = "admin";
                     if (ctx.rcon.clearRconLockout)
-                        std::snprintf(m, sizeof(m), "[admin] unlocked %s (admin + RCON)", ip.c_str());
-                    else
-                        std::snprintf(m, sizeof(m), "[admin] unlocked %s", ip.c_str());
+                        channels += " + RCON";
+                    if (ctx.httpAdmin.clearLockout)
+                        channels += " + HTTP";
+                    std::snprintf(m, sizeof(m), "[admin] unlocked %s (%s)", ip.c_str(), channels.c_str());
                 } else {
                     std::snprintf(m, sizeof(m), "[admin] admin_unlock: %s was not locked", ip.c_str());
                 }
@@ -914,24 +919,29 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         });
 
     // admin_auth_status
-    registry.registerCommand("admin_auth_status",
-                             "admin_auth_status  -- show per-IP auth lockout state for admin and RCON channels",
-                             [ctx](std::span<std::string_view>) -> std::string {
-                                 if (!ctx.sim.broadcaster)
-                                     return "admin_auth_status: not available";
-                                 auto adminS = ctx.sim.broadcaster->getAuthLockoutSummary();
-                                 bool hasRcon = static_cast<bool>(ctx.rcon.getRconAuthSummary);
-                                 auto rconS = hasRcon ? ctx.rcon.getRconAuthSummary() : fl::AuthLockoutSummary{};
+    registry.registerCommand(
+        "admin_auth_status",
+        "admin_auth_status  -- show per-IP auth lockout state for the admin, RCON and HTTP channels",
+        [ctx](std::span<std::string_view>) -> std::string {
+            if (!ctx.sim.broadcaster)
+                return "admin_auth_status: not available";
+            auto adminS = ctx.sim.broadcaster->getAuthLockoutSummary();
+            bool hasRcon = static_cast<bool>(ctx.rcon.getRconAuthSummary);
+            auto rconS = hasRcon ? ctx.rcon.getRconAuthSummary() : fl::AuthLockoutSummary{};
 
-                                 std::string detail = formatAuthSection("MsgAdminCommand channel", adminS);
-                                 if (hasRcon) {
-                                     detail += "\n\n";
-                                     detail += formatAuthSection("RCON channel", rconS);
-                                 }
-                                 std::printf("%s\n", detail.c_str());
-                                 std::fflush(stdout);
-                                 return detail;
-                             });
+            std::string detail = formatAuthSection("MsgAdminCommand channel", adminS);
+            if (hasRcon) {
+                detail += "\n\n";
+                detail += formatAuthSection("RCON channel", rconS);
+            }
+            if (ctx.httpAdmin.getAuthSummary) {
+                detail += "\n\n";
+                detail += formatAuthSection("HTTP admin channel", ctx.httpAdmin.getAuthSummary());
+            }
+            std::printf("%s\n", detail.c_str());
+            std::fflush(stdout);
+            return detail;
+        });
 
     // set_weather <preset>
     registry.registerCommand(

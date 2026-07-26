@@ -1863,3 +1863,75 @@ TOML; see [docs/distribution.md](distribution.md#server-distribution--self-hosti
     - name: FL_MAX_PEERS
       value: "32"
   ```
+
+## `[http_admin]` — REST admin API and health probe (#233)
+
+An embedded HTTP/1.1 server exposing the admin surface to container orchestrators, monitoring, and
+fl-lobby (#143). **Disabled by default, and bound to `127.0.0.1` when enabled** — putting it on the
+network is a deliberate second edit, not a side effect of flipping one boolean.
+
+```toml
+[http_admin]
+enabled = true
+port = 8080
+bind_address = "127.0.0.1"
+max_auth_failures = 5
+lockout_seconds = 300
+
+[[http_admin.tokens]]
+token = "a-long-random-secret"
+role  = "admin"          # admin | moderator | gm | faction_leader
+
+[[http_admin.tokens]]
+token = "another-secret"
+role  = "faction_leader"
+faction = 1              # faction index for a faction-scoped role; -1 = unbound
+```
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Enabling with **no tokens is refused at startup**, not warned about — this endpoint can kick, ban and shut the server down |
+| `port` | int | `8080` | `[1, 65535]`; `0` asks the OS for an ephemeral port (used by tests) |
+| `bind_address` | string | `"127.0.0.1"` | Set to `0.0.0.0` only behind a reverse proxy or on a trusted network |
+| `max_auth_failures` | int | `5` | Per-IP lockout threshold, the same policy the RCON and ENet admin channels use |
+| `lockout_seconds` | int | `300` | Per-IP lockout duration |
+| `[[http_admin.tokens]].token` | string | — | The bearer credential; a row with an empty token is dropped with a warning |
+| `[[http_admin.tokens]].role` | string | `"admin"` | A capability preset. An **unknown name stops the server starting** rather than silently granting nothing |
+| `[[http_admin.tokens]].faction` | int | `-1` | Faction binding for a faction-scoped role |
+
+### Endpoints
+
+Every route except `/health` requires `Authorization: Bearer <token>` and answers JSON.
+
+| Method | Path | Requires | Description |
+|---|---|---|---|
+| GET | `/health` | — | `{"status": "ok", "uptime": N}`. The liveness/readiness probe |
+| GET | `/status` | any token | Peer count, entity count, tick rate, uptime |
+| GET | `/peers` | any token | Connected peers |
+| GET | `/worldstate` | any token | The ~1 Hz world-state snapshot (#600), passed through verbatim |
+| GET | `/events?after=N&max=M` | any token | The match event stream (#600); `after` is the cursor from the previous response's `next_seq` |
+| POST | `/kick` | `kick_ban` | `{"peer": <id>}` |
+| POST | `/ban` | `kick_ban` | `{"ip": "1.2.3.4"}` |
+| POST | `/unban` | `kick_ban` | `{"ip": "1.2.3.4"}` |
+| POST | `/shutdown` | `server_config` | `{"in": 1800, "reason": "..."}`; both fields optional |
+
+Status codes: `200` success, `400` malformed body, `401` missing or wrong token, `403` the token
+authenticated but lacks the command's capability, `404` unknown route or command, `429` the source IP
+is locked out, `503` the underlying command has no answer yet (e.g. `/worldstate` in the first second
+of a server's life).
+
+**`/health` is deliberately the one unauthenticated route**, and it touches nothing shared. A probe
+that could block on a lock the stalled sim thread holds would report unhealthy exactly when an
+orchestrator most needs a truthful answer, and a probe requiring a credential could not be configured
+in a bare Kubernetes `httpGet` check.
+
+**There is no second permission system.** Each route resolves its token to a `CommandIssuer` and calls
+the same permission-checked `CommandRegistry::dispatch` the in-game admin channel uses, so a
+capability added to a command is enforced over HTTP for free — a `moderator` token can `POST /kick`
+and is refused `POST /shutdown` with a `403`.
+
+**Transport security is out of scope here.** Tokens travel as plain Bearer credentials over plain
+HTTP. Keep the listener on the loopback for probes, or front it with a TLS-terminating reverse proxy;
+the same caveat the `[rcon]` section carries.
+
+---

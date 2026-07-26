@@ -16,6 +16,7 @@
 // See docs/fl-server-config.md for the full operator configuration reference.
 // fl-lobby integration is tracked in issue #36.
 #include "GameModeSource.h"
+#include "HttpAdminServer.h"
 #include "IpListFile.h"
 #include "MatchTeams.h"
 #include "MissionSource.h"
@@ -1919,6 +1920,8 @@ int main(int argc, char** argv) {
     CommandShell adminShell(*log, adminRegistry);
     // Declared here so rconServer outlives gameLoop but is destroyed before adminRegistry.
     std::unique_ptr<fl::RconServer> rconServer;
+    // Same lifetime rule for the REST admin API (#233): its listener thread calls into adminRegistry.
+    std::unique_ptr<fl::HttpAdminServer> httpAdminServer;
 
     // (The read-only AI script cache is built earlier, above the mission load, so the mission's
     // scripted-bot `ai: lua <name>` objects can resolve their scripts — see aiScriptCache.)
@@ -2208,6 +2211,16 @@ int main(int argc, char** argv) {
     adminCtx.rcon.getRconAuthSummary = [&rconServer]() -> fl::AuthLockoutSummary {
         return rconServer ? rconServer->getRconAuthSummary() : fl::AuthLockoutSummary{};
     };
+    // The REST channel's lockout, so admin_unlock / admin_auth_status cover all three (#233). Left
+    // unset when the API is disabled, which is what makes those commands omit its section entirely.
+    if (cfg.httpAdmin.enabled) {
+        adminCtx.httpAdmin.clearLockout = [&httpAdminServer](const std::string& ip) -> bool {
+            return httpAdminServer ? httpAdminServer->clearLockout(ip) : false;
+        };
+        adminCtx.httpAdmin.getAuthSummary = [&httpAdminServer]() -> fl::AuthLockoutSummary {
+            return httpAdminServer ? httpAdminServer->getAuthSummary() : fl::AuthLockoutSummary{};
+        };
+    }
 
     broadcaster.setShutdownCallback([&]() { g_quit = 1; });
     fl::registerServerCommands(adminRegistry, adminCtx);
@@ -2332,6 +2345,17 @@ int main(int argc, char** argv) {
                      ("--time-rate: unknown rate \"" + flagTimeRate +
                       "\" (paused|eighth|quarter|half|normal|double|quad|octa); using normal")
                          .c_str());
+        }
+    }
+
+    // ---- REST admin API + health probe (#233) ----
+    // Started before RCON only so the two log lines read in config order; they are independent.
+    if (cfg.httpAdmin.enabled) {
+        httpAdminServer = std::make_unique<fl::HttpAdminServer>(adminRegistry, cfg.httpAdmin, *log, &adminShell);
+        if (!httpAdminServer->start()) {
+            log->log(LogLevel::Warn, __FILE__, __LINE__,
+                     "http_admin failed to start; continuing without the REST admin API");
+            httpAdminServer.reset();
         }
     }
 
@@ -2469,6 +2493,8 @@ int main(int argc, char** argv) {
         httpClient->shutdown();
     }
 
+    if (httpAdminServer)
+        httpAdminServer->stop();
     if (rconServer)
         rconServer->stop();
     gameLoop.stop();

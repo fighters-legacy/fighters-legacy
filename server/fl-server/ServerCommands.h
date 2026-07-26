@@ -97,6 +97,14 @@ struct ServerCommandContext {
         // RCON drain (issue #304). nullptr = disabled.
         CommandShell* shell{nullptr};
     } rcon;
+
+    // REST admin API hooks (#233). All null when [http_admin] is disabled. Present so admin_unlock
+    // and admin_auth_status cover the HTTP channel too -- a third authentication surface an operator
+    // cannot see or clear is a surface that gets forgotten during an incident.
+    struct HttpAdminHooks {
+        std::function<bool(const std::string&)> clearLockout;
+        std::function<AuthLockoutSummary()> getAuthSummary;
+    } httpAdmin;
 };
 
 // Register all fl-server admin commands into registry using the given context.

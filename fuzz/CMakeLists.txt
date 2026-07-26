@@ -62,6 +62,16 @@ target_link_libraries(fuzz_wire_tlv PRIVATE engine-protocol)
 fl_add_fuzzer(fuzz_lobby_list)
 target_link_libraries(fuzz_lobby_list PRIVATE engine-net)
 
+# REST admin API request-body scanners (#233): the bytes a POST /kick or /ban carries. Same recipe as
+# fuzz_rcon_packet -- HttpAdminServer.cpp lives in no library, so it is compiled in directly.
+fl_add_fuzzer(fuzz_http_admin_body)
+target_sources(fuzz_http_admin_body PRIVATE "${CMAKE_SOURCE_DIR}/server/fl-server/HttpAdminServer.cpp")
+target_link_libraries(fuzz_http_admin_body PRIVATE fl-server-config engine-console engine-net httplib::httplib)
+target_include_directories(fuzz_http_admin_body PRIVATE "${CMAKE_SOURCE_DIR}/server/fl-server")
+if(WIN32)
+    target_link_libraries(fuzz_http_admin_body PRIVATE ws2_32)
+endif()
+
 # Source-Engine RCON packet decoder: fl::rcon::decodePacket. RconServer.cpp is not in any library
 # (fl-server compiles it directly), so mirror tests/CMakeLists.txt's test_rcon_server recipe.
 fl_add_fuzzer(fuzz_rcon_packet)

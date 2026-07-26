@@ -533,6 +533,22 @@ if(TARGET platform-enet)
         "${CMAKE_CURRENT_SOURCE_DIR}")
     catch_discover_tests(test_content_bootstrap)
 
+    # REST admin API (#233). Every security decision — token table, bearer extraction, constant-time
+    # compare, issuer construction, untrusted body scanning — lives in free functions, so this covers
+    # them without opening a socket (the test_rcon_server recipe). HttpAdminServer.cpp is in no
+    # library, so it is compiled directly.
+    add_executable(test_http_admin test_http_admin.cpp
+        "${CMAKE_SOURCE_DIR}/server/fl-server/HttpAdminServer.cpp")
+    target_link_libraries(test_http_admin PRIVATE
+        Catch2::Catch2WithMain fl-server-config engine-console engine-net httplib::httplib)
+    target_include_directories(test_http_admin PRIVATE
+        "${CMAKE_SOURCE_DIR}/server/fl-server"
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(WIN32)
+        target_link_libraries(test_http_admin PRIVATE ws2_32)
+    endif()
+    catch_discover_tests(test_http_admin)
+
     add_executable(test_rcon_server test_rcon_server.cpp
         "${CMAKE_SOURCE_DIR}/server/fl-server/RconServer.cpp")
     target_link_libraries(test_rcon_server PRIVATE

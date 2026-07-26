@@ -585,6 +585,48 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
+# cpp-httplib — header-only HTTP/1.1 server for fl-server's REST admin API (#233)
+# and, in Stage 3, the MCP Streamable-HTTP endpoint (#601). System preferred,
+# FetchContent fallback (the tomlplusplus pattern). MIT, no transitive deps.
+#
+# Confined to server/fl-server/ by cmake/layering.cmake: no engine-* target may
+# link an HTTP implementation. Built WITHOUT OpenSSL/zlib/Brotli on purpose — the
+# listener binds localhost by default and a real deployment fronts it with a
+# reverse proxy, so linking TLS here would add a dependency to secure a socket
+# that is not exposed.
+#
+# The USE_*_IF_AVAILABLE options are what actually control that. REQUIRE_* only
+# means "fail the build if missing"; detection is separate and defaults ON, so
+# leaving these alone silently enabled TLS and zlib wherever OpenSSL happened to
+# be installed for GameNetworkingSockets — which is every CI platform. Turning
+# detection off makes the build identical everywhere and match what the docs say.
+#
+# It is a dependency rather than hand-rolled parsing because #233 puts an
+# HTTP/1.1 parser on a network-facing socket, and that is exactly the code where
+# a maintained implementation earns its keep.
+# ---------------------------------------------------------------------------
+find_package(httplib 0.18.0 QUIET)
+if(httplib_FOUND)
+    message(STATUS "cpp-httplib: system (${httplib_VERSION})")
+else()
+    message(STATUS "cpp-httplib: FetchContent")
+    set(HTTPLIB_REQUIRE_OPENSSL OFF CACHE BOOL "" FORCE)
+    set(HTTPLIB_REQUIRE_ZLIB OFF CACHE BOOL "" FORCE)
+    set(HTTPLIB_REQUIRE_BROTLI OFF CACHE BOOL "" FORCE)
+    set(HTTPLIB_USE_OPENSSL_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+    set(HTTPLIB_USE_ZLIB_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+    set(HTTPLIB_USE_BROTLI_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(httplib
+        GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
+        GIT_TAG        v0.18.3
+        GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
+        SYSTEM
+    )
+    FetchContent_MakeAvailable(httplib)
+endif()
+
+# ---------------------------------------------------------------------------
 # Opus — the voice codec for the in-game radio nets (Epic J, #531/#532).
 # System-preferred with a FetchContent fallback, normalized onto `fl::opus`
 # (the zstd pattern), because distros disagree about what an opus dev package

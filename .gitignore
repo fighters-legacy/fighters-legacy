@@ -118,3 +118,12 @@ base-terrain/
 # OurAirports binary cache (#486) — imported from data/*.csv at first run into the per-user
 # data dir; a dev run started from the repo root writes it here. Generated, never committed.
 cache/
+
+# libFuzzer working-corpus output. A committed corpus holds ONLY hand-written seeds
+# (seed-*) and regression inputs (regress-*) -- everything else in these directories is
+# generated. `fl_add_fuzzer`'s ctest passes a build-tree corpus as the writable one, but a
+# manual run that names the source corpus first makes libFuzzer write its discoveries here,
+# and 76 of them once reached a commit before anyone looked.
+fuzz/corpus/*/*
+!fuzz/corpus/*/seed-*
+!fuzz/corpus/*/regress-*
