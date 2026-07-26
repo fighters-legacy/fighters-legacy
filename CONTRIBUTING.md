@@ -5,8 +5,13 @@ Please read the [Code of Conduct](https://github.com/fighters-legacy/.github/blo
 
 ## Commit Messages
 
-This project uses [Conventional Commits](https://www.conventionalcommits.org/). Commit messages
-drive automated changelog generation via `git-cliff` and `scripts/draft-changelog.sh`.
+This project uses [Conventional Commits](https://www.conventionalcommits.org/). The scope and type
+drive the PR title lint and the release workflow's fallback notes.
+
+**`CHANGELOG.md` is hand-curated, not generated.** Every PR adds its own entry under `[Unreleased]`
+— one per issue closed, with its own rationale — because a generated line collapses a multi-issue PR
+to a single subject and loses the *why*. See [project-management.md](docs/project-management.md) for
+the entry convention and the release procedure.
 
 ### Format
 
