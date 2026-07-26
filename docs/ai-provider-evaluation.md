@@ -512,15 +512,21 @@ overlaps — p99 ratio [2.48–2.66] vs [2.49–2.55], Δ p99 [6.71–7.37] vs [
 served **1.53× more requests** (535/run vs 351) at **identical per-request token work** (143.3 prompt
 / 9.0 generation tokens, from each server's own accounting), so its marginally lower numbers are not
 "it did less work". The supported statement is that the backend difference is **below the noise floor
-on this hardware**, not that either backend wins.
+on this hardware**, not that either backend wins. (Two qualifications from #1025, below: the two
+Δ p95 figures matching *to two decimals* is not the coincidence it looks like — on a vsync-pinned
+client Δ p95 can only land near an integer multiple of the refresh interval, and both legs land on
+one; and there is structure these overlapping ranges hide, in that Vulkan stalls the renderer more
+often while CUDA stalls it more deeply. So "indistinguishable" is a statement about these metrics on
+this client, not about the two backends. See
+[Where the Windows cost lives](#where-the-windows-cost-lives-1025).)
 
 **And that disagrees with Linux, which is the interesting part.** On Linux the same comparison is
 disjoint by a wide margin (Δ p95: CUDA 1.72 ms [1.16–1.85] vs Vulkan 0.02 ms [0.01–0.06]); on Windows
 both cost 4.38 ms. The whole effect is the Vulkan leg moving — essentially free on Linux, 4.38 ms
-under Windows, on the same card with the same binary, weights and flags. The natural reading is that
+under Windows, on the same card with the same binary, weights and flags. The natural reading was that
 WDDM's compute-vs-graphics scheduling imposes a per-contender cost that swamps the API-path
-difference, so under Windows it stops mattering which API the inference uses. **That is inference
-from the pattern, not a measurement** — confirming it needs GPU-scheduler-level tracing (#1025).
+difference, so under Windows it stops mattering which API the inference uses. That reading was
+inference from the pattern rather than a measurement; **#1025 has since measured it** — see below.
 
 **It is not a load difference**, which is the first thing to suspect after the `localhost` defect:
 the Linux runs served 373 and 540 requests per run against 351 and 535 on the corrected Windows runs
@@ -533,6 +539,148 @@ What survives unchanged: **every** configuration measured on either OS shows the
 heavy-tail signature. That is still the finding, and it is what bears on #769 — client-local
 inference costs the frame budget materially on Windows regardless of backend (~2.5× p99, ~4.4 ms at
 p95), which supports server-side hosting rather than undermining it.
+
+### Where the Windows cost lives (#1025)
+
+*The renderer is not doing slower work. It is waiting.* And the reason the two backends looked
+identical is that the statistic saying so is quantized.
+
+Frame time cannot distinguish "the renderer's GPU work took longer" from "the renderer was made to
+wait" — the two are the same number in the frame column and want opposite fixes. The harness already
+recorded what separates them: `gpu_ms`, the renderer's own Vulkan timestamp-query span, alongside
+frame time on **every** sample. So each frame splits into the part the renderer spent executing and
+everything else — CPU frame work, queue wait, present:
+
+    Δ frame  =  Δ renderer-GPU-execution  +  Δ residual
+
+That split needed no new runs. It is computed from the #1021 artifacts, and `analyze.py` now emits
+it for every run (`residual_ms` per phase, `residual_*`/`gpu_p95`/`gpu_p99` deltas, and the
+catch-up/throughput pair below), so it is a standing output rather than this spike's one-off.
+
+| | | Δ frame | Δ renderer-GPU | Δ residual |
+|---|---|---:|---:|---:|
+| **Windows** CUDA (Ollama), 5 runs | mean | +0.03 ms | **+0.01 ms** | +0.03 ms |
+| | p95 | +4.38 ms | **+0.03 ms** | **+4.27 ms** |
+| | p99 | +7.11 ms | **+0.18 ms** | **+7.10 ms** |
+| **Windows** Vulkan (llama.cpp), 5 runs | mean | +0.04 ms | **+0.01 ms** | +0.02 ms |
+| | p95 | +4.38 ms | **+0.02 ms** | **+4.36 ms** |
+| | p99 | +6.73 ms | **+0.19 ms** | **+6.71 ms** |
+| **Linux** CUDA (Ollama), 4 runs✧ | mean | +0.20 ms | **+0.79 ms** | −0.60 ms |
+| | p95 | +1.72 ms | **+2.23 ms** | −0.02 ms |
+| | p99 | +3.45 ms | **+2.26 ms** | +1.22 ms |
+| **Linux** Vulkan (llama.cpp), 5 runs✧ | mean | +0.04 ms | **+1.07 ms** | −1.03 ms |
+| | p95 | +0.02 ms | **+1.17 ms** | −0.16 ms |
+| | p99 | +1.03 ms | **+1.19 ms** | +0.21 ms |
+
+Medians across runs, burst minus that run's own idle baseline. The Windows rows come straight out of
+`aggregate.py`; the Linux rows were computed on the Linux boot with the same per-frame split before
+the analyzer carried it, so re-deriving them means re-running `analyze.py` over the Linux artifacts
+on that partition rather than reading a committed number. Absolute anchors for the Windows
+rows: 4.16 ms idle cadence, 1.25 ms idle GPU span, 2.92 ms idle residual. **The columns are additive
+at the mean only** — means are additive, percentiles are not, so the p95/p99 rows say where the tail
+lives rather than forming an identity. The residual itself *is* per-frame, which is what makes it
+more than a subtraction of two summaries.
+
+**On Windows the renderer's own GPU execution is untouched — by either API.** +0.01 ms at the mean
+and +0.19 ms at p99 against a 1.25 ms baseline span. The whole 4.4 ms at p95 and ~7 ms at p99 is
+outside execution. This is not a subtle margin: the GPU column is two orders of magnitude smaller
+than the frame column it is supposed to explain.
+
+**And the renderer's work is not being preempted mid-flight either.** GPU timestamps are written by
+the GPU as it executes, so a context switch *inside* the renderer's command buffer would appear as
+a longer `gpu_ms`. It does not. Once the renderer's work starts it runs contiguously; the cost is
+paid before it starts, or after it ends in present.
+
+**The frame clock goes bimodal while throughput holds — the signature of blocking, not slowness.**
+Frames shorter than half the cadence — a queued present returning immediately once the renderer
+unblocks — go from **0.45 %** at idle to **15.5 %** (CUDA) and **27.6 %** (Vulkan) under burst, while
+frames that missed at least one flip go from **0.26 %** to **9.5 %** / **12.4 %**. And the frame rate
+barely moves: **239.9 → 238.0 fps, 0.99×**. Work that got slower cannot produce short frames and
+cannot preserve throughput. Waiting, then draining a queued image, does exactly both.
+
+The two are the **same event**, not two coincidences: **56–57 % of burst hitches are immediately
+followed by a catch-up frame**, and that figure is remarkably tight — [55.7–58.4] across all ten
+runs, both backends. (The idle phases carry 10–20 hitches each, far too few to make a contrast out
+of, which is the point rather than a gap: at idle there is almost nothing to condition on.)
+
+**The 4.38 ms is one missed refresh interval, which is why both backends report it.** The idle
+cadence is 4.163 ms and Δ p95 is 4.376 ms. This is the same finding the Intel iGPU row produced at
+16.67 ms (below) — on a vsync-pinned client the frame clock is quantized, so Δ p95 can only land
+near an integer multiple of the refresh interval and *both* legs land on one. The apparent
+"identical to two decimals" agreement is therefore weaker evidence than it looked: it is the
+resolution of the statistic, not a measured equality.
+
+**What differs between the backends is not the size of a stall but how often and how deep, and
+"how often" is close once load is accounted for.** Because the clock is quantized, a miss can be
+counted at two depths, and they do not say the same thing:
+
+| Burst frames that missed… | CUDA | Vulkan |
+|---|---:|---:|
+| ≥ 1 flip (≥ 2 refresh intervals) | 9.5 % | **12.4 %** |
+| ≥ 2 flips (≥ 3 intervals — the run's hitch threshold) | **6.7 %** | 5.6 % |
+| ≥ 1 flip, per inference request | **6.3** | 5.4 |
+| ≥ 2 flips, per inference request | **4.5** | 2.4 |
+
+Vulkan stalls the renderer **more often**; CUDA stalls it **deeper**. Vulkan also submitted
+**5.33 requests/s** against CUDA's **3.49**, so per request the *frequency* of a missed flip agrees
+to within 17 % (6.3 vs 5.4) while the *depth* does not (1.8×) — and that depth difference is exactly
+what the Δ p99 gap (+7.11 vs +6.73 ms) is made of. Ollama's fewer, larger submissions against
+llama.cpp's more numerous smaller ones is the obvious candidate, and it is not tested here.
+
+So the per-contender reading survives in the form that matters — **how often the renderer is made to
+wait tracks how much contending work was submitted, not which API submitted it** — but "the two
+backends cost the same" would be over-reading it. Note also that this normalisation is
+threshold-sensitive: quoting a single "misses per request" figure without saying at which depth
+would have produced either 1.17× or 1.84× at will.
+
+**Linux is the other shape entirely, on the same card.** There the renderer's GPU span *does*
+stretch — and stretches **more** under Vulkan (+1.07 ms) than under CUDA (+0.79 ms) — while the
+residual goes *negative*. The backend that costs the frame nothing is the one doing more damage to
+the renderer's execution. With 4.16 ms of vsync slack, longer execution is absorbed; waiting is not.
+So the two operating systems are not differing in magnitude of one effect, they are exhibiting two
+different arbitration behaviours: **Linux interleaves inside the renderer's execution window;
+Windows serialises around it.**
+
+#### Established, and not established
+
+**Established (measured, both APIs, five runs each):** the Windows cost is time the renderer spends
+**not executing**; its GPU work is neither slowed nor preempted mid-command-buffer; throughput is
+preserved and the cost is jitter; how *often* the renderer is stalled tracks contender load rather
+than API (within 17 % per request), though how *deeply* does not; and the headline 4.4 ms is one
+refresh interval of a vsync-pinned client rather than a magnitude either backend chose.
+
+**Not established: which layer does the waiting.** `gpu_ms` localises the cost outside renderer
+execution but cannot separate *WDDM queue arbitration before submission* from *the present/DWM path
+after it* — the harness deliberately runs windowed, so the compositor is in the loop and is itself a
+GPU client that must be scheduled each vblank. Both candidates are the Windows graphics stack, and
+in both the proximate cause is a packet not scheduled in time; the distinction is whose. Separating
+them needs ETW/GPUView, **which was not run**.
+
+Nor is CPU contention formally excluded — the residual contains CPU frame work. It is argued against
+rather than eliminated: the same two contender processes at comparable load on the same physical
+machine produce **no** residual growth under Linux, and a CPU-side stall would have to be both
+Windows-specific and absent from the renderer's GPU span.
+
+The remaining question was not worth the second half of the time box. GPUView would name the layer;
+no decision turns on the name, because the consequence is the same either way:
+
+- **No client-side lever is indicated.** The renderer's own work is already running at full speed
+  and uninterrupted — there is nothing to make faster. Deeper swapchain queues would hide more of
+  the wait at the price of latency, and the arbitration itself belongs to another process and the
+  OS. So the follow-on issue the spike reserved for "if the mechanism turns out to be tunable" does
+  not open.
+- **#769's server-side choice is reinforced with a mechanism rather than a correlation.** Taking the
+  contender off the client's GPU removes the wait; nothing else measured here does.
+- **The "floor, not typical case" caveat gets sharper.** This client had a whole refresh interval of
+  slack and still lost one. A client already near its frame budget has no slack to absorb the wait
+  and would pay it directly.
+
+WPT/GPUView is installed on the measurement box, so if the layer ever becomes load-bearing this is
+one capture away — aimed, now, at a specific question rather than an open one. Read against a burst
+and an idle phase of one ordinary harness run (the reports carry epoch-ms phase windows, so the
+`.etl` aligns to the same timeline), and read in this order: whether the renderer's packets are
+delayed at submission or at execution — the split above predicts submission — then context-switch
+frequency between the renderer and the inference server, then preemption events.
 
 ### The Intel iGPU row is vsync-divisor-locked, and that is the whole story (#1019)
 
@@ -583,8 +731,9 @@ Three things follow, and they matter beyond this one machine:
   reading of such a run would be exactly backwards.
 
 Note this is a *different* failure mode from the RTX 5080 Vulkan pair above, which swung 1.49× →
-2.48× at an unchanged 240 Hz cadence. That remains unexplained run-to-run variance. This one has a
-mechanism.
+2.48× at an unchanged 240 Hz cadence — that swing was the `localhost` defect (#1021), not the
+divisor. What the two cells *do* share is the quantization itself: on both, the tail cost is one
+missed refresh interval, 16.67 ms here and 4.16 ms there (#1025).
 
 **Unified memory on Windows: the budget number is worse than useless.** The macOS row established
 that `VK_EXT_memory_budget` reports a *recommended working set* rather than a pool on unified

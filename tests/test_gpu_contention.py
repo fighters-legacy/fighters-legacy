@@ -521,3 +521,148 @@ def test_aggregate_markdown_reports_the_idle_frame_interval():
     reports = [_agg_report(2.0, 6.0, 0.05, idle_interval_ms=4.6) for _ in range(3)]
     md = agg.render_aggregate_markdown(agg.aggregate_reports(reports))
     assert "Idle frame interval" in md
+
+
+# ---- the wait-vs-slowdown split (#1025) ----------------------------------------------------------
+#
+# Frame time alone cannot tell "the renderer's GPU work got slower" from "the renderer waited to be
+# scheduled" — the two look identical in the frame column and want opposite fixes. Splitting each
+# frame into the renderer's own GPU span and the remainder separates them, which is what resolved
+# #1025 from artifacts already on disk rather than from a two-day tracing session.
+
+
+def _split_run(idle_frame, idle_gpu, burst_frame, burst_gpu):
+    """A run with frame time and GPU span varied INDEPENDENTLY, which _synthetic_run cannot do."""
+    samples = []
+    for t in range(6000, 10_000, 100):
+        samples.append([float(t), idle_frame, idle_gpu, 3000.0])
+    for t in range(16_000, 20_000, 100):
+        samples.append([float(t), burst_frame, burst_gpu, 3200.0])
+    for t in range(26_000, 30_000, 100):
+        samples.append([float(t), idle_frame, idle_gpu, 3000.0])
+    return samples
+
+
+def test_residual_is_frame_minus_gpu_per_frame():
+    assert an.residual_ms([10.0, 20.0], [4.0, 5.0]) == [6.0, 15.0]
+    assert an.residual_ms([], []) == []
+    # Ragged input pairs positionally and ignores the surplus rather than raising.
+    assert an.residual_ms([10.0, 20.0, 30.0], [4.0]) == [6.0]
+
+
+def test_short_frame_pct_counts_the_catch_up_drain():
+    # Half the frames come back in well under half the 8 ms cadence.
+    frames = [8.0, 8.0, 0.5, 0.5]
+    assert an.short_frame_pct(frames, 8.0) == 50.0
+    assert an.short_frame_pct([8.0, 8.0], 8.0) == 0.0
+
+
+def test_short_frame_pct_is_unavailable_without_an_idle_baseline():
+    # Same principle as the hitch threshold: "could not measure" is not "measured zero".
+    assert an.short_frame_pct([8.0, 0.1], None) is None
+    assert an.short_frame_pct([8.0, 0.1], 0.0) is None
+    assert an.short_frame_pct([], 8.0) is None
+
+
+def test_drain_after_hitch_conditions_short_frames_on_the_hitch_before_them():
+    # 8 ms cadence, hitch >16 ms, catch-up <4 ms. Two hitches; only the first is drained.
+    frames = [8.0, 20.0, 1.0, 8.0, 20.0, 8.0]
+    assert an.drain_after_hitch_pct(frames, 16.0, 8.0) == 50.0
+    # A run with no hitch has nothing to condition on — that is not "0 % drained".
+    assert an.drain_after_hitch_pct([8.0] * 10, 16.0, 8.0) is None
+    assert an.drain_after_hitch_pct(frames, None, 8.0) is None
+    assert an.drain_after_hitch_pct(frames, 16.0, None) is None
+
+
+def test_drain_after_hitch_ignores_a_trailing_hitch_with_no_successor():
+    # The final frame has no next frame, so it cannot be evidence either way.
+    assert an.drain_after_hitch_pct([8.0, 8.0, 20.0], 16.0, 8.0) is None
+
+
+def test_frames_per_second_is_throughput_over_the_frames_it_holds():
+    assert an.frames_per_second([10.0] * 100) == 100.0
+    assert an.frames_per_second([]) == 0.0
+
+
+def test_a_wait_lands_in_the_residual_and_not_in_the_gpu_column():
+    """Frames doubled, renderer's GPU span untouched — the Windows signature (#1025)."""
+    run = _split_run(idle_frame=4.16, idle_gpu=1.25, burst_frame=8.32, burst_gpu=1.25)
+    d = an.contention_metrics(_frame_report(run), _driver_report(_phases()))["delta_burst_vs_idle"]
+    assert d["frame_mean_ms"] == 4.16
+    assert d["gpu_mean_ms"] == 0.0
+    assert d["residual_mean_ms"] == 4.16
+    assert d["gpu_p99_ms"] == 0.0
+    assert d["residual_p99_ms"] == 4.16
+
+
+def test_a_slowdown_lands_in_the_gpu_column_and_not_in_the_residual():
+    """The opposite mechanism — the renderer's own work takes longer (the Linux signature)."""
+    run = _split_run(idle_frame=4.16, idle_gpu=1.25, burst_frame=5.16, burst_gpu=2.25)
+    d = an.contention_metrics(_frame_report(run), _driver_report(_phases()))["delta_burst_vs_idle"]
+    assert d["frame_mean_ms"] == 1.0
+    assert d["gpu_mean_ms"] == 1.0
+    assert d["residual_mean_ms"] == 0.0
+
+
+def test_throughput_ratio_separates_a_drain_from_a_real_slowdown():
+    # A burst of blocked frames, each followed by the catch-up frame it queued, then an ordinary
+    # one. Three frames still take three cadences between them, so the frame RATE does not move —
+    # the whole cost is jitter. Idle cadence 8 ms, so hitch >16 ms and catch-up <4 ms.
+    pattern = [16.5, 0.5, 7.0]  # sums to 3 x 8.0, so throughput is unchanged by construction
+    samples = [[float(t), 8.0, 2.0, 3000.0] for t in range(6000, 10_000, 100)]
+    for i, t in enumerate(range(16_000, 19_900, 100)):  # 39 frames = 13 whole patterns
+        samples.append([float(t), pattern[i % 3], 2.0, 3200.0])
+    samples += [[float(t), 8.0, 2.0, 3000.0] for t in range(26_000, 30_000, 100)]
+    report = an.contention_metrics(_frame_report(samples), _driver_report(_phases()))
+    d = report["delta_burst_vs_idle"]
+    assert report["per_phase"]["burst"]["frame_ms"]["mean"] == 8.0
+    assert report["per_phase"]["burst"]["short_frames_pct"] == round(100 / 3, 2)
+    assert d["fps_ratio"] == 1.0  # throughput held exactly; the cost is all jitter
+    assert d["frame_p99_ms"] == 8.5  # ...and the tail still took a full extra cadence
+    # Every hitch here is followed by its own catch-up: one event, not two coincidences.
+    assert report["per_phase"]["burst"]["drain_after_hitch_pct"] == 100.0
+
+
+def test_markdown_shows_where_the_delta_lives():
+    run = _split_run(idle_frame=4.16, idle_gpu=1.25, burst_frame=8.32, burst_gpu=1.25)
+    md = an.render_markdown(an.contention_metrics(_frame_report(run), _driver_report(_phases())))
+    assert "Where the delta lives" in md
+    assert "Δ residual" in md
+    assert "Catch-up frames" in md
+
+
+def test_markdown_omits_the_split_when_the_device_reports_no_gpu_timestamps():
+    """Without timestamps gpu_ms is 0, so the 'split' is definitionally frame == residual.
+
+    Printing it would dress a missing measurement as a finding; the warnings block says the
+    timestamps are absent, and that is the honest output.
+    """
+    run = _split_run(idle_frame=4.16, idle_gpu=0.0, burst_frame=8.32, burst_gpu=0.0)
+    frame_report = _frame_report(run)
+    frame_report["gpu_ms"] = {"max": 0.0}
+    report = an.contention_metrics(frame_report, _driver_report(_phases()))
+    md = an.render_markdown(report)
+    assert "Where the delta lives" not in md
+    assert any("GPU timestamps read 0" in w for w in report["warnings"])
+
+
+def test_aggregate_carries_the_split_across_runs():
+    reports = []
+    for p95 in (4.2, 4.4, 4.5):
+        r = _agg_report(2.5, 6.7, 0.04)
+        r["delta_burst_vs_idle"].update(
+            {"gpu_p95_ms": 0.02, "residual_p95_ms": p95, "residual_p99_ms": p95 + 2, "fps_ratio": 0.99}
+        )
+        reports.append(r)
+    a = agg.aggregate_reports(reports)
+    assert a["delta_burst_vs_idle"]["residual_p95_ms"]["median"] == 4.4
+    assert a["delta_burst_vs_idle"]["gpu_p95_ms"]["median"] == 0.02
+    assert "Residual p95 delta" in agg.render_aggregate_markdown(a)
+
+
+def test_aggregate_tolerates_reports_predating_the_split():
+    """The fields are additive, so a report written before them aggregates without warning."""
+    a = agg.aggregate_reports([_agg_report(2.0, 6.0, 0.05) for _ in range(3)])
+    assert a["warnings"] == []
+    assert a["delta_burst_vs_idle"]["residual_p95_ms"]["median"] is None
+    assert "—" in agg.render_aggregate_markdown(a)

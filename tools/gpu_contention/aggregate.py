@@ -39,6 +39,16 @@ DELTA_METRICS = [
     ("worst_1pct_ms", "Worst 1% delta", "ms"),
     ("gpu_mean_ms", "GPU mean delta", "ms"),
     ("hitches_per_min", "Hitches/min delta", ""),
+    # The wait-vs-slowdown split (#1025). Aggregated because it is the pair that has to be read
+    # across runs to mean anything: one run's residual is a number, five runs' residual against
+    # five runs' GPU delta is what says which mechanism the platform is showing.
+    ("gpu_p95_ms", "GPU p95 delta", "ms"),
+    ("gpu_p99_ms", "GPU p99 delta", "ms"),
+    ("residual_p95_ms", "Residual p95 delta", "ms"),
+    ("residual_p99_ms", "Residual p99 delta", "ms"),
+    ("residual_mean_ms", "Residual mean delta", "ms"),
+    ("short_frames_pct", "Catch-up frames delta", "%"),
+    ("fps_ratio", "Throughput ratio", "x"),
 ]
 
 # VRAM metrics (from the `vram` block) — usually stable across runs, reported for completeness.
