@@ -327,7 +327,7 @@ baseline in the same session. Frame columns are **burst minus that run's own idl
 | Linux, RTX 5080 16 GB | Vulkan (llama.cpp b10107) | `qwen2.5-coder:14b` — 5 runs✧ | 4.31 ms | 5.38 ms | **+1.03 ms (1.24×) [1.02–1.49]** | +0.04 ms | +3.9 ms | +35.7/min◊ | n/a✧ | 4979 MB |
 | Linux, RTX 5080 16 GB | CUDA (Ollama) | `qwen2.5-coder:14b` — single run✧ | 4.42 ms | 6.68 ms | **+2.26 ms (1.51×)** | +0.01 ms | +13.8 ms | 22 | 9031 MB | 4556 MB |
 | Linux, RTX 5080 16 GB | CUDA (Ollama) | `gemma2:9b` — single run | 4.41 ms | 6.67 ms | **+2.26 ms (1.51×)** | +0.06 ms | +5.1 ms | 8 | 5971 MB | 6939 MB |
-| macOS 26.5, Apple M4 Pro 64 GB | Metal (Ollama) | `qwen2.5-coder:14b` | 14.45 ms | 27.29 ms | **+12.84 ms (1.89×)** | **+9.53 ms** | +13.8 ms | 3 | 14558 MB | 53084 MB† |
+| macOS 26.5, Apple M4 Pro 64 GB | Metal (Ollama) | `qwen2.5-coder:14b` — single run⁂ | 14.45 ms | 27.29 ms | **+12.84 ms (1.89×)** | **+9.53 ms** | +13.8 ms | 3 | 14558 MB | 53084 MB† |
 | Windows 11, RTX 5080 16 GB | CUDA (Ollama) | `qwen2.5-coder:14b` — 5 runs✦ | 4.43 ms | 11.57 ms | **+7.11 ms (2.61×) [2.48–2.66]** | +0.03 ms | +8.3 ms | +939/min◊ | 9031 MB | 15209 MB‡ |
 | Windows 11, RTX 5080 16 GB | Vulkan (llama.cpp b10107) | `qwen2.5-coder:14b` — 5 runs✦ | 4.48 ms | 11.21 ms | **+6.73 ms (2.50×) [2.49–2.55]** | +0.04 ms | +8.2 ms | +779/min◊ | ~8880 MB§ | 15209 MB‡ |
 | ~~Windows 11, RTX 5080 16 GB~~ | ~~CUDA (Ollama)~~ | ~~`gemma2:9b`~~ | — | — | **withdrawn✦** | — | — | — | — | — |
@@ -400,6 +400,26 @@ and Ollama adds its own scheduling layer — worth ~125 ms of `load_duration` ch
 despite a resident pinned model. So these rows compare **two deployments**, not the CUDA API path in
 the abstract.
 
+⁂ **The macOS row is a single run, and is the only cell never re-measured under the current
+instrument.** It predates `--repeat` (#1016), the relative hitch counter (#1022), the vsync-divisor
+guard (#1019) and the wait-vs-slowdown split (#1025). Every one of those exists because it caught a
+number that looked fine and was not — most directly #1016, whose finding is that a single run's tail
+statistics are not a measurement. So this row is held to a standard the rest of the table no longer
+accepts, and it is marked rather than quietly trusted.
+
+**What that does and does not undermine.** The *memory* finding is corroborated independently: this
+row and the Intel iGPU row both show `VK_EXT_memory_budget` reporting a recommended working set
+rather than a pool, on two unrelated unified-memory devices. The *frame-time character* — the
+sustained mean tax described below — rests on this row alone; the Intel cell is unified memory too
+but showed a different shape (one missed refresh interval on a quantized clock), so it is a second
+data point rather than a confirmation.
+
+**No decision turns on it**, which is why this is a caveat and not a re-run. #769 rests on accuracy,
+keep-warm cost and where the data already is; the Windows rows carry the client-local question, and
+they are five runs per backend with a mechanism (#1025). Re-measure this cell before *using* it for
+anything — ~40 min on Mercury with the recipe in the harness README — not before believing the
+platform summary, which does not depend on it.
+
 ◊ **The Hitches column is retired and is not comparable across these rows (#1022).** Every value
 here was counted against a fixed `>33.3 ms` threshold, which measures a different thing on each row:
 on a client idling at 4.6 ms a 33 ms frame is a severe stall, and on one idling at 33.3 ms it is an
@@ -466,7 +486,8 @@ reported budget falls from 6939 MB (9B resident) to 4556 MB (14B resident). The 
 an allocation failure — it sees a smaller ceiling. On an 8 GB card a 14B leaves essentially nothing,
 which is a hard incompatibility rather than a performance cost.
 
-**On Apple Silicon the cost is the mean, not the tail — and it is larger.** The same harness on an
+**On Apple Silicon the cost is the mean, not the tail — and it is larger.** *(Single run, ⁂ — the
+shape below is the least-corroborated claim in this document.)* The same harness on an
 M4 Pro (macOS 26.5, 64 GB unified) nearly *doubles* the mean frame time under inference (12.25 →
 21.77 ms, **+9.53 ms**) with the p99 rising in lockstep (+12.84 ms, 1.89×): a burst drops the client
 from ~80 fps to ~46 fps for its whole duration, not for a handful of frames. Where the discrete
@@ -777,7 +798,8 @@ inference is now measured rather than assumed on all three platforms #609 asked 
 GPU classes rather than one. The cost is real but character-dependent: hitching on a discrete GPU
 with headroom — mild on Linux, up to 2.5× the p99 on Windows — VRAM-dominated on a card without
 headroom, a sustained frame-time tax of roughly a halved frame rate on unified-memory Apple Silicon
-where GPU time rather than capacity is scarce, and on an integrated GPU already vsync-pinned below
+where GPU time rather than capacity is scarce (**single run, ⁂** — the one platform character in this
+list not measured under `--repeat`), and on an integrated GPU already vsync-pinned below
 refresh, **one additional missed refresh interval at p95** (+16.3 ms of a 16.67 ms interval, 1.60×
 the p99). Three findings sharpen the picture without changing it: the tail cost varies enough run to
 run that a single measurement cannot rank inference backends; the Vulkan memory budget stays flat
