@@ -10,10 +10,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **engine**: airspace alert system — missions declare enforced airspace via `airspace_zones:`, and an intruder escalates through warned → intercept → weapons-free on dwell. The zone owner's alert level (`sides[].alert`, `world.set_alert_level()`) selects the escalation schedule, so raising a coalition's posture tightens every zone it owns at once. Escalation policies are content-pack `zones/*.toml`; posture changes reach clients as the new reliable `MsgAlertLevelChange` (`0x26`) (#162)
+- **docs**: `docs/replay-format.md` — the `.flrep` replay file specification. It is the first format here that outlives the build that wrote it, so it carries real major/minor compatibility rules (additive sections are skippable; a newer major is refused with a clear message) and a header that stores the session's planet radius and tick rate rather than assuming them — without the radius every geodetic readout on replay, and every ACMI export built on it, is silently wrong rather than visibly broken (#187)
 - **ci**: `lint_workflow_expressions` — reject Actions expressions carrying free text inside `run:` blocks (#1034)
 
 ### Fixed
 
+- **docs**: `InputTraceFormat.h` said a FLIT record count is `(fileSize - 10) / 28`; records are 32 bytes (#187)
 - **ci**: pass composite-action inputs through `env:` rather than interpolating them into the script (#1034)
 - **ci**: the release-notes gate no longer lists `release: published`, which cannot fire for our own releases (#1034)
 

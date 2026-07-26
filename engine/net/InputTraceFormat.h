@@ -13,7 +13,7 @@
 //                       rudder f32 | buttons u32 | flaps u8 | speedbrake u8 |
 //                       artButtons u8 | reserved u8
 //
-// Records follow the header back-to-back; the record count is (fileSize - 10) / 28. All
+// Records follow the header back-to-back; the record count is (fileSize - 10) / 32. All
 // integers/floats are stored little-endian regardless of host endianness (a trace produced on
 // one machine replays on any), so the codec serialises bytes explicitly rather than memcpy'ing
 // native words. The five control fields map 1:1 onto the harness's BotControl and onto
