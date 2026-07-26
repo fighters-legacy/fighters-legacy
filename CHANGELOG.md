@@ -7,482 +7,48 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Changed
-
-- **ai**: the GPU-contention analyzer now splits the burst-vs-idle delta into the renderer's own GPU
-  execution and the residual, which resolved spike #1025 from artifacts already on disk instead of
-  the two days of GPU-scheduler tracing it budgeted. A frame time cannot distinguish "inference made
-  the renderer's work slower" from "inference made the renderer wait" — the two are the same number
-  in the frame column and want opposite fixes — but every sample already carried `gpu_ms`, the
-  renderer's own timestamp-query span, so each frame splits into execution and everything else
-  (`Δ frame = Δ renderer-GPU + Δ residual`). Reports gain `residual_ms` per phase,
-  `residual_mean/p95/p99_ms` and `gpu_p95/p99_ms` deltas, `short_frames_pct` (catch-up frames under
-  half the idle cadence — a blocked frame's queued successor returns immediately, which slower work
-  cannot manufacture), `drain_after_hitch_pct` (the share of hitches immediately followed by one,
-  which says the long frame and the short one are the same event rather than two coincidences) and
-  `fps`/`fps_ratio` (throughput, which a wait-then-drain preserves and a
-  slowdown does not); the per-run markdown prints a *Where the delta lives* table, omitted when the
-  device reports no timestamps rather than dressing `frame == residual` up as a split. Fields are
-  additive, so `schema_version` stays at 2 and older reports aggregate unchanged — the shared
-  metrics keep their meaning, and making the refuse-to-blend guard reject the mix would be worse
-  than allowing it. What that would have left silent, `aggregate.py` now warns about: a metric only
-  *some* of the input reports carried was rendering exactly like one every report carried, because
-  `across_run_stats` drops the missing entries and the markdown prints no `n` — so a row computed
-  from 2 of 5 runs sat under a header reading "aggregate, 5 runs", its range looking tight because
-  it was two runs rather than because the metric was stable. Mixed-version inputs now name the thin
-  rows and their shortfall; a metric absent from *every* report is untouched, since that is a cell
-  which never had it rather than a mixed set. **The finding: on
-  Windows the renderer's GPU execution is untouched (+0.01 ms mean, +0.19 ms p99 against a 1.25 ms
-  span) while the residual carries the entire +4.4 ms p95 / +7 ms p99 — by both backends.** Throughput
-  holds at 0.99×, catch-up frames rise 15–27 points, and 56–57 % of burst hitches are followed
-  immediately by one: the renderer is waiting and then draining a queued present, not doing
-  slower work, and it is not being preempted mid-command-buffer either (that would land inside
-  `gpu_ms`). Linux is the opposite shape on the same card — the GPU column carries +0.8 to +1.1 ms
-  and the residual goes negative. Normalised by request rate, how *often* the renderer is stalled
-  agrees across the two Windows backends within 17 % (6.3 vs 5.4 missed flips per inference request)
-  — the per-contender reading's falsifiable prediction holding — while how *deeply* does not
-  (1.8×: Vulkan stalls more often, CUDA deeper), which is what the Δ p99 gap between them is made
-  of. The headline 4.38 ms is **one 4.16 ms refresh interval**,
-  so the two backends' "identical to two decimals" agreement is the resolution of a quantized
-  statistic rather than a measured equality. Still not established, and stated as such: whether the
-  wait sits in WDDM queue arbitration or the present/DWM path — that needs ETW, and no decision turns
-  on it, so no follow-on issue opens.
-
-- **docs**: recorded the Linux CUDA-vs-Vulkan contention pair and corrected a claim the Windows
-  write-up made about it (#1021). The results table carried no Linux Vulkan row at all, while the
-  prose already leaned on its numbers to draw the Linux-vs-Windows comparison — so the headline
-  finding could not be checked against the table it came from. Both Linux cells are now rows (4-run
-  CUDA, 5-run Vulkan on the same physical RTX 5080 as the Windows rows, since that machine
-  dual-boots), with the older single-run CUDA row kept beneath and marked superseded rather than
-  deleted: the gap between them (1.51× vs 1.75× [1.01–1.88]) is itself the #1016 point about what a
-  lone run is worth. Both backends served **byte-identical weights** — `llama-server` was pointed at
-  Ollama's own GGUF blob — so that row needs no `~approximate` VRAM caveat, and the quoted Vulkan run
-  is the **flag-matched** one: re-running with Ollama's exact server flags changed Δ p95 by nothing
-  to two decimals and throughput by one request per run, because the `intent` prompts are ~31 tokens
-  and fit in one batch at either bound. Since Δ p95 is not a table column and is the statistic that
-  separates the backends on Linux, both figures are now recorded in the footnote instead of living
-  only in git-ignored artifacts. **Correction:** the harness README said the p95 preference came from
-  a "lightly loaded" Linux cell. It did not — Linux served 373 and 540 requests per run against 351
-  and 535 on the corrected Windows runs (45 on the defective ones), a fact the same change had
-  already written into the docs footnote. Both operating systems ran at comparable full load on one
-  card and still disagree about which statistic is trustworthy, so the condition on "prefer Δ p95" is
-  not load; it is a per-cell property to read from the harness's own stability verdict.
-
-- **ai**: the GPU-contention hitch counter is now calibrated per run at **2× that run's median idle
-  frame interval**, replacing a fixed `>33.3 ms` threshold (#1022). The fixed threshold measured a
-  different thing on every row of the results table — on a client idling at 4.6 ms a 33 ms frame is a
-  severe stall, on one idling at 33.3 ms it is an ordinary frame — and on the #1019 Intel iGPU, whose
-  idle cadence *is* 33.3 ms, it scored 7757 of 14200 **idle** frames as hitches in phases with no
-  inference running at all. Relative to the baseline, "hitch" means the same thing on a 240 Hz client
-  and a 30 fps one. The threshold is calibrated once off the idle phase and applied to every phase:
-  calibrating per phase would define the burst's hitches in terms of the burst's own slowness and
-  could never show contention. `stalls_over_50ms` stays absolute, being a band of human perception
-  rather than a property of the frame rate. With no idle phase there is nothing to calibrate against,
-  so the hitch metrics report `null`/`n/a` rather than a fixed fallback — "could not measure" and
-  "measured zero" are different findings. **This invalidates the `Hitches` column of the #782 results
-  table**, whose values were all measured under the old threshold; they are retained, marked and
-  footnoted as not comparable across rows, and will be re-based as each cell is re-measured. Reports
-  gain `hitch_threshold_ms` and `idle_frame_interval_median_ms`, and `schema_version` goes to 2 so
-  `aggregate.py` refuses to blend pre- and post-change runs. That new frame-interval field also lets
-  the aggregate catch what the refuse-to-blend guard structurally could not (#1019): runs sitting on
-  different **vsync divisors** — every declared field identical, but a 15 fps run and a 30 fps run are
-  two populations, not one noisy cell — now warn when their idle cadences differ by more than 20 %,
-  and the interval is reported as an aggregate row.
-
-### Fixed
-
-- **ai**: the Windows GPU-contention runner now addresses the inference endpoint as `127.0.0.1`
-  rather than `localhost` (#1021), and warns when an explicit `-BaseUrl` still says `localhost`.
-  Both inference servers bind IPv4 only, but `localhost` resolves to `::1` first on Windows and the
-  IPv6 connect has to time out before the client falls back — **~2.1 s of dead wait on every
-  request**, with no error and nothing wrong-looking in any artifact. Because `driver.py` loops
-  requests until the burst deadline, the stall did not slow the bursts, it *emptied* them: every
-  Windows run served **45 requests instead of ~350**, so each 20 s burst was **~85 % idle** and the
-  measurement compared a nearly-idle window against the idle baseline. Ollama's own accounting made
-  it provable — identical token counts (143.3 prompt / 9.0 generation) and ~0.3 s of
-  `total_duration` behind a 2.39 s wall clock, falling to 0.271 s over IPv4. **This invalidated
-  every Windows row of the #782 results table**, including the 1.49× → 2.48× p99 swing that
-  motivated #1016 and #1021: that swing was not p99 instability but two nearly-idle windows being
-  compared. Re-run under load, the same Vulkan cell is a stable 2.50× [2.49–2.55]. The table is
-  updated accordingly — both `qwen2.5-coder:14b` Windows rows replaced with 5-run aggregates, both
-  `gemma2:9b` Windows rows **withdrawn** (same defect, not re-measured), and the *Run-to-run
-  variance* section rewritten: on Windows the two backends are indistinguishable (every range
-  overlaps; Δ p95 medians identical at 4.38 ms), which disagrees with Linux, where they are disjoint.
-  That cross-OS difference is left flagged as inference pending scheduler-level tracing (#1025). The runbook's own
-  instruction to pass `-BaseUrl http://localhost:...` is why the warning exists as well as the
-  corrected default; the README and `docs/ai-provider-evaluation.md` commands are corrected to match,
-  and the README's "prefer Δ p95" guidance (#1019) is now marked conditional — under full burst load
-  on a 240 fps client the ordering reverses and p99 is the stable statistic.
-
-- **ai**: a GPU-contention run whose `analyze.py` emitted warnings no longer passes silently on
-  Windows (#1019). The harness README states analyze.py exits non-zero on warnings precisely so "a
-  run whose numbers are not trustworthy must not look like a clean pass", but `Invoke-Run` checked
-  only `driver.py`'s exit code, and the script's final `exit $LASTEXITCODE` reflects `aggregate.py`.
-  Warnings are now recorded per run and reported at the end — named run numbers plus a non-zero exit
-  — rather than thrown on the spot, because aborting run 3 of 5 would discard the runs that already
-  succeeded and skip the aggregate, and the across-run distribution is the entire point of
-  `--repeat`. The sibling `measure_linux.sh`/`measure_macos.sh` have the same missing check but the
-  opposite behaviour (`set -euo pipefail` aborts the loop mid-flight): loud rather than silent, so
-  not the same hazard, and left alone as untestable from this machine. Also removes an em dash from
-  the two new string literals: this file is BOM-less UTF-8, PowerShell 5.1 decodes such a file as
-  the ANSI codepage, and an em dash's third byte (0x94) becomes U+201D — which PowerShell honours as
-  a string delimiter, terminating the string early and breaking the parse. Em dashes are safe in
-  this file's `#` comments, which is where every existing one lives.
-
-- **script**: Lua is now compiled **as C++**, which fixes a crash and closes a whole class of
-  undefined behaviour (#1015). Lua raises errors by unwinding from the failure point back to the
-  enclosing `lua_pcall`; built as C it does that with `longjmp`, which cannot safely cross a C++
-  frame. MSVC implements `longjmp` by *unwinding* the frames it passes, so a `lua_CFunction` written
-  in C++ has its destructor funclets executed against an EH state that no longer describes live
-  objects — faulting inside `~ifstream`, which is how this surfaced: two `LuaSandbox` require-
-  rejection tests died with SIGSEGV on Windows/MSVC. Itanium-ABI platforms fail the opposite way,
-  skipping destructors and leaking. The previous mitigation — confine every C++ object to an inner
-  scope that ends before Lua can raise — was both insufficient (the frame still carries unwind data
-  MSVC will act on) and unenforceable: it is a rule no compiler checks, repeated by hand across the
-  22 registered functions in `LuaController.cpp`, and `LuaSandbox.cpp` was already breaking it while
-  carrying a comment claiming it was safe. Compiled as C++, `ldo.c` selects `throw`/`catch` — the
-  option upstream documents first — and a Lua error becomes an ordinary C++ exception that unwinds
-  correctly and destroys each object exactly once. `luaRequireLoader` is rewritten as plain
-  straight-line C++ now that the contortion has no purpose. Two consequences, both deliberate:
-  **there is no longer a system-Lua path** (a distro `liblua` is built as C, so linking one would
-  restore the unsafe semantics on some machines and not others — the worst outcome for a
-  memory-safety property, and Lua is ~30 small files to build), and translation units including
-  `<lua.h>` must **not** wrap it in `extern "C"` or use `lua.hpp`. `tests/test_lua_sandbox.cpp` now
-  guards the property itself rather than only the symptom: it raises a Lua error from a C function
-  holding a live C++ object and asserts the destructor ran, so a future revert to a C-built Lua fails
-  the suite instead of crashing months later.
-- **renderer**: `VkRenderer::beginFrame` reset the current frame's in-flight fence *before* the
-  per-image wait that observes it, so whenever `m_imagesInFlight[imageIndex]` was the current slot's
-  own fence the wait could never be satisfied and burned its full 100 ms timeout — pinning the
-  renderer at **10 fps** regardless of what it was drawing (#1013). `vkWaitForFences` returning
-  `VK_TIMEOUT` is ignored there, so frames still rendered and GPU time still read a healthy 2.2 ms;
-  only the wall clock showed it. Headless hit this every frame by construction (`m_currentImageIndex`
-  *is* `m_currentFrame`), and windowed hit it whenever an image index recurred on the same frame
-  slot — every frame at the swapchain image count Windows returns on the reference box, which is why
-  it went unnoticed on Linux. Moving the reset after the wait-and-assign restores the canonical
-  order: `hello_triangle` 10 → 240 fps, and the game's observer client 100.5 ms → 4.33 ms mean
-  (232 fps, vsync-pinned at 239 Hz). Found while running the Windows leg of #782, which cannot
-  measure anything while a 2.2 ms GPU workload sits behind a 100 ms stall.
+## [0.3.10] - 2026-07-26
 
 ### Added
 
-- **docs**: filled the second-GPU / unified-memory row of the GPU-contention table (#1019) — the
-  first cell measured with `--repeat` (#1016), on an Intel Core Ultra 7 155U integrated GPU
-  (Vulkan/llama.cpp, `qwen2.5-3b-instruct-q4_k_m`, 32 GB unified, 60 Hz panel), and the first
-  execution of the `-Repeat` path on real hardware. The 5-run verdict was *unstable* (p99 ratio
-  median 1.59× over [0.88–1.61]), and the cause turned out to be mechanical rather than noise: the
-  client cannot hold 60 fps, so it sits on an **integer divisor of the refresh interval** — 73.6 % of
-  run 1's frames at 4 × 16.67 ms (15 fps) against 96.9 % of runs 2–5's at 2 × 16.67 ms (30 fps).
-  Those are two operating points, and aggregating the four that share a divisor flips the harness's
-  own verdict to *stable*: **p99 ratio 1.60× [1.56–1.61]**, Δ p95 **+16.29 ms [16.11–16.49]**, Δ mean
-  +1.90 ms. The tail cost is therefore exactly **one missed vsync interval** — a burst pushes ~3 % of
-  frames from two intervals to three — the familiar flat-mean/heavy-tail signature expressed on a
-  quantized frame clock. Three findings generalize past this machine: a cell is only aggregatable
-  *within* one vsync divisor (the refuse-to-blend guard compares model/GPU/OS/label and cannot see
-  the operating point); **Δ p95 is the informative statistic on a quantized clock** (it held within
-  1.3 ms across all five runs while Δ p99 ranged over 34 ms); and a *slower* client can measure a
-  *smaller* tail delta (run 1's p99 fell to 0.88× — a 66.7 ms frame interval is a large place to hide
-  inference), so "we tested on a weak GPU and it was fine" is exactly backwards. On memory, the
-  unified-memory case is now confirmed twice over and is worse than the macOS row suggested: this GPU
-  has no dedicated VRAM, `\GPU Process Memory\Dedicated Usage` is **absent rather than zero** (so an
-  unguarded read records nothing and looks like success — the reason 12e6786 captures shared usage and
-  reports `unavailable` distinctly), and `VK_EXT_memory_budget` advertised a flat **17605 MB** across
-  every run with a 2 GB model resident. A "can I fit a local model" check must read an OS-level
-  per-process counter and must distinguish "unavailable" from "zero". Also documents that the
-  analyzer's fixed >33 ms hitch counter is degenerate when the frame cadence is itself ≥33 ms (it
-  scored 7757 of 14200 *idle* frames as hitches); `stalls_over_50ms` is the usable signal there.
-  Harness README gains the same guidance for anyone reading a `--repeat` aggregate off a vsync-limited
-  client. No engine or tool code changed.
-- **ai**: repeat-and-aggregate mode for the GPU-contention harness (#1016). The Windows runs (#782)
-  showed a single run's p99 is not a measurement: re-running the identical Vulkan cell on an RTX 5080
-  moved the p99 ratio from 1.49× to 2.48× — the run-to-run spread within one cell exceeded the gap
-  between backends, so no backend ordering could be read off single runs. The mean, by contrast, was
-  stable to ±0.02 ms. `--repeat N` on any runner now boots the server once, runs the measurement N
-  times against the same warm model, and calls a new `aggregate.py` over the reports, which reports
-  each metric as **median [min–max] across the runs** and prints a p99-stability verdict comparing
-  the run-to-run spread against the effect being measured. It refuses to blend runs from different
-  cells (model/GPU/OS/label), which would fabricate a spread from real differences. `analyze.py` now
-  stamps each report with its cell `--label` so the aggregator can group and guard. Reproduced on the
-  RTX 5080: three runs of one cell gave p99 ratios 1.21×/1.82×/2.02× while the mean moved 0.11 ms —
-  the verdict correctly reports the range rather than a point. CI never requires a model; only the
-  aggregation logic is unit-tested.
-- **ai**: the LLM-vs-renderer GPU contention harness, and the measurements it exists to produce
-  (#782, follow-up to spike #609). #609 asked what a resident local model costs the frame budget on
-  each OS and could not answer it; the gap was recorded as "runs to schedule, not work to build",
-  except the work was not built. `tools/gpu_contention/` builds it: `driver.py` drives any
-  OpenAI-compatible endpoint on a phased schedule (idle baseline → alternating bursts and gaps →
-  idle tail), the game records per-frame timing and VRAM through the new `--frame-stats-json` flag,
-  and `analyze.py` attributes every frame to the phase that was running when it rendered. Both sides
-  stamp **wall-clock** epoch milliseconds rather than a monotonic clock, because a monotonic epoch is
-  per-process and two processes' timestamps cannot otherwise be put on one timeline. Per-OS runners
-  (`measure_linux.sh` / `measure_macos.sh` / `measure_windows.ps1`, the latter covering both Windows
-  inference backends) do the whole sequence unattended. Measured on an RTX 5080: inference leaves the
-  *mean* frame time flat (+0.01 ms) while p99 rises 1.51× and the worst 1 % of frames roughly triples
-  — the cost is hitching, not slowness — and a resident 14B cuts the driver-reported VRAM budget
-  offered to the renderer from 6.9 GB to 4.6 GB, which is the sharper constraint and one the renderer
-  cannot see (it observes a smaller ceiling, never a failed allocation). Full results and caveats
-  (notably: the measured client was vsync-limited, so these are a floor on the impact) in
-  `docs/ai-provider-evaluation.md`. CI never requires a model — only the pure schedule/join logic is
-  unit-tested.
-- **engine**: `engine/perf/FrameStatsRecorder.h` — the client-side render-perf artifact, the sibling
-  of fl-server's `--metrics-json`. Records one sample per rendered Flight frame (CPU frame time, GPU
-  time from timestamp queries, device-local VRAM usage and budget) and serialises a summary plus the
-  raw per-frame samples, flushed periodically so a run killed by an orchestrator still leaves a
-  usable file. Driven by the new `--frame-stats-json <path>` and `--run-seconds <n>` game flags;
-  `--run-seconds` is deliberately not `--screenshot-frames`, which counts frames and so cannot
-  bracket a fixed-duration external schedule exactly when the frame rate is the thing under
-  measurement. The tolerant JSON scanners shared with `ServerTickReport` were promoted to
-  `engine/perf/JsonScan.h` rather than copied.
-- **audio**: the radio-net presentation layer — radio DSP, PTT squelch, per-net ducking, subtitles
-  (#925, Epic #499). What separates a combat flight sim's radio from lobby voice chat is almost
-  entirely presentation; the bytes are the same Opus either way. `engine/voice/RadioDsp.h` adds a
-  300–3000 Hz biquad pair into a `tanh` soft clipper (not a hard clamp, whose odd harmonics read as
-  digital distortion rather than a compressed channel), an optional carrier hiss, and **generated**
-  key-down click / squelch-tail cues — deterministic byte-stable procedural PCM, the
-  `SfxBuiltinSounds` contract, so the radio sounds like a radio in the zero-pack sandbox and
-  identical on every machine. Those cues are why the wire carries an explicit end-of-transmission
-  marker rather than deriving the boundary from a receive timeout, which would put the squelch a
-  timeout late. Ducking is one smoothed envelope for the whole radio and drops the **music** only —
-  the engine note and the RWR are information the pilot is flying on. Each new transmission pushes a
-  `[NET] Callsign…` line onto the same `SubtitleQueue` the ATC callouts use, which is both the
-  accessibility path and the answer to "who was that?" when a radio-filtered voice is hard to place.
-  Crucially, ATC/AWACS/TTS traffic runs the **same** filter, cues, net gain and ducking as human
-  voice (`MsgRadioTransmission.netId` → `VoiceCalloutManager`), so there is one implementation rather
-  than two that drift and a synthetic transmission is indistinguishable in presentation. New
-  bottom-left HUD indicator shows the armed net, a mic-level-driven TX light, and who is on the air.
-  Full design record in `docs/voice.md`.
-- **network**: voice channel over the transport with team / flight / proximity routing (#532, Epic
-  #499). Three messages — `MsgVoiceNetDef` (0x23, the server's radio-net table, sent once after
-  ConnectAck), `MsgVoiceFrame` (0x24, client→server) and `MsgVoiceRelay` (0x25, server→client) — and
-  **the server understands exactly one thing about the audio: how many bytes it is**. Frames are
-  relayed opaque to a recipient set derived from the net's kind, so voice at 128 players costs the
-  server almost nothing and the codec stays a client-to-client contract that can change without a
-  protocol change. Routing lives in `engine/net/VoiceRouter.h` as pure functions over a net table and
-  a peer list, testable without a server or a transport. Nets are **data**: `[[voice.nets]]` in
-  server.toml, or the compiled-in team/flight/atc/proximity stack when an operator configures
-  nothing. There is deliberately no frequency dial. Voice rides its **own transport channel**
-  (`kNetChVoice`, new `INetwork::sendChannel` with a forwarding default so no mock changes) because
-  ENet sequences unreliable packets per channel and drops stale ones — 50 voice frames/s sharing a
-  channel with 60 snapshots/s would make the two streams cut each other to pieces. `MsgRadioTransmission`
-  gained a `netId` so synthetic ATC/TTS traffic rides the same net as human voice and gets the same
-  presentation. Admin: `voice`, `voice_mute`, `voice_unmute` (transmit-only — muting is not a
-  punishment that also blinds someone to their own team).
-- **audio**: Opus voice capture, playback and positional mix — the local half of the radio (#531,
-  Epic #499). New `engine-voice` library: a fixed-operating-point Opus wrapper (48 kHz mono, 20 ms
-  frames, VOIP mode, in-band FEC scaled by measured link loss), a per-speaker voice jitter buffer,
-  a PTT/VOX keying gate, and a `VoiceMixer` that decodes one stream per **(speaker, net)** pair and
-  places it head-locked or camera-relative-positional per the net's profile. A new `IAudioCapture`
-  HAL (SDL3 recording backend) keeps microphone capture out of `IAudio` — OpenAL's capture side is
-  an optional extension with no device enumeration, and capture has a per-transmission lifecycle
-  playback does not. Voice cannot reuse `engine/net/JitterBuffer.h`: control input stale-repeats on
-  underrun, which for audio produces a robotic stutter instead of Opus's near-inaudible packet-loss
-  concealment, and a late voice frame is a syllable rather than a worthless stale stick position.
-  Every failure degrades softly and independently (no device / no encoder / no audio device =
-  listen-only, send-only, or a clean no-op), so CI and a machine with no sound card need no
-  `#ifdef`. Client config lands as `[voice]` in `user.toml` plus three rebindable actions
-  (`PushToTalkPrimary` V, `PushToTalkSecondary` B, `VoiceNetCycle` M) and a voice section in the
-  settings screen — whose row layout is now computed rather than hand-tabulated, so the hover bands
-  can no longer drift off the drawn rows.
-- **tools**: `validate-mesh` animation checks + the `3d-models.md` registry rewrite (#844, Epic #837).
-  The validator could not see animations at all: a `.glb` with a misspelled clip name, a skinned mesh,
-  or a rest pose that disagreed with its own `t=0` keyframe passed clean and then simply did not move
-  in the game, with no diagnostic anywhere. It now warns on an unknown clip name (listing the valid
-  channels), and errors on a skin, a morph-target `weights` channel, an unsupported interpolation, a
-  rest pose that disagrees with the clip's **neutral** keyframe (`t=0`, or the clip **midpoint** for a
-  signed channel — the trap that renders an aircraft subtly wrong before anything is commanded), and
-  two scrubbed clips fighting over one node. Marker empties and arbitrary `extras` stay legal, and a
-  mesh with zero animations stays valid forever. The docs' animation section was documenting a
-  registry nothing implemented (`gear_extend`/`gear_retract`, `bay_open`/`bay_close`) — it is replaced
-  by the real contract: the channel table, the scrub semantics, "transit timing lives in the
-  simulation, never in the clip", the rest-pose rule, one clip per channel with retraction as
-  scrubbing toward 0, spin as the one looping exception, and the Blender `NLA_TRACKS` recipe that
-  actually produces separately named clips.
-- **game**: landing gear and flaps end-to-end (#639, Epic #837) — the `InputAction::LandingGear` and
-  `Flaps` bindings existed and were never read, so a human pilot could not raise the gear. **G**
-  toggles the gear, **F** steps the flap detent (clean / manoeuvre / full — the positions a real lever
-  has), **H** the hook, **Shift+C** the canopy, **K** the speed brake (momentary — the one flight
-  configuration control that is not a switch). All latched client-side and sent as absolute state.
-  The HUD's new configuration block reads the actual actuator **position**, not the switch, so a gear
-  still travelling shows `GEAR ...` rather than claiming it is down. Ground contact now depends on
-  gear position: brakes, tyre cornering grip and nosewheel steering are things *wheels* do, so with
-  the gear up a ground contact is a belly slide — much higher drag and no steering at all — and a
-  half-extended strut has partial authority. Aircraft spawn gear-down when parked and gear-up when
-  airborne. `InputAction::Airbrake`'s default moved off Space, which collided with the documented gun
-  trigger and would have bitten the first person to read the bindings table and believe it.
-- **network**: articulation channels on the wire (#843, Epic #837) — two gaps, in both directions. A
-  human pilot **could not raise the gear**: `MsgClientInput` had no gear/flap/speedbrake/hook/canopy
-  command, so only Lua AI ever set one, server-side. And no articulation channel reached a remote
-  client, so even once the renderer could pose an aircraft, every aircraft except your own would sit
-  with its gear up and its flaps clean. Client→server fills the reserved bytes after `radarMode`
-  (`flaps`, `speedbrake`, an `artButtons` bitmask) as **absolute state, not edges** — an edge lost on
-  the unreliable channel never converges, an absolute value does on the next packet. Server→client
-  adds `ExtTag::SnapshotArticulation` (0x0107), a changed-only TLV with a 30-tick refresh: an entity
-  at all-default channels costs **zero bytes**, so a world of unarticulated aircraft is byte-identical
-  to before. Its 1/255 quantization is cosmetic-grade on purpose and cannot affect flight, because a
-  peer never reads its own entity's channels from the wire — `ClientPrediction` rewinds the actuators
-  to their position at the acked input and re-integrates them at full precision through the same
-  shared `advanceArticulation`. `test_prediction_parity` now cycles gear, flaps and speedbrake
-  mid-run and still holds divergence under 1e-3 m over 600 ticks. Input traces record the new
-  commands, so a determinism replay flies the aeroplane it recorded. `kProtocolVersion` stays 1.
-- **flight**: articulation state — transit dynamics and gear/flap aero (#842, Epic #837, core of #639).
-  Gear and speedbrake existed only as **commands**: `AeroForces` added their full drag the instant the
-  command flipped, so gear that takes six seconds to travel produced all of its drag in one tick — and
-  there was no number an animation could have been driven from. Flaps, hook and canopy did not exist
-  at all. `FlightState` now carries five normalized actuator **positions**, slewed toward their
-  commands at the model's `[articulation]` transit rates (the same discipline `advanceSweep`/
-  `advanceTvc` always used for wing sweep and TVC, which is why those two were already right).
-  Reversing mid-travel reverses from the current position; drag follows the position, which is both
-  correct and the reason the animation reads the same number. A new optional `[aero.flaps]` adds
-  `dcl`/`dcd`/`alpha_shift_deg` — the alpha shift moves the CL-table lookup, so a flap gives more CL at
-  a given body AoA **and** stalls at a lower one, as a real flap does. `computeForces` no longer takes
-  `ControlInput` at all: once every device term reads a position, the force calculation depends on
-  state alone. Transit timing lives in the simulation, never in the clip — one number drives the
-  server, the client's prediction replay and the visual. Everything is optional with defaults, so
-  every existing flight model keeps parsing and (with no `[aero.flaps]`) flies identically with the
-  lever down. `validate-flight-model` range-checks the transit times;
-  `docs/modding/flight-model.md` documents both sections.
-- **renderer**: `SceneRenderer` populates `RenderItem::animPoses` (#841, Epic #837) — the renderer knew
-  how to be told where an aircraft's parts are; nothing told it. `EntityRenderEntry` gains a normalized
-  `artChannels[]` (all-zero is neutral, so an entity nobody articulates renders exactly as before), and
-  the entity loop samples every channel the mesh's rig actually models into a **frame pose arena**.
-  Spans are patched in after the loop from recorded (offset, count) pairs, which makes a dangling span
-  *impossible* rather than merely unlikely — reserving up-front and hoping the estimate holds would let
-  one reallocation silently invalidate every span already handed out. An entity whose mesh has no clips
-  gets an empty span and the existing single-draw path. Spin (`prop_spin`/`rotor_spin`/`wheel_spin`)
-  gets a per-entity phase accumulator held render-side: a propeller's angle is cosmetic, never
-  simulated and never wired. A new `art <entityIdx> <channel> <value>` console command scrubs a channel
-  end-to-end, so the whole clip → sampler → arena → per-node draw path is demonstrable before the
-  simulation or the wire drive it — and stays useful afterwards for telling "the clip is wrong" apart
-  from "the sim is wrong".
-- **renderer**: articulation rig — channel registry, clip parser and scrub sampler (#840, Epic #837).
-  Nothing in the engine knew what an animation clip was: `docs/modding/3d-models.md` promised modders
-  an animation-name registry the renderer never read, and `NodePose` had existed with no producer.
-  `engine/render/MeshArticulation` implements the contract every shipping sim uses — **the engine owns
-  named normalized channels, the model bakes keyframed node-TRS clips, and the runtime SCRUBS at
-  `t = value × duration`; it never "plays" a clip.** So retraction is scrubbing `gear` toward 0, not a
-  second `gear_retract` clip to keep in sync. Sixteen channels (`gear`/`flaps`/`speedbrake`/`hook`/
-  `canopy`/`sweep`/TVC/control surfaces/`prop_spin`/`bay`/gear compression) in an append-only enum
-  whose order is the wire order; signed channels centre on the clip midpoint so asymmetric control
-  authority is authored as asymmetric endpoints rather than by rescaling the parameter. STEP, LINEAR
-  and CUBICSPLINE are evaluated; skins and morph-target `weights` are rejected at parse with a
-  diagnostic (rigid parts only); `_b` damage nodes inherit their base node's pose; spin is the one
-  looping exception. **A mesh with zero animations builds an empty rig and costs nothing** — the
-  static-mesh baseline stays valid forever. Transit timing lives in the simulation, never in the clip.
-- **renderer**: entity-selected variant node-sets (#882) — one `.glb` serves a whole airframe family.
-  Tag a glTF node with `extras: {"fl_variant": "two_seat"}` (a string or an array) and an entity def
-  picks its set with `mesh_variant = "two_seat"`; **untagged nodes are always drawn**, so the shared
-  airframe stays shared and every mesh authored before this is unaffected. A pack can now ship one
-  MiG-21 mesh serving both the bis and the two-seat U instead of N `.glb` + LOD + damage sets to keep
-  in sync. Purely load-time and static — node *presence*, never node *pose* (that is articulation,
-  #837): no per-frame cost, and the selector rides `MsgEntityTypeDef` as a tail-append because the
-  client has no pack entity def to read it from. `validate-entity --pack` errors when `mesh_variant`
-  matches no tag in the referenced mesh and lists the tags the file does declare — without it a typo
-  renders as the bare shared airframe with no diagnostic anywhere; `fl-viewer`'s node panel shows each
-  node's tags.
-- **renderer**: node-aware glTF loader and per-node submesh draws (#839, Epic #837) — the foundation
-  articulation, the `_b` damage convention and LOD selection all needed. `createMesh` read only
-  `meshes[0].primitives[0]` and ignored node transforms entirely, so a multi-node aircraft was
-  impossible and `f5e.glb` rendered correctly only by luck. It now walks the scene graph through a new
-  pure, GPU-free `MeshNodePlan` (`platform-meshgraph`, unit-tested without a device), concatenates
-  every mesh-bearing node's primitives into the one VB/IB pair, and keeps a per-node submesh table
-  keyed by the **glTF node array index** — the contract that lets an engine-side sampler address nodes
-  a platform-side loader uploaded. Each draw loop (shadow, forward-opaque, transparent, inset) expands
-  an item into per-node draws with `model = transform · Q·G·Q⁻¹`, where `G` is the composed
-  content-frame node transform (`RenderItem::animPoses` overriding a node's rest local) and `Q` the
-  content→body rotation. `kRenderFlagDamaged` — set since #886 and read by nobody — finally selects
-  `_b` submeshes over the base ones they shadow. Per-primitive materials land here too, so a
-  multi-material `.glb` no longer loses everything after the first primitive. `FrameStats::drawCalls`
-  is now measured rather than assumed to be one per item.
-- **tools**: `validate-mod` (#651, Epic #836) — one command validates a whole content pack, so
-  fl-base-pack CI runs one gate instead of seven. It composes the existing per-asset validators by
-  LINKING their libs (never subprocessing): the manifest (through a new shared `parseModManifest` that
-  `ModLoader` now also delegates to, so the loader and the validator cannot drift), an optional
-  `[files]` SHA-256 integrity table (the cheap half of #246, via `engine-crypto`), pack-structure
-  checks, and every asset through `validateEntityPack` / `validatePackWeapons` / `validateLiveryPack`
-  / `validateSensor` / `validateMesh` / `validateFlightModel` / `validateMission` / `validateCampaign`
-  / `validateGameMode` / `parseAirportDef` / `parseTheaterManifest` / `validatePlaylist` / REUSE
-  licenses. Findings are domain-prefixed. `validate-mod <pack>` passes on fl-base-pack (the Phase 9
-  acceptance criterion, mechanized).
-- **tools**: `validate-campaign` (#847, Epic #836) — the campaign format's first validator, so a
-  campaign author's feedback loop is no longer "the engine failed to load it". It delegates the schema
-  to the engine's `parseCampaign` (anti-drift) and, with `--pack`, resolves every theater manifest,
-  story/template file, and frontline PNG raster (8-bit grayscale, dimensions == the theater's
-  `frontline_grid`) inside the pack. Theater manifests become real: a new `parseTheaterManifest`
-  (`theaters/<id>.toml` with geographic `bounds` + an optional `terrain`, default `"world"`), an
-  `AssetType::Theater`, an `IContentPack::loadPackFile` for raw pack-relative reads, and a hardened
-  8-bit-grayscale `FrontlinePng` codec (its own `engine-campaign-png` target). `parseCampaign` now
-  catches dangling `next.id`/`unlock`/`theater` references, duplicate ids, and warns on stories
-  unreachable from any trigger. fl-server finally consumes campaign rasters end-to-end: the previously
-  unset `FrontlineLoader` decodes them, and theater `bounds` map the raster onto real lat/lon.
-- **tools**: `fl-viewer` interactive model viewer (#838, Epic #836) — the DCS-Model-Viewer-shape tool
-  every established sim ships. `fl-viewer --entity fl-base:f5e` (or a bare `.glb`) opens a window
-  showing the aircraft exactly as the game draws it, with an orbit/pan/zoom camera, a glTF node-tree
-  panel (via the new `describeMeshNodes` in `validate-mesh-lib`), inline validate-mesh diagnostics, a
-  grid + engine-axis gizmo, damage-mesh toggle, and live hot-reload (#152) — edit the mesh on disk and
-  the view updates, the killer iteration feature. New renderer debug views back it: a **wireframe**
-  view (a LINE-polygon forward pipeline behind the newly enabled `fillModeNonSolid`) and a
-  **normals** view (`shadingMode 5` — visualize the final world-space normal to debug normal maps),
-  selectable in snapshot mode too (`--view wireframe|normals`). The IGui HAL gains `checkbox` /
-  `treeNode` / `treePop`. The single tinygltf+stb implementation is centralized into a shared
-  `tinygltf-impl` target so the viewer can link both the renderer and the mesh-validation lib.
-- **content**: asset hot-reload (#152, Epic #836). Editing a mesh, texture, livery, flight model or
-  localization file on disk now updates the running game live, no restart — gated behind
-  `FL_HOT_RELOAD=1` (all build configs; the env var is inherited by the single-player fl-server
-  subprocess, so one variable lights up both halves). A new polling `StdFilesystemWatcher`
-  (`platform-stdfs`) is the one production `IFilesystemWatcher` backend (two-scan settle defeats
-  partial writes with no timers; rename = delete + create). `AssetManager` gains fine-grained
-  eviction (`processHotReload` reports exactly which assets changed via a shared
-  `engine/content/AssetPaths` reverse-map, watches asset subdirs not the giant terrain tree, and
-  bumps a `cacheGeneration`); `SceneRenderer` gains `invalidateMesh/Texture/Liveries/AllAssets` with
-  texture->mesh dependency tracking; `IRenderer::destroyMesh` now cascades to the mesh's material +
-  textures so a re-upload cannot leak GPU memory; `FlightIntegrator::setFlightModel` swaps the model
-  in place preserving flight state; `WorldBroadcaster` gains `reloadFlightModels`/`replaceController`.
-  The `reload_content` console/admin command (previously a stub) forces a full reload on both client
-  and server.
-- **tools**: `fl-viewer`, a standalone model preview on the game renderer, and the session-free
-  preview bootstrap it shares (#666, Epic #836). A new `engine/render/PreviewScene` loads one entity
-  def or a bare `.glb` through the real content stack + renderer, resolves its glTF PBR material
-  through the same resolver `SceneRenderer` uses (the extracted `render/MeshTextureResolver.h`, so the
-  two cannot drift), computes the model bounds (`IRenderer::getMeshBounds`) and frames a camera on
-  them. This commit ships `fl-viewer`'s **headless snapshot** mode — `fl-viewer [--entity fl-base:f5e
-  | model.glb] [--assets <root>] --snapshot out.png [--size WxH] [--frames N] [--damaged] [--view
-  shaded|facecolor] [--require-content]` renders offscreen (no window, no server, no session — the
-  gap the game's full-session `--screenshot` left) and writes a PNG, the golden-image CLI pack CI
-  needs; run without `--snapshot` it points at the interactive window (#838). The game gains `--size
-  WxH` (headless resolution) and a `screenshot [path]` console command. A lavapipe headless snapshot
-  smoke runs in CI so the epic's render bootstrap is gated on every PR.
+- **audio**: Opus voice capture, playback and positional mix — the local half of the radio (#531, Epic #499)
+- **network**: voice channel over the transport with team / flight / proximity routing (#532, Epic #499)
+- **audio**: the radio-net presentation layer — radio DSP, PTT squelch, per-net ducking, subtitles (#925, completing Epic #499)
+- **renderer**: node-aware glTF loader and per-node submesh draws (#839, Epic #837)
+- **renderer**: articulation rig — channel registry, clip parser and scrub sampler (#840, Epic #837)
+- **renderer**: `SceneRenderer` populates `RenderItem::animPoses` (#841, Epic #837)
+- **flight**: articulation state — transit dynamics and gear/flap aero (#842, Epic #837)
+- **network**: articulation channels on the wire, in both directions (#843, Epic #837)
+- **tools**: `validate-mesh` animation checks and the `3d-models.md` registry rewrite (#844, Epic #837)
+- **game**: landing gear, flaps, hook, canopy and speed brake end-to-end (#639, completing Epic #837)
+- **renderer**: entity-selected variant node-sets — one `.glb` serves an airframe family (#882)
+- **content**: asset hot-reload for meshes, textures, liveries, flight models and localization (#152, Epic #836)
+- **tools**: `fl-viewer` headless snapshot mode and the session-free `PreviewScene` bootstrap it shares (#666, Epic #836)
+- **tools**: `fl-viewer` interactive model viewer, with a glTF node tree and live hot-reload (#838, Epic #836)
+- **tools**: `validate-campaign`, and theater manifests the campaign runtime consumes end-to-end (#847, Epic #836)
+- **tools**: `validate-mod` — one command validates a whole content pack (#651, Epic #836)
+- **ai**: the LLM-vs-renderer GPU-contention harness, and the measurements it exists to produce (#782, follow-up to spike #609)
+- **engine**: `FrameStatsRecorder` — the client-side render-perf artifact, driven by `--frame-stats-json` / `--run-seconds` (#782)
+- **ai**: repeat-and-aggregate mode for the GPU-contention harness — `--repeat N` plus `aggregate.py` (#1016)
+- **docs**: the second-GPU / unified-memory GPU-contention row, the first cell measured with `--repeat` (#1019)
+- **ci**: release-notes gate — a release body must be hand-authored prose describing its own tag (#1030)
 
 ### Changed
 
-- **docs**: filled the macOS / Metal row of the GPU-contention table (#782) — measured on an Apple
-  M4 Pro (macOS 26.5, 64 GB unified) with `qwen2.5-coder:14b`. The finding is qualitatively different
-  from the discrete-GPU Linux leg: unified memory makes inference nearly *double* the mean frame time
-  (12.25 → 21.77 ms, +9.53 ms; p99 +12.84 ms, 1.89×) for the burst's whole duration — a sustained
-  frame-time tax rather than occasional hitching — while the discrete card's VRAM-budget squeeze
-  disappears entirely (the model holds 15 GB, the renderer under 1 GB, memory pressure barely moves).
-  On Apple Silicon GPU *time*, not memory capacity, is the scarce resource. Windows CUDA/Vulkan rows
-  remain pending; #782 stays open until they are filled.
-- **tools**: `tex-compress` now emits **Basis Universal** KTX2, not raw block-compressed textures
-  (#846, Epic #836). This is a correctness fix as much as a portability one: the tool asked toktx for
-  `--encode bc7`, but toktx v4 has no raw-BCn encoder and *silently emitted an uncompressed texture*
-  (`vkFormat = VK_FORMAT_R8G8B8_SRGB`, not a block format) — so packs were shipping uncompressed,
-  desktop-only assets. The engine already transcodes Basis at load (`ktxTexture2_TranscodeBasis` →
-  BC7 on desktop / ASTC 4×4 on Apple Silicon), so a Basis KTX2 is the portable form every GPU wants.
-  `--type` now selects the encoding — base color → **ETC1S** (small), normal/ORM/emissive → **UASTC**
-  (high quality, zstd-supercompressed via `--zcmp`), the split `KHR_texture_basisu` exists for.
-  `--format` takes `etc1s|uastc` (the old `bc1|bc3|bc7` values parse as deprecated aliases with a
-  warning). The CI smoke now asserts the output is Basis (`vkFormat == 0`), not merely that a file
-  appeared. `gen_terrain_color.py` switches its satellite tiles to UASTC.
-- **docs**: rewrite `docs/modding/textures.md` around the source-vs-artifact split (#846, Epic #836).
-  The guide previously told authors to commit `.ktx2` and discard the source `.png` — backwards, and
-  self-contradicted by its own later sections. It now states the industry pattern plainly: **PNG
-  masters are the committed source** (under `aircraft/<id>/textures-src/`, the preferred-form-of-
-  modification a CC-BY pack must ship), and **`.ktx2` is a git-ignored build artifact** produced by
-  `tex-compress` in the pack's release workflow and shipped under `textures/`. A new local-dev section
-  documents the engine's `.png` fallback (`textures/<name>.ktx2` → `.png`), so an author can preview
-  and iterate — in-game and in `fl-viewer` — with no compressor installed. Straggler fixes: the
-  `3d-models.md` example URI depth (`../textures/` → `../../textures/`), and the "ships `.ktx2`" lines
-  in `formats.md` / `liveries.md` now say "built from committed PNG masters".
+- **ai**: the GPU-contention analyzer splits the burst-vs-idle delta into the renderer's own GPU execution and the residual — on Windows the cost is the renderer *waiting*, not slowing (#1025)
+- **ai**: the GPU-contention hitch counter is calibrated per run at 2× that run's median idle frame interval, replacing a fixed `>33.3 ms` threshold (#1022)
+- **docs**: record the Linux CUDA-vs-Vulkan contention pair, and correct the load claim the Windows write-up made about it (#1021)
+- **docs**: fill the macOS / Metal GPU-contention row, marked as the single run it is (#782)
+- **tools**: `tex-compress` emits Basis Universal KTX2 rather than raw block-compressed textures (#846, Epic #836)
+- **docs**: rewrite `docs/modding/textures.md` around the source-vs-artifact split (#846, Epic #836)
+
+### Fixed
+
+- **script**: compile Lua as C++ so its errors unwind C++ frames rather than `longjmp` across them (#1015)
+- **renderer**: reset the in-flight fence after the per-image wait, not before — the renderer was pinned at 10 fps (#1013)
+- **ai**: address the Windows GPU-contention endpoint by IPv4 rather than `localhost`, which cost ~2.1 s of dead wait per request (#1021)
+- **ai**: a GPU-contention run whose `analyze.py` emitted warnings no longer passes silently on Windows (#1019)
+
 
 ## [0.3.9] - 2026-07-23
 
@@ -1173,7 +739,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **mission**: Airborne mission spawns no longer tumble at t=0 — the integrator is seeded with the spawn heading and a forward airspeed (optional `speed:`) (#883)
 - **flight**: A cambered wing's negative trim alpha is no longer reported as a trim failure by fm-trim (#896)
 
-## [0.3.3] - 2026-07-15
+## [0.3.3] - 2026-07-16
 
 ### Added
 
@@ -1245,6 +811,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **game**: The client and server resolved `mods/` differently, so a server-loaded pack was invisible to the client (#831)
 - **docs**: `ai.md` documented `pitch_error_from_alt` with the wrong signature; the example is now an executed test (#830)
 - **tools**: Flight-model plausibility bands excluded the entire light-fighter class (#815)
+- **entity**: An empty hardpoint station is legal — the parser rejected it (#828)
 
 ## [0.3.1] - 2026-07-13
 
@@ -1352,6 +919,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **game**: Split multi-line admin responses into one console entry per line (#461)
 - **content**: Pass assets root to ModLoader so native plugins load (#664)
 - **renderer**: Center hud/menu text via HudAlign anchor field (#439) (#736)
+## [0.2.6] - 2026-06-26
+
+### Fixed
+
+- **ci**: Windows release build failed on a missing MSVC environment and a stale cache (#459)
+
+### Changed
+
+- **ci**: Bump actions/cache from 5 to 6 (#458)
+
 ## [0.2.5] - 2026-06-26
 
 ### Added
@@ -1508,7 +1085,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **network**: Spawn peers at terrain height plus 500 m AGL (#252) (#294)
 - **renderer**: Rotate windshield rain streaks by aircraft roll angle (#295)
 - **game**: Add startup timeout to LoadingScreen Phase::StartingServer (#334)
-## [0.2.0] - 2026-05-27
+## [0.2.2] - 2026-05-27
+
+### Fixed
+
+- **ci**: Release workflow artifact glob missed the built archives, and the job lacked the attestations permission (#118)
+
+## [0.2.1] - 2026-05-27
+
+### Fixed
+
+- **ci**: Release workflow built without its SDL3, Vulkan and OpenAL dependencies (#116)
+
+## [0.2.0] - 2026-05-26
 
 ### Added
 
