@@ -7,23 +7,36 @@ name: Release notes gate
 #      recorded step 6 as done.
 #   2. A release carrying ANOTHER version's notes. `gh release edit` was pointed at the wrong tag
 #      at least twice: v0.3.9's notes landed on v0.3.8, and v0.2.5's on v0.2.6. Both times the
-#      clobbered release advertised features it did not contain.
+#      clobbered release advertised features it did not contain, for months.
 #
 # WHY THIS IS NOT A STEP IN release.yml: that workflow publishes the git-cliff body itself, so a
 # check running inside it would fail on every release by construction — the prose is applied after
 # the workflow completes (`softprops/action-gh-release` overwrites the body, which is the timing
-# race that bit v0.3.8). A permanently-red check is one everyone learns to ignore. Triggering on
-# the `release` event instead means this re-runs when the body is EDITED, so it goes green on its
-# own once the notes are written. The failed run stays failed — a run's conclusion is immutable —
-# but the latest run reflects current truth, and the tracking issue below closes itself.
+# race that bit v0.3.8). A permanently-red check is one everyone learns to ignore.
 #
-# CAVEAT: edits made with GITHUB_TOKEN inside Actions do not re-trigger workflows (GitHub's
-# recursion guard). Hand edits via `gh` use a user token and do re-trigger. If the prose step is
-# ever automated inside Actions, it needs a PAT or this gate will not re-fire.
+# WHY THREE TRIGGERS, not just `release`:
+#
+#   * `workflow_run` on Release — release.yml publishes with GITHUB_TOKEN, and events created by
+#     GITHUB_TOKEN do NOT trigger workflows (GitHub's recursion guard). So `release: published`
+#     never fires for our own releases. Without this trigger the gate would only ever run on a
+#     hand edit, i.e. it would pass every time and catch nothing — it would have been blind to
+#     defect 1 above, the very case it exists for.
+#   * `release: [published, edited]` — catches a hand edit (user token, so it does fire) and any
+#     release published by something other than release.yml. This is what makes the gate
+#     self-clearing: fix the body, the gate re-runs and goes green.
+#   * `schedule` — a weekly sweep of EVERY release, not just the one being published. v0.3.8 and
+#     v0.3.9 were both wrong for months; a publish-time-only check cannot see a release that
+#     rotted after the fact.
 
 on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
   release:
     types: [published, edited]
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -31,93 +44,119 @@ permissions:
 
 jobs:
   check:
-    name: Release notes are hand-authored and describe this tag
+    name: Release notes are hand-authored and describe their own tag
     runs-on: ubuntu-latest
     steps:
-      - name: Check the release body
+      - name: Resolve which releases to check
+        id: scope
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          TAG: ${{ github.event.release.tag_name }}
+          EVENT: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           set -uo pipefail
+          case "$EVENT" in
+            release)      tags="$RELEASE_TAG" ;;
+            workflow_run) tags="$RUN_BRANCH" ;;   # a tag-push run's head_branch is the tag name
+            *)            tags=$(gh release list --limit 200 --json tagName --jq '.[].tagName') ;;
+          esac
+          # A workflow_run for a non-tag push has no release to check.
+          if [ "$EVENT" = "workflow_run" ] && ! gh release view "$tags" >/dev/null 2>&1; then
+            echo "no release for '$tags' — nothing to check"; tags=""
+          fi
+          { echo "tags<<EOF"; echo "$tags"; echo "EOF"; } >> "$GITHUB_OUTPUT"
 
-          # Read the body through the API rather than interpolating
-          # ${{ github.event.release.body }} into this script — release bodies are
-          # attacker-influenced text and would be a shell-injection vector.
-          body=$(gh release view "$TAG" --json body --jq '.body')
-          version="${TAG#v}"
-          fail=0
+      - name: Check the release bodies
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAGS: ${{ steps.scope.outputs.tags }}
+        run: |
+          set -uo pipefail
+          bad=""
           {
-            echo "## Release notes gate — \`$TAG\`"
+            echo "## Release notes gate"
             echo
+            echo "| tag | hand-authored | describes own version |"
+            echo "|---|---|---|"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          # --- Check 1: the body must lead with prose, not a git-cliff version heading. ---
-          first=$(printf '%s' "$body" | grep -m1 -v '^[[:space:]]*$' || true)
-          if printf '%s' "$first" | grep -qE '^## \['; then
-            echo "::error title=Release notes not hand-authored::$TAG still carries the autogenerated body. Write a thematic summary and apply it with 'gh release edit $TAG --notes-file <file>'."
-            echo "- ❌ **Not hand-authored** — body still begins with the git-cliff heading \`$first\`" >> "$GITHUB_STEP_SUMMARY"
-            fail=1
-          else
-            echo "- ✅ Leads with prose, not the autogenerated heading" >> "$GITHUB_STEP_SUMMARY"
-          fi
+          for tag in $TAGS; do
+            [ -n "$tag" ] || continue
+            # Read the body through the API rather than interpolating
+            # ${{ github.event.release.body }} into this script — release bodies are
+            # attacker-influenced text and would be a shell-injection vector.
+            body=$(gh release view "$tag" --json body --jq '.body' 2>/dev/null) || continue
+            version="${tag#v}"
+            c1=✅; c2=✅
 
-          # --- Check 2: the body must not carry another version's section heading. ---
-          stray=$(printf '%s' "$body" | grep -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' | tr -d '#[] ' | sort -u | grep -v "^${version}$" || true)
-          if [ -n "$stray" ]; then
-            joined=$(printf '%s' "$stray" | tr '\n' ' ')
-            echo "::error title=Release notes describe the wrong version::$TAG carries section heading(s) for: $joined"
-            echo "- ❌ **Wrong version** — body carries heading(s) for \`$joined\`, not \`$version\`" >> "$GITHUB_STEP_SUMMARY"
-            fail=1
-          else
-            echo "- ✅ No heading for a version other than \`$version\`" >> "$GITHUB_STEP_SUMMARY"
-          fi
+            # --- Check 1: lead with prose, not a git-cliff version heading. ---
+            first=$(printf '%s' "$body" | grep -m1 -v '^[[:space:]]*$' || true)
+            if printf '%s' "$first" | grep -qE '^## \['; then
+              c1="❌ autogenerated"
+              echo "::error title=Release notes not hand-authored::$tag still carries the autogenerated body. Write a thematic summary and apply it with 'gh release edit $tag --notes-file <file>'."
+              bad="$bad $tag"
+            fi
 
-          echo "FAIL=$fail" >> "$GITHUB_ENV"
-          echo "VERSION=$version" >> "$GITHUB_ENV"
+            # --- Check 2: no other version's section heading. ---
+            stray=$(printf '%s' "$body" | grep -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' | tr -d '#[] ' | sort -u | grep -v "^${version}$" || true)
+            if [ -n "$stray" ]; then
+              joined=$(printf '%s' "$stray" | tr '\n' ' ')
+              c2="❌ carries $joined"
+              echo "::error title=Release notes describe the wrong version::$tag carries section heading(s) for: $joined"
+              case " $bad " in *" $tag "*) ;; *) bad="$bad $tag" ;; esac
+            fi
 
-      # A run's conclusion is immutable, so the red run above never turns green. The issue is the
-      # durable, self-clearing signal: opened when the body is bad, closed when an edit fixes it.
+            echo "| \`$tag\` | $c1 | $c2 |" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+          bad=$(echo $bad | xargs || true)
+          echo "bad=$bad" >> "$GITHUB_OUTPUT"
+          [ -z "$bad" ] || echo "failing tags: $bad"
+
+      # A run's conclusion is immutable, so a red run never turns green — only a newer run does.
+      # The issue is the durable, self-clearing signal: opened when a body is bad, closed when an
+      # edit fixes it (the `release: edited` trigger is what re-runs this).
       - name: Open or close the tracking issue
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          TAG: ${{ github.event.release.tag_name }}
+          BAD: ${{ steps.check.outputs.bad }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
-          title="release notes: $TAG needs a hand-authored body"
+          title="release notes: hand-authored bodies missing or mismatched"
           existing=$(gh issue list --state open --search "\"$title\" in:title" \
                        --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -1)
 
-          if [ "${FAIL:-0}" = "1" ]; then
+          if [ -n "${BAD:-}" ]; then
+            list=$(for t in $BAD; do echo "- \`$t\`"; done)
+            body=$(printf '%s\n' \
+              "These GitHub Releases do not pass the release-notes gate:" "" "$list" "" \
+              "A release body must be hand-authored prose — a one-to-two paragraph thematic summary naming" \
+              "the release's major theme(s) and the *why*, followed by the categorized per-issue detail" \
+              "(the matching CHANGELOG section). See \`docs/project-management.md\` → *Cutting a release*." "" \
+              "Fix each with:" "" \
+              "    gh release edit <tag> --notes-file <file>" "" \
+              "Editing a body re-triggers this gate, which closes this issue automatically once all pass." "" \
+              "Run: $RUN_URL")
             if [ -n "$existing" ]; then
-              echo "tracking issue #$existing already open"
+              gh issue edit "$existing" --body "$body" >/dev/null
+              echo "updated tracking issue #$existing"
             else
-              gh issue create --title "$title" --label documentation --body "$(cat <<EOF
-          The GitHub Release for \`$TAG\` did not pass the release-notes gate.
-
-          A release body must be hand-authored prose — a one-to-two paragraph thematic summary naming
-          the release's major theme(s) and the *why*, followed by the categorized per-issue detail
-          (the \`[$VERSION]\` CHANGELOG section). See \`docs/project-management.md\` → *Cutting a release*.
-
-          Fix it with:
-
-              gh release edit $TAG --notes-file <file>
-
-          Editing the body re-triggers this gate, which closes this issue automatically once it passes.
-
-          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          EOF
-          )"
+              gh issue create --title "$title" --label documentation --body "$body" >/dev/null
+              echo "opened tracking issue"
             fi
             exit 1
           fi
 
           if [ -n "$existing" ]; then
             gh issue close "$existing" --reason completed \
-              --comment "Release notes for \`$TAG\` now pass the gate. Closed automatically."
+              --comment "All release notes now pass the gate. Closed automatically by $RUN_URL"
             echo "closed tracking issue #$existing"
           fi
-          echo "release notes for $TAG pass the gate"
+          echo "all checked release notes pass the gate"
