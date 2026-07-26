@@ -41,10 +41,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Windows run served **45 requests instead of ~350**, so each 20 s burst was **~85 % idle** and the
   measurement compared a nearly-idle window against the idle baseline. Ollama's own accounting made
   it provable — identical token counts (143.3 prompt / 9.0 generation) and ~0.3 s of
-  `total_duration` behind a 2.39 s wall clock, falling to 0.271 s over IPv4. **This invalidates
+  `total_duration` behind a 2.39 s wall clock, falling to 0.271 s over IPv4. **This invalidated
   every Windows row of the #782 results table**, including the 1.49× → 2.48× p99 swing that
   motivated #1016 and #1021: that swing was not p99 instability but two nearly-idle windows being
-  compared. Re-run under load, the same Vulkan cell is a stable 2.50× [2.49–2.55]. The runbook's own
+  compared. Re-run under load, the same Vulkan cell is a stable 2.50× [2.49–2.55]. The table is
+  updated accordingly — both `qwen2.5-coder:14b` Windows rows replaced with 5-run aggregates, both
+  `gemma2:9b` Windows rows **withdrawn** (same defect, not re-measured), and the *Run-to-run
+  variance* section rewritten: on Windows the two backends are indistinguishable (every range
+  overlaps; Δ p95 medians identical at 4.38 ms), which disagrees with Linux, where they are disjoint.
+  That cross-OS difference is left flagged as inference pending scheduler-level tracing (#1025). The runbook's own
   instruction to pass `-BaseUrl http://localhost:...` is why the warning exists as well as the
   corrected default; the README and `docs/ai-provider-evaluation.md` commands are corrected to match,
   and the README's "prefer Δ p95" guidance (#1019) is now marked conditional — under full burst load
