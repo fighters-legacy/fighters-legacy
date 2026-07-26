@@ -63,9 +63,18 @@ jobs:
       - name: Build client + server
         run: cmake --build --preset release --target fighters-legacy fl-server
 
+      # Dispatch inputs arrive as environment variables, never as Actions expressions inside the
+      # script. Actions substitutes expressions BEFORE the script is written to disk, so an input's
+      # text would become shell source rather than an argument — a `mission` of `x"; curl …; :"`
+      # would execute. Passing through env keeps it data. The same defect broke the release-notes
+      # gate and sat in release.yml's fallback-notes step; see #1032.
       - name: Record demo set (headless, lavapipe)
         env:
           VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+          RESOLUTION: ${{ inputs.resolution }}
+          FPS: ${{ inputs.fps }}
+          TIME_RATE: ${{ inputs.time_rate }}
+          MISSION: ${{ inputs.mission }}
         run: |
           set -e
           GAME=$(find build/release -type f -name fighters-legacy | head -1)
@@ -73,10 +82,10 @@ jobs:
           echo "game=$GAME server=$SERVER"
           ARGS=(--game "$GAME" --server "$SERVER" --assets "$PWD" \
                 --out-dir demo-videos --headless \
-                --res "${{ inputs.resolution }}" --fps "${{ inputs.fps }}" \
-                --time-rate "${{ inputs.time_rate }}")
-          if [ -n "${{ inputs.mission }}" ]; then
-            ARGS+=(--mission "${{ inputs.mission }}")
+                --res "$RESOLUTION" --fps "$FPS" \
+                --time-rate "$TIME_RATE")
+          if [ -n "$MISSION" ]; then
+            ARGS+=(--mission "$MISSION")
           else
             ARGS+=(--all)
           fi
@@ -92,8 +101,11 @@ jobs:
             demo-videos/*-server.log
           if-no-files-found: warn
 
+      # `if:` is an expression context and is evaluated by Actions, not by a shell — safe. The tag
+      # reaches the script through env for the same reason as the recording step above.
       - name: Attach to release
         if: ${{ inputs.release_tag != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ inputs.release_tag }}" demo-videos/*.mp4 --clobber
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: gh release upload "$RELEASE_TAG" demo-videos/*.mp4 --clobber
