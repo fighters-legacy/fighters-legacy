@@ -213,20 +213,97 @@ The delivery loop, in brief (full rules in [CONTRIBUTING.md](../CONTRIBUTING.md)
 
 ## Cutting a release
 
-Releases are `chore(release): vX.Y.Z` PRs, then a tag on the merge commit (the `release.yml` workflow
-builds the cross-platform artifacts and publishes the GitHub Release):
+**This is the canonical procedure.** `docs/development.md` covers the two scripts; this section
+covers the whole thing, including the steps that come *after* the tag — which are the ones that get
+skipped.
 
-1. **Roll the CHANGELOG** — rename `[Unreleased]` to the dated `[X.Y.Z] - YYYY-MM-DD` heading and add
-   a fresh empty `[Unreleased]` above it. **Bump the CMake `project(... VERSION X.Y.Z ...)`.** Open
-   the release PR; tag the merge commit `vX.Y.Z` (annotated).
-2. **Write the release notes as prose, not just a list.** `release.yml` auto-generates notes from
-   conventional commits via git-cliff, but a squash-merged multi-issue PR collapses to a *single*
-   line — so **hand-author the GitHub Release body**: lead with a **one-to-two paragraph thematic
-   summary** naming the release's major theme(s) and the "why", then the categorized per-issue detail
-   (paste the `[X.Y.Z]` CHANGELOG section). Set it with `gh release edit vX.Y.Z --notes-file …`. The
-   sibling `fighters-codex` releases are the house style to match.
-3. **Verify the artifacts** — confirm the GitHub Release is published (not draft) with the Linux /
-   macOS / Windows archives attached before considering the release done.
+Releases are `chore(release): vX.Y.Z` PRs, then a tag on the merge commit. The tag fires
+`release.yml`, which builds the three platform archives and publishes the GitHub Release.
+
+### The seven steps
+
+1. **Roll the CHANGELOG.** `./scripts/cut-release.sh vX.Y.Z` renames `[Unreleased]` to
+   `[X.Y.Z] - YYYY-MM-DD`, opens a fresh empty `[Unreleased]` above it, and bumps the CMake
+   `project(... VERSION X.Y.Z ...)`. It does **not** generate anything — `CHANGELOG.md` is
+   hand-curated.
+
+2. **Condense the new section, and check its scope.** Released sections are **one line per change
+   with an issue ref** — `- **scope**: Headline (#NNN)`. The long rationale that accumulated under
+   `[Unreleased]` is deliberately dropped; it lives on in the PR bodies and commit messages. A
+   changelog is an index, not an archive. Then verify the scope against the range rather than
+   assuming it:
+
+       git log --oneline <prev-tag>..HEAD
+
+   Every released issue needs an entry, and **nothing from a prior release may be left floating
+   under `[Unreleased]`** for the next release to sweep up. Merge any duplicate `### Changed`
+   blocks. Open the release PR and merge it.
+
+3. **Tag the merge commit.** `./scripts/tag-release.sh vX.Y.Z`. The script refuses to tag if the
+   `[X.Y.Z]` heading's date is not today — the changelog date, the tag date and the release body
+   must all agree, and a release PR that sits overnight otherwise drifts.
+
+4. **Wait for the Release workflow to COMPLETE.** Its `softprops/action-gh-release` step *sets* the
+   body to git-cliff's collapsed list. Notes applied before it finishes are silently overwritten.
+
+5. **Verify the archives actually attached.** A green workflow is not evidence:
+
+       gh release view vX.Y.Z --json assets -q '.assets[] | "\(.name) \(.size)"'
+
+   Expect `fighters-legacy-{linux,macos,windows}.zip`.
+
+6. **Hand-author the release body and apply it to this tag.**
+
+       gh release edit vX.Y.Z --notes-file <file>
+
+7. **Read the body back, on the tag you meant.**
+
+       gh release view vX.Y.Z --json body -q '.body' | head -3
+
+### What a release body contains
+
+    *Tagged YYYY-MM-DD.*
+
+    **Bold thematic headline.** One to two paragraphs naming the release's major theme(s)
+    and the *why* — what changed about the product, not a list of commits.
+
+    ### Added / ### Changed / ### Fixed
+    (the categorized per-issue detail — paste the [X.Y.Z] CHANGELOG section)
+
+The leading `*Tagged …*` line states the **git tag date**. A GitHub release object's own date is
+not reliable — a release created after the fact reports the day it was created, not the day the
+version shipped. The sibling `jomkz/fighters-codex` releases are the house style to match.
+
+A release with no attached archives gets a `### Downloads` section saying so and why. Binaries are
+**not** reconstructed later: a zip built today under an old tag uses a different toolchain and
+different dependency versions, so it is not what that tag produced.
+
+### Why each step exists
+
+Every one of these was earned by a real defect found in the 2026-07-26 audit of all 18 tags:
+
+| Step | Defect it prevents |
+|---|---|
+| 2 — verify scope | v0.3.8's roll-up was skipped entirely; its content sat orphaned under `[Unreleased]`, and cutting v0.3.9 naively would have re-shipped it |
+| 2 — every issue entered | #828 shipped in v0.3.2 with no entry anywhere, because it closed no issue |
+| 3 — date guard | `[0.2.0]` and `[0.3.3]` each shipped a day out from their tags |
+| 4 — wait for completion | v0.3.8's hand-authored body was overwritten by the workflow |
+| 5 — verify artifacts | seven releases published with a green workflow and no archives attached; v0.2.1 attached four Vulkan SDK sample zips instead of the build |
+| 6 — hand-author | v0.3.9 shipped git-cliff's six-line PR list and was never touched |
+| 7 — read back | v0.3.9's notes were applied to **v0.3.8**, and v0.2.5's to **v0.2.6** — both clobbered a previous release and went unnoticed for months |
+
+### The automated gate
+
+`.github/workflows/release-notes-gate.yml` enforces steps 6 and 7. It checks that a release body
+leads with prose rather than a git-cliff heading, and that it carries no section heading for another
+version. It runs on `workflow_run` when `release.yml` completes (the publish path — `release:
+published` never fires for our own releases, because events created by `GITHUB_TOKEN` do not trigger
+workflows), on `release: edited` (so fixing the body clears it), and **weekly over every release** —
+a publish-time check cannot see a release that rotted afterwards, which is how v0.3.8 and v0.3.9
+survived for months.
+
+Expect it to **fail** right after a tag: the body is still git-cliff's at that point. It goes green
+once step 6 lands, and closes the tracking issue it opened.
 
 ## Adopting this in a new project
 
