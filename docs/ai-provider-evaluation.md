@@ -705,7 +705,7 @@ then measured as contention):
     tools/gpu_contention/measure_linux.sh --model qwen2.5-coder:14b            # Linux
     tools/gpu_contention/measure_macos.sh --model qwen2.5-coder:14b            # macOS / Metal
     .\tools\gpu_contention\measure_windows.ps1 -Model qwen2.5-coder:14b -Label cuda
-    .\tools\gpu_contention\measure_windows.ps1 -BaseUrl http://localhost:8080 -Model local -Label vulkan
+    .\tools\gpu_contention\measure_windows.ps1 -BaseUrl http://127.0.0.1:8081 -Model local -Label vulkan
 
 Each runner prints the analyzed Markdown and writes it to `tools/gpu_contention/results/`
 (git-ignored). **The analyzer exits non-zero when it emits warnings** — a run whose numbers are not

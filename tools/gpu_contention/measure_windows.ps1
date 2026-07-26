@@ -9,7 +9,14 @@
 #     .\measure_windows.ps1 -Model qwen2.5-coder:14b -Label cuda
 #
 #   Vulkan (llama.cpp's llama-server built with -DGGML_VULKAN=ON, serving OpenAI-compatible):
-#     .\measure_windows.ps1 -BaseUrl http://localhost:8080 -Model local -Label vulkan
+#     .\measure_windows.ps1 -BaseUrl http://127.0.0.1:8081 -Model local -Label vulkan
+#
+# USE 127.0.0.1, NEVER `localhost` (#1021). Both inference servers bind IPv4 only, but `localhost`
+# resolves to ::1 first on Windows; the IPv6 connect has to time out before Python falls back, and
+# that costs ~2.1 s of DEAD WAIT on EVERY request. It does not fail, so nothing looks wrong -- the
+# burst simply serves ~9 requests instead of ~75 and spends ~85% of its window idle, which is a
+# near-silent way to measure almost no contention and report it as a result. Every Windows run
+# before #1021 hit this (45 requests/run, 2.3 s/request, against 0.27 s/request once fixed).
 #
 # The Vulkan case is the interesting one: there the inference backend and the renderer are on the
 # same API and the same queue family, which is the configuration most likely to contend.
@@ -20,7 +27,8 @@
 [CmdletBinding()]
 param(
     [string]$Model = "qwen2.5-coder:14b",
-    [string]$BaseUrl = $(if ($env:FL_AI_BASE_URL) { $env:FL_AI_BASE_URL } else { "http://localhost:11434" }),
+    # 127.0.0.1, not localhost -- see the header note: localhost costs ~2.1 s/request here.
+    [string]$BaseUrl = $(if ($env:FL_AI_BASE_URL) { $env:FL_AI_BASE_URL } else { "http://127.0.0.1:11434" }),
     [ValidateSet("intent", "mission", "ops")][string]$Workload = "intent",
     [string]$Mission = "builtin:sandbox",
     [int]$Concurrency = 1,
@@ -66,6 +74,13 @@ if (-not (Test-Path $Game)) { throw "game binary not found under $BuildDir (buil
 if (-not (Test-Path $FlServer)) { throw "fl-server not found under $BuildDir" }
 
 # ── Preflight: the endpoint must answer ──────────────────────────────────────────────────────
+# An explicit -BaseUrl beats the corrected default, and the #1021 runbook itself said `localhost`,
+# so warn rather than silently letting the ~2.1 s/request IPv6 stall gut the burst load.
+if ($BaseUrl -match "localhost") {
+    Write-Host "  WARNING: -BaseUrl uses 'localhost'. On Windows that resolves to ::1 first and costs"
+    Write-Host "           ~2.1 s of dead wait per request against an IPv4-only server (#1021)."
+    Write-Host "           Use http://127.0.0.1:<port> instead, or the bursts will be mostly idle."
+}
 $endpointOk = $false
 foreach ($probe in @("/v1/models", "/api/tags")) {
     try {
