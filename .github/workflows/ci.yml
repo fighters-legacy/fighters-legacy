@@ -27,6 +27,16 @@ jobs:
       - name: REUSE compliance check
         uses: fsfe/reuse-action@v4
 
+      # Actions substitutes ${{ }} into a run block BEFORE the script is written to disk, so an
+      # expression holding free text becomes shell source. Three instances shipped here before
+      # anyone noticed (#1034): git-cliff output in release.yml, the release body in the
+      # release-notes gate's own comment, and demo-videos' dispatch inputs. Cheap to check, and
+      # it sits in `lint` so a violation fails before the build matrix burns macOS/Windows time.
+      - name: Lint workflow expressions
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          python3 tools/lint_workflow_expressions.py
+
       - name: Check clang-format
         run: |
           git diff --name-only --diff-filter=d origin/${{ github.base_ref || 'main' }}...HEAD \
