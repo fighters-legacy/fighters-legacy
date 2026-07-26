@@ -326,11 +326,10 @@ baseline in the same session. Frame columns are **burst minus that run's own idl
 | Linux, RTX 5080 16 GB | CUDA (Ollama) | `qwen2.5-coder:14b` | 4.42 ms | 6.68 ms | **+2.26 ms (1.51×)** | +0.01 ms | +13.8 ms | 22 | 9031 MB | 4556 MB |
 | Linux, RTX 5080 16 GB | CUDA (Ollama) | `gemma2:9b` | 4.41 ms | 6.67 ms | **+2.26 ms (1.51×)** | +0.06 ms | +5.1 ms | 8 | 5971 MB | 6939 MB |
 | macOS 26.5, Apple M4 Pro 64 GB | Metal (Ollama) | `qwen2.5-coder:14b` | 14.45 ms | 27.29 ms | **+12.84 ms (1.89×)** | **+9.53 ms** | +13.8 ms | 3 | 14558 MB | 53084 MB† |
-| Windows 11, RTX 5080 16 GB | CUDA (Ollama) | `qwen2.5-coder:14b` | 4.59 ms | 8.46 ms | **+3.87 ms (1.84×)** | +0.02 ms | +6.3 ms | 12 | 9031 MB | 15209 MB‡ |
-| Windows 11, RTX 5080 16 GB | CUDA (Ollama) | `gemma2:9b` | 4.63 ms | 8.55 ms | **+3.92 ms (1.85×)** | +0.01 ms | +4.3 ms | 13 | 5971 MB | 15209 MB‡ |
-| Windows 11, RTX 5080 16 GB | Vulkan (llama.cpp) | `qwen2.5-coder:14b` — run 1 | 4.60 ms | 6.84 ms | **+2.24 ms (1.49×)** | +0.01 ms | +2.7 ms | 13 | ~9080 MB§ | 15209 MB‡ |
-| Windows 11, RTX 5080 16 GB | Vulkan (llama.cpp) | `qwen2.5-coder:14b` — run 2 | 4.58 ms | 11.36 ms | **+6.78 ms (2.48×)** | +0.02 ms | +6.9 ms | 11 | ~8940 MB§ | 15209 MB‡ |
-| Windows 11, RTX 5080 16 GB | Vulkan (llama.cpp) | `gemma2:9b` | 4.65 ms | 11.29 ms | **+6.64 ms (2.43×)** | +0.03 ms | +6.7 ms | 11 | ~6600 MB§ | 15209 MB‡ |
+| Windows 11, RTX 5080 16 GB | CUDA (Ollama) | `qwen2.5-coder:14b` — 5 runs✦ | 4.43 ms | 11.57 ms | **+7.11 ms (2.61×) [2.48–2.66]** | +0.03 ms | +8.3 ms | +939/min◊ | 9031 MB | 15209 MB‡ |
+| Windows 11, RTX 5080 16 GB | Vulkan (llama.cpp b10107) | `qwen2.5-coder:14b` — 5 runs✦ | 4.48 ms | 11.21 ms | **+6.73 ms (2.50×) [2.49–2.55]** | +0.04 ms | +8.2 ms | +779/min◊ | ~8880 MB§ | 15209 MB‡ |
+| ~~Windows 11, RTX 5080 16 GB~~ | ~~CUDA (Ollama)~~ | ~~`gemma2:9b`~~ | — | — | **withdrawn✦** | — | — | — | — | — |
+| ~~Windows 11, RTX 5080 16 GB~~ | ~~Vulkan (llama.cpp)~~ | ~~`gemma2:9b`~~ | — | — | **withdrawn✦** | — | — | — | — | — |
 | Windows 11, Intel Core Ultra 7 155U iGPU (32 GB unified) | Vulkan (llama.cpp) | `qwen2.5-3b-instruct-q4_k_m` — 4 runs¶ | 35.02 ms | 56.07 ms | **+20.93 ms (1.60×) [1.56–1.61]** | +1.90 ms | +21.4 ms | n/a‖ | ~2087 MB# | 17605 MB☆ |
 
 Raw artifacts (frame samples, driver phases, sysinfo) are written to
@@ -346,8 +345,23 @@ full heap regardless of what another process holds. See *The VRAM budget does no
 below — it is a difference in what the driver reports, not in what is available.
 
 § `llama-server` exposes no equivalent of Ollama's `/api/ps`, so the Vulkan rows' model footprint is
-an `nvidia-smi` delta against a measured model-free desktop baseline of 2928 MB, not a per-process
-figure. Treat it as approximate; the CUDA rows' numbers come from `/api/ps` directly.
+an `nvidia-smi` delta against a measured model-free desktop baseline (2928 MB originally; 2809 MB on
+the #1021 re-run), not a per-process figure. Treat it as approximate; the CUDA rows' numbers come
+from `/api/ps` directly. The #1021 re-run does remove the *weights* as a variable: `llama-server` was
+pointed at Ollama's own GGUF blob, so both Windows rows served byte-identical weights.
+
+✦ **The original Windows rows were invalid and have been replaced or withdrawn (#1021).** Every
+Windows run before #1021 addressed the inference endpoint as `localhost`, which resolves to `::1`
+first while both servers bind IPv4 only; the IPv6 connect had to time out before falling back, at
+**~2.1 s of dead wait per request**. It never errored, so nothing looked wrong. But `driver.py` loops
+requests until the burst deadline, so the stall did not slow the bursts — it *emptied* them: **45
+requests per run instead of ~350**, leaving each 20 s burst **~85 % idle**. Those rows compared a
+nearly-idle window against the idle baseline. The two `qwen2.5-coder:14b` rows above are re-measured
+over IPv4 at full load (5 runs each, median [min–max], zero analyzer warnings, all ten runs at one
+4.16 ms idle cadence). The two `gemma2:9b` Windows rows are **withdrawn rather than corrected** —
+they carry the same defect and have not been re-measured; they will return when that cell is re-run.
+The Linux and macOS rows are unaffected (their request counts, 373 and 540 per run, confirm they ran
+under full load).
 
 ◊ **The Hitches column is retired and is not comparable across these rows (#1022).** Every value
 here was counted against a fixed `>33.3 ms` threshold, which measures a different thing on each row:
@@ -357,11 +371,9 @@ interval**, so the numbers above cannot be compared with anything measured after
 with each other across different frame rates. They are left in place rather than deleted because
 they are real counts of frames over 33.3 ms — they are simply not a cross-row statistic. Each row's
 value will be re-based when that cell is next measured; until then read Δ p95 / Δ p99 / worst-1%,
-which are unaffected.
-
-The two `qwen2.5-coder:14b` Vulkan rows are the **same configuration measured twice**, listed
-separately rather than averaged because the spread between them is the most important thing the
-Windows leg found. See *Run-to-run variance* below.
+which are unaffected. The two re-measured Windows rows (#1021) carry the **new** calibrated metric —
+a per-minute *delta* against 2× that run's own idle median — so they are comparable with each other
+but not with the fixed-threshold counts on the remaining rows, which is why the unit differs.
 
 ¶ The Intel row is the first cell measured with `--repeat` (#1019): 5 runs, reported as median
 [min–max]. It is **4 runs, not 5** — run 1 sat on a different vsync divisor for its entire duration
@@ -443,29 +455,40 @@ of local inference is hitching, not slowness* — and Linux's numbers are the op
 not a representative one. Note these idle baselines are again vsync-pinned (4.17 ms mean at 239 Hz),
 so the Windows rows carry the same "floor, not typical case" caveat as the Linux row.
 
-**Run-to-run variance: this data cannot rank CUDA against Vulkan.** #782 expected the Vulkan backend
-to be the interesting one — inference and the renderer on the same API and the same queue family is
-the configuration most likely to contend. It may well be, but *these runs cannot show it*. The two
-CUDA rows agree almost exactly (1.84× and 1.85×), which invites reading the first Vulkan row's 1.49×
-as "Vulkan contends less". Re-running that identical cell produced **2.48×** — a 3× swing in the
-delta, from the same binary, model, scene and machine minutes apart. The spread *within* one cell is
-larger than the gap *between* backends, so any CUDA-vs-Vulkan ordering read off this table is noise.
-The CUDA pair's agreement is then better explained as coincidence than as precision.
+**Run-to-run variance: the Windows swing was a defect, not noise (#1021).** #782 expected the Vulkan
+backend to be the interesting one — inference and the renderer on the same API and the same queue
+family is the configuration most likely to contend. The original Windows data appeared to say the
+question was unanswerable: the same Vulkan cell measured 1.49× and then **2.48×** minutes apart, a
+spread *within* one cell larger than the gap *between* backends, which is why #1016 built
+`--repeat`/aggregate and why those rows carried "the backend ordering is not to be read".
 
-What this does establish: **every** Windows configuration measured — both backends, both model
-sizes, five runs — shows the same flat-mean, heavy-tail signature, with Δ p99 never below +2.2 ms.
-That is the finding. Ranking the backends would need repeated runs per cell and a reported
-distribution rather than a single number; at n=1 the tail statistic is not reproducible enough to
-support it.
+That swing was not p99 instability. Both runs were served over `localhost` and spent ~2.1 s of every
+request waiting on an IPv6 connect timeout, so each 20 s burst carried 9 requests instead of ~75 and
+was ~85 % idle (see ✦ above). The measurement was comparing two nearly-idle windows, and the ratio
+between two nearly-idle windows is close to arbitrary. Re-run over IPv4 at full load, the same Vulkan
+cell is **2.50× [2.49–2.55] across five runs**, and the harness's own verdict is that p99 is stable
+enough for the median to be a defensible point value.
 
-The harness now does exactly that (#1016): `--repeat N` on any runner boots the server once, runs
-the measurement N times against the same warm model, and aggregates the runs into a **median
-[min–max]** per metric plus a p99-stability verdict, so a cell's spread is reported next to its
-value instead of a lone number inviting the over-reading above. Whether the CUDA/Vulkan
-same-queue-family difference is real or below the noise floor is now a `--repeat 5` per backend
-away — ideally on a second GPU, since one card's driver behaviour is not a general answer. Until
-those runs are done the RTX 5080 rows above stay single-run and their backend ordering is not to be
-read.
+**The corrected answer: on Windows the two backends are indistinguishable.** Every metric's range
+overlaps — p99 ratio [2.48–2.66] vs [2.49–2.55], Δ p99 [6.71–7.37] vs [6.68–6.81], worst-1%
+[7.57–8.56] vs [7.91–8.41] — and the Δ p95 medians are identical to two decimals (4.38 ms). Vulkan
+served **1.53× more requests** (535/run vs 351) at **identical per-request token work** (143.3 prompt
+/ 9.0 generation tokens, from each server's own accounting), so its marginally lower numbers are not
+"it did less work". The supported statement is that the backend difference is **below the noise floor
+on this hardware**, not that either backend wins.
+
+**And that disagrees with Linux, which is the interesting part.** On Linux the same comparison is
+disjoint by a wide margin (Δ p95: CUDA 1.72 ms [1.16–1.85] vs Vulkan 0.02 ms [0.01–0.06]); on Windows
+both cost 4.38 ms. The whole effect is the Vulkan leg moving — essentially free on Linux, 4.38 ms
+under Windows, on the same card with the same binary, weights and flags. The natural reading is that
+WDDM's compute-vs-graphics scheduling imposes a per-contender cost that swamps the API-path
+difference, so under Windows it stops mattering which API the inference uses. **That is inference
+from the pattern, not a measurement** — confirming it needs GPU-scheduler-level tracing (#1025).
+
+What survives unchanged: **every** configuration measured on either OS shows the same flat-mean,
+heavy-tail signature. That is still the finding, and it is what bears on #769 — client-local
+inference costs the frame budget materially on Windows regardless of backend (~2.5× p99, ~4.4 ms at
+p95), which supports server-side hosting rather than undermining it.
 
 ### The Intel iGPU row is vsync-divisor-locked, and that is the whole story (#1019)
 
@@ -705,7 +728,7 @@ then measured as contention):
     tools/gpu_contention/measure_linux.sh --model qwen2.5-coder:14b            # Linux
     tools/gpu_contention/measure_macos.sh --model qwen2.5-coder:14b            # macOS / Metal
     .\tools\gpu_contention\measure_windows.ps1 -Model qwen2.5-coder:14b -Label cuda
-    .\tools\gpu_contention\measure_windows.ps1 -BaseUrl http://localhost:8080 -Model local -Label vulkan
+    .\tools\gpu_contention\measure_windows.ps1 -BaseUrl http://127.0.0.1:8081 -Model local -Label vulkan
 
 Each runner prints the analyzed Markdown and writes it to `tools/gpu_contention/results/`
 (git-ignored). **The analyzer exits non-zero when it emits warnings** — a run whose numbers are not

@@ -58,8 +58,15 @@ tools/gpu_contention/measure_macos.sh --model qwen2.5-coder:14b
 
 # Windows — run twice, once per inference backend (#782 names both)
 .\tools\gpu_contention\measure_windows.ps1 -Model qwen2.5-coder:14b -Label cuda
-.\tools\gpu_contention\measure_windows.ps1 -BaseUrl http://localhost:8080 -Model local -Label vulkan
+.\tools\gpu_contention\measure_windows.ps1 -BaseUrl http://127.0.0.1:8081 -Model local -Label vulkan
 ```
+
+**On Windows, address the endpoint as `127.0.0.1`, never `localhost` (#1021).** Both inference
+servers bind IPv4 only, but `localhost` resolves to `::1` first; the IPv6 connect has to time out
+before the client falls back, costing **~2.1 s of dead wait per request**. It never errors, so the
+run looks clean — but the driver loops requests until a deadline, so the stall does not slow the
+burst, it *empties* it: ~45 requests instead of ~350, leaving each burst ~85 % idle and comparing a
+nearly-idle window against the idle baseline. Every Windows run before #1021 was measured this way.
 
 Options are the same across all three (`--help` on the shell scripts). Defaults: `builtin:sandbox`
 as the scene, the `intent` workload, 5 × 20 s bursts, one request in flight. Results land in
@@ -111,6 +118,13 @@ Two practical consequences when reading a `--repeat` aggregate from any vsync-li
 - **Prefer Δ p95 to Δ p99 on a quantized frame clock.** Δ p95 held within 1.3 ms across all five
   runs *including* the odd one; Δ p99 ranged over 34 ms, because p99 lands wherever the next divisor
   is. On that machine the real effect was exactly one missed refresh interval.
+
+  **That preference is conditional, not general (#1021).** It was drawn from a quantized 30 fps clock,
+  and the Linux cell that echoed it turned out to be lightly loaded. On a 240 fps client under full
+  burst load — ~350 requests/run rather than 45 — the ordering reverses: p99 was the *stable*
+  statistic on both Windows backends (spreads 0.18× and 0.06× against 1.61× and 1.50× effects, both
+  verdicts "defensible point value") while Δ p95 was the noisier one. Read the harness's own
+  per-cell stability verdict rather than assuming either statistic wins everywhere.
 
 ### The hitch counter is relative to the run's own baseline (#1022)
 

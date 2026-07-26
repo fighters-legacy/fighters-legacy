@@ -32,6 +32,29 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **ai**: the Windows GPU-contention runner now addresses the inference endpoint as `127.0.0.1`
+  rather than `localhost` (#1021), and warns when an explicit `-BaseUrl` still says `localhost`.
+  Both inference servers bind IPv4 only, but `localhost` resolves to `::1` first on Windows and the
+  IPv6 connect has to time out before the client falls back — **~2.1 s of dead wait on every
+  request**, with no error and nothing wrong-looking in any artifact. Because `driver.py` loops
+  requests until the burst deadline, the stall did not slow the bursts, it *emptied* them: every
+  Windows run served **45 requests instead of ~350**, so each 20 s burst was **~85 % idle** and the
+  measurement compared a nearly-idle window against the idle baseline. Ollama's own accounting made
+  it provable — identical token counts (143.3 prompt / 9.0 generation) and ~0.3 s of
+  `total_duration` behind a 2.39 s wall clock, falling to 0.271 s over IPv4. **This invalidated
+  every Windows row of the #782 results table**, including the 1.49× → 2.48× p99 swing that
+  motivated #1016 and #1021: that swing was not p99 instability but two nearly-idle windows being
+  compared. Re-run under load, the same Vulkan cell is a stable 2.50× [2.49–2.55]. The table is
+  updated accordingly — both `qwen2.5-coder:14b` Windows rows replaced with 5-run aggregates, both
+  `gemma2:9b` Windows rows **withdrawn** (same defect, not re-measured), and the *Run-to-run
+  variance* section rewritten: on Windows the two backends are indistinguishable (every range
+  overlaps; Δ p95 medians identical at 4.38 ms), which disagrees with Linux, where they are disjoint.
+  That cross-OS difference is left flagged as inference pending scheduler-level tracing (#1025). The runbook's own
+  instruction to pass `-BaseUrl http://localhost:...` is why the warning exists as well as the
+  corrected default; the README and `docs/ai-provider-evaluation.md` commands are corrected to match,
+  and the README's "prefer Δ p95" guidance (#1019) is now marked conditional — under full burst load
+  on a 240 fps client the ordering reverses and p99 is the stable statistic.
+
 - **ai**: a GPU-contention run whose `analyze.py` emitted warnings no longer passes silently on
   Windows (#1019). The harness README states analyze.py exits non-zero on warnings precisely so "a
   run whose numbers are not trustworthy must not look like a clean pass", but `Invoke-Run` checked
