@@ -560,6 +560,34 @@ if(TARGET platform-enet)
         target_link_libraries(test_rcon_server PRIVATE ws2_32)
     endif()
     catch_discover_tests(test_rcon_server)
+
+    # Admin-console stdin reader (#1038). Pure line assembly + the reader lifecycle; no fd, no
+    # server. StdinCommandReader.cpp is in no library, so it is compiled directly (the
+    # test_rcon_server recipe). Threads only -- the platform read loop needs no link deps.
+    find_package(Threads REQUIRED)
+    add_executable(test_stdin_reader test_stdin_reader.cpp
+        "${CMAKE_SOURCE_DIR}/server/fl-server/StdinCommandReader.cpp")
+    target_link_libraries(test_stdin_reader PRIVATE Catch2::Catch2WithMain Threads::Threads)
+    target_include_directories(test_stdin_reader PRIVATE
+        "${CMAKE_SOURCE_DIR}/server/fl-server"
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+    catch_discover_tests(test_stdin_reader)
+endif()
+
+# Shutdown-deadlock regression (#1038): spawns the REAL fl-server with its stdin held open (the
+# condition the deadlock needs, and the way the game client starts single-player) and requires it to
+# exit on `quit` within a deadline. Needs the built binary, so it is gated on the target; the path
+# is passed WITHOUT an extension because Subprocess::spawn appends .exe on Windows itself.
+if(TARGET fl-server AND TARGET platform-subprocess)
+    add_executable(test_server_shutdown test_server_shutdown.cpp)
+    target_link_libraries(test_server_shutdown PRIVATE Catch2::Catch2WithMain platform-subprocess platform-hal)
+    target_compile_definitions(test_server_shutdown PRIVATE
+        FL_SERVER_BIN="$<TARGET_FILE_DIR:fl-server>/fl-server")
+    target_include_directories(test_server_shutdown PRIVATE
+        "${CMAKE_SOURCE_DIR}/platform"
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_dependencies(test_server_shutdown fl-server)
+    catch_discover_tests(test_server_shutdown)
 endif()
 
 # Mission-source resolution (server/fl-server/MissionSource.h, header-only): builtin id -> .yaml

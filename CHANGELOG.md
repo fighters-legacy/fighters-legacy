@@ -7,6 +7,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **server**: `fl-server` no longer hangs on shutdown when its stdin stays open — both `quit` and Ctrl-C wedged the process inside `exit()`, because the detached console reader held the stdin stdio lock that exit-time flushing waits on. The reader now waits with a timeout on the raw handle and is joined before `main()` returns (#1038)
+
 ## [0.3.11] - 2026-07-26
 
 ### Added

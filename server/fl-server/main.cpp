@@ -23,6 +23,7 @@
 #include "NetworkFactory.h"
 #include "RconServer.h"
 #include "ServerCommands.h"
+#include "StdinCommandReader.h"
 #include "StdoutLogger.h"
 #include "TestSpawn.h"
 #include "bots.h"
@@ -111,12 +112,10 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
-#include <iostream>
 #include <memory>
 #include <mutex>
 #include <numbers>
 #include <optional>
-#include <queue>
 #include <string>
 #include <thread>
 #include <unordered_set>
@@ -2369,15 +2368,13 @@ int main(int argc, char** argv) {
     }
 
     // ---- Admin console (stdin command loop) ----
-    std::mutex stdinMutex;
-    std::queue<std::string> stdinLines;
-    std::thread([&stdinMutex, &stdinLines]() {
-        std::string line;
-        while (std::getline(std::cin, line)) {
-            std::lock_guard<std::mutex> lk(stdinMutex);
-            stdinLines.push(std::move(line));
-        }
-    }).detach();
+    // The reader owns its thread and is stopped before main() returns (#1038). It reads fd 0 / the
+    // console handle directly rather than std::cin, so it never holds the C-stdio lock that
+    // exit-time flushing waits on -- the deadlock that used to wedge both `quit` and Ctrl-C for any
+    // parent that keeps stdin open.
+    fl::StdinCommandReader stdinReader;
+    stdinReader.start();
+    std::vector<std::string> stdinLines;
 
     // Per-phase tick-budget JSON export (atomic .tmp -> rename each interval). Disabled when path empty.
     const std::string metricsPath = cfg.metrics.tickJsonPath;
@@ -2409,10 +2406,9 @@ int main(int argc, char** argv) {
     const uint64_t rssStartupKb = fl::currentRssKb();
     while (!g_quit) {
         {
-            std::lock_guard<std::mutex> lk(stdinMutex);
-            while (!stdinLines.empty()) {
-                std::string line = std::move(stdinLines.front());
-                stdinLines.pop();
+            stdinLines.clear();
+            stdinReader.drain(stdinLines);
+            for (const std::string& line : stdinLines) {
                 std::string result = adminRegistry.dispatch(line);
                 if (!result.empty())
                     std::printf("[admin] %s\n", result.c_str());
@@ -2492,6 +2488,10 @@ int main(int argc, char** argv) {
         httpClient->service();
         httpClient->shutdown();
     }
+
+    // Stop the console reader BEFORE the rest of the teardown: it is the one thread that outlived
+    // main() and wedged exit (#1038). Everything below this line already joined its own threads.
+    stdinReader.stop();
 
     if (httpAdminServer)
         httpAdminServer->stop();
