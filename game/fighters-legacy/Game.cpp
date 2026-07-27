@@ -2566,7 +2566,8 @@ void Game::run() {
                 // Keep terrain refinement honest about the FOV in use, or SSE tile selection refines for
                 // a field of view the player is not looking through.
                 if (d.services.terrainStreamer)
-                    d.services.terrainStreamer->setViewParams(d.services.p.window->height(), glm::radians(fovDeg));
+                    d.services.terrainStreamer->setViewParams(static_cast<float>(d.services.p.window->height()),
+                                                              glm::radians(fovDeg));
 
                 if (d.services.rendererSettings.evOffset != d.services.photo.evOffset) {
                     d.services.rendererSettings.evOffset = d.services.photo.active ? d.services.photo.evOffset : 0.f;
