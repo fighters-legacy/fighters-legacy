@@ -36,6 +36,12 @@ class LocalServer {
     // the sandbox — the same behavior as before this seam existed. Call before start().
     void setMission(std::string missionName);
 
+    // Where the embedded server writes its `.flrep` recordings (#41/#643). The server otherwise
+    // resolves [replay] dir against its own working directory, which is wherever the CLIENT was
+    // launched from -- so single-player recordings would land somewhere the replay browser does not
+    // look. The client owns its user-data location, so the client names the directory.
+    void setReplayDir(std::string dir);
+
     enum class StartResult {
         Ok,          // fl-server started and is listening
         SpawnFailed, // subprocess could not be created (binary not found)
@@ -74,6 +80,7 @@ class LocalServer {
     ILogger& m_log;
     std::string m_contentRoot; // forwarded to fl-server via --assets; empty = server resolves its own
     std::string m_mission;     // forwarded to fl-server via --mission; empty = sandbox (#634)
+    std::string m_replayDir;   // forwarded via --replay-dir; empty = the server's own [replay] dir
     struct Impl;
     std::unique_ptr<Impl> m_impl;
 };

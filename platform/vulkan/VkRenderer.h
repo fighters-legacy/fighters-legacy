@@ -99,7 +99,8 @@ struct TonemapPush {
     float bloomStrength{0.0f}; // bloom blend multiplier (0 = disabled)
     float aoStrength{0.0f};    // GTAO darkening strength (0 = AO disabled)
     float nvgIntensity{0.0f};  // night-vision green tint/gain (#210); 0 = off (consumes a pad slot)
-    float _pad[2]{};           // 16-byte alignment → 32 bytes
+    float exposureScale{1.0f}; // exp2(evOffset) from photo mode (#41); 1 = no change (a pad slot)
+    float _pad[1]{};           // 16-byte alignment → 32 bytes
 };
 static_assert(sizeof(TonemapPush) == 32);
 static_assert(sizeof(TonemapPush) <= 128);

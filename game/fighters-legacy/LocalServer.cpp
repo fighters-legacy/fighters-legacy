@@ -63,6 +63,10 @@ void LocalServer::setMission(std::string missionName) {
     m_mission = std::move(missionName);
 }
 
+void LocalServer::setReplayDir(std::string dir) {
+    m_replayDir = std::move(dir);
+}
+
 // Explicit destructor defined here so the compiler sees Impl as a complete type
 // when unique_ptr<Impl> is destroyed (pimpl pattern requirement).
 LocalServer::~LocalServer() {
@@ -110,6 +114,13 @@ LocalServer::StartResult LocalServer::start(const char* bindAddr, uint16_t port)
                                   "enet",
                                   "--flight-size",
                                   "1"};
+
+    // Recordings go to the client's user-data directory (#41), not the process working directory,
+    // so the replay browser and the embedded server agree on where a replay lives.
+    if (!m_replayDir.empty()) {
+        args.emplace_back("--replay-dir");
+        args.emplace_back(m_replayDir);
+    }
 
     // Forward the client's resolved content root so the embedded server finds the same mods/ (#831).
     if (!m_contentRoot.empty()) {

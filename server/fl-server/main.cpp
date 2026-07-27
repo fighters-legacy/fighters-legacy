@@ -197,6 +197,7 @@ int main(int argc, char** argv) {
     std::string flagAdminToken;    // non-empty if --admin-token was given (internal single-player use)
     std::string flagTransport;     // non-empty if --transport <gns|enet> was given (overrides [network])
     std::string flagMetricsJson;   // non-empty if --metrics-json path was given (overrides [metrics])
+    std::string flagReplayDir;     // non-empty if --replay-dir was given (overrides [replay] dir)
     std::string flagAssets;        // non-empty if --assets <dir> was given (content root; single-player forwards it)
     long flagSimWorkers = -1;      // >=0 if --sim-worker-threads was given (overrides [world])
     long flagFlightSize = -1;      // >=0 if --flight-size was given (overrides [flight] size)
@@ -217,6 +218,7 @@ int main(int argc, char** argv) {
                 "  --bind <addr>      Bind address (overrides server.toml and FL_BIND_ADDRESS)\n"
                 "  --assets <dir>     Content root holding mods/ (overrides FL_ASSETS_ROOT and the CWD)\n"
                 "  --metrics-json <p> Write the per-phase tick-budget JSON to <p> (overrides [metrics])\n"
+                "  --replay-dir <p>   Write .flrep recordings to <p> (overrides [replay] dir)\n"
                 "  --sim-worker-threads <n>  Sim-tick CPU parallelism; 0=auto, 1=serial (overrides [world])\n"
                 "  --flight-size <n>         AI wingmen per player; 0=none (overrides [flight])\n"
                 "  --mission <name>          Load a mission at startup (overrides [rotation])\n"
@@ -258,6 +260,8 @@ int main(int argc, char** argv) {
             flagAdminToken = argv[++i];
         if (std::strcmp(argv[i], "--metrics-json") == 0 && i + 1 < argc)
             flagMetricsJson = argv[++i];
+        if (std::strcmp(argv[i], "--replay-dir") == 0 && i + 1 < argc)
+            flagReplayDir = argv[++i];
         if (std::strcmp(argv[i], "--assets") == 0 && i + 1 < argc)
             flagAssets = argv[++i];
         if (std::strcmp(argv[i], "--mission") == 0 && i + 1 < argc)
@@ -312,6 +316,10 @@ int main(int argc, char** argv) {
     // --metrics-json overrides the [metrics] tick_json_path from server.toml.
     if (!flagMetricsJson.empty())
         cfg.metrics.tickJsonPath = flagMetricsJson;
+    // The embedded single-player server is told where to record (#41): its working directory is
+    // wherever the CLIENT was launched from, which is not where the replay browser looks.
+    if (!flagReplayDir.empty())
+        cfg.replay.dir = flagReplayDir;
     // --sim-worker-threads overrides the [world] sim_worker_threads from server.toml.
     if (flagSimWorkers >= 0)
         cfg.simWorkerThreads = static_cast<uint32_t>(flagSimWorkers);

@@ -14,6 +14,7 @@
 #include "net/AckWindow.h"
 #include "net/BitStream.h"
 #include "net/GameProtocol.h"
+#include "net/RenderEntryFromQuant.h" // the ONE QuantEntity -> EntityRenderEntry mapping (#41)
 #include "net/SnapshotCodec.h"
 #include "net/SnapshotCompression.h"
 #include "net/SnapshotScheduler.h" // kSnapshotRetentionTicks
@@ -312,33 +313,15 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
                 qe.factionIndex = kit->second.factionIndex; // #860: cached like typeIndex
             }
 
+            // The ONE QuantEntity -> EntityRenderEntry mapping, shared with replay playback (#41):
+            // D7's premise is that the renderer cannot tell a replay from a live session, which only
+            // holds if both paths build the same entry from the same bits.
             fl::EntityRenderEntry re;
-            re.entityIdx = qe.idx;
-            re.entityGen = qe.gen;
-            re.typeIndex = qe.typeIndex;
-            re.factionIndex = qe.factionIndex;
-            re.position = {qe.pos[0], qe.pos[1], qe.pos[2]};
-            re.velocity = {qe.vel[0], qe.vel[1], qe.vel[2]};
-            // Wire quaternion order x,y,z,w — glm::quat constructor is (w,x,y,z).
-            re.orientation = glm::quat(qe.quat[3], qe.quat[0], qe.quat[1], qe.quat[2]);
-            re.damageLevel = qe.damageLevel;
-            re.playerOwned = qe.playerOwned;
-            re.throttle = qe.throttle;
-            re.fuelPct = qe.fuelPct;
-            re.abEngaged = qe.abEngaged;
-            re.engineFailFlags = qe.engineFailFlags;
-            re.omega = {qe.omega[0], qe.omega[1], qe.omega[2]};
-            // Own-record loadout block (#625) — travels with omega, own entity only.
-            re.hasLoadout = qe.hasOmega;
-            re.selectedStation = qe.selectedStation;
-            re.stationRounds = qe.stationRounds;
-            re.weaponFlags = qe.weaponFlags;
-            re.payloadMassKg = qe.payloadMassKg;
-            re.payloadCd0 = qe.payloadCd0;
             // Articulation is carried on its own TLV (#843) and updates on CHANGE, so a record decode
-            // must not wipe it: hold the last known channel values across the overwrite.
+            // must not wipe it: prime from the cache first, since renderEntryFromQuant leaves it alone.
             if (auto cached = m_entityCache.find(qe.idx); cached != m_entityCache.end())
                 std::memcpy(re.artChannels, cached->second.re.artChannels, sizeof(re.artChannels));
+            fl::renderEntryFromQuant(qe, re);
             m_entityCache[qe.idx] = {re, hdr.tickIndex};
         }
 

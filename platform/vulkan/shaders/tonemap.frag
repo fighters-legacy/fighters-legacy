@@ -19,6 +19,7 @@ layout(push_constant) uniform TonemapPush {
     float bloomStrength; // 0 = no bloom
     float aoStrength;    // 0 = AO disabled
     float nvgIntensity;  // 0 = off; night-vision green tint/gain (#210)
+    float exposureScale; // exp2(EV offset) from photo mode (#41); 1 = unchanged
 } push;
 
 // ---------------------------------------------------------------------------
@@ -49,6 +50,10 @@ vec3 khronosPbrNeutral(vec3 color) {
 // ---------------------------------------------------------------------------
 vec3 sampleAndTonemap(vec2 uv) {
     vec3 hdr = texture(hdrBuffer, uv).rgb;
+    // Exposure compensation multiplies LINEAR radiance before the curve (#41). Applied here, not
+    // after tonemapping, so raising exposure recovers real highlight detail instead of washing out
+    // an already-compressed image.
+    hdr *= push.exposureScale;
     // Apply ambient occlusion before bloom (forward-renderer approximation: scales total radiance).
     if (push.aoStrength > 0.0) {
         float ao = texture(aoBuffer, uv).r;

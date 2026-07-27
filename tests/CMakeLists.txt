@@ -600,6 +600,28 @@ target_include_directories(test_replay_format PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_replay_format)
 
+# ReplayPlayer (#41): playback timing, speed control and scrubbing. Compiles the game-layer source
+# directly (the test_screen_manager idiom) and links engine-replay for the reader.
+add_executable(test_replay_player test_replay_player.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ReplayPlayer.cpp")
+target_link_libraries(test_replay_player PRIVATE Catch2::Catch2WithMain engine-replay engine-render platform-hal)
+target_include_directories(test_replay_player PRIVATE
+    "${CMAKE_SOURCE_DIR}/engine"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
+    "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_replay_player)
+
+# The replay browser (#41): the directory scan and the list/confirm behaviour, including the refusal
+# path for a file this build cannot read.
+add_executable(test_replay_select test_replay_select.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ReplaySelectScreen.cpp")
+target_link_libraries(test_replay_select PRIVATE Catch2::Catch2WithMain engine-replay platform-hal)
+target_include_directories(test_replay_select PRIVATE
+    "${CMAKE_SOURCE_DIR}/engine"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
+    "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_replay_select)
+
 # Mission-source resolution (server/fl-server/MissionSource.h, header-only): builtin id -> .yaml
 # file path -> pack Mission asset. Needs engine-content for AssetManager only; no networking.
 add_executable(test_mission_source test_mission_source.cpp)
@@ -1282,6 +1304,8 @@ catch_discover_tests(test_debrief_screen)
 
 add_executable(test_screen_manager test_screen_manager.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ScreenManager.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ReplayPlayer.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ReplaySelectScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/MainMenuScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/JoinServerScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ServerBrowserScreen.cpp"
@@ -1308,7 +1332,7 @@ add_executable(test_screen_manager test_screen_manager.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightInputCollector.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp")
 target_link_libraries(test_screen_manager PRIVATE
-    Catch2::Catch2WithMain engine-config engine-render engine-sandbox engine-content engine-console engine-input engine-net engine-entity engine-weather engine-flight engine-manual engine-audio engine-i18n engine-ai engine-spatial platform-sdl3 platform-hal SDL3::SDL3)
+    Catch2::Catch2WithMain engine-config engine-render engine-sandbox engine-content engine-console engine-input engine-net engine-replay engine-entity engine-weather engine-flight engine-manual engine-audio engine-i18n engine-ai engine-spatial platform-sdl3 platform-hal SDL3::SDL3)
 target_include_directories(test_screen_manager PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
 if(WIN32)
