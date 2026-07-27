@@ -424,6 +424,18 @@ add_library(engine-compress STATIC
 target_include_directories(engine-compress PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-compress PRIVATE fl::zstd)
 
+# `.flrep` replay codec (#643) — the writer the server records with and the reader the CLIENT plays
+# back with (#41) and the determinism gate compares with (#644). Its own target on purpose: the
+# reader belongs in the game binary, and folding it into engine-net would drag the whole server sim
+# into the client to read a file. Reaches engine-protocol (the record encoding) + engine-compress
+# (the zstd framing) and nothing else — no platform backend, no engine-net.
+add_library(engine-replay STATIC
+    replay/ReplayWriter.cpp
+    replay/ReplayReader.cpp
+)
+target_include_directories(engine-replay PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(engine-replay PUBLIC engine-protocol engine-compress)
+
 # Authoritative server-sim serializer and network broadcaster.
 add_library(engine-net STATIC
     net/NetworkUtils.cpp

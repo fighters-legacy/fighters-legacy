@@ -9,18 +9,19 @@ target_include_directories(fl-server-config PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
     PRIVATE "${CMAKE_SOURCE_DIR}/engine")  # config/TomlNumeric.h — header-only, no link needed
 
 add_executable(fl-server main.cpp ServerCommands.cpp IpListFile.cpp RconServer.cpp HttpAdminServer.cpp
-    StdinCommandReader.cpp)
+    StdinCommandReader.cpp ReplayRecorder.cpp)
 # platform-net is the backend-selecting facade (enet6 always, GNS when FL_ENABLE_GNS); fl-server
 # picks the transport at runtime via createNetwork(cfg.network.transport).
 target_link_libraries(fl-server PRIVATE
     fl-server-config platform-net engine-net engine-entity engine-loop engine-weather engine-console
     engine-config engine-render engine-content engine-difficulty engine-flight engine-ai engine-script
-    engine-perf engine-weapon engine-bootstrap engine-sensor engine-mission engine-campaign engine-campaign-png engine-match
+    engine-replay engine-perf engine-weapon engine-bootstrap engine-sensor engine-mission engine-campaign engine-campaign-png engine-match
     platform-stdfs platform-http
     # cpp-httplib: the embedded REST admin API + /health (#233), and in Stage 3 the MCP endpoint
     # (#601). Confined to this binary by cmake/layering.cmake -- no engine-* target may link it.
     httplib::httplib)
 target_include_directories(fl-server PRIVATE
+    "${CMAKE_BINARY_DIR}/engine"  # generated Version.h: the engine version stamped into recordings
     "${CMAKE_SOURCE_DIR}/platform/net"
     "${CMAKE_SOURCE_DIR}/platform/http"
     "${enet6_SOURCE_DIR}/include")

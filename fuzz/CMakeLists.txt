@@ -113,6 +113,10 @@ target_include_directories(fuzz_client_msg PRIVATE "${CMAKE_SOURCE_DIR}/game/fig
 fl_add_fuzzer(fuzz_asset_validator)
 target_link_libraries(fuzz_asset_validator PRIVATE engine-content)
 
+# .flrep replay reader (#643): a file downloaded from a stranger, per docs/replay-format.md §5.
+fl_add_fuzzer(fuzz_flrep)
+target_link_libraries(fuzz_flrep PRIVATE engine-replay)
+
 # decodeTerrainChunkPng — 16-bit grayscale PNG decoder (stb_image).
 fl_add_fuzzer(fuzz_terrain_png)
 target_link_libraries(fuzz_terrain_png PRIVATE engine-render)
@@ -161,7 +165,7 @@ target_link_libraries(fuzz_mesh_json PRIVATE validate-mesh-lib)
 # Regenerates the committed corpus/<name>/seed-*.bin from the same builders the unit tests use.
 # Run once after building: ./build/fuzz/fuzz/fuzz-mint-seeds
 add_executable(fuzz-mint-seeds mint_seeds.cpp "${CMAKE_SOURCE_DIR}/server/fl-server/RconServer.cpp")
-target_link_libraries(fuzz-mint-seeds PRIVATE engine-protocol fl-server-config engine-console)
+target_link_libraries(fuzz-mint-seeds PRIVATE engine-protocol engine-replay fl-server-config engine-console)
 target_include_directories(fuzz-mint-seeds PRIVATE "${CMAKE_SOURCE_DIR}/server/fl-server"
                                                    "${CMAKE_SOURCE_DIR}/tests")
 target_compile_definitions(fuzz-mint-seeds PRIVATE FL_FUZZ_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")

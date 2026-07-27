@@ -7,6 +7,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **server**: server-side match recording to the `.flrep` replay format — every session records what the server broadcast (all entities, not one player's interest set) plus the interleaved match event log, keyframed for seek, zstd-chunked, rotated within a bounded directory, and written off the sim thread; `[replay]` config section (#643)
+
 ### Fixed
 
 - **server**: `fl-server` no longer hangs on shutdown when its stdin stays open — both `quit` and Ctrl-C wedged the process inside `exit()`, because the detached console reader held the stdin stdio lock that exit-time flushing waits on. The reader now waits with a timeout on the raw handle and is joined before `main()` returns (#1038)

@@ -5,38 +5,6 @@
 
 namespace fl {
 
-const char* matchEventTypeName(MatchEventType t) noexcept {
-    switch (t) {
-    case MatchEventType::Spawn:
-        return "spawn";
-    case MatchEventType::Despawn:
-        return "despawn";
-    case MatchEventType::Kill:
-        return "kill";
-    case MatchEventType::DamageLevel:
-        return "damage_level";
-    case MatchEventType::Score:
-        return "score";
-    case MatchEventType::Join:
-        return "join";
-    case MatchEventType::Leave:
-        return "leave";
-    case MatchEventType::Chat:
-        return "chat";
-    case MatchEventType::AdminCommand:
-        return "admin_command";
-    case MatchEventType::AlertLevel:
-        return "alert_level";
-    case MatchEventType::AgentAction:
-        return "agent_action";
-    }
-    return "unknown";
-}
-
-bool isMatchEventTypeOrdinal(uint8_t v) noexcept {
-    return v <= static_cast<uint8_t>(MatchEventType::AgentAction);
-}
-
 MatchEventLog::MatchEventLog(std::size_t capacity) : m_capacity(capacity == 0 ? 1 : capacity) {
     // Allocated once, up front: a ring that grows would defeat the bound it exists to enforce, and
     // the sim thread must not allocate mid-tick to record a kill.

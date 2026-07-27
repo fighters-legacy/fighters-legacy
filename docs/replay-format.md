@@ -1,9 +1,11 @@
 # `.flrep` — Replay File Format
 
-**Status:** specification. No code implements this yet — the writer is #643, the player is #41, and the
-determinism gate that consumes it is #644. This document is the contract those three build against, and
-it is deliberately written first, because a replay file is the first thing this engine produces that
-**outlives the build that wrote it**.
+**Status:** implemented as of v0.3.12. The writer and reader are `engine/replay/`
+(`ReplayWriter`/`ReplayReader`, #643), the server records through `WorldBroadcaster`'s replay tap
+into `server/fl-server/ReplayRecorder`, the client plays back through `ReplayPlayer` (#41), and the
+determinism gate compares state hashes computed from the file (#644). This document was written
+first, deliberately, because a replay file is the first thing this engine produces that **outlives
+the build that wrote it** — it remains the contract, not a description of the code.
 
 Related: [`network-protocol.md`](network-protocol.md) (the snapshot codec this reuses),
 [`snapshot-quantization.md`](snapshot-quantization.md) (the per-entity bit layout),
@@ -212,13 +214,30 @@ interleaves.
 **The determinism gate (#644).** Needs a per-tick state hash over the canonical `QuantEntity` stream.
 The hash is not stored in the file — it is *computed* from it on both the record and replay side, and
 compared. Storing it would let a recorder assert its own correctness, which is not a test.
+`engine/net/ReplayStateHash.h` is that primitive, and it hashes the **quantized integer domain**:
+quantization is lossy, so a record that goes through the codec can never equal its input in float
+space, but it must be exactly equal after quantization — and that comparison is also free of the
+float-ordering ambiguity that would make the gate flaky across workers and platforms.
 
 ---
 
-## 7. Open items for the implementing PRs
+## 7. Items left open by the spec, and how they were settled
 
-- **Keyframe cadence** is a `[replay]` config value, not a constant. The tradeoff is seek granularity
-  against file size; pick a default with a measured session, do not guess in the spec.
-- **Rotation bounds** (max file size, max retained files) belong to #643's `[replay]` config.
-- **Section `0x0004` (camera track)** stays unimplemented until #41 needs it. It is listed here so its
-  id is reserved rather than claimed later by something else.
+- **Keyframe cadence** is `[replay] keyframe_interval_ticks`, default **120** (2 s at 60 Hz), range
+  `[15, 3600]`. The spec said to measure it rather than guess, so it was measured: on a 40-entity
+  world with everything moving, a 25-second recording produced 701 bytes/tick at a 60-tick cadence,
+  700 at 300 and 700 at 600 — **0.4 % across a tenfold range**. The expected size/seek tradeoff
+  barely exists at this workload, because a delta record for a moving entity is nearly the size of a
+  full one and zstd absorbs the repeated keyframes. Cadence is therefore chosen for seek feel, and
+  set low. A world of mostly-static entities is the case where the tradeoff is real.
+- **Rotation bounds** are `[replay] max_file_mb` (default 256) and `max_files` (default 20). `max_files`
+  bounds the **directory**, not one session — a server recording one file per match would otherwise
+  fill a disk one perfectly-rotated file at a time. Rotation happens at a chunk boundary, so every
+  rotated file is independently playable.
+- **Section `0x0004` (camera track)** remains reserved and unwritten. #41's playback drives the live
+  camera path (`makeCameraView`) rather than a stored track, so nothing needs it yet; the id stays
+  claimed so nothing else takes it.
+- **Two things the implementation added**, both additive within format 1.0: the header carries
+  `keyframeIntervalTicks` (a reader shows seek granularity without scanning), and the index trailer
+  carries the recording's first and last tick (a replay browser shows a duration without
+  decompressing anything). A file with no trailer recovers both from the forward scan.

@@ -22,6 +22,7 @@
 #include "MissionSource.h"
 #include "NetworkFactory.h"
 #include "RconServer.h"
+#include "ReplayRecorder.h"
 #include "ServerCommands.h"
 #include "StdinCommandReader.h"
 #include "StdoutLogger.h"
@@ -35,6 +36,8 @@
 #include "sensor/SensorDefParser.h"
 #include "server_config.h"
 #include <content/ContentBootstrap.h>
+
+#include "Version.h" // FL_VERSION_STRING — stamped into every recording (#643)
 
 #include <ILogger.h>
 #include <Platform.h>
@@ -242,7 +245,7 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (std::strcmp(argv[i], "--version") == 0 || std::strcmp(argv[i], "-v") == 0) {
-            std::printf("fl-server %s (%s)\n", "0.0.1", networkBackendVersion(TransportKind::Gns));
+            std::printf("fl-server %s (%s)\n", FL_VERSION_STRING, networkBackendVersion(TransportKind::Gns));
             return 0;
         }
         if (std::strcmp(argv[i], "--persistent") == 0)
@@ -2302,6 +2305,78 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    // ---- Match recording (#643) ----
+    // Started here, last thing before the loop, so the sections describe the world the recording is
+    // actually about: every content pack is loaded, every projectile type is registered, and the
+    // faction table (if the mission brought one) is final. A `.flrep` whose entity-type manifest was
+    // captured earlier would store type indices that mean something else.
+    fl::ReplayRecorder replayRecorder;
+    if (cfg.replay.enabled) {
+        fl::ReplaySections sections;
+        sections.entityTypes.reserve(entityRegistry.typeCount());
+        for (uint32_t ti = 0; ti < entityRegistry.typeCount(); ++ti) {
+            const fl::EntityDef* def = entityRegistry.byIndex(ti);
+            if (!def)
+                continue;
+            fl::ReplayEntityType t;
+            t.typeIndex = ti;
+            t.id = def->id;
+            t.name = def->name;
+            t.category = static_cast<uint8_t>(def->category);
+            t.projectileKind = static_cast<uint8_t>(def->projectileKind);
+            sections.entityTypes.push_back(std::move(t));
+        }
+        for (uint16_t fi = 0; fi < missionFactions.count(); ++fi) {
+            if (const fl::FactionDef* fd = missionFactions.get(fi)) {
+                fl::ReplayFaction f;
+                f.factionIndex = fi;
+                f.id = fd->id;
+                f.name = fd->name;
+                sections.factions.push_back(std::move(f));
+            }
+        }
+        // The roster section is empty at this point by construction -- nobody has connected yet.
+        // Participants who join later arrive as Join events carrying their callsign, so a reader
+        // builds the roster forward as it reads (see WorldBroadcaster::recordParticipant).
+
+        const std::time_t now = std::time(nullptr);
+        std::tm tmv{};
+#if defined(_WIN32)
+        localtime_s(&tmv, &now);
+#else
+        localtime_r(&now, &tmv);
+#endif
+        char stamp[32];
+        std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &tmv);
+
+        fl::ReplayRecorder::Options ropts;
+        ropts.cfg = cfg.replay;
+        ropts.baseDir = std::filesystem::current_path();
+        ropts.baseName = std::string(stamp) + (loadedMissionName.empty() ? "" : "_" + loadedMissionName);
+        ropts.engineVersion = FL_VERSION_STRING;
+        ropts.tickRateHz = static_cast<uint32_t>(kSimTickRateHz);
+        // Stored, never assumed: every geodetic readout on playback -- and the ACMI export built on
+        // this file later (#923) -- is a function of the radius this session actually ran.
+        ropts.planetRadiusM = cfg.planetRadiusM;
+        ropts.missionId = loadedMissionName;
+        ropts.startUnixSeconds = static_cast<uint64_t>(now);
+        ropts.sessionFlags = loadedMissionName.empty() ? 0u : fl::kReplaySessionMission;
+
+        if (replayRecorder.start(ropts, sections, *log)) {
+            broadcaster.setReplaySink(
+                [&replayRecorder, &broadcaster,
+                 lastEventSeq = uint64_t{0}](const fl::WorldBroadcaster::ReplayTickRecords& rec) mutable {
+                    // Interleave the events that landed since the previous tick. since() returns
+                    // copies, so no lock is held while the recorder serializes them.
+                    std::vector<fl::MatchEvent> events = broadcaster.matchEventLog().since(lastEventSeq);
+                    if (!events.empty())
+                        lastEventSeq = events.back().seq;
+                    replayRecorder.onTick(rec, std::move(events));
+                },
+                cfg.replay.keyframeIntervalTicks);
+        }
+    }
+
     // ---- Start sim loop ----
     // Emit the "listening on" line now that pre-loop setup (including primeSpawnHeight) is done.
     // LocalServer::start() waits for this line; emitting it here ensures ENet is serviced before
@@ -2488,6 +2563,10 @@ int main(int argc, char** argv) {
         httpClient->service();
         httpClient->shutdown();
     }
+
+    // Flush and close the recording before anything else tears down: the writer thread is holding
+    // the tail of the match (#643).
+    replayRecorder.stop();
 
     // Stop the console reader BEFORE the rest of the teardown: it is the one thread that outlived
     // main() and wedged exit (#1038). Everything below this line already joined its own threads.

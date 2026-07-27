@@ -698,6 +698,35 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         return m_worldStatePublisher;
     }
 
+    // ── replay tap (#643) ────────────────────────────────────────────────────
+    // One tick's worth of UNFILTERED entity state, in the exact encoding the wire uses.
+    //
+    // A recorder cannot reuse a per-peer snapshot: those are interest-filtered and budget-capped, so
+    // they describe what one player could see, not what happened. Re-quantizing in the recorder would
+    // be a SECOND quantization implementation free to disagree with the first about what 0.125 m
+    // means -- the thing docs/replay-format.md exists to prevent. So the tap reuses the blobs the
+    // encode-once pass (#725) already built this tick and stitches them into one complete stream.
+    struct ReplayTickRecords {
+        uint64_t tick{0};
+        bool keyframe{false}; // every record is full: the seek point a scrub lands on
+        uint16_t recordCount{0};
+        uint64_t stateHash{0};        // ReplayStateHash over the quantized records, ascending idx (#644)
+        std::vector<double> origins;  // originCount * 3 shared quantization origins
+        std::vector<uint8_t> records; // stitched record stream
+    };
+
+    // Install the recorder's sink. `keyframeIntervalTicks` is the cadence at which every entity is
+    // emitted full (0 = use the default); the first tick after installation is always a keyframe, so
+    // a recording never opens with deltas whose baseline is not in the file. A null sink costs
+    // nothing -- the tap stream is not built at all, and every byte the peers receive is unchanged.
+    // Sim-thread; call before gameLoop.start().
+    void setReplaySink(std::function<void(const ReplayTickRecords&)> sink, uint32_t keyframeIntervalTicks) {
+        m_replaySink = std::move(sink);
+        m_replayKeyframeInterval = keyframeIntervalTicks == 0 ? 120u : keyframeIntervalTicks;
+        m_replayKnownGens.clear();
+        m_replayForceKeyframe = true;
+    }
+
     // The match event log (#600): one append-only record of kills, spawns, chat, admin commands,
     // joins and posture changes. Readable from any thread (the log takes its own lock).
     [[nodiscard]] MatchEventLog& matchEventLog() noexcept {
@@ -1556,9 +1585,20 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // consume it. Rebuild cadence matched to the ~1 Hz agent/GM-map cadence, not the 60 Hz tick.
     static constexpr uint64_t kWorldStateIntervalTicks = 60;
     WorldStateSnapshot m_worldState;
-    WorldStatePublisher m_worldStatePublisher;  // #600: the off-thread copy readers take
-    WorldStateMission m_worldStateMission;      // #600: pushed by the host, read at rebuild
-    MatchEventLog m_matchEventLog;              // #600: the one append-only match record
+    WorldStatePublisher m_worldStatePublisher; // #600: the off-thread copy readers take
+    WorldStateMission m_worldStateMission;     // #600: pushed by the host, read at rebuild
+    MatchEventLog m_matchEventLog;             // #600: the one append-only match record
+
+    // ── replay tap state (#643) — sim-thread only ───────────────────────────
+    std::function<void(const ReplayTickRecords&)> m_replaySink;
+    uint32_t m_replayKeyframeInterval{120};
+    bool m_replayForceKeyframe{true};
+    // entityIdx -> generation last recorded. A record is full on a keyframe tick, for an entity the
+    // recording has not seen, or when its generation changed (a pool slot reused for a new entity) --
+    // the same three reasons the per-peer path sends a full, minus everything about acks, because a
+    // file never drops a packet.
+    std::unordered_map<uint32_t, uint16_t> m_replayKnownGens;
+
     void rebuildWorldState(uint64_t tickIndex); // gather peers + weather, call buildWorldStateSnapshot
     void broadcastGmWorldState();               // #861: chunked GM-map feed to peers holding GmMap
     void broadcastMatchState();                 // send m_matchState to every handshake-complete peer

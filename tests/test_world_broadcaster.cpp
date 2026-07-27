@@ -11335,3 +11335,128 @@ TEST_CASE("WorldBroadcaster: steady-state articulation is not resent every tick 
     CHECK(withTlv > 0);
     CHECK(withTlv <= 4);
 }
+
+// ── replay tap (#643) ───────────────────────────────────────────────────────
+//
+// The recorder cannot reuse a per-peer snapshot: those are interest-filtered and budget-capped, so
+// they describe what one player could see rather than what happened. These cases pin the two
+// properties that makes the tap worth having -- it sees EVERYTHING, and it costs nothing when
+// nobody is recording.
+
+TEST_CASE("WorldBroadcaster: the replay tap records entities no peer can see (#643)", "[world_broadcaster][replay]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    // One entity at the origin, one 50 km away. A peer at the origin with a 5 km draw distance sees
+    // exactly one of them; the recording must contain both.
+    fl::EntityTransform nearT{};
+    nearT.pos[1] = 500.0;
+    REQUIRE(em.spawn("builtin:debug-entity", nearT).valid());
+    fl::EntityTransform farT{};
+    farT.pos[0] = 50'000.0;
+    farT.pos[1] = 500.0;
+    REQUIRE(em.spawn("builtin:debug-entity", farT).valid());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setDrawDistance(5.f);
+    connectPilotPeer(broadcaster, net, 0u);
+
+    std::vector<fl::WorldBroadcaster::ReplayTickRecords> taps;
+    broadcaster.setReplaySink([&taps](const fl::WorldBroadcaster::ReplayTickRecords& r) { taps.push_back(r); },
+                              /*keyframeIntervalTicks=*/4);
+
+    for (uint64_t t = 0; t < 8; ++t)
+        broadcaster.onTick(1.0 / 60.0, t);
+
+    REQUIRE(taps.size() == 8);
+    for (const auto& tap : taps) {
+        // 3 = the two spawned entities + the peer's own aircraft.
+        CHECK(tap.recordCount == 3);
+        CHECK_FALSE(tap.records.empty());
+        CHECK_FALSE(tap.origins.empty());
+        CHECK(tap.stateHash != 0u);
+    }
+
+    // The first tick after installation is a keyframe, and the cadence holds from there -- a file
+    // that opened on a delta would have no baseline to decode against.
+    CHECK(taps[0].keyframe);
+    CHECK(taps[4].keyframe);
+    CHECK_FALSE(taps[1].keyframe);
+    CHECK_FALSE(taps[5].keyframe);
+
+    // A keyframe carries every entity full, so it is strictly larger than the delta ticks around it.
+    CHECK(taps[0].records.size() > taps[1].records.size());
+}
+
+TEST_CASE("WorldBroadcaster: the replay tap does not change a single byte a peer receives (#643)",
+          "[world_broadcaster][replay]") {
+    // The cost-of-the-feature question, asserted rather than assumed: recording must not perturb the
+    // snapshots, or turning it on would change what every client sees.
+    auto run = [](bool withSink) {
+        MockLogger logger;
+        MockNetwork net;
+        fl::EntityTypeRegistry registry;
+        registry.registerType(makeDebugDef());
+        fl::EntityManager em(logger, registry);
+
+        fl::EntityTransform t{};
+        t.pos[1] = 800.0;
+        REQUIRE(em.spawn("builtin:debug-entity", t).valid());
+
+        fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+        connectPilotPeer(broadcaster, net, 0u);
+        if (withSink)
+            broadcaster.setReplaySink([](const fl::WorldBroadcaster::ReplayTickRecords&) {}, 4);
+        clearSnapshots(net);
+        for (uint64_t i = 0; i < 10; ++i)
+            broadcaster.onTick(1.0 / 60.0, i);
+        return snapshotsFor(net, 0u);
+    };
+
+    const auto without = run(false);
+    const auto with = run(true);
+    REQUIRE(without.size() == with.size());
+    for (std::size_t i = 0; i < without.size(); ++i) {
+        INFO("snapshot packet index " << i);
+        CHECK(without[i] == with[i]);
+    }
+}
+
+TEST_CASE("WorldBroadcaster: the replay tap's state hash tracks the world, not the tick number (#643)",
+          "[world_broadcaster][replay]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::EntityTransform t{};
+    t.pos[1] = 900.0;
+    const fl::EntityId id = em.spawn("builtin:debug-entity", t);
+    REQUIRE(id.valid());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    std::vector<uint64_t> hashes;
+    broadcaster.setReplaySink(
+        [&hashes](const fl::WorldBroadcaster::ReplayTickRecords& r) { hashes.push_back(r.stateHash); }, 4);
+
+    for (uint64_t i = 0; i < 4; ++i)
+        broadcaster.onTick(1.0 / 60.0, i);
+
+    // A static world still hashes differently per tick (the tick index is folded in), which is what
+    // makes a per-tick stream comparable position-by-position rather than as a set.
+    REQUIRE(hashes.size() == 4);
+    CHECK(hashes[0] != hashes[1]);
+
+    // Moving an entity changes the hash for that tick: the fingerprint follows the world.
+    const uint64_t beforeMove = hashes.back();
+    fl::EntityState* st = em.get(id);
+    REQUIRE(st != nullptr);
+    st->transform.pos[0] += 1000.0;
+    broadcaster.onTick(1.0 / 60.0, 3); // same tick index, different world
+    REQUIRE(hashes.size() == 5);
+    CHECK(hashes.back() != beforeMove);
+}

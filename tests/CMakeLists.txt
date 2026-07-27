@@ -590,6 +590,16 @@ if(TARGET fl-server AND TARGET platform-subprocess)
     catch_discover_tests(test_server_shutdown)
 endif()
 
+# `.flrep` replay format (#643): writer/reader round-trip, seek, trailer rebuild, version rules and
+# the hostile-input refusals. engine-replay reaches only engine-protocol + engine-compress, so this
+# links no server sim and no platform backend.
+add_executable(test_replay_format test_replay_format.cpp)
+target_link_libraries(test_replay_format PRIVATE Catch2::Catch2WithMain engine-replay)
+target_include_directories(test_replay_format PRIVATE
+    "${CMAKE_SOURCE_DIR}/engine"
+    "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_replay_format)
+
 # Mission-source resolution (server/fl-server/MissionSource.h, header-only): builtin id -> .yaml
 # file path -> pack Mission asset. Needs engine-content for AssetManager only; no networking.
 add_executable(test_mission_source test_mission_source.cpp)

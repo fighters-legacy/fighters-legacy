@@ -126,6 +126,14 @@ lockout_seconds   = 60   # per-IP lockout duration in seconds
 [trace]
 input_trace_dir = ""  # empty = disabled; per-peer FLIT input traces written here
 
+[replay]
+enabled                 = true       # record every match to .flrep (#643)
+dir                     = "replays"  # recording directory, relative to the working directory
+keyframe_interval_ticks = 120        # seek granularity: a scrub lands on the keyframe at or before it
+max_file_mb             = 256        # rotate to a new file past this size
+max_files               = 20         # keep at most N .flrep files in `dir`, oldest deleted first
+hash_log                = ""         # per-tick state-hash sidecar for the determinism gate (#644)
+
 [spawn]
 agl_offset = 500.0  # metres AGL above terrain for all spawn points
 
@@ -1564,6 +1572,81 @@ Disabled when `input_trace_dir` is empty; toggle at runtime with the `trace_star
 [trace]
 input_trace_dir = ""   # empty = disabled; per-peer FLIT traces written here
 ```
+
+## [replay] — Match recording
+
+Records the match to a `.flrep` replay file — the server's own view of what happened, tick by tick,
+which the client plays back with any camera, a scrubbable timeline and photo mode. The format is
+specified in [replay-format.md](replay-format.md); it is versioned for real, because a replay
+outlives the build that wrote it.
+
+**On by default.** A replay nobody remembered to enable is not a replay, and disk use is bounded by
+rotation rather than by trust. Recording runs on its own thread: a chunk is compressed and written
+once per keyframe interval, off the sim thread, so the tick never pays for it.
+
+What is recorded is what the SERVER broadcast — every entity, not one player's interest set — plus
+the interleaved match event log (kills, spawns, chat, admin commands, alert changes). What was never
+on the wire (raw peer input, server-internal AI state) is not in the file and cannot be recovered
+from it.
+
+```toml
+[replay]
+enabled                 = true
+dir                     = "replays"
+keyframe_interval_ticks = 120
+max_file_mb             = 256
+max_files               = 20
+hash_log                = ""
+```
+
+### `enabled`
+
+`true` (default) records every session. `false` disables recording entirely — the tap is not even
+built, and the snapshots every client receives are byte-identical either way.
+
+### `dir`
+
+Directory for recordings, relative to the server's working directory; created if absent. Files are
+named `<timestamp>[_<mission>].flrep`, with `_001`, `_002`… suffixes for rotations.
+
+### `keyframe_interval_ticks`
+
+Ticks between keyframes (a tick whose entity records are all full). Range `[15, 3600]`, default
+`120` — 2 seconds at 60 Hz.
+
+This is **the seek granularity**: scrubbing finds the keyframe at or before the target, decompresses
+that one chunk and rolls forward.
+
+The default was measured, not guessed. On a 40-entity world with everything moving, a 25-second
+recording came out at 701 bytes/tick at a 60-tick cadence, 700 at 300, and 700 at 600 — **0.4 %
+across a tenfold range**. A delta record for a moving entity is nearly the size of a full one (a
+full adds only type, faction and generation), and zstd absorbs the repetition. So cadence buys
+essentially nothing on disk and everything on seek feel, and the default is set low deliberately.
+
+The one workload where it matters is a world of mostly-static entities, whose deltas are much
+smaller than their fulls; a server recording large static scenery can raise this without losing
+much.
+
+### `max_file_mb`
+
+Rotate to a new file once the current one passes this size. Range `[1, 65535]`, default `256`.
+Rotation happens at a chunk boundary, so every rotated file is a complete, independently playable
+replay rather than a fragment.
+
+### `max_files`
+
+Keep at most this many `.flrep` files in `dir`, deleting the oldest first. Range `[1, 10000]`,
+default `20`.
+
+This bounds **the directory, not the session**: a server that records one file per match would
+otherwise fill the disk one perfectly-rotated file at a time. Pruning only ever touches `.flrep`
+files in `dir`, and never the file currently being written.
+
+### `hash_log`
+
+Path to a per-tick state-hash sidecar (`<tick> <hash>` per line), relative to the working directory.
+Empty (default) writes nothing. This is the instrument the determinism gate (#644) compares against
+the hashes recomputed from the recorded file; a live server has no use for it.
 
 | Key | Type | Default | Notes |
 |---|---|---|---|

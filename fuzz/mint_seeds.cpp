@@ -22,6 +22,7 @@
 #include <net/GameProtocol.h>
 #include <net/SnapshotCodec.h>
 #include <net/WireCodec.h>
+#include <replay/ReplayWriter.h>
 
 #include <RconServer.h>
 #include <server_config.h>
@@ -518,6 +519,100 @@ void mintMeshJsonSeeds() {
     writeSeed("fuzz_mesh_json", "seed-minimal.bin", kGltf);
 }
 
+// --- .flrep replay seeds (#643) ---
+//
+// Built through the real ReplayWriter so a seed is a genuine artifact rather than a guess at the
+// layout, plus two deliberate malformations that give libFuzzer a head start on the refusal paths.
+void mintFlrepSeeds() {
+    const fs::path tmp = fs::temp_directory_path() / "fl_mint_flrep";
+    fs::remove_all(tmp);
+    fs::create_directories(tmp);
+
+    fl::ReplayHeader header;
+    header.engineVersion = "0.0.0"; // fixed, never FL_VERSION_STRING: minting must be byte-stable
+    header.tickRateHz = 60;
+    header.planetRadiusM = 6371000.0;
+    header.startUnixSeconds = 0;
+    header.missionId = "seed";
+    header.keyframeIntervalTicks = 2;
+
+    fl::ReplaySections sections;
+    sections.entityTypes.push_back({0, "builtin:debug-entity", "Debug", 0, 0});
+    sections.factions.push_back({0, "neutral", "Neutral"});
+    sections.roster.push_back({0, "Seed", 0, 0, false});
+
+    fl::ReplayWriter::Config cfg;
+    cfg.dir = tmp;
+    cfg.baseName = "seed";
+
+    fl::QuantEntity e;
+    e.idx = 0;
+    e.gen = 1;
+    e.typeIndex = 0;
+    e.pos[0] = 100.0;
+    e.pos[1] = 500.0;
+    e.pos[2] = -100.0;
+    e.quat[3] = 1.f;
+    e.throttle = 50;
+
+    {
+        fl::ReplayWriter w;
+        if (w.open(header, sections, cfg)) {
+            for (uint64_t t = 0; t < 4; ++t) {
+                fl::ReplayTick tick;
+                tick.tickIndex = t;
+                tick.flags = (t % 2 == 0) ? fl::kReplayTickKeyframe : uint16_t{0};
+                double origin[3];
+                fl::originForPos(e.pos, origin);
+                tick.origins = {origin[0], origin[1], origin[2]};
+                fl::QuantEntity q = e;
+                q.isFull = (t % 2 == 0);
+                std::vector<uint8_t> blob;
+                fl::encodeStandaloneRecord(blob, q, origin, q.isFull);
+                fl::appendStitchedRecord(tick.records, 0, blob);
+                tick.recordCount = 1;
+                if (t == 1) {
+                    fl::MatchEvent ev;
+                    ev.tick = t;
+                    ev.type = fl::MatchEventType::Chat;
+                    ev.text = "seed";
+                    tick.events.push_back(ev);
+                }
+                w.writeTick(tick);
+            }
+            w.close();
+        }
+    }
+
+    std::vector<uint8_t> whole;
+    {
+        std::ifstream in(tmp / "seed.flrep", std::ios::binary);
+        whole.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    if (whole.empty()) {
+        fs::remove_all(tmp);
+        return;
+    }
+
+    writeSeed("fuzz_flrep", "seed-valid.bin", whole);
+
+    // No trailer: the interrupted-recording shape the forward scan exists for.
+    std::vector<uint8_t> noTrailer(whole.begin(), whole.begin() + static_cast<long>(whole.size() * 2 / 3));
+    writeSeed("fuzz_flrep", "seed-no-trailer.bin", noTrailer);
+
+    // A header whose first section claims far more bytes than the file holds.
+    std::vector<uint8_t> hugeClaim(whole.begin(), whole.begin() + 40);
+    hugeClaim.push_back(0x01);
+    hugeClaim.push_back(0x00);
+    hugeClaim.push_back(0xFF);
+    hugeClaim.push_back(0xFF);
+    hugeClaim.push_back(0xFF);
+    hugeClaim.push_back(0x0F);
+    writeSeed("fuzz_flrep", "seed-huge-section.bin", hugeClaim);
+
+    fs::remove_all(tmp);
+}
+
 } // namespace
 
 int main() {
@@ -533,6 +628,7 @@ int main() {
     mintTomlSeeds();
     mintModManifestSeeds();
     mintMeshJsonSeeds();
+    mintFlrepSeeds();
     printf("Done.\n");
     return 0;
 }
