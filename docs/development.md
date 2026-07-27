@@ -290,6 +290,10 @@ Each `fuzz_smoke_<name>` ctest replays the committed seeds in `fuzz/corpus/<name
 build-tree working corpus for 60 s. Requires clang with the libFuzzer runtime
 (`libclang_rt.fuzzer`, bundled with the `clang` package on Ubuntu).
 
+Harnesses cover the network codecs, the content/asset parsers, and the on-disk formats — including
+`fuzz_flrep`, the replay reader, which parses a file a player downloads from a stranger
+(docs/replay-format.md §5).
+
 **Run one harness manually (longer, to explore new states):**
 
 ```bash

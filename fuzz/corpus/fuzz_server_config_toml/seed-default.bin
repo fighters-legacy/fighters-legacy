@@ -221,8 +221,9 @@ enabled = true
 # Directory for recordings, relative to the server's working directory.
 dir = "replays"
 # Ticks between keyframes. A scrub seeks to the keyframe at or before the target and rolls
-# forward, so this is the seek granularity -- traded against file size. [15, 3600].
-keyframe_interval_ticks = 300
+# forward, so this is the seek granularity. Measured: across 60-600 ticks the file size moves
+# by well under 1 %, so pick this for seek feel, not for disk. 120 = 2 s at 60 Hz. [15, 3600].
+keyframe_interval_ticks = 120
 # Rotate to a new file once the current one passes this size. [1, 65535] MB.
 max_file_mb = 256
 # Keep at most this many .flrep files in `dir`, deleting the oldest first. Bounds the DIRECTORY,
