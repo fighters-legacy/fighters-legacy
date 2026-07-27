@@ -16,7 +16,14 @@
 //      but it must be exactly equal after quantization, and that is the property worth gating. It
 //      also removes float-order ambiguity between workers and platforms, the same reasoning that
 //      makes Detection.cpp's rollPasses compare integers.
-//   2. Records are folded in ASCENDING ENTITY INDEX, which the caller must supply. Every producer in
+//   2. Callers hash DECODED entities -- values that came out of the codec, on both sides of a
+//      comparison. This is a real contract, not a convention: smallest-three orientation drops the
+//      largest-magnitude component, so a rotation whose two largest components are nearly equal can
+//      have that choice tip when quantized, and the same rotation then hashes two different ways
+//      depending on which side of the codec you took it from. The #644 gate found this on its first
+//      real recording. WorldBroadcaster's replay tap therefore decodes the stream it just wrote and
+//      hashes that.
+//   3. Records are folded in ASCENDING ENTITY INDEX, which the caller must supply. Every producer in
 //      this engine already has a deterministic order available; a hash over a map's iteration order
 //      would fail randomly and teach everyone to ignore it.
 //
@@ -27,6 +34,7 @@
 #include "Quantization.h"
 #include "SnapshotCodec.h"
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 
@@ -46,19 +54,21 @@ inline void hashFold(uint64_t& h, uint64_t v) noexcept {
 // grid origin -- exactly what the codec transmits -- so the hash is a function of what a replay can
 // actually reproduce, not of a world offset that never crosses the wire.
 inline void hashQuantEntity(uint64_t& h, const QuantEntity& e) noexcept {
-    double origin[3];
-    originForPos(e.pos, origin);
-
     hashFold(h, e.idx);
     hashFold(h, e.gen);
     hashFold(h, e.typeIndex);
     hashFold(h, e.factionIndex);
 
     for (int i = 0; i < 3; ++i) {
-        // The codec quantizes the offset from the grid origin at kPosStepM; the origin itself is a
-        // multiple of kOriginGridM and is folded so two entities in different cells never collide.
-        hashFold(h, static_cast<uint64_t>(static_cast<int64_t>(origin[i] / kOriginGridM)));
-        hashFold(h, static_cast<uint64_t>(quantizeSigned(e.pos[i] - origin[i], kPosStepM, kPosBitsPerAxis)));
+        // ABSOLUTE position in units of kPosStepM, deliberately NOT the codec's (origin, offset)
+        // pair. The wire splits a position into a grid-cell origin plus a quantized offset, and the
+        // offset is what survives the round trip -- but the CELL is re-derived from the position, and
+        // a dequantized position sitting a fraction of a step from a cell boundary can land in the
+        // next cell. Hashing (cell, offset) therefore made two identical worlds hash differently
+        // depending on where an entity happened to be, which the #644 gate caught on its first real
+        // recording. One absolute integer per axis has no boundary to fall off: the grid origin is a
+        // whole multiple of kPosStepM, so recorder and reader round to the same value.
+        hashFold(h, static_cast<uint64_t>(std::llround(e.pos[i] / kPosStepM)));
     }
 
     const SmallestThree q = encodeSmallestThree(e.quat, kQuatBits);

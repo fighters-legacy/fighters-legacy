@@ -10,6 +10,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **engine**: replay playback and photo mode — a `.flrep` plays through the same presentation path a live session uses, so every camera, the HUD and the terrain work unchanged; main-menu replay browser, `--replay <file>`, scrub/speed transport bar, and a photo mode with FOV, roll, exposure compensation and PNG export (#41)
+- **ci**: replay determinism gates — a per-tick state-hash primitive over the quantized entity stream, a record→read-back fidelity gate against the real server, and an in-process check that the same scripted world hashes identically twice and across worker counts (#644)
 - **server**: server-side match recording to the `.flrep` replay format — every session records what the server broadcast (all entities, not one player's interest set) plus the interleaved match event log, keyframed for seek, zstd-chunked, rotated within a bounded directory, and written off the sim thread; `[replay]` config section (#643)
 
 ### Fixed

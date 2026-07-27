@@ -1644,9 +1644,15 @@ files in `dir`, and never the file currently being written.
 
 ### `hash_log`
 
-Path to a per-tick state-hash sidecar (`<tick> <hash>` per line), relative to the working directory.
-Empty (default) writes nothing. This is the instrument the determinism gate (#644) compares against
-the hashes recomputed from the recorded file; a live server has no use for it.
+Path to a per-tick state-hash sidecar (`<tick> <hash> <record count>` per line), relative to the
+working directory. Empty (default) writes nothing. This is the instrument the determinism gate (#644)
+compares against the hashes recomputed from the recorded file; a live server has no use for it.
+`--replay-hash-log <path>` overrides it, which is how the ctest sets it without editing a config.
+
+The hash is taken over the **decoded** records — what a replay will actually show — because a value
+taken before encoding and one taken after do not compare: the smallest-three orientation encoding
+drops the largest-magnitude component, and a rotation whose two largest components are nearly equal
+can have that choice tip when quantized.
 
 | Key | Type | Default | Notes |
 |---|---|---|---|

@@ -588,6 +588,22 @@ if(TARGET fl-server AND TARGET platform-subprocess)
         "${CMAKE_CURRENT_SOURCE_DIR}")
     add_dependencies(test_server_shutdown fl-server)
     catch_discover_tests(test_server_shutdown)
+
+    # Record<->replay fidelity gate (#644): run the real server with recording on, then require the
+    # hashes recomputed from the DECODED file to equal the recorder's own. The sim-determinism half
+    # lives in test_world_broadcaster ([determinism]) -- in process, because two networked runs are
+    # not tick-aligned and comparing them would be flaky rather than strict.
+    add_executable(test_replay_roundtrip test_replay_roundtrip.cpp)
+    target_link_libraries(test_replay_roundtrip PRIVATE
+        Catch2::Catch2WithMain engine-replay platform-subprocess platform-hal)
+    target_compile_definitions(test_replay_roundtrip PRIVATE
+        FL_SERVER_BIN="$<TARGET_FILE_DIR:fl-server>/fl-server")
+    target_include_directories(test_replay_roundtrip PRIVATE
+        "${CMAKE_SOURCE_DIR}/engine"
+        "${CMAKE_SOURCE_DIR}/platform"
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_dependencies(test_replay_roundtrip fl-server)
+    catch_discover_tests(test_replay_roundtrip)
 endif()
 
 # `.flrep` replay format (#643): writer/reader round-trip, seek, trailer rebuild, version rules and

@@ -11460,3 +11460,110 @@ TEST_CASE("WorldBroadcaster: the replay tap's state hash tracks the world, not t
     REQUIRE(hashes.size() == 5);
     CHECK(hashes.back() != beforeMove);
 }
+
+// ── sim determinism (#644) ──────────────────────────────────────────────────
+//
+// #644 asks for two properties that a single gate cannot honestly cover. The record<->replay
+// FIDELITY half lives in `replay_roundtrip_ci_smoke` (it needs a real recording on disk). This is the
+// other half, and the one the roadmap actually calls the sim-drift alarm: does the SIM produce the
+// same world twice?
+//
+// It runs IN PROCESS on purpose. Two networked server runs are not tick-aligned -- input arrival
+// decides which tick an input lands on -- so a two-process comparison would be a flaky test wearing a
+// determinism gate's clothes. Stepping the same scripted world twice, and at 1 vs N workers, is
+// deterministic by construction, and it is what actually fails when someone introduces a race, an
+// unseeded RNG, or a float path that depends on evaluation order.
+
+namespace {
+
+// A controller with a fixed, per-instance control input -- enough for every entity to fly its own
+// trajectory without pulling engine-ai into this test.
+struct ScriptedController : fl::IEntityController {
+    fl::ControlInput ctrl{};
+    fl::ControlInput sample(const fl::EntityState&, uint64_t, double, const fl::AiTickContext&) override {
+        return ctrl;
+    }
+};
+
+// Step a fixed scripted world and return the per-tick state-hash stream from the replay tap.
+std::vector<uint64_t> runDeterminismScenario(fl::JobSystem* jobs, int entityCount = 24) {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    if (jobs)
+        broadcaster.setJobSystem(*jobs);
+    connectPilotPeer(broadcaster, net, 0u);
+
+    // A moving world: entities under AI control, spread out so the spatial index, the AI pass and the
+    // integrate pass all have real work to parallelise. A static world would pass this gate while
+    // hiding every ordering bug it exists to catch.
+    for (int i = 0; i < entityCount; ++i) {
+        fl::EntityTransform t{};
+        t.pos[0] = 500.0 * static_cast<double>(i);
+        t.pos[1] = 1200.0 + 5.0 * static_cast<double>(i);
+        t.pos[2] = -300.0 * static_cast<double>(i % 7);
+        const fl::EntityId id = em.spawn("builtin:debug-entity", t);
+        REQUIRE(id.valid());
+        // Per-entity control surfaces, so the entities fly DIFFERENT paths: a fleet flying one
+        // identical trajectory would hash the same under any ordering bug.
+        auto ctl = std::make_unique<ScriptedController>();
+        ctl->ctrl.throttle = 0.5f + 0.02f * static_cast<float>(i % 10);
+        ctl->ctrl.elevator = 0.1f * static_cast<float>((i % 5) - 2);
+        ctl->ctrl.aileron = 0.05f * static_cast<float>((i % 3) - 1);
+        broadcaster.registerController(id, std::move(ctl));
+    }
+
+    std::vector<uint64_t> hashes;
+    broadcaster.setReplaySink(
+        [&hashes](const fl::WorldBroadcaster::ReplayTickRecords& r) { hashes.push_back(r.stateHash); },
+        /*keyframeIntervalTicks=*/30);
+
+    for (uint64_t tick = 1; tick <= 180; ++tick)
+        broadcaster.onTick(1.0 / 60.0, tick);
+    return hashes;
+}
+
+} // namespace
+
+TEST_CASE("WorldBroadcaster: the same scripted world hashes identically twice (#644)",
+          "[world_broadcaster][determinism]") {
+    const std::vector<uint64_t> first = runDeterminismScenario(nullptr);
+    const std::vector<uint64_t> second = runDeterminismScenario(nullptr);
+
+    REQUIRE(first.size() == 180);
+    CHECK(first == second);
+
+    // The stream must actually be doing something: an all-identical stream would compare equal while
+    // proving nothing, which is exactly how a determinism gate quietly stops testing anything.
+    CHECK(std::adjacent_find(first.begin(), first.end(), std::not_equal_to<>()) != first.end());
+}
+
+TEST_CASE("WorldBroadcaster: worker count does not change the world (#644)", "[world_broadcaster][determinism]") {
+    const std::vector<uint64_t> serial = runDeterminismScenario(nullptr);
+
+    for (unsigned workers : {1u, 2u, 4u, 8u}) {
+        fl::JobSystem jobs(workers);
+        const std::vector<uint64_t> parallel = runDeterminismScenario(&jobs);
+        INFO("workers=" << workers);
+        REQUIRE(parallel.size() == serial.size());
+        // Tick-by-tick rather than whole-vector, so a failure names WHEN the sim diverged -- which is
+        // the first thing anyone chasing a drift regression needs.
+        for (std::size_t i = 0; i < serial.size(); ++i) {
+            INFO("tick " << (i + 1));
+            REQUIRE(parallel[i] == serial[i]);
+        }
+    }
+}
+
+TEST_CASE("WorldBroadcaster: the state hash notices a changed world (#644)", "[world_broadcaster][determinism]") {
+    // The gate is only worth having if the hash actually responds to state. One more entity must
+    // produce a different stream -- otherwise "identical hashes" would mean nothing at all.
+    const std::vector<uint64_t> base = runDeterminismScenario(nullptr, 24);
+    const std::vector<uint64_t> more = runDeterminismScenario(nullptr, 25);
+    REQUIRE(base.size() == more.size());
+    CHECK(base != more);
+}

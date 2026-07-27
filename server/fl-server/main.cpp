@@ -198,6 +198,8 @@ int main(int argc, char** argv) {
     std::string flagTransport;     // non-empty if --transport <gns|enet> was given (overrides [network])
     std::string flagMetricsJson;   // non-empty if --metrics-json path was given (overrides [metrics])
     std::string flagReplayDir;     // non-empty if --replay-dir was given (overrides [replay] dir)
+    std::string flagReplayHashLog; // non-empty if --replay-hash-log was given (overrides [replay] hash_log)
+    int flagTestSpawnAi = -1;      // >= 0 if --test-spawn-ai-count was given (overrides [world])
     std::string flagAssets;        // non-empty if --assets <dir> was given (content root; single-player forwards it)
     long flagSimWorkers = -1;      // >=0 if --sim-worker-threads was given (overrides [world])
     long flagFlightSize = -1;      // >=0 if --flight-size was given (overrides [flight] size)
@@ -219,6 +221,8 @@ int main(int argc, char** argv) {
                 "  --assets <dir>     Content root holding mods/ (overrides FL_ASSETS_ROOT and the CWD)\n"
                 "  --metrics-json <p> Write the per-phase tick-budget JSON to <p> (overrides [metrics])\n"
                 "  --replay-dir <p>   Write .flrep recordings to <p> (overrides [replay] dir)\n"
+                "  --replay-hash-log <p>  Write the per-tick replay state-hash sidecar to <p> (#644)\n"
+                "  --test-spawn-ai-count <n>  Pre-spawn n loiter-AI entities (overrides [world])\n"
                 "  --sim-worker-threads <n>  Sim-tick CPU parallelism; 0=auto, 1=serial (overrides [world])\n"
                 "  --flight-size <n>         AI wingmen per player; 0=none (overrides [flight])\n"
                 "  --mission <name>          Load a mission at startup (overrides [rotation])\n"
@@ -262,6 +266,10 @@ int main(int argc, char** argv) {
             flagMetricsJson = argv[++i];
         if (std::strcmp(argv[i], "--replay-dir") == 0 && i + 1 < argc)
             flagReplayDir = argv[++i];
+        if (std::strcmp(argv[i], "--replay-hash-log") == 0 && i + 1 < argc)
+            flagReplayHashLog = argv[++i];
+        if (std::strcmp(argv[i], "--test-spawn-ai-count") == 0 && i + 1 < argc)
+            flagTestSpawnAi = std::atoi(argv[++i]);
         if (std::strcmp(argv[i], "--assets") == 0 && i + 1 < argc)
             flagAssets = argv[++i];
         if (std::strcmp(argv[i], "--mission") == 0 && i + 1 < argc)
@@ -320,6 +328,12 @@ int main(int argc, char** argv) {
     // wherever the CLIENT was launched from, which is not where the replay browser looks.
     if (!flagReplayDir.empty())
         cfg.replay.dir = flagReplayDir;
+    // Both of these exist for the determinism gate (#644), which needs a populated world and the
+    // recorder's own per-tick hashes without hand-editing a server.toml in a ctest.
+    if (!flagReplayHashLog.empty())
+        cfg.replay.hashLog = flagReplayHashLog;
+    if (flagTestSpawnAi >= 0)
+        cfg.testSpawnAiCount = static_cast<uint32_t>(flagTestSpawnAi);
     // --sim-worker-threads overrides the [world] sim_worker_threads from server.toml.
     if (flagSimWorkers >= 0)
         cfg.simWorkerThreads = static_cast<uint32_t>(flagSimWorkers);

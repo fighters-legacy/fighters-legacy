@@ -108,8 +108,11 @@ void ReplayRecorder::run() {
             m_running.store(false, std::memory_order_release);
             return;
         }
-        if (m_hashLog.is_open())
-            m_hashLog << q.tick.tickIndex << ' ' << q.stateHash << '\n';
+        if (m_hashLog.is_open()) {
+            // tick, hash, record count. The count is there so a mismatch says WHICH kind of drift it
+            // is -- a different world hashing differently, or a different number of entities.
+            m_hashLog << q.tick.tickIndex << ' ' << q.stateHash << ' ' << q.tick.recordCount << '\n';
+        }
     }
 }
 

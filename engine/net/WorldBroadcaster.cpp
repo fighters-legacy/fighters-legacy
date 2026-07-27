@@ -1487,8 +1487,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             return static_cast<uint32_t>(out.origins.size() / 3 - 1);
         };
 
-        std::vector<QuantEntity> hashEnts;
-        hashEnts.reserve(replayEnts.size());
+        std::vector<QuantEntity> written; // the pre-encode entities, in written order
+        written.reserve(replayEnts.size());
         for (const auto& [ridx, rqe] : replayEnts) {
             const auto eit = encoded.find(ridx);
             if (eit == encoded.end())
@@ -1500,7 +1500,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                                  full ? eit->second.fullBlob : eit->second.deltaBlob);
             m_replayKnownGens[ridx] = gen16;
             ++out.recordCount;
-            hashEnts.push_back(rqe);
+            written.push_back(rqe);
         }
 
         // Forget entities that are no longer live, so a reused pool slot is recorded full rather than
@@ -1510,6 +1510,36 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                 it = (snapMap.find(it->first) == snapMap.end()) ? m_replayKnownGens.erase(it) : std::next(it);
         }
 
+        // Hash what a READER will see, by decoding the stream just built -- NOT the values the encoder
+        // was fed. The two are not interchangeable, and the #644 gate is what proved it: the
+        // smallest-three orientation encoding drops the largest-magnitude component, so a rotation
+        // whose two largest components are nearly equal can have that choice tip when quantized. The
+        // decoded quaternion then re-encodes to a different dropped component and a different hash --
+        // a mismatch that is not drift at all, and one that no amount of re-normalizing fixes, because
+        // the tie sits exactly on the boundary.
+        //
+        // Decoding our own stream (one pass, only while recording) removes the question: both sides
+        // hash a value that came out of the codec, so the hash means "the world a replay will show".
+        // Sim drift still changes it, because a different world encodes to different bytes.
+        std::vector<QuantEntity> hashEnts;
+        hashEnts.reserve(written.size());
+        {
+            BitReader hr(out.records.data(), out.records.size());
+            const auto originCount = static_cast<uint32_t>(out.origins.size() / 3);
+            for (const QuantEntity& src : written) {
+                QuantEntity dec;
+                bool genPresent = false;
+                if (!decodeStandaloneRecord(hr, dec, out.origins.data(), originCount, genPresent))
+                    break; // cannot happen for bytes we just wrote; fail closed rather than guess
+                // A delta carries no typeIndex/factionIndex/gen -- a reader restores them from its
+                // cache, which holds exactly these values.
+                dec.typeIndex = src.typeIndex;
+                dec.factionIndex = src.factionIndex;
+                if (!genPresent)
+                    dec.gen = src.gen;
+                hashEnts.push_back(dec);
+            }
+        }
         out.stateHash = hashTickState(tickIndex, hashEnts.data(), hashEnts.size());
         m_replayForceKeyframe = false;
         m_replaySink(out);
