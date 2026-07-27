@@ -51,6 +51,11 @@ struct RendererSettings {
     RendererAOMode aoMode{RendererAOMode::High};            // GTAO quality
     RendererSkyQuality skyQuality{RendererSkyQuality::LUT}; // sky scattering model
     bool autoExposure{true};                                // HDR eye adaptation (always-on baseline)
+    // Manual exposure compensation in STOPS, applied to linear HDR before the tonemap curve (#41
+    // photo mode). 0 = the exposure the renderer would have chosen; +1 doubles it, -1 halves it.
+    // Deliberately an offset rather than an absolute exposure: the automatic path stays the baseline
+    // a photographer nudges, which is what "adjust exposure" means to the person pressing the key.
+    float evOffset{0.f};
 };
 
 // Per-frame GPU and CPU timing statistics. Populated by IRenderer::getFrameStats()

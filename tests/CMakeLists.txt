@@ -560,7 +560,83 @@ if(TARGET platform-enet)
         target_link_libraries(test_rcon_server PRIVATE ws2_32)
     endif()
     catch_discover_tests(test_rcon_server)
+
+    # Admin-console stdin reader (#1038). Pure line assembly + the reader lifecycle; no fd, no
+    # server. StdinCommandReader.cpp is in no library, so it is compiled directly (the
+    # test_rcon_server recipe). Threads only -- the platform read loop needs no link deps.
+    find_package(Threads REQUIRED)
+    add_executable(test_stdin_reader test_stdin_reader.cpp
+        "${CMAKE_SOURCE_DIR}/server/fl-server/StdinCommandReader.cpp")
+    target_link_libraries(test_stdin_reader PRIVATE Catch2::Catch2WithMain Threads::Threads)
+    target_include_directories(test_stdin_reader PRIVATE
+        "${CMAKE_SOURCE_DIR}/server/fl-server"
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+    catch_discover_tests(test_stdin_reader)
 endif()
+
+# Shutdown-deadlock regression (#1038): spawns the REAL fl-server with its stdin held open (the
+# condition the deadlock needs, and the way the game client starts single-player) and requires it to
+# exit on `quit` within a deadline. Needs the built binary, so it is gated on the target; the path
+# is passed WITHOUT an extension because Subprocess::spawn appends .exe on Windows itself.
+if(TARGET fl-server AND TARGET platform-subprocess)
+    add_executable(test_server_shutdown test_server_shutdown.cpp)
+    target_link_libraries(test_server_shutdown PRIVATE Catch2::Catch2WithMain platform-subprocess platform-hal)
+    target_compile_definitions(test_server_shutdown PRIVATE
+        FL_SERVER_BIN="$<TARGET_FILE_DIR:fl-server>/fl-server")
+    target_include_directories(test_server_shutdown PRIVATE
+        "${CMAKE_SOURCE_DIR}/platform"
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_dependencies(test_server_shutdown fl-server)
+    catch_discover_tests(test_server_shutdown)
+
+    # Record<->replay fidelity gate (#644): run the real server with recording on, then require the
+    # hashes recomputed from the DECODED file to equal the recorder's own. The sim-determinism half
+    # lives in test_world_broadcaster ([determinism]) -- in process, because two networked runs are
+    # not tick-aligned and comparing them would be flaky rather than strict.
+    add_executable(test_replay_roundtrip test_replay_roundtrip.cpp)
+    target_link_libraries(test_replay_roundtrip PRIVATE
+        Catch2::Catch2WithMain engine-replay platform-subprocess platform-hal)
+    target_compile_definitions(test_replay_roundtrip PRIVATE
+        FL_SERVER_BIN="$<TARGET_FILE_DIR:fl-server>/fl-server")
+    target_include_directories(test_replay_roundtrip PRIVATE
+        "${CMAKE_SOURCE_DIR}/engine"
+        "${CMAKE_SOURCE_DIR}/platform"
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_dependencies(test_replay_roundtrip fl-server)
+    catch_discover_tests(test_replay_roundtrip)
+endif()
+
+# `.flrep` replay format (#643): writer/reader round-trip, seek, trailer rebuild, version rules and
+# the hostile-input refusals. engine-replay reaches only engine-protocol + engine-compress, so this
+# links no server sim and no platform backend.
+add_executable(test_replay_format test_replay_format.cpp)
+target_link_libraries(test_replay_format PRIVATE Catch2::Catch2WithMain engine-replay)
+target_include_directories(test_replay_format PRIVATE
+    "${CMAKE_SOURCE_DIR}/engine"
+    "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_replay_format)
+
+# ReplayPlayer (#41): playback timing, speed control and scrubbing. Compiles the game-layer source
+# directly (the test_screen_manager idiom) and links engine-replay for the reader.
+add_executable(test_replay_player test_replay_player.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ReplayPlayer.cpp")
+target_link_libraries(test_replay_player PRIVATE Catch2::Catch2WithMain engine-replay engine-render platform-hal)
+target_include_directories(test_replay_player PRIVATE
+    "${CMAKE_SOURCE_DIR}/engine"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
+    "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_replay_player)
+
+# The replay browser (#41): the directory scan and the list/confirm behaviour, including the refusal
+# path for a file this build cannot read.
+add_executable(test_replay_select test_replay_select.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ReplaySelectScreen.cpp")
+target_link_libraries(test_replay_select PRIVATE Catch2::Catch2WithMain engine-replay platform-hal)
+target_include_directories(test_replay_select PRIVATE
+    "${CMAKE_SOURCE_DIR}/engine"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
+    "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_replay_select)
 
 # Mission-source resolution (server/fl-server/MissionSource.h, header-only): builtin id -> .yaml
 # file path -> pack Mission asset. Needs engine-content for AssetManager only; no networking.
@@ -1244,6 +1320,8 @@ catch_discover_tests(test_debrief_screen)
 
 add_executable(test_screen_manager test_screen_manager.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ScreenManager.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ReplayPlayer.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ReplaySelectScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/MainMenuScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/JoinServerScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ServerBrowserScreen.cpp"
@@ -1270,7 +1348,7 @@ add_executable(test_screen_manager test_screen_manager.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightInputCollector.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp")
 target_link_libraries(test_screen_manager PRIVATE
-    Catch2::Catch2WithMain engine-config engine-render engine-sandbox engine-content engine-console engine-input engine-net engine-entity engine-weather engine-flight engine-manual engine-audio engine-i18n engine-ai engine-spatial platform-sdl3 platform-hal SDL3::SDL3)
+    Catch2::Catch2WithMain engine-config engine-render engine-sandbox engine-content engine-console engine-input engine-net engine-replay engine-entity engine-weather engine-flight engine-manual engine-audio engine-i18n engine-ai engine-spatial platform-sdl3 platform-hal SDL3::SDL3)
 target_include_directories(test_screen_manager PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
 if(WIN32)

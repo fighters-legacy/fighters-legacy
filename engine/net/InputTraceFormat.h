@@ -19,6 +19,8 @@
 // native words. The five control fields map 1:1 onto the harness's BotControl and onto
 // MsgClientInput's flight-control fields.
 
+#include "ByteOrder.h" // the shared little-endian file helpers this header used to define privately
+
 #include <cstdint>
 #include <cstring>
 #include <vector>
@@ -52,48 +54,8 @@ struct InputTraceRecord {
     uint8_t reserved{0};   // explicit pad to a 32-byte record
 };
 
-namespace detail {
-
-inline void putU16LE(std::vector<uint8_t>& b, uint16_t v) {
-    b.push_back(static_cast<uint8_t>(v & 0xFFu));
-    b.push_back(static_cast<uint8_t>((v >> 8) & 0xFFu));
-}
-inline void putU32LE(std::vector<uint8_t>& b, uint32_t v) {
-    for (int i = 0; i < 4; ++i)
-        b.push_back(static_cast<uint8_t>((v >> (8 * i)) & 0xFFu));
-}
-inline void putU64LE(std::vector<uint8_t>& b, uint64_t v) {
-    for (int i = 0; i < 8; ++i)
-        b.push_back(static_cast<uint8_t>((v >> (8 * i)) & 0xFFu));
-}
-inline void putF32LE(std::vector<uint8_t>& b, float v) {
-    uint32_t bits;
-    std::memcpy(&bits, &v, sizeof(bits));
-    putU32LE(b, bits);
-}
-
-inline uint16_t getU16LE(const uint8_t* p) {
-    return static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8);
-}
-inline uint32_t getU32LE(const uint8_t* p) {
-    uint32_t v = 0;
-    for (int i = 0; i < 4; ++i)
-        v |= static_cast<uint32_t>(p[i]) << (8 * i);
-    return v;
-}
-inline uint64_t getU64LE(const uint8_t* p) {
-    uint64_t v = 0;
-    for (int i = 0; i < 8; ++i)
-        v |= static_cast<uint64_t>(p[i]) << (8 * i);
-    return v;
-}
-inline float getF32LE(const uint8_t* p) {
-    uint32_t bits = getU32LE(p);
-    float v;
-    std::memcpy(&v, &bits, sizeof(v));
-    return v;
-}
-
-} // namespace detail
+// The little-endian byte helpers this format is built on now live in ByteOrder.h (same
+// `fl::detail` namespace, same semantics) because `.flrep` (#643) needs the identical rules and a
+// second copy would be a second chance to disagree about what a u32 looks like on disk.
 
 } // namespace fl

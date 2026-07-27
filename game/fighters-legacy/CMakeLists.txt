@@ -17,6 +17,8 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         EngineAudioManager.cpp
         VideoEncoderPipe.cpp
         LocalServer.cpp
+        ReplayPlayer.cpp
+        ReplaySelectScreen.cpp
         ScreenManager.cpp
         MainMenuScreen.cpp
         JoinServerScreen.cpp
@@ -47,6 +49,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         engine-loop
         engine-entity
         engine-net
+        engine-replay  # .flrep playback (#41); the reader only -- no server sim comes with it
         engine-weather
         engine-perf
         engine-console

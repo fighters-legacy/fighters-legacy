@@ -29,6 +29,8 @@
 #include "Platform.h"
 #include "PrecipitationController.h"
 #include "RecordScheduler.h"
+#include "ReplayPlayer.h"
+#include "ReplaySelectScreen.h"
 #include "SDL3AudioCaptureFactory.h" // Epic J microphone capture (#531)
 #include "ScoreboardOverlay.h"
 #include "ScreenManager.h"
@@ -363,6 +365,14 @@ struct GameServices {
     fs::path userDataDir;
     fs::path assetsRoot;
 
+    // Replay playback (#41). `replayDir` is where the embedded server is told to record and where the
+    // browser looks; `pendingReplayPath` is the file the next session will play (from the browser or
+    // --replay), empty for an ordinary flying session.
+    fs::path replayDir;
+    fs::path pendingReplayPath;
+    fl::PhotoModeState photo;
+    bool photoCaptureRequest{false};
+
     // Crash reporting
     CrashInfo crashInfo;
     CrashReporter crashReporter;
@@ -538,6 +548,10 @@ struct SessionContext {
     std::optional<HapticController> hapticController;
     std::optional<DiscoveryListener> discoveryListener;
     std::optional<SandboxInspector> inspector;
+    std::optional<ReplayPlayer> replayPlayer; // #41: set only for a replay session (no server, no socket)
+    uint32_t replayNoOwnEntityIdx{0};         // a replay has no ownship; FlightScreen reads these
+    uint32_t replayNoOwnEntityGen{0};
+    bool replayCameraSeeded{false}; // the opening frame parks the camera at the action, once
 
     std::thread serverThread;
     std::atomic<bool> serverReady{false};
@@ -774,6 +788,9 @@ bool Game::initPlatform(int argc, char** argv) {
     SDL_Init(0);
     char* prefRaw = SDL_GetPrefPath("mkzsystems", "fighters-legacy");
     d.services.userDataDir = prefRaw ? fs::path(prefRaw) : fs::path(".");
+    // Recordings live under the user-data directory (#41), not the working directory: the browser and
+    // the embedded server must agree on one place, and it must survive being launched from anywhere.
+    d.services.replayDir = d.services.userDataDir / "replays";
     if (prefRaw)
         SDL_free(prefRaw);
 
@@ -814,6 +831,10 @@ bool Game::initPlatform(int argc, char** argv) {
             d.services.rawLogger->setMinLevel(parseLogLevel(argv[i + 1]));
         else if (std::strcmp(argv[i], "--connect") == 0)
             parseConnectArg(argv[i + 1], d.services.connectHost, d.services.connectPort);
+        // --replay <file>: open a recording straight from the command line, the same menu-bypass path
+        // --mission/--auto already use. tools/visual_check.sh and the #644 gate both want it.
+        if (std::strcmp(argv[i], "--replay") == 0 && i + 1 < argc)
+            d.services.pendingReplayPath = fs::path(argv[i + 1]);
         else if (std::strcmp(argv[i], "--operator-password") == 0)
             d.services.operatorPassword = argv[i + 1];
         else if (std::strcmp(argv[i], "--aircraft") == 0)
@@ -1426,13 +1447,59 @@ void Game::startGame(const std::string& mission) {
         d.services.entityRegistry.registerType(fl::builtinBomberDef()); // the crewed bomber (#977)
     }
 
-    const bool isMultiplayer = !d.services.connectHost.empty();
+    // A REPLAY session (#41) is a third kind beside single-player and multiplayer: no server process,
+    // no socket, no prediction. Playback publishes through the same SimRenderBridge the network client
+    // publishes through, so everything downstream -- renderer, cameras, HUD, terrain -- is unchanged.
+    const bool isReplay = !d.services.pendingReplayPath.empty();
+    if (isReplay) {
+        d.session.replayPlayer.emplace();
+        if (!d.session.replayPlayer->open(d.services.pendingReplayPath)) {
+            d.services.rawLogger->log(LogLevel::Error, __FILE__, __LINE__,
+                                      ("replay: " + d.session.replayPlayer->lastError()).c_str());
+            d.session.replayPlayer.reset();
+            d.services.pendingReplayPath.clear();
+            d.session.sessionFailure.store(SessionFailure::ServerSpawnFailed, std::memory_order_release);
+            return;
+        }
 
-    if (!isMultiplayer) {
+        // Register the recording's entity types so a stored typeIndex means something: the manifest
+        // is the replay's equivalent of the MsgEntityTypeDef set a live client gets in ConnectAck.
+        // Types already registered (the builtins) keep their index; registerType rejects a duplicate
+        // id, which is the correct behaviour here.
+        for (const fl::ReplayEntityType& t : d.session.replayPlayer->sections().entityTypes) {
+            if (d.services.entityRegistry.indexById(t.id.c_str()) != std::numeric_limits<uint32_t>::max())
+                continue;
+            fl::EntityDef def;
+            def.id = t.id;
+            def.name = t.name;
+            def.category = static_cast<fl::ObjectCategory>(t.category);
+            def.projectileKind = static_cast<fl::ProjectileKind>(t.projectileKind);
+            d.services.entityRegistry.registerType(std::move(def));
+        }
+
+        // The planet radius the session actually ran at -- stored in the header precisely so playback
+        // does not assume Earth and render a plausible wrong altitude.
+        const double radiusM = d.session.replayPlayer->header().planetRadiusM > 0.0
+                                   ? d.session.replayPlayer->header().planetRadiusM
+                                   : fl::kEarthRadiusM;
+        if (d.services.terrainStreamer)
+            d.services.terrainStreamer->setPlanetRadius(radiusM);
+        d.services.camInput.setPlanetRadius(radiusM);
+
+        d.services.photo = fl::PhotoModeState{}; // fresh photo state per replay
+        d.services.photoCaptureRequest = false;
+        d.session.serverReady.store(true, std::memory_order_release); // nothing to wait for
+    }
+
+    const bool isMultiplayer = !isReplay && !d.services.connectHost.empty();
+
+    if (!isMultiplayer && !isReplay) {
         // Single-player: spawn fl-server subprocess in a background thread.
         d.session.localServer.emplace(*d.services.rawLogger);
         // Forward the client's resolved content root so the embedded server loads the same packs (#831).
         d.session.localServer->setContentRoot(d.services.assetsRoot.string());
+        // Recordings go where the browser looks (#41), not into the client's working directory.
+        d.session.localServer->setReplayDir(d.services.replayDir.string());
         // Load the chosen mission (#634); empty = the sandbox, as before.
         d.session.localServer->setMission(mission);
         d.session.serverThread = std::thread([&d]() {
@@ -1468,9 +1535,49 @@ void Game::startGame(const std::string& mission) {
     }
 
     // onConnect is called by LoadingScreen once serverReady fires.
-    auto onConnect = [&d, isMultiplayer]() {
+    auto onConnect = [&d, isMultiplayer, isReplay]() {
         d.services.activeHud = &d.services.flightHud;
         d.session.hapticController.emplace(*d.services.p.input, d.services.p.joystick.get());
+
+        // A replay has nothing to connect to. It wires the flight screen against the player instead
+        // of a socket and returns before any of the network setup below -- deliberately a short,
+        // explicit block rather than threading `if (!isReplay)` through 150 lines of callbacks that
+        // exist to serve a connection this session does not have.
+        if (isReplay) {
+            FlightScreenDeps fsd;
+            fsd.camInput = &d.services.camInput;
+            fsd.flightInput = &d.services.flightInput;
+            fsd.cameraController = &d.services.cameraController;
+            fsd.gameConsole = &*d.services.gameConsole;
+            fsd.hapticController = &*d.session.hapticController;
+            fsd.activeHud = &d.services.activeHud;
+            fsd.windshieldRain = &d.services.windshieldRain;
+            fsd.renderBridge = &d.services.renderBridge;
+            fsd.terrainStreamer = d.services.terrainStreamer.get();
+            fsd.env = &d.services.env;
+            fsd.entityRegistry = &d.services.entityRegistry;
+            fsd.joystick = d.services.p.joystick.get();
+            fsd.userConfig = &*d.services.userConfig;
+            fsd.inputBindings = &d.services.inputBindings;
+            fsd.sceneRenderer = d.services.sceneRenderer.get();
+            fsd.nvgIntensity = &d.services.nvgIntensity;
+            fsd.headTracker = &d.services.headTracker;
+            fsd.manual = &d.services.manual;
+            fsd.gui = d.services.p.gui.get();
+            // No ownship: a recording is of the world, so the screen runs its spectator path and
+            // these stay zero rather than pointing into a network handler that does not exist.
+            fsd.assignedEntityIdx = &d.session.replayNoOwnEntityIdx;
+            fsd.assignedEntityGen = &d.session.replayNoOwnEntityGen;
+            fsd.replay = &*d.session.replayPlayer;
+            fsd.photo = &d.services.photo;
+            fsd.photoCaptureRequest = &d.services.photoCaptureRequest;
+            d.services.screenMgr->reinitFlight(std::move(fsd));
+
+            // Free camera; the eye is parked at the action by the run loop on the first published
+            // world (nothing has been decoded yet at this point).
+            d.services.cameraController.setMode(fl::CameraMode::Free);
+            return;
+        }
         if (d.services.userConfig) {
             const auto cs = d.services.userConfig->controls(); // #928 FFB config
             d.session.hapticController->setFfbConfig(cs.ffbEnabled, cs.ffbStrength);
@@ -1740,6 +1847,10 @@ void Game::startGame(const std::string& mission) {
     d.services.screenMgr->reinitLoading(
         d.session.serverReady,
         [&d]() -> bool {
+            // A replay is ready as soon as it has published a world and the terrain under it has
+            // started streaming -- there is no handshake to wait for.
+            if (d.session.replayPlayer)
+                return d.services.renderBridge.hasSnapshot() && d.services.terrainStreamer->tileCount() > 0;
             if (!d.services.renderBridge.hasSnapshot() || !d.session.clientHandler)
                 return false;
             if (!d.session.clientHandler->gotConnectAck() || d.services.terrainStreamer->tileCount() == 0)
@@ -1790,6 +1901,17 @@ void Game::stopGame() {
         d.session.localServer.reset();
     }
 
+    if (d.session.replayPlayer) {
+        d.session.replayPlayer->close();
+        d.session.replayPlayer.reset();
+    }
+    d.session.replayCameraSeeded = false;
+    // Cleared so the NEXT session is an ordinary flying session unless something asks for a replay
+    // again; a stale path here would silently turn "Instant Action" into a rerun of the last file.
+    d.services.pendingReplayPath.clear();
+    d.services.photo = fl::PhotoModeState{};
+    d.services.photoCaptureRequest = false;
+
     d.session.clientHandler.reset();
     d.session.discoveryListener.reset();
     d.session.inspector.reset();
@@ -1835,6 +1957,15 @@ void Game::handleTransition(Screen next) {
     // null and crashing the next frame (#876). Entering from the brief loads the chosen pack mission;
     // entering from the menu loads the item's mission — "builtin:sandbox" for Instant Action (#40), empty
     // for Free Flight / Join Server.
+    // Rescan on every entry (#41): a player who just flew expects their recording in the list without
+    // restarting, and the scan is a handful of header reads.
+    if (next == Screen::ReplaySelect)
+        d.services.screenMgr->reinitReplaySelect(d.services.replayDir);
+
+    // Entering a session from the replay browser plays that file; every other path flies.
+    if (entersReplaySession(prev, next))
+        d.services.pendingReplayPath = d.services.screenMgr->replaySelect().selectedReplay();
+
     if (entersSession(prev, next)) {
         const std::string mission = (prev == Screen::MissionBrief)
                                         ? d.services.screenMgr->missionSelect().selectedMission()
@@ -1942,6 +2073,10 @@ void Game::run() {
     if (d.services.autoStart) {
         d.services.screenMgr->mainMenu().setConfirmedMission(d.services.autoStartMission);
         handleTransition(Screen::Loading);
+    } else if (!d.services.pendingReplayPath.empty()) {
+        // --replay <file> takes the same bypass (#41): pendingReplayPath is already set, so the
+        // enters-session transition builds a replay session rather than a flying one.
+        handleTransition(Screen::Loading);
     }
 
     while (running && !d.services.p.window->shouldClose()) {
@@ -2004,6 +2139,33 @@ void Game::run() {
         // Network service (session only).
         if (inSession && d.session.clientNet)
             d.session.clientNet->service(0);
+
+        // Replay playback (#41): the source of world state for a replay session, standing exactly
+        // where the network service stands for a live one. It publishes through publishExternal --
+        // the same call ClientNetEventHandler makes -- so nothing downstream knows the difference.
+        if (inSession && d.session.replayPlayer && d.session.replayPlayer->isOpen()) {
+            const float frameMs = d.services.p.renderer ? d.services.p.renderer->getFrameStats().frameDtMs : 16.7f;
+            fl::RenderSnapshot snap;
+            if (d.session.replayPlayer->update(static_cast<double>(frameMs) / 1000.0, snap)) {
+                // Park the camera at the action on the FIRST published world, not at startGame time:
+                // playback publishes its first tick from inside this loop, so at session start there
+                // is nothing to aim at yet and the camera would open looking at an empty origin.
+                if (!d.session.replayCameraSeeded && !snap.entries.empty()) {
+                    d.session.replayCameraSeeded = true;
+                    d.services.camInput.setFlyEye(snap.entries.front().position + glm::dvec3{0.0, 120.0, -400.0});
+                    char rbuf[160];
+                    std::snprintf(rbuf, sizeof(rbuf), "replay: playing %llu entities at tick %llu",
+                                  static_cast<unsigned long long>(snap.entries.size()),
+                                  static_cast<unsigned long long>(snap.tickIndex));
+                    d.services.rawLogger->log(LogLevel::Info, __FILE__, __LINE__, rbuf);
+                }
+                d.services.renderBridge.publishExternal(std::move(snap));
+            }
+            // Terrain follows the camera rather than an ownship: a replay viewer is a free camera,
+            // and the recording's own aircraft may be anywhere.
+            if (d.services.terrainStreamer)
+                d.services.terrainStreamer->update(d.services.camInput.eyeWorld());
+        }
         if (inSession && d.session.discoveryListener)
             d.session.discoveryListener->poll();
 
@@ -2016,7 +2178,13 @@ void Game::run() {
         const fl::EntityRenderEntry* playerEntry = nullptr;
         float alpha = 0.f;
         float aspect = 1.f;
-        if (inSession && d.session.clientHandler && d.services.renderBridge.hasSnapshot()) {
+        if (inSession && d.session.replayPlayer && d.services.renderBridge.hasSnapshot()) {
+            // A replay has no server tick to interpolate against and no ownship to follow: the
+            // published snapshot IS the frame, so alpha stays 0 and no player entry is resolved.
+            d.services.renderBridge.tryAdvance();
+            aspect = static_cast<float>(d.services.p.window->width()) /
+                     static_cast<float>(d.services.p.window->height() > 0 ? d.services.p.window->height() : 1);
+        } else if (inSession && d.session.clientHandler && d.services.renderBridge.hasSnapshot()) {
             d.services.renderBridge.tryAdvance(); // consume latest snapshot before screen update
             playerEntry = findPlayerEntry(d.services.renderBridge, d.session.clientHandler->assignedEntityIdx,
                                           d.session.clientHandler->assignedEntityGen);
@@ -2375,16 +2543,63 @@ void Game::run() {
         // Skip 3D rendering during LoadingScreen: the loading overlay covers the viewport
         // and the camera has no valid entity target yet, so rendering would show stale
         // state (underground camera -> blue sky) bleeding through the overlay.
-        if (inSession && cur != Screen::Loading && d.session.clientHandler && d.services.renderBridge.hasSnapshot()) {
-            // Cinematic recorder (#916): override the camera with the shot-driven pose + per-shot FOV
-            // before building the view. Only in Flight, once entities are streaming.
-            if (d.services.recorder.active && cur == Screen::Flight) {
-                driveRecorderCamera();
-                cam = d.services.cameraController.view(aspect, glm::radians(d.services.recorder.curFovDeg), 0.1f);
+        // The world renders for a live session OR a replay (#41) -- the same block, because D7's whole
+        // claim is that the renderer cannot tell them apart. What differs is only where the camera
+        // comes from and which of the network-derived extras are available.
+        if (inSession && cur != Screen::Loading && (d.session.clientHandler || d.session.replayPlayer) &&
+            d.services.renderBridge.hasSnapshot()) {
+            if (d.session.replayPlayer) {
+                // Photo mode's FOV and roll are applied to the view here (FOV is already a per-call
+                // parameter -- the MissionShot precedent); the EV offset rides RendererSettings into the
+                // tonemap.
+                const float fovDeg = d.services.photo.active ? d.services.photo.fovDeg : 60.f;
+                cam = d.services.cameraController.view(aspect, glm::radians(fovDeg), 0.1f);
+                if (d.services.photo.active && d.services.photo.rollDeg != 0.f) {
+                    // Roll about the view axis, applied to the view matrix rather than to the camera
+                    // pose: the eye and the look direction are what the free camera owns, and rolling
+                    // them would fight CameraInput's own up-vector every frame.
+                    cam.view =
+                        glm::rotate(glm::mat4(1.f), glm::radians(d.services.photo.rollDeg), glm::vec3(0.f, 0.f, -1.f)) *
+                        cam.view;
+                }
+                camOrigin = cam.worldOrigin;
+                // Keep terrain refinement honest about the FOV in use, or SSE tile selection refines for
+                // a field of view the player is not looking through.
+                if (d.services.terrainStreamer)
+                    d.services.terrainStreamer->setViewParams(static_cast<float>(d.services.p.window->height()),
+                                                              glm::radians(fovDeg));
+
+                if (d.services.rendererSettings.evOffset != d.services.photo.evOffset) {
+                    d.services.rendererSettings.evOffset = d.services.photo.active ? d.services.photo.evOffset : 0.f;
+                    if (d.services.p.renderer)
+                        d.services.p.renderer->applySettings(d.services.rendererSettings);
+                }
+
+                if (d.services.photoCaptureRequest) {
+                    d.services.photoCaptureRequest = false;
+                    if (d.services.p.renderer) {
+                        const fs::path dir = d.services.userDataDir / "screenshots";
+                        std::error_code ec;
+                        fs::create_directories(dir, ec);
+                        const fs::path out =
+                            dir / ("photo-" + std::to_string(static_cast<long long>(std::time(nullptr))) + ".png");
+                        if (d.services.p.renderer->captureScreenshot(out.string().c_str()))
+                            d.services.gameConsole->print("[photo] writing " + out.string());
+                        else
+                            d.services.gameConsole->print("[photo] capture request refused");
+                    }
+                }
             } else {
-                cam = d.services.cameraController.view(aspect);
+                // Cinematic recorder (#916): override the camera with the shot-driven pose + per-shot FOV
+                // before building the view. Only in Flight, once entities are streaming.
+                if (d.services.recorder.active && cur == Screen::Flight) {
+                    driveRecorderCamera();
+                    cam = d.services.cameraController.view(aspect, glm::radians(d.services.recorder.curFovDeg), 0.1f);
+                } else {
+                    cam = d.services.cameraController.view(aspect);
+                }
+                camOrigin = cam.worldOrigin;
             }
-            camOrigin = cam.worldOrigin;
 
             // Geographic sun (#481): the sun direction is PER-OBSERVER — derived from this camera's
             // own latitude/longitude (worldToGeodetic of the eye) and the shared UTC clock, so the
@@ -2392,8 +2607,23 @@ void Game::run() {
             // suns. This overwrites the legacy planar sun the weather packet seeded, and is recomputed
             // every frame because it depends on the (moving) camera position. Skipped until the first
             // weather packet supplies the UTC Julian Day.
-            if (const double utcJd = d.session.clientHandler->utcJulianDay(); utcJd > 0.0) {
-                const double planetR = static_cast<double>(d.session.clientHandler->planetRadiusKm()) * 1000.0;
+            // A replay carries no MsgWeatherState, so there is no live UTC to place the sun with.
+            // The header's `startUnixSeconds` is real recorded data, though, so playback lights the
+            // scene from the wall clock the match was actually flown at. It is an APPROXIMATION --
+            // the server's own time-of-day can be set or time-scaled independently of the wall clock
+            // -- and recording the weather/time state properly is an additive section, i.e. a format
+            // MINOR bump, filed as a follow-on rather than smuggled in here.
+            const double replayJd = (d.session.replayPlayer && d.session.replayPlayer->header().startUnixSeconds > 0)
+                                        ? fl::julianDayFromUnixSeconds(
+                                              static_cast<double>(d.session.replayPlayer->header().startUnixSeconds) +
+                                              d.session.replayPlayer->elapsedSeconds())
+                                        : 0.0;
+            if (const double utcJd = d.session.clientHandler ? d.session.clientHandler->utcJulianDay() : replayJd;
+                utcJd > 0.0) {
+                const double planetR =
+                    d.session.clientHandler
+                        ? static_cast<double>(d.session.clientHandler->planetRadiusKm()) * 1000.0
+                        : (d.session.replayPlayer ? d.session.replayPlayer->header().planetRadiusM : fl::kEarthRadiusM);
                 fl::WeatherController::applyGeographicSun(d.services.env, utcJd, cam.worldOrigin, planetR);
                 // Night sky (#484): Moon + geographically-oriented stars for this observer. Must
                 // follow the sun call (the night factor keys off env.sunDirection).
@@ -2411,7 +2641,9 @@ void Game::run() {
                 const glm::vec3 up = glm::vec3(cam.view[1][0], cam.view[1][1], cam.view[1][2]);
                 d.services.sfxManager.updateListener(fwd, up);
                 d.services.effectRouter.setCameraOrigin(cam.worldOrigin);
-                d.services.effectRouter.setOwnEntity(d.session.clientHandler->assignedEntityIdx);
+                // No ownship in a replay: effects are all "someone else's".
+                d.services.effectRouter.setOwnEntity(
+                    d.session.clientHandler ? d.session.clientHandler->assignedEntityIdx : 0xFFFFFFFFu);
             }
 
             // Continuous engine + aero doppler layers (#959): drive them from the current snapshot
@@ -2419,7 +2651,7 @@ void Game::run() {
             // engine is head-locked; other air entities get positional doppler sources. An observer
             // (no own entity, assignedEntityGen == 0) still hears the flybys.
             {
-                const uint32_t ownIdx = d.session.clientHandler->assignedEntityGen != 0
+                const uint32_t ownIdx = (d.session.clientHandler && d.session.clientHandler->assignedEntityGen != 0)
                                             ? d.session.clientHandler->assignedEntityIdx
                                             : fl::EngineAudioManager::kNoEntity;
                 d.services.engineAudio.update(d.services.renderBridge.current().entries, ownIdx, cam.worldOrigin,
@@ -2431,7 +2663,7 @@ void Game::run() {
             // on the ground should remain. External views (Chase/Free) show it normally.
             const fl::CameraMode cm = d.services.cameraController.mode();
             const bool cockpit = (cm == fl::CameraMode::Cockpit || cm == fl::CameraMode::Padlock); // #697
-            if (cockpit && playerEntry) {
+            if (cockpit && playerEntry && d.session.clientHandler) {
                 d.services.sceneRenderer->setHiddenEntity(d.session.clientHandler->assignedEntityIdx,
                                                           d.session.clientHandler->assignedEntityGen);
                 // Cockpit interior (#870): render the ownship's cockpit mesh locked to the airframe.

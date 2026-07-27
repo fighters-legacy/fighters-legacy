@@ -9,6 +9,7 @@
 #include "MissionBriefScreen.h"
 #include "MissionSelectScreen.h"
 #include "PauseMenuScreen.h"
+#include "ReplaySelectScreen.h"
 #include "SettingsScreen.h"
 
 #include "IDisplay.h"
@@ -28,10 +29,15 @@ void ScreenManager::init(UserConfig& config, IRenderer& renderer, IWindow& windo
     m_mainMenu = std::make_unique<MainMenuScreen>(assets.hasPacks(), isMultiplayer);
     // LoadingScreen and FlightScreen are created lazily per session
     m_missionSelect = std::make_unique<MissionSelectScreen>(assets.listMissions());
+    m_replaySelect = std::make_unique<ReplaySelectScreen>(std::vector<ReplaySelectScreen::Entry>{});
     m_missionBrief = std::make_unique<MissionBriefScreen>();
     m_settings = std::make_unique<SettingsScreen>(config, renderer, window, display);
     m_pauseMenu = std::make_unique<PauseMenuScreen>();
     m_debrief = std::make_unique<DebriefScreen>();
+}
+
+void ScreenManager::reinitReplaySelect(const std::filesystem::path& replayDir) {
+    m_replaySelect = std::make_unique<ReplaySelectScreen>(ReplaySelectScreen::scan(replayDir));
 }
 
 void ScreenManager::reinitFlight(FlightScreenDeps deps) {
@@ -66,6 +72,8 @@ IScreen& ScreenManager::active() {
         return *m_loading;
     case Screen::MissionSelect:
         return *m_missionSelect;
+    case Screen::ReplaySelect:
+        return *m_replaySelect;
     case Screen::MissionBrief:
         return *m_missionBrief;
     case Screen::Settings:
@@ -136,6 +144,9 @@ LoadingScreen& ScreenManager::loading() {
 }
 MissionSelectScreen& ScreenManager::missionSelect() {
     return *m_missionSelect;
+}
+ReplaySelectScreen& ScreenManager::replaySelect() {
+    return *m_replaySelect;
 }
 MissionBriefScreen& ScreenManager::missionBrief() {
     return *m_missionBrief;

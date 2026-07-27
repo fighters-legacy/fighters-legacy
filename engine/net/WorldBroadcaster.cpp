@@ -28,7 +28,8 @@
 #include "net/BitStream.h"
 #include "net/GameProtocol.h"
 #include "net/NetworkUtils.h"
-#include "net/SeatInput.h" // seat-scoped input routing (#972)
+#include "net/ReplayStateHash.h" // the per-tick world fingerprint the replay tap stamps (#644)
+#include "net/SeatInput.h"       // seat-scoped input routing (#972)
 #include "net/SnapshotCodec.h"
 #include "net/SnapshotCompression.h"
 #include "net/WireCodec.h"
@@ -343,6 +344,14 @@ void WorldBroadcaster::recordParticipant(uint32_t participantId, uint16_t factio
     // isBot rides in `value` rather than a dedicated field: it is the only bool any participant
     // record needs, and a bool field on every record type to serve two of them is not worth it.
     me.value = isBot ? 1 : 0;
+    // The callsign rides in `text` (#643): a replay's roster section is written when recording STARTS,
+    // so a participant who joins later would otherwise be "participant 7" forever. The roster upsert
+    // always precedes this call, so the name is already there to read. A join with no name is not
+    // much use to the #600 event stream or the #601 audit mirror either.
+    if (joined) {
+        if (const auto it = m_roster.find(participantId); it != m_roster.end())
+            me.text = it->second.callsign;
+    }
     m_matchEventLog.append(std::move(me));
 }
 
@@ -1408,6 +1417,12 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     };
     std::unordered_map<uint32_t, EncodedRecord> encoded;
     encoded.reserve(snapMap.size());
+    // Replay tap (#643): the recorder needs the QuantEntity VALUES as well as the blobs -- the state
+    // hash (#644) is computed over the quantized integer domain, which is the only domain in which a
+    // recorded and a replayed world can be compared at all. Populated only when a sink is installed.
+    std::vector<std::pair<uint32_t, QuantEntity>> replayEnts;
+    if (m_replaySink)
+        replayEnts.reserve(snapMap.size());
     for (const auto& [encIdx, snap] : snapMap) {
         const EntityState& st = *snap.state;
         QuantEntity qe;
@@ -1440,6 +1455,94 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         qe.isFull = false;
         encodeStandaloneRecord(rec.deltaBlob, qe, rec.origin, /*sendGen=*/false);
         encoded.emplace(encIdx, std::move(rec));
+        if (m_replaySink)
+            replayEnts.emplace_back(encIdx, qe);
+    }
+
+    // Build the replay tick from those same blobs (#643). Serial, outside the parallel peer pass, and
+    // skipped entirely when nobody is recording. Records go out in ASCENDING ENTITY INDEX: `encoded`
+    // is an unordered_map, and a file (or a state hash) whose byte layout depended on hash-table
+    // iteration order would differ between two runs of the same session and make the #644 gate
+    // meaningless.
+    if (m_replaySink) {
+        std::sort(replayEnts.begin(), replayEnts.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+
+        const bool keyframe =
+            m_replayForceKeyframe || (m_replayKeyframeInterval > 0 && (tickIndex % m_replayKeyframeInterval) == 0);
+
+        ReplayTickRecords out;
+        out.tick = tickIndex;
+        out.keyframe = keyframe;
+
+        // Origin table, deduped in first-use order. A handful of entries in practice (kOriginGridM is
+        // ~65 km), so a linear scan beats a map and keeps the order deterministic.
+        auto originIndexOf = [&out](const double o[3]) -> uint32_t {
+            for (std::size_t i = 0; i * 3 + 2 < out.origins.size(); ++i) {
+                if (out.origins[i * 3] == o[0] && out.origins[i * 3 + 1] == o[1] && out.origins[i * 3 + 2] == o[2])
+                    return static_cast<uint32_t>(i);
+            }
+            out.origins.push_back(o[0]);
+            out.origins.push_back(o[1]);
+            out.origins.push_back(o[2]);
+            return static_cast<uint32_t>(out.origins.size() / 3 - 1);
+        };
+
+        std::vector<QuantEntity> written; // the pre-encode entities, in written order
+        written.reserve(replayEnts.size());
+        for (const auto& [ridx, rqe] : replayEnts) {
+            const auto eit = encoded.find(ridx);
+            if (eit == encoded.end())
+                continue;
+            const auto kit = m_replayKnownGens.find(ridx);
+            const auto gen16 = static_cast<uint16_t>(rqe.gen);
+            const bool full = keyframe || kit == m_replayKnownGens.end() || kit->second != gen16;
+            appendStitchedRecord(out.records, originIndexOf(eit->second.origin),
+                                 full ? eit->second.fullBlob : eit->second.deltaBlob);
+            m_replayKnownGens[ridx] = gen16;
+            ++out.recordCount;
+            written.push_back(rqe);
+        }
+
+        // Forget entities that are no longer live, so a reused pool slot is recorded full rather than
+        // as a delta against a corpse.
+        if (m_replayKnownGens.size() > replayEnts.size()) {
+            for (auto it = m_replayKnownGens.begin(); it != m_replayKnownGens.end();)
+                it = (snapMap.find(it->first) == snapMap.end()) ? m_replayKnownGens.erase(it) : std::next(it);
+        }
+
+        // Hash what a READER will see, by decoding the stream just built -- NOT the values the encoder
+        // was fed. The two are not interchangeable, and the #644 gate is what proved it: the
+        // smallest-three orientation encoding drops the largest-magnitude component, so a rotation
+        // whose two largest components are nearly equal can have that choice tip when quantized. The
+        // decoded quaternion then re-encodes to a different dropped component and a different hash --
+        // a mismatch that is not drift at all, and one that no amount of re-normalizing fixes, because
+        // the tie sits exactly on the boundary.
+        //
+        // Decoding our own stream (one pass, only while recording) removes the question: both sides
+        // hash a value that came out of the codec, so the hash means "the world a replay will show".
+        // Sim drift still changes it, because a different world encodes to different bytes.
+        std::vector<QuantEntity> hashEnts;
+        hashEnts.reserve(written.size());
+        {
+            BitReader hr(out.records.data(), out.records.size());
+            const auto originCount = static_cast<uint32_t>(out.origins.size() / 3);
+            for (const QuantEntity& src : written) {
+                QuantEntity dec;
+                bool genPresent = false;
+                if (!decodeStandaloneRecord(hr, dec, out.origins.data(), originCount, genPresent))
+                    break; // cannot happen for bytes we just wrote; fail closed rather than guess
+                // A delta carries no typeIndex/factionIndex/gen -- a reader restores them from its
+                // cache, which holds exactly these values.
+                dec.typeIndex = src.typeIndex;
+                dec.factionIndex = src.factionIndex;
+                if (!genPresent)
+                    dec.gen = src.gen;
+                hashEnts.push_back(dec);
+            }
+        }
+        out.stateHash = hashTickState(tickIndex, hashEnts.data(), hashEnts.size());
+        m_replayForceKeyframe = false;
+        m_replaySink(out);
     }
 
     // Crew turret-pose table (#972): for each CREWED entity that has turrets, the quantized mount-frame
@@ -4285,14 +4388,16 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         if (!m_inputTraceDir.empty()) {
             auto& writer = m_peerTraceWriters[peerId];
             if (!writer) {
-                char path[512];
-                std::snprintf(path, sizeof(path), "%s/trace_peer%u_%u.flit", m_inputTraceDir.c_str(), peerId,
-                              m_traceFileSeq++);
-                writer = std::make_unique<InputTraceWriter>(std::string(path), 60u);
+                char name[128];
+                std::snprintf(name, sizeof(name), "trace_peer%u_%u.flit", peerId, m_traceFileSeq++);
+                // std::filesystem::path end to end (#643): building the path as a narrow string and
+                // handing it to ofstream loses a non-ASCII trace directory on Windows.
+                const std::filesystem::path path = std::filesystem::path(m_inputTraceDir) / name;
+                writer = std::make_unique<InputTraceWriter>(path, 60u);
                 if (!writer->good()) {
                     char wmsg[576];
                     std::snprintf(wmsg, sizeof(wmsg), "could not open input trace '%s' for peer %u — not tracing it",
-                                  path, peerId);
+                                  path.string().c_str(), peerId);
                     m_logger.log(LogLevel::Warn, __FILE__, __LINE__, wmsg);
                 }
             }

@@ -22,6 +22,9 @@ MainMenuScreen::MainMenuScreen(bool hasPacks, bool isMultiplayer) {
     }
     if (hasPacks)
         m_items.push_back({"Select Mission", Screen::MissionSelect, ""});
+    // #41: recorded matches. Offered in both single-player and multiplayer -- a replay is a file,
+    // and which mode produced it is irrelevant to watching it.
+    m_items.push_back({"Replays", Screen::ReplaySelect, ""});
     m_items.push_back({"Settings", Screen::Settings, ""});
     m_items.push_back({"Exit to Desktop", Screen::Quit, ""});
 }

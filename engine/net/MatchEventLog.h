@@ -40,10 +40,41 @@ enum class MatchEventType : uint8_t {
     AgentAction = 10, // an MCP/agent tool invocation (#601), recorded for the audit mirror
 };
 
-[[nodiscard]] const char* matchEventTypeName(MatchEventType t) noexcept;
+// Both inline: the `.flrep` reader (#643) needs the ordinal gate and the type name while living in
+// engine-replay, which must not link engine-net -- the game client reads replays and has no business
+// pulling in the server sim.
+[[nodiscard]] inline const char* matchEventTypeName(MatchEventType t) noexcept {
+    switch (t) {
+    case MatchEventType::Spawn:
+        return "spawn";
+    case MatchEventType::Despawn:
+        return "despawn";
+    case MatchEventType::Kill:
+        return "kill";
+    case MatchEventType::DamageLevel:
+        return "damage_level";
+    case MatchEventType::Score:
+        return "score";
+    case MatchEventType::Join:
+        return "join";
+    case MatchEventType::Leave:
+        return "leave";
+    case MatchEventType::Chat:
+        return "chat";
+    case MatchEventType::AdminCommand:
+        return "admin_command";
+    case MatchEventType::AlertLevel:
+        return "alert_level";
+    case MatchEventType::AgentAction:
+        return "agent_action";
+    }
+    return "unknown";
+}
 
 // Gate an ordinal that arrived from outside (a replay file, a wire message) before casting.
-[[nodiscard]] bool isMatchEventTypeOrdinal(uint8_t v) noexcept;
+[[nodiscard]] inline bool isMatchEventTypeOrdinal(uint8_t v) noexcept {
+    return v <= static_cast<uint8_t>(MatchEventType::AgentAction);
+}
 
 // One record. Deliberately a flat POD-plus-string rather than a variant: every consumer here is a
 // serializer, and a flat record serializes without a visitor. Fields not meaningful for a type are

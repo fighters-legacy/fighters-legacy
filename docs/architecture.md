@@ -220,6 +220,31 @@ revised by a dated decision record instead of a full RFC, provided the change is
 with its rationale. This keeps the velocity of pre-1.0 architecture work without leaving the
 locked table silently stale.
 
+**2026-07-27 — a replay file is versioned for real, and the world it describes is fingerprinted by
+its quantized state, not its floats (#643/#644, plan #1036 D6/D8).** `.flrep` is the first artifact
+this engine produces that OUTLIVES THE BUILD THAT WROTE IT, so it does not inherit FLIT's frozen
+`version = 1`: every section is length-prefixed and skippable, an additive change is a MINOR bump a
+reader tolerates, and a change of meaning is a MAJOR bump a reader REFUSES by name ("this replay is
+format 3.0; this build reads format 1.x"). A silent partial read that renders a plausible wrong
+flight is worse than a refusal nobody can miss. The header stores what cannot be re-derived later --
+notably the session's planet radius, without which every geodetic readout on playback, and every ACMI
+line exported from it (#923), is quietly wrong rather than absent.
+
+The recording reuses the wire's own quantized records (`SnapshotCodec`) rather than a second
+serialization, and the recorder taps the encode-once pass instead of re-quantizing, so there is one
+implementation of what 0.125 m means. Playback publishes through the same `SimRenderBridge` a network
+client publishes through (D7), which is why the renderer, the cameras and the HUD needed no
+replay-awareness at all.
+
+`ReplayStateHash` is the determinism primitive the codebase lacked: a per-tick FNV-1a fold over the
+**quantized integer domain**, which removes the float-ordering ambiguity that would make a
+cross-worker comparison flaky (the `rollPasses` reasoning applied to whole-world state). It carries
+one contract, learned the hard way: **hashes are taken on DECODED entities, on both sides of any
+comparison.** Smallest-three orientation drops the largest-magnitude component, so a rotation whose
+two largest components are nearly equal has that choice tip when quantized -- the same world then
+hashes two ways depending on which side of the codec the value came from, and no amount of
+re-normalizing settles a tie that sits exactly on the boundary.
+
 **2026-07-23 — server authority is a capability bitmask, and the game-master map is the first consumer
 of one aggregated world-state surface (#944/#861/#600).** The single all-or-nothing `operator_password`
 gate is replaced by a per-command capability check that knows *who* issued a command: `CommandRegistry`
@@ -810,6 +835,7 @@ The game binary (`fighters-legacy`) uses a `ScreenManager` that owns all menu an
 ```
 MainMenu → Loading → Flight → Pause → (Flight or MainMenu)
                  ↘ MissionSelect → MissionBrief → Loading
+                 ↘ ReplaySelect → Loading (a replay session: no server, no socket)
 MainMenu → Settings → MainMenu (or Pause)
 Flight → Debrief → MainMenu
 ```
@@ -819,6 +845,7 @@ Flight → Debrief → MainMenu
 | `MainMenu` | Main menu; no local server running |
 | `Loading` | Local server starting + ENet connecting; Quake-style progress messages |
 | `MissionSelect` | Scrollable list of missions from content packs |
+| `ReplaySelect` | Recorded matches (`.flrep`), newest first; an unreadable file is listed greyed out with the reader's refusal, never hidden (#41) |
 | `MissionBrief` | Mission name, map placeholder, "Fly" / "Back" |
 | `Settings` | Graphics and audio settings; saves on Back |
 | `Flight` | In-flight; mouse captured; flight HUD + windshield rain rendered |

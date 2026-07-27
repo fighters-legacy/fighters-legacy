@@ -4616,6 +4616,9 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         pc.bloomStrength = m_settings.bloom ? 0.10f : 0.0f;
         pc.aoStrength = (m_settings.aoMode != RendererAOMode::Off) ? 0.85f : 0.0f;
         pc.nvgIntensity = m_nvgIntensity; // #210 night-vision green gain (0 = off)
+        // Photo-mode exposure compensation (#41), in stops. Computed here rather than in the shader
+        // so the GPU never pays for an exp2 per pixel, and so evOffset == 0 is exactly 1.0f.
+        pc.exposureScale = (m_settings.evOffset == 0.f) ? 1.0f : std::exp2(m_settings.evOffset);
         vkCmdPushConstants(cmd, m_tonemapLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 
         vkCmdDraw(cmd, 3, 1, 0, 0); // fullscreen triangle

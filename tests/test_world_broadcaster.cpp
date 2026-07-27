@@ -11335,3 +11335,235 @@ TEST_CASE("WorldBroadcaster: steady-state articulation is not resent every tick 
     CHECK(withTlv > 0);
     CHECK(withTlv <= 4);
 }
+
+// ── replay tap (#643) ───────────────────────────────────────────────────────
+//
+// The recorder cannot reuse a per-peer snapshot: those are interest-filtered and budget-capped, so
+// they describe what one player could see rather than what happened. These cases pin the two
+// properties that makes the tap worth having -- it sees EVERYTHING, and it costs nothing when
+// nobody is recording.
+
+TEST_CASE("WorldBroadcaster: the replay tap records entities no peer can see (#643)", "[world_broadcaster][replay]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    // One entity at the origin, one 50 km away. A peer at the origin with a 5 km draw distance sees
+    // exactly one of them; the recording must contain both.
+    fl::EntityTransform nearT{};
+    nearT.pos[1] = 500.0;
+    REQUIRE(em.spawn("builtin:debug-entity", nearT).valid());
+    fl::EntityTransform farT{};
+    farT.pos[0] = 50'000.0;
+    farT.pos[1] = 500.0;
+    REQUIRE(em.spawn("builtin:debug-entity", farT).valid());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setDrawDistance(5.f);
+    connectPilotPeer(broadcaster, net, 0u);
+
+    std::vector<fl::WorldBroadcaster::ReplayTickRecords> taps;
+    broadcaster.setReplaySink([&taps](const fl::WorldBroadcaster::ReplayTickRecords& r) { taps.push_back(r); },
+                              /*keyframeIntervalTicks=*/4);
+
+    for (uint64_t t = 0; t < 8; ++t)
+        broadcaster.onTick(1.0 / 60.0, t);
+
+    REQUIRE(taps.size() == 8);
+    for (const auto& tap : taps) {
+        // 3 = the two spawned entities + the peer's own aircraft.
+        CHECK(tap.recordCount == 3);
+        CHECK_FALSE(tap.records.empty());
+        CHECK_FALSE(tap.origins.empty());
+        CHECK(tap.stateHash != 0u);
+    }
+
+    // The first tick after installation is a keyframe, and the cadence holds from there -- a file
+    // that opened on a delta would have no baseline to decode against.
+    CHECK(taps[0].keyframe);
+    CHECK(taps[4].keyframe);
+    CHECK_FALSE(taps[1].keyframe);
+    CHECK_FALSE(taps[5].keyframe);
+
+    // A keyframe carries every entity full, so it is strictly larger than the delta ticks around it.
+    CHECK(taps[0].records.size() > taps[1].records.size());
+}
+
+TEST_CASE("WorldBroadcaster: the replay tap does not change a single byte a peer receives (#643)",
+          "[world_broadcaster][replay]") {
+    // The cost-of-the-feature question, asserted rather than assumed: recording must not perturb the
+    // snapshots, or turning it on would change what every client sees.
+    auto run = [](bool withSink) {
+        MockLogger logger;
+        MockNetwork net;
+        fl::EntityTypeRegistry registry;
+        registry.registerType(makeDebugDef());
+        fl::EntityManager em(logger, registry);
+
+        fl::EntityTransform t{};
+        t.pos[1] = 800.0;
+        REQUIRE(em.spawn("builtin:debug-entity", t).valid());
+
+        fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+        connectPilotPeer(broadcaster, net, 0u);
+        if (withSink)
+            broadcaster.setReplaySink([](const fl::WorldBroadcaster::ReplayTickRecords&) {}, 4);
+        clearSnapshots(net);
+        for (uint64_t i = 0; i < 10; ++i)
+            broadcaster.onTick(1.0 / 60.0, i);
+        return snapshotsFor(net, 0u);
+    };
+
+    const auto without = run(false);
+    const auto with = run(true);
+    REQUIRE(without.size() == with.size());
+    for (std::size_t i = 0; i < without.size(); ++i) {
+        INFO("snapshot packet index " << i);
+        CHECK(without[i] == with[i]);
+    }
+}
+
+TEST_CASE("WorldBroadcaster: the replay tap's state hash tracks the world, not the tick number (#643)",
+          "[world_broadcaster][replay]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::EntityTransform t{};
+    t.pos[1] = 900.0;
+    const fl::EntityId id = em.spawn("builtin:debug-entity", t);
+    REQUIRE(id.valid());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    std::vector<uint64_t> hashes;
+    broadcaster.setReplaySink(
+        [&hashes](const fl::WorldBroadcaster::ReplayTickRecords& r) { hashes.push_back(r.stateHash); }, 4);
+
+    for (uint64_t i = 0; i < 4; ++i)
+        broadcaster.onTick(1.0 / 60.0, i);
+
+    // A static world still hashes differently per tick (the tick index is folded in), which is what
+    // makes a per-tick stream comparable position-by-position rather than as a set.
+    REQUIRE(hashes.size() == 4);
+    CHECK(hashes[0] != hashes[1]);
+
+    // Moving an entity changes the hash for that tick: the fingerprint follows the world.
+    const uint64_t beforeMove = hashes.back();
+    fl::EntityState* st = em.get(id);
+    REQUIRE(st != nullptr);
+    st->transform.pos[0] += 1000.0;
+    broadcaster.onTick(1.0 / 60.0, 3); // same tick index, different world
+    REQUIRE(hashes.size() == 5);
+    CHECK(hashes.back() != beforeMove);
+}
+
+// ── sim determinism (#644) ──────────────────────────────────────────────────
+//
+// #644 asks for two properties that a single gate cannot honestly cover. The record<->replay
+// FIDELITY half lives in `replay_roundtrip_ci_smoke` (it needs a real recording on disk). This is the
+// other half, and the one the roadmap actually calls the sim-drift alarm: does the SIM produce the
+// same world twice?
+//
+// It runs IN PROCESS on purpose. Two networked server runs are not tick-aligned -- input arrival
+// decides which tick an input lands on -- so a two-process comparison would be a flaky test wearing a
+// determinism gate's clothes. Stepping the same scripted world twice, and at 1 vs N workers, is
+// deterministic by construction, and it is what actually fails when someone introduces a race, an
+// unseeded RNG, or a float path that depends on evaluation order.
+
+namespace {
+
+// A controller with a fixed, per-instance control input -- enough for every entity to fly its own
+// trajectory without pulling engine-ai into this test.
+struct ScriptedController : fl::IEntityController {
+    fl::ControlInput ctrl{};
+    fl::ControlInput sample(const fl::EntityState&, uint64_t, double, const fl::AiTickContext&) override {
+        return ctrl;
+    }
+};
+
+// Step a fixed scripted world and return the per-tick state-hash stream from the replay tap.
+std::vector<uint64_t> runDeterminismScenario(fl::JobSystem* jobs, int entityCount = 24) {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    if (jobs)
+        broadcaster.setJobSystem(*jobs);
+    connectPilotPeer(broadcaster, net, 0u);
+
+    // A moving world: entities under AI control, spread out so the spatial index, the AI pass and the
+    // integrate pass all have real work to parallelise. A static world would pass this gate while
+    // hiding every ordering bug it exists to catch.
+    for (int i = 0; i < entityCount; ++i) {
+        fl::EntityTransform t{};
+        t.pos[0] = 500.0 * static_cast<double>(i);
+        t.pos[1] = 1200.0 + 5.0 * static_cast<double>(i);
+        t.pos[2] = -300.0 * static_cast<double>(i % 7);
+        const fl::EntityId id = em.spawn("builtin:debug-entity", t);
+        REQUIRE(id.valid());
+        // Per-entity control surfaces, so the entities fly DIFFERENT paths: a fleet flying one
+        // identical trajectory would hash the same under any ordering bug.
+        auto ctl = std::make_unique<ScriptedController>();
+        ctl->ctrl.throttle = 0.5f + 0.02f * static_cast<float>(i % 10);
+        ctl->ctrl.elevator = 0.1f * static_cast<float>((i % 5) - 2);
+        ctl->ctrl.aileron = 0.05f * static_cast<float>((i % 3) - 1);
+        broadcaster.registerController(id, std::move(ctl));
+    }
+
+    std::vector<uint64_t> hashes;
+    broadcaster.setReplaySink(
+        [&hashes](const fl::WorldBroadcaster::ReplayTickRecords& r) { hashes.push_back(r.stateHash); },
+        /*keyframeIntervalTicks=*/30);
+
+    for (uint64_t tick = 1; tick <= 180; ++tick)
+        broadcaster.onTick(1.0 / 60.0, tick);
+    return hashes;
+}
+
+} // namespace
+
+TEST_CASE("WorldBroadcaster: the same scripted world hashes identically twice (#644)",
+          "[world_broadcaster][determinism]") {
+    const std::vector<uint64_t> first = runDeterminismScenario(nullptr);
+    const std::vector<uint64_t> second = runDeterminismScenario(nullptr);
+
+    REQUIRE(first.size() == 180);
+    CHECK(first == second);
+
+    // The stream must actually be doing something: an all-identical stream would compare equal while
+    // proving nothing, which is exactly how a determinism gate quietly stops testing anything.
+    CHECK(std::adjacent_find(first.begin(), first.end(), std::not_equal_to<>()) != first.end());
+}
+
+TEST_CASE("WorldBroadcaster: worker count does not change the world (#644)", "[world_broadcaster][determinism]") {
+    const std::vector<uint64_t> serial = runDeterminismScenario(nullptr);
+
+    for (unsigned workers : {1u, 2u, 4u, 8u}) {
+        fl::JobSystem jobs(workers);
+        const std::vector<uint64_t> parallel = runDeterminismScenario(&jobs);
+        INFO("workers=" << workers);
+        REQUIRE(parallel.size() == serial.size());
+        // Tick-by-tick rather than whole-vector, so a failure names WHEN the sim diverged -- which is
+        // the first thing anyone chasing a drift regression needs.
+        for (std::size_t i = 0; i < serial.size(); ++i) {
+            INFO("tick " << (i + 1));
+            REQUIRE(parallel[i] == serial[i]);
+        }
+    }
+}
+
+TEST_CASE("WorldBroadcaster: the state hash notices a changed world (#644)", "[world_broadcaster][determinism]") {
+    // The gate is only worth having if the hash actually responds to state. One more entity must
+    // produce a different stream -- otherwise "identical hashes" would mean nothing at all.
+    const std::vector<uint64_t> base = runDeterminismScenario(nullptr, 24);
+    const std::vector<uint64_t> more = runDeterminismScenario(nullptr, 25);
+    REQUIRE(base.size() == more.size());
+    CHECK(base != more);
+}

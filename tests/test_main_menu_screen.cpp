@@ -9,12 +9,21 @@ using namespace fl;
 
 TEST_CASE("MainMenuScreen: no packs - no Select Mission item") {
     MainMenuScreen s(/*hasPacks=*/false);
-    CHECK(s.itemCount() == 4); // Instant Action, Free Flight, Settings, Exit to Desktop
+    CHECK(s.itemCount() == 5); // Instant Action, Free Flight, Replays, Settings, Exit to Desktop
 }
 
 TEST_CASE("MainMenuScreen: with packs - includes Select Mission") {
     MainMenuScreen s(/*hasPacks=*/true);
-    CHECK(s.itemCount() == 5); // Instant Action, Free Flight, Select Mission, Settings, Exit to Desktop
+    // Instant Action, Free Flight, Select Mission, Replays, Settings, Exit to Desktop
+    CHECK(s.itemCount() == 6);
+}
+
+TEST_CASE("MainMenuScreen: Replays is offered in single-player and multiplayer") {
+    // A replay is a file; which mode produced it is irrelevant to watching it (#41).
+    MainMenuScreen sp(/*hasPacks=*/false, /*isMultiplayer=*/false);
+    MainMenuScreen mp(/*hasPacks=*/false, /*isMultiplayer=*/true);
+    CHECK(sp.itemCount() == 5);
+    CHECK(mp.itemCount() == 4); // Join Server, Replays, Settings, Exit to Desktop
 }
 
 TEST_CASE("MainMenuScreen: ArrowDown wraps navigation") {

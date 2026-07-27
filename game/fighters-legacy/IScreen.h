@@ -17,6 +17,7 @@ enum class Screen {
     MainMenu,
     ServerBrowser, // #143: multiplayer server browser (LAN + lobby list)
     JoinServer,    // #322: multiplayer direct-connect form (host / password / callsign)
+    ReplaySelect,  // #41: recorded-match browser
     Loading,
     MissionSelect,
     MissionBrief,
@@ -41,6 +42,14 @@ enum class Screen {
 [[nodiscard]] inline bool exitsSession(Screen prev, Screen next) noexcept {
     return next == Screen::MainMenu &&
            (prev == Screen::Flight || prev == Screen::Pause || prev == Screen::Debrief || prev == Screen::Loading);
+}
+
+// A replay session is a session with no server and no socket (#41): playback publishes through the
+// same SimRenderBridge a network client does, so everything downstream is unchanged. It is entered
+// the same way every other session is -- through Loading -- so entersSession/exitsSession need no new
+// arm; what differs is only which source Game::startGame wires up.
+[[nodiscard]] inline bool entersReplaySession(Screen prev, Screen next) noexcept {
+    return next == Screen::Loading && prev == Screen::ReplaySelect;
 }
 
 // Interface for a single game/menu screen.

@@ -236,6 +236,26 @@ static const char* kDefaultToml =
     "# toggle it at runtime. See docs/load-testing.md for the trace format.\n"
     "input_trace_dir = \"\"\n"
     "\n"
+    "[replay]\n"
+    "# Server-side match recording to the .flrep replay format (#643, docs/replay-format.md). Every\n"
+    "# match is recorded automatically; the client plays these back with full camera control and a\n"
+    "# scrubbable timeline. Disk use is bounded by rotation, not by remembering to clean up.\n"
+    "enabled = true\n"
+    "# Directory for recordings, relative to the server's working directory.\n"
+    "dir = \"replays\"\n"
+    "# Ticks between keyframes. A scrub seeks to the keyframe at or before the target and rolls\n"
+    "# forward, so this is the seek granularity. Measured: across 60-600 ticks the file size moves\n"
+    "# by well under 1 %, so pick this for seek feel, not for disk. 120 = 2 s at 60 Hz. [15, 3600].\n"
+    "keyframe_interval_ticks = 120\n"
+    "# Rotate to a new file once the current one passes this size. [1, 65535] MB.\n"
+    "max_file_mb = 256\n"
+    "# Keep at most this many .flrep files in `dir`, deleting the oldest first. Bounds the DIRECTORY,\n"
+    "# not one session. [1, 10000].\n"
+    "max_files = 20\n"
+    "# Per-tick state-hash sidecar for the determinism gate (#644). Empty = not written; a live\n"
+    "# server has no use for it.\n"
+    "hash_log = \"\"\n"
+    "\n"
     "[network]\n"
     "# Transport backend: \"gns\" (GameNetworkingSockets — encrypted UDP, congestion control, 128+\n"
     "# headroom; default for dedicated servers) or \"enet\" (enet6 — LAN / low-count). See\n"
@@ -1043,6 +1063,35 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         // [trace]
         if (auto v = tbl["trace"]["input_trace_dir"].value<std::string>())
             cfg.trace.inputTraceDir = std::move(*v);
+
+        // [replay] — server-side match recording (#643)
+        if (auto v = tbl["replay"]["enabled"].value<bool>())
+            cfg.replay.enabled = *v;
+        if (auto v = tbl["replay"]["dir"].value<std::string>())
+            cfg.replay.dir = std::move(*v);
+        if (auto v = tomlInt(tbl["replay"]["keyframe_interval_ticks"])) {
+            if (*v < 15 || *v > 3600)
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "replay.keyframe_interval_ticks out of range [15, 3600]; using default 120");
+            else
+                cfg.replay.keyframeIntervalTicks = static_cast<uint32_t>(*v);
+        }
+        if (auto v = tomlInt(tbl["replay"]["max_file_mb"])) {
+            if (*v < 1 || *v > 65535)
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "replay.max_file_mb out of range [1, 65535]; using default 256");
+            else
+                cfg.replay.maxFileMb = static_cast<uint32_t>(*v);
+        }
+        if (auto v = tomlInt(tbl["replay"]["max_files"])) {
+            if (*v < 1 || *v > 10000)
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "replay.max_files out of range [1, 10000]; using default 20");
+            else
+                cfg.replay.maxFiles = static_cast<uint32_t>(*v);
+        }
+        if (auto v = tbl["replay"]["hash_log"].value<std::string>())
+            cfg.replay.hashLog = std::move(*v);
 
         // [network]
         if (auto v = tbl["network"]["transport"].value<std::string>()) {

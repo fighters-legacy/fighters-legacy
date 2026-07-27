@@ -7,6 +7,7 @@
 #include "SessionStatus.h"
 
 #include <atomic>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <string_view>
@@ -24,6 +25,7 @@ class UserConfig;
 class MainMenuScreen;
 class LoadingScreen;
 class MissionSelectScreen;
+class ReplaySelectScreen;
 class MissionBriefScreen;
 class SettingsScreen;
 class FlightScreen;
@@ -45,6 +47,11 @@ class ScreenManager {
     // isMultiplayer relabels "Sandbox (Instant Action)" → "Join Server" in the main menu.
     void init(UserConfig& config, IRenderer& renderer, IWindow& window, IDisplay& display, AssetManager& assets,
               bool isMultiplayer = false);
+
+    // (Re)build the replay browser from a directory scan (#41). Rebuilt on every entry rather than
+    // once at init: a player who just flew expects their recording to be in the list without a
+    // restart, and the scan is a handful of header reads.
+    void reinitReplaySelect(const std::filesystem::path& replayDir);
 
     // (Re)create the loading screen with fresh callbacks. Called by Game::startGame()
     // each time a new session begins.
@@ -86,6 +93,7 @@ class ScreenManager {
     ServerBrowserScreen& serverBrowser();
     LoadingScreen& loading();
     MissionSelectScreen& missionSelect();
+    ReplaySelectScreen& replaySelect();
     MissionBriefScreen& missionBrief();
     SettingsScreen& settings();
     FlightScreen& flight();
@@ -102,6 +110,7 @@ class ScreenManager {
     std::unique_ptr<ServerBrowserScreen> m_serverBrowser; // #143; null until reinitServerBrowser()
     std::unique_ptr<LoadingScreen> m_loading;
     std::unique_ptr<MissionSelectScreen> m_missionSelect;
+    std::unique_ptr<ReplaySelectScreen> m_replaySelect;
     std::unique_ptr<MissionBriefScreen> m_missionBrief;
     std::unique_ptr<SettingsScreen> m_settings;
     std::unique_ptr<FlightScreen> m_flight;

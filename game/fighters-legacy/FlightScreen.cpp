@@ -97,7 +97,10 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     // spectator state to a DEAD pilot awaiting respawn, not just a role-observer.
     const bool observer = d.clientNetHandler && d.clientNetHandler->grantedRole() == fl::PeerRole::Observer;
     const bool deadSpectator = d.clientNetHandler && d.clientNetHandler->awaitingRespawn();
-    const bool spectating = observer || deadSpectator;
+    // A replay viewer is a spectator by construction: a recording has no ownship, and the picker +
+    // free camera the spectator path already provides IS the "view any player's perspective"
+    // requirement (#41). Reusing it rather than adding a replay camera mode is the point of D7.
+    const bool spectating = observer || deadSpectator || (d.replay != nullptr);
     // On the rising edge into a dead-pilot spectate, drop into the free ghost camera at the wreck (the
     // role-observer path is seeded by Game.cpp's #859 flow instead).
     if (spectating && !m_wasSpectating && deadSpectator && !observer) {
@@ -130,6 +133,83 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
         // drop back to the free ghost camera rather than freezing on an empty Chase/Cockpit.
         if (!viewEntry && d.cameraController->mode() != fl::CameraMode::Free)
             d.cameraController->setMode(fl::CameraMode::Free);
+    }
+
+    // ── replay transport + photo mode (#41) ─────────────────────────────────
+    // Gated on the console/menus being closed, like every other in-flight key handler, so typing a
+    // command never scrubs the recording out from under the player.
+    if (d.replay && d.replay->isOpen() && !d.gameConsole->isOpen() && !(d.wingmanMenu && d.wingmanMenu->isOpen()) &&
+        !(d.commsMenu && d.commsMenu->isOpen())) {
+        fl::ReplayPlayer& rp = *d.replay;
+
+        if (input.isKeyJustPressed(Key::Space))
+            rp.togglePause();
+        // Scrub in whole seconds; arrows are the obvious keys and the flight controls they usually
+        // drive have no meaning here (there is nothing to fly).
+        if (input.isKeyJustPressed(Key::ArrowLeft))
+            rp.seekBySeconds(-5.0);
+        if (input.isKeyJustPressed(Key::ArrowRight))
+            rp.seekBySeconds(5.0);
+        if (input.isKeyJustPressed(Key::ArrowDown))
+            rp.seekBySeconds(-30.0);
+        if (input.isKeyJustPressed(Key::ArrowUp))
+            rp.seekBySeconds(30.0);
+        if (input.isKeyJustPressed(Key::Home))
+            rp.seekToFraction(0.0);
+        if (input.isKeyJustPressed(Key::End))
+            rp.seekToFraction(1.0);
+
+        // Speed: the #41 set (0.25x / 0.5x / 1x / 2x), stepped through the shared TimeRate ladder.
+        auto stepRate = [](fl::TimeRate r, int dir) {
+            constexpr fl::TimeRate kLadder[] = {fl::TimeRate::Quarter, fl::TimeRate::Half, fl::TimeRate::Normal,
+                                                fl::TimeRate::Double};
+            int step = 2; // Normal
+            for (int i = 0; i < 4; ++i)
+                if (kLadder[i] == r)
+                    step = i;
+            step = std::clamp(step + dir, 0, 3);
+            return kLadder[step];
+        };
+        // Minus/Equals mean speed while playing and exposure inside photo mode. That is not a
+        // collision: photo mode pauses playback, so a speed control there would adjust nothing.
+        const bool inPhoto = d.photo && d.photo->active;
+        if (!inPhoto && input.isKeyJustPressed(Key::Minus))
+            rp.setRate(stepRate(rp.rate(), -1));
+        if (!inPhoto && input.isKeyJustPressed(Key::Equals))
+            rp.setRate(stepRate(rp.rate(), +1));
+
+        if (d.photo) {
+            // Photo mode pauses on entry: a still of a moving world is a screenshot, not a photograph.
+            if (input.isKeyJustPressed(Key::P)) {
+                d.photo->active = !d.photo->active;
+                if (d.photo->active) {
+                    if (!rp.paused())
+                        rp.togglePause();
+                    d.cameraController->setMode(fl::CameraMode::Free);
+                }
+            }
+            if (d.photo->active) {
+                const float fovStep = input.isKeyDown(Key::LeftShift) ? 1.f : 5.f;
+                if (input.isKeyDown(Key::PageUp))
+                    d.photo->fovDeg =
+                        std::clamp(d.photo->fovDeg - fovStep, fl::ReplayHud::kMinFovDeg, fl::ReplayHud::kMaxFovDeg);
+                if (input.isKeyDown(Key::PageDown))
+                    d.photo->fovDeg =
+                        std::clamp(d.photo->fovDeg + fovStep, fl::ReplayHud::kMinFovDeg, fl::ReplayHud::kMaxFovDeg);
+                if (input.isKeyDown(Key::Q))
+                    d.photo->rollDeg = std::clamp(d.photo->rollDeg - 1.f, -180.f, 180.f);
+                if (input.isKeyDown(Key::E))
+                    d.photo->rollDeg = std::clamp(d.photo->rollDeg + 1.f, -180.f, 180.f);
+                if (input.isKeyJustPressed(Key::Minus))
+                    d.photo->evOffset =
+                        std::clamp(d.photo->evOffset - 0.25f, -fl::ReplayHud::kMaxEv, fl::ReplayHud::kMaxEv);
+                if (input.isKeyJustPressed(Key::Equals))
+                    d.photo->evOffset =
+                        std::clamp(d.photo->evOffset + 0.25f, -fl::ReplayHud::kMaxEv, fl::ReplayHud::kMaxEv);
+                if (input.isKeyJustPressed(Key::Enter) && d.photoCaptureRequest)
+                    *d.photoCaptureRequest = true; // Game.cpp owns the renderer; the screen just asks
+            }
+        }
     }
 
     // Head tracking (#927): drain the opentrack UDP stream and feed the smoothed pose to the cockpit
@@ -406,7 +486,11 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
             d.clientNetHandler->stampAck(*msg);
         if (d.prediction && d.env)
             d.prediction->onInput(*msg, *d.env);
-        d.clientNet->send(0, &*msg, sizeof(*msg), /*reliable=*/false);
+        // Null in a replay session (#41): there is no server to fly at. Every other use of the net in
+        // this function was already null-guarded; this one send was not, and it was reachable the
+        // moment a session existed without a socket.
+        if (d.clientNet)
+            d.clientNet->send(0, &*msg, sizeof(*msg), /*reliable=*/false);
     }
     if (d.clientNetHandler)
         d.clientNetHandler->sendHeartbeatIfNeeded();
@@ -768,6 +852,17 @@ std::span<const HudElement> FlightScreen::buildElements() {
         addLine(m_seatPickerLine, 0.86f, 0.9f);
     }
     addLine(m_seatResultLine, 0.90f, 0.9f);
+
+    // Replay transport bar (#41), appended last so it draws over the HUD rather than under it.
+    if (m_deps.replay && m_deps.replay->isOpen()) {
+        static const fl::PhotoModeState kNoPhoto{};
+        for (const auto& e : m_replayHud.build(*m_deps.replay, m_deps.photo ? *m_deps.photo : kNoPhoto)) {
+            if (m_elementCount >= kMaxElements)
+                break;
+            m_elements[static_cast<std::size_t>(m_elementCount++)] = e;
+        }
+    }
+
     return {m_elements.data(), static_cast<std::size_t>(m_elementCount)};
 }
 

@@ -224,6 +224,28 @@ struct ServerConfig {
     };
     TraceConfig trace;
 
+    // [replay]  — server-side match recording to `.flrep` (#643)
+    //
+    // On by default: #41's acceptance is "every mission recorded automatically", and a replay nobody
+    // remembered to switch on is not a replay. The disk cost is bounded by rotation, not by trust.
+    struct ReplayConfig {
+        bool enabled = true;
+        std::string dir = "replays"; // relative to the server's working directory
+        // Ticks between keyframes -- the seek granularity a scrub lands on. Measured rather than
+        // guessed (#643): across a 10x range (60 -> 600 ticks) on a 40-entity moving world the file
+        // grew only 0.4 %, because a delta record of a moving entity is nearly the size of a full one
+        // and zstd eats the repetition. So cadence is chosen for SEEK, not size: 120 = 2 s at 60 Hz.
+        uint32_t keyframeIntervalTicks = 120;
+        uint32_t maxFileMb = 256; // rotate to a new file past this size; [1, 65535]
+        // Bounds the DIRECTORY, oldest first -- a server that records one file per match must not
+        // fill the disk one perfectly-rotated file at a time. [1, 10000].
+        uint32_t maxFiles = 20;
+        // Per-tick state-hash sidecar (#644's gate reads it). Empty = not written; this is a test
+        // instrument, not something a live server needs.
+        std::string hashLog;
+    };
+    ReplayConfig replay;
+
     // [spawn]
     struct SpawnPointDef {
         double x = 0.0;

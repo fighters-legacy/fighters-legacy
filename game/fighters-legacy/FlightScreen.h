@@ -3,6 +3,7 @@
 
 #include "IScreen.h"
 #include "RenderTypes.h"
+#include "ReplayHud.h"
 
 #include "Autopilot.h"      // player autopilot holds (#640)
 #include "CrewSeatMenu.h"   // crew seat picker (#975)
@@ -79,6 +80,14 @@ struct FlightScreenDeps {
     IGui* gui{nullptr};                            // null = no GUI backend (chat input box degrades off)
     uint32_t* assignedEntityIdx{nullptr};
     uint32_t* assignedEntityGen{nullptr};
+    // Replay playback (#41). Non-null = this session is watching a recording rather than flying:
+    // there is no ownship, so the screen runs its existing SPECTATOR path (entity picker, free
+    // camera, no cockpit) and adds the transport bar. Null = an ordinary live session, unchanged.
+    ReplayPlayer* replay{nullptr};
+    PhotoModeState* photo{nullptr}; // null = photo mode unavailable (a live multiplayer session)
+    // Set by the screen when photo mode asks for a still. Game.cpp owns the renderer, so the screen
+    // raises a flag rather than reaching for it.
+    bool* photoCaptureRequest{nullptr};
 };
 
 // IScreen for the in-flight state. Handles camera/flight input, HUD update,
@@ -157,6 +166,7 @@ class FlightScreen : public IScreen {
     // streaks + the target designator box (#696) + the radio/comms menu + the in-flight manual (#821),
     // which is a full page of text. Must stay >= the FlightHud element cap or HUD symbology is truncated.
     static constexpr int kMaxElements = 480;
+    ReplayHud m_replayHud; // #41 transport bar; only built when deps.replay is set
     std::array<HudElement, kMaxElements> m_elements{};
     int m_elementCount{0};
 };

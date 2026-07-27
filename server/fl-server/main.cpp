@@ -22,7 +22,9 @@
 #include "MissionSource.h"
 #include "NetworkFactory.h"
 #include "RconServer.h"
+#include "ReplayRecorder.h"
 #include "ServerCommands.h"
+#include "StdinCommandReader.h"
 #include "StdoutLogger.h"
 #include "TestSpawn.h"
 #include "bots.h"
@@ -34,6 +36,8 @@
 #include "sensor/SensorDefParser.h"
 #include "server_config.h"
 #include <content/ContentBootstrap.h>
+
+#include "Version.h" // FL_VERSION_STRING — stamped into every recording (#643)
 
 #include <ILogger.h>
 #include <Platform.h>
@@ -111,12 +115,10 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
-#include <iostream>
 #include <memory>
 #include <mutex>
 #include <numbers>
 #include <optional>
-#include <queue>
 #include <string>
 #include <thread>
 #include <unordered_set>
@@ -195,6 +197,9 @@ int main(int argc, char** argv) {
     std::string flagAdminToken;    // non-empty if --admin-token was given (internal single-player use)
     std::string flagTransport;     // non-empty if --transport <gns|enet> was given (overrides [network])
     std::string flagMetricsJson;   // non-empty if --metrics-json path was given (overrides [metrics])
+    std::string flagReplayDir;     // non-empty if --replay-dir was given (overrides [replay] dir)
+    std::string flagReplayHashLog; // non-empty if --replay-hash-log was given (overrides [replay] hash_log)
+    int flagTestSpawnAi = -1;      // >= 0 if --test-spawn-ai-count was given (overrides [world])
     std::string flagAssets;        // non-empty if --assets <dir> was given (content root; single-player forwards it)
     long flagSimWorkers = -1;      // >=0 if --sim-worker-threads was given (overrides [world])
     long flagFlightSize = -1;      // >=0 if --flight-size was given (overrides [flight] size)
@@ -215,6 +220,9 @@ int main(int argc, char** argv) {
                 "  --bind <addr>      Bind address (overrides server.toml and FL_BIND_ADDRESS)\n"
                 "  --assets <dir>     Content root holding mods/ (overrides FL_ASSETS_ROOT and the CWD)\n"
                 "  --metrics-json <p> Write the per-phase tick-budget JSON to <p> (overrides [metrics])\n"
+                "  --replay-dir <p>   Write .flrep recordings to <p> (overrides [replay] dir)\n"
+                "  --replay-hash-log <p>  Write the per-tick replay state-hash sidecar to <p> (#644)\n"
+                "  --test-spawn-ai-count <n>  Pre-spawn n loiter-AI entities (overrides [world])\n"
                 "  --sim-worker-threads <n>  Sim-tick CPU parallelism; 0=auto, 1=serial (overrides [world])\n"
                 "  --flight-size <n>         AI wingmen per player; 0=none (overrides [flight])\n"
                 "  --mission <name>          Load a mission at startup (overrides [rotation])\n"
@@ -243,7 +251,7 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (std::strcmp(argv[i], "--version") == 0 || std::strcmp(argv[i], "-v") == 0) {
-            std::printf("fl-server %s (%s)\n", "0.0.1", networkBackendVersion(TransportKind::Gns));
+            std::printf("fl-server %s (%s)\n", FL_VERSION_STRING, networkBackendVersion(TransportKind::Gns));
             return 0;
         }
         if (std::strcmp(argv[i], "--persistent") == 0)
@@ -256,6 +264,12 @@ int main(int argc, char** argv) {
             flagAdminToken = argv[++i];
         if (std::strcmp(argv[i], "--metrics-json") == 0 && i + 1 < argc)
             flagMetricsJson = argv[++i];
+        if (std::strcmp(argv[i], "--replay-dir") == 0 && i + 1 < argc)
+            flagReplayDir = argv[++i];
+        if (std::strcmp(argv[i], "--replay-hash-log") == 0 && i + 1 < argc)
+            flagReplayHashLog = argv[++i];
+        if (std::strcmp(argv[i], "--test-spawn-ai-count") == 0 && i + 1 < argc)
+            flagTestSpawnAi = std::atoi(argv[++i]);
         if (std::strcmp(argv[i], "--assets") == 0 && i + 1 < argc)
             flagAssets = argv[++i];
         if (std::strcmp(argv[i], "--mission") == 0 && i + 1 < argc)
@@ -310,6 +324,16 @@ int main(int argc, char** argv) {
     // --metrics-json overrides the [metrics] tick_json_path from server.toml.
     if (!flagMetricsJson.empty())
         cfg.metrics.tickJsonPath = flagMetricsJson;
+    // The embedded single-player server is told where to record (#41): its working directory is
+    // wherever the CLIENT was launched from, which is not where the replay browser looks.
+    if (!flagReplayDir.empty())
+        cfg.replay.dir = flagReplayDir;
+    // Both of these exist for the determinism gate (#644), which needs a populated world and the
+    // recorder's own per-tick hashes without hand-editing a server.toml in a ctest.
+    if (!flagReplayHashLog.empty())
+        cfg.replay.hashLog = flagReplayHashLog;
+    if (flagTestSpawnAi >= 0)
+        cfg.testSpawnAiCount = static_cast<uint32_t>(flagTestSpawnAi);
     // --sim-worker-threads overrides the [world] sim_worker_threads from server.toml.
     if (flagSimWorkers >= 0)
         cfg.simWorkerThreads = static_cast<uint32_t>(flagSimWorkers);
@@ -2303,6 +2327,78 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    // ---- Match recording (#643) ----
+    // Started here, last thing before the loop, so the sections describe the world the recording is
+    // actually about: every content pack is loaded, every projectile type is registered, and the
+    // faction table (if the mission brought one) is final. A `.flrep` whose entity-type manifest was
+    // captured earlier would store type indices that mean something else.
+    fl::ReplayRecorder replayRecorder;
+    if (cfg.replay.enabled) {
+        fl::ReplaySections sections;
+        sections.entityTypes.reserve(entityRegistry.typeCount());
+        for (uint32_t ti = 0; ti < entityRegistry.typeCount(); ++ti) {
+            const fl::EntityDef* def = entityRegistry.byIndex(ti);
+            if (!def)
+                continue;
+            fl::ReplayEntityType t;
+            t.typeIndex = ti;
+            t.id = def->id;
+            t.name = def->name;
+            t.category = static_cast<uint8_t>(def->category);
+            t.projectileKind = static_cast<uint8_t>(def->projectileKind);
+            sections.entityTypes.push_back(std::move(t));
+        }
+        for (uint16_t fi = 0; fi < missionFactions.count(); ++fi) {
+            if (const fl::FactionDef* fd = missionFactions.get(fi)) {
+                fl::ReplayFaction f;
+                f.factionIndex = fi;
+                f.id = fd->id;
+                f.name = fd->name;
+                sections.factions.push_back(std::move(f));
+            }
+        }
+        // The roster section is empty at this point by construction -- nobody has connected yet.
+        // Participants who join later arrive as Join events carrying their callsign, so a reader
+        // builds the roster forward as it reads (see WorldBroadcaster::recordParticipant).
+
+        const std::time_t now = std::time(nullptr);
+        std::tm tmv{};
+#if defined(_WIN32)
+        localtime_s(&tmv, &now);
+#else
+        localtime_r(&now, &tmv);
+#endif
+        char stamp[32];
+        std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &tmv);
+
+        fl::ReplayRecorder::Options ropts;
+        ropts.cfg = cfg.replay;
+        ropts.baseDir = std::filesystem::current_path();
+        ropts.baseName = std::string(stamp) + (loadedMissionName.empty() ? "" : "_" + loadedMissionName);
+        ropts.engineVersion = FL_VERSION_STRING;
+        ropts.tickRateHz = static_cast<uint32_t>(kSimTickRateHz);
+        // Stored, never assumed: every geodetic readout on playback -- and the ACMI export built on
+        // this file later (#923) -- is a function of the radius this session actually ran.
+        ropts.planetRadiusM = cfg.planetRadiusM;
+        ropts.missionId = loadedMissionName;
+        ropts.startUnixSeconds = static_cast<uint64_t>(now);
+        ropts.sessionFlags = loadedMissionName.empty() ? 0u : fl::kReplaySessionMission;
+
+        if (replayRecorder.start(ropts, sections, *log)) {
+            broadcaster.setReplaySink(
+                [&replayRecorder, &broadcaster,
+                 lastEventSeq = uint64_t{0}](const fl::WorldBroadcaster::ReplayTickRecords& rec) mutable {
+                    // Interleave the events that landed since the previous tick. since() returns
+                    // copies, so no lock is held while the recorder serializes them.
+                    std::vector<fl::MatchEvent> events = broadcaster.matchEventLog().since(lastEventSeq);
+                    if (!events.empty())
+                        lastEventSeq = events.back().seq;
+                    replayRecorder.onTick(rec, std::move(events));
+                },
+                cfg.replay.keyframeIntervalTicks);
+        }
+    }
+
     // ---- Start sim loop ----
     // Emit the "listening on" line now that pre-loop setup (including primeSpawnHeight) is done.
     // LocalServer::start() waits for this line; emitting it here ensures ENet is serviced before
@@ -2369,15 +2465,13 @@ int main(int argc, char** argv) {
     }
 
     // ---- Admin console (stdin command loop) ----
-    std::mutex stdinMutex;
-    std::queue<std::string> stdinLines;
-    std::thread([&stdinMutex, &stdinLines]() {
-        std::string line;
-        while (std::getline(std::cin, line)) {
-            std::lock_guard<std::mutex> lk(stdinMutex);
-            stdinLines.push(std::move(line));
-        }
-    }).detach();
+    // The reader owns its thread and is stopped before main() returns (#1038). It reads fd 0 / the
+    // console handle directly rather than std::cin, so it never holds the C-stdio lock that
+    // exit-time flushing waits on -- the deadlock that used to wedge both `quit` and Ctrl-C for any
+    // parent that keeps stdin open.
+    fl::StdinCommandReader stdinReader;
+    stdinReader.start();
+    std::vector<std::string> stdinLines;
 
     // Per-phase tick-budget JSON export (atomic .tmp -> rename each interval). Disabled when path empty.
     const std::string metricsPath = cfg.metrics.tickJsonPath;
@@ -2409,10 +2503,9 @@ int main(int argc, char** argv) {
     const uint64_t rssStartupKb = fl::currentRssKb();
     while (!g_quit) {
         {
-            std::lock_guard<std::mutex> lk(stdinMutex);
-            while (!stdinLines.empty()) {
-                std::string line = std::move(stdinLines.front());
-                stdinLines.pop();
+            stdinLines.clear();
+            stdinReader.drain(stdinLines);
+            for (const std::string& line : stdinLines) {
                 std::string result = adminRegistry.dispatch(line);
                 if (!result.empty())
                     std::printf("[admin] %s\n", result.c_str());
@@ -2492,6 +2585,14 @@ int main(int argc, char** argv) {
         httpClient->service();
         httpClient->shutdown();
     }
+
+    // Flush and close the recording before anything else tears down: the writer thread is holding
+    // the tail of the match (#643).
+    replayRecorder.stop();
+
+    // Stop the console reader BEFORE the rest of the teardown: it is the one thread that outlived
+    // main() and wedged exit (#1038). Everything below this line already joined its own threads.
+    stdinReader.stop();
 
     if (httpAdminServer)
         httpAdminServer->stop();
