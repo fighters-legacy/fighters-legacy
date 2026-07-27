@@ -7,15 +7,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.12] - 2026-07-27
+
 ### Added
 
-- **engine**: replay playback and photo mode — a `.flrep` plays through the same presentation path a live session uses, so every camera, the HUD and the terrain work unchanged; main-menu replay browser, `--replay <file>`, scrub/speed transport bar, and a photo mode with FOV, roll, exposure compensation and PNG export (#41)
-- **ci**: replay determinism gates — a per-tick state-hash primitive over the quantized entity stream, a record→read-back fidelity gate against the real server, and an in-process check that the same scripted world hashes identically twice and across worker counts (#644)
-- **server**: server-side match recording to the `.flrep` replay format — every session records what the server broadcast (all entities, not one player's interest set) plus the interleaved match event log, keyframed for seek, zstd-chunked, rotated within a bounded directory, and written off the sim thread; `[replay]` config section (#643)
+- **server**: server-side match recording to the `.flrep` replay format, on by default; `[replay]` config section (#643)
+- **engine**: replay playback — replay browser, `--replay <file>`, timeline scrubbing, 0.25×–2× speed, every camera mode (#41)
+- **renderer**: photo mode — pause, free camera, FOV, roll, exposure compensation and PNG export (#41)
+- **ci**: replay determinism gates — a per-tick state-hash primitive, a record↔replay fidelity gate, and an in-process sim-determinism check across worker counts (#644)
 
 ### Fixed
 
-- **server**: `fl-server` no longer hangs on shutdown when its stdin stays open — both `quit` and Ctrl-C wedged the process inside `exit()`, because the detached console reader held the stdin stdio lock that exit-time flushing waits on. The reader now waits with a timeout on the raw handle and is joined before `main()` returns (#1038)
+- **server**: `fl-server` hung on shutdown when its stdin stayed open — both `quit` and Ctrl-C wedged inside `exit()` on the stdio lock held by the detached console reader (#1038)
 
 ## [0.3.11] - 2026-07-26
 
