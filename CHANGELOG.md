@@ -7,19 +7,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.11] - 2026-07-26
+
 ### Added
 
-- **engine**: airspace alert system — missions declare enforced airspace via `airspace_zones:`, and an intruder escalates through warned → intercept → weapons-free on dwell. The zone owner's alert level (`sides[].alert`, `world.set_alert_level()`) selects the escalation schedule, so raising a coalition's posture tightens every zone it owns at once. Escalation policies are content-pack `zones/*.toml`; posture changes reach clients as the new reliable `MsgAlertLevelChange` (`0x26`) (#162)
-- **docs**: `docs/replay-format.md` — the `.flrep` replay file specification. It is the first format here that outlives the build that wrote it, so it carries real major/minor compatibility rules (additive sections are skippable; a newer major is refused with a clear message) and a header that stores the session's planet radius and tick rate rather than assuming them — without the radius every geodetic readout on replay, and every ACMI export built on it, is silently wrong rather than visibly broken (#187)
-- **server**: structured world-state API and match event stream. `MatchEventLog` is one append-only, bounded record of kills, spawns, damage, joins/leaves, chat, admin commands and alert changes, replacing five disjoint hooks that each carried a slice of it — and `EntityEventType::Spawned` closes the hole where a spawn was observable nowhere. The world-state snapshot gains the faction table, alert levels, the relationship matrix, mission state and wind; both serialize to deterministic hand-rolled JSON (escaped, since it carries player text) and are readable off the sim thread via a published immutable snapshot. Exposed as the `worldstate` and `events` admin commands (#600)
-- **server**: REST admin API and `/health` probe, disabled by default and bound to localhost. Every route resolves its bearer token to a `CommandIssuer` and calls the same permission-checked `CommandRegistry::dispatch` the ENet admin channel uses, so it is the fourth frontend over one command substrate rather than a second admin implementation — a moderator token can `/kick` and cannot `set_weather`, enforced by the #945 capability vocabulary and not by the transport. `/health` authenticates nothing and touches nothing the sim thread can hold, so it stays truthful while the sim is stalled. `[http_admin]` with no tokens is refused at startup rather than warned about, and `admin_unlock` / `admin_auth_status` now cover all three auth channels (#233)
+- **engine**: airspace alert system — mission `airspace_zones:`, per-faction alert levels, content-pack escalation policies, Lua `world.*` zone bindings, and the reliable `MsgAlertLevelChange` (`0x26`) (#162)
+- **server**: structured world-state API and append-only match event stream, plus `EntityEventType::Spawned` and off-sim-thread snapshot publication; exposed as the `worldstate` and `events` admin commands (#600)
+- **server**: REST admin API and `/health` probe over the existing capability-checked command substrate; `[http_admin]` bearer-token table, disabled by default and bound to localhost (#233)
+- **docs**: `docs/replay-format.md` — the `.flrep` replay file specification, versioned for real because a replay outlives the build that wrote it (#187)
 - **ci**: `lint_workflow_expressions` — reject Actions expressions carrying free text inside `run:` blocks (#1034)
 
 ### Fixed
 
-- **docs**: `InputTraceFormat.h` said a FLIT record count is `(fileSize - 10) / 28`; records are 32 bytes (#187)
-- **ci**: pass composite-action inputs through `env:` rather than interpolating them into the script (#1034)
+- **ci**: stop interpolating release text into the `release.yml` / `release-notes-gate.yml` shell scripts (#1032)
+- **ci**: pass demo-videos dispatch inputs through `env:` rather than into the script (#1033)
 - **ci**: the release-notes gate no longer lists `release: published`, which cannot fire for our own releases (#1034)
+- **docs**: `InputTraceFormat.h` said a FLIT record count is `(fileSize - 10) / 28`; records are 32 bytes (#187)
 
 ### Changed
 
