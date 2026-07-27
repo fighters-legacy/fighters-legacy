@@ -75,6 +75,18 @@ EntityId EntityManager::spawn(const char* typeId, const EntityTransform& transfo
     s->playerOwned = false;
     s->ownerId = ownerId;
 
+    // Spawned (#600) — raised here, after the state is fully populated and before the id escapes, so
+    // a handler sees a consistent entity. Until #600 a spawn was observable nowhere, which left the
+    // match event log unable to say where anything came from.
+    //
+    // `instigator` is null: spawn() takes a uint32_t ownerId (a peer id), not an EntityId, so there
+    // is no entity to attribute a spawn to. A controller-spawned entity (a MIRV RV, a projectile)
+    // that wants attribution should carry it in the event the CALLER appends, not here.
+    EntityEvent ev{};
+    ev.type = EntityEventType::Spawned;
+    ev.subject = id;
+    fireEvent(ev);
+
     return id;
 }
 

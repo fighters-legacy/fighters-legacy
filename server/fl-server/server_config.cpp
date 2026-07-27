@@ -188,6 +188,22 @@ static const char* kDefaultToml =
     "min_shutdown_delay_s = 0\n"
     "shutdown_require_confirm = true\n"
     "\n"
+    "[http_admin]\n"
+    "# REST admin API + /health probe (#233). Disabled by default.\n"
+    "# Bound to localhost: exposing it to the network is a deliberate second edit.\n"
+    "# Tokens travel as plain Bearer credentials over plain HTTP -- put this behind a\n"
+    "# TLS-terminating reverse proxy, or keep it on the loopback for k8s/compose probes.\n"
+    "# Enabling this with no tokens is refused, not warned: it would be an open admin API.\n"
+    "enabled = false\n"
+    "port = 8080\n"
+    "bind_address = \"127.0.0.1\"\n"
+    "max_auth_failures = 5\n"
+    "lockout_seconds = 300\n"
+    "# [[http_admin.tokens]]\n"
+    "# token = \"change-me\"\n"
+    "# role  = \"admin\"   # admin | moderator | gm | faction_leader\n"
+    "# faction = -1        # faction index for a faction-scoped role; -1 = unbound\n"
+    "\n"
     "[rcon]\n"
     "# Source Engine RCON (TCP) remote admin channel. Disabled by default.\n"
     "# Set a strong password before enabling. Password travels over plain TCP;\n"
@@ -950,6 +966,64 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
             log->log(LogLevel::Warn, __FILE__, __LINE__,
                      "rcon.password is empty; RCON will accept unauthenticated connections"
                      " -- set a password or disable rcon.enabled");
+
+        // [http_admin] (#233)
+        if (auto v = tbl["http_admin"]["enabled"].value<bool>())
+            cfg.httpAdmin.enabled = *v;
+        if (auto v = tomlInt(tbl["http_admin"]["port"])) {
+            if (*v < 1 || *v > 65535)
+                log->log(LogLevel::Warn, __FILE__, __LINE__, "http_admin.port out of range [1,65535]; using default");
+            else
+                cfg.httpAdmin.port = static_cast<uint16_t>(*v);
+        }
+        if (auto v = tbl["http_admin"]["bind_address"].value<std::string>())
+            cfg.httpAdmin.bindAddress = std::move(*v);
+        if (auto v = tomlInt(tbl["http_admin"]["max_auth_failures"])) {
+            if (*v < 1 || *v > 1000)
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "http_admin.max_auth_failures out of range [1,1000]; using default");
+            else
+                cfg.httpAdmin.maxAuthFailures = static_cast<int>(*v);
+        }
+        if (auto v = tomlInt(tbl["http_admin"]["lockout_seconds"])) {
+            if (*v < 1 || *v > 86400)
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "http_admin.lockout_seconds out of range [1,86400]; using default");
+            else
+                cfg.httpAdmin.lockoutSeconds = static_cast<int>(*v);
+        }
+        if (auto* toks = tbl["http_admin"]["tokens"].as_array()) {
+            for (auto& node : *toks) {
+                auto* t = node.as_table();
+                if (!t) {
+                    log->log(LogLevel::Warn, __FILE__, __LINE__, "http_admin.tokens entries must be tables; skipping");
+                    continue;
+                }
+                ServerConfig::HttpAdminToken row;
+                if (auto v = (*t)["token"].value<std::string>())
+                    row.token = std::move(*v);
+                if (auto v = (*t)["role"].value<std::string>())
+                    row.role = std::move(*v);
+                if (auto v = tomlInt((*t)["faction"]))
+                    row.faction = static_cast<int>(*v);
+                // A token row that names no secret authenticates nobody; dropping it here means the
+                // server cannot start up believing it has an admin token that can never be presented.
+                if (row.token.empty()) {
+                    log->log(LogLevel::Warn, __FILE__, __LINE__,
+                             "http_admin.tokens entry has an empty token; skipping");
+                    continue;
+                }
+                cfg.httpAdmin.tokens.push_back(std::move(row));
+            }
+        }
+        // Enabled with no usable token would be an OPEN admin API. Refuse to enable rather than warn:
+        // a warning in a startup log is not a control, and this endpoint can kick, ban and shut down.
+        if (cfg.httpAdmin.enabled && cfg.httpAdmin.tokens.empty()) {
+            log->log(LogLevel::Error, __FILE__, __LINE__,
+                     "http_admin.enabled is true but no [[http_admin.tokens]] are configured; "
+                     "refusing to start an unauthenticated admin API -- add a token or disable it");
+            cfg.httpAdmin.enabled = false;
+        }
 
         // [metrics]
         if (auto v = tbl["metrics"]["tick_json_path"].value<std::string>())

@@ -436,6 +436,7 @@ add_library(engine-net STATIC
     net/CongestionController.cpp
     net/TickGovernor.cpp
     net/WorldState.cpp
+    net/MatchEventLog.cpp
     net/VoiceRouter.cpp
     net/LobbyListClient.cpp
     net/LobbyRegistration.cpp

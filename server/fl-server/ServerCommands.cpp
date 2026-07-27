@@ -15,6 +15,7 @@
 #include <loop/TimeRate.h>
 #include <net/DiscoveryBeacon.h>
 #include <net/WorldBroadcaster.h>
+#include <net/WorldStateJson.h> // worldstate/events JSON (#600)
 #include <weather/WeatherController.h>
 #include <weather/WeatherTypes.h>
 
@@ -220,6 +221,50 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         });
 
     // tickstats — per-phase server tick budget (integrate/ai/collision/serialize/total).
+    registry.registerCommand(
+        "worldstate",
+        "worldstate  -- the ~1 Hz aggregated world state as JSON (entities, factions, peers, mission, weather)", 0,
+        [ctx](std::span<std::string_view>) -> std::string {
+            if (!ctx.sim.broadcaster)
+                return "worldstate: not available";
+            // Read the PUBLISHED snapshot, not broadcaster->worldState(): this handler runs on the
+            // RCON thread or the stdin thread, never the sim thread, and the published copy is the
+            // whole point of #600's off-thread publication.
+            const auto snap = ctx.sim.broadcaster->worldStatePublisher().get();
+            if (!snap)
+                return "worldstate: no snapshot yet (the first rebuild is one second in)";
+            return fl::toJson(*snap);
+        });
+
+    registry.registerCommand(
+        "events", "events [after_seq] [max]  -- match event stream as JSON; omit after_seq for the recent tail", 0,
+        [ctx](std::span<std::string_view> args) -> std::string {
+            if (!ctx.sim.broadcaster)
+                return "events: not available";
+            fl::MatchEventLog& log = ctx.sim.broadcaster->matchEventLog();
+
+            // No cursor = "show me what just happened"; a cursor = "everything I have not seen",
+            // which is the shape a polling agent needs to avoid re-reading the same kills forever.
+            std::vector<fl::MatchEvent> evs;
+            uint64_t after = 0;
+            bool gap = false;
+            if (args.empty()) {
+                constexpr std::size_t kDefaultTail = 32;
+                evs = log.tail(kDefaultTail);
+            } else {
+                after = static_cast<uint64_t>(std::strtoull(std::string(args[0]).c_str(), nullptr, 10));
+                gap = log.hasGapBefore(after);
+                evs = log.since(after);
+            }
+            if (args.size() >= 2) {
+                const std::size_t maxN =
+                    static_cast<std::size_t>(std::strtoull(std::string(args[1]).c_str(), nullptr, 10));
+                if (maxN > 0 && evs.size() > maxN)
+                    evs.resize(maxN);
+            }
+            return fl::matchEventsToJson(std::span<const fl::MatchEvent>(evs), log.nextSeq(), gap);
+        });
+
     registry.registerCommand(
         "tickstats", "tickstats  -- per-phase sim tick budget (ms: mean/p95/p99/max) + actual tick Hz", 0,
         [ctx](std::span<std::string_view>) -> std::string {
@@ -850,13 +895,18 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
             ctx.sim.gameLoop->enqueueSimCallback([ctx, ip]() {
                 bool adminWasLocked = ctx.sim.broadcaster->unlockAdminAuth(ip);
                 bool rconWasLocked = ctx.rcon.clearRconLockout ? ctx.rcon.clearRconLockout(ip) : false;
-                bool anyWasLocked = adminWasLocked || rconWasLocked;
-                char m[128];
+                // The REST channel keeps its own per-IP lockout (#233); unlocking an operator on two
+                // of three channels and leaving the third would be worse than not unlocking at all.
+                bool httpWasLocked = ctx.httpAdmin.clearLockout ? ctx.httpAdmin.clearLockout(ip) : false;
+                bool anyWasLocked = adminWasLocked || rconWasLocked || httpWasLocked;
+                char m[160];
                 if (anyWasLocked) {
+                    std::string channels = "admin";
                     if (ctx.rcon.clearRconLockout)
-                        std::snprintf(m, sizeof(m), "[admin] unlocked %s (admin + RCON)", ip.c_str());
-                    else
-                        std::snprintf(m, sizeof(m), "[admin] unlocked %s", ip.c_str());
+                        channels += " + RCON";
+                    if (ctx.httpAdmin.clearLockout)
+                        channels += " + HTTP";
+                    std::snprintf(m, sizeof(m), "[admin] unlocked %s (%s)", ip.c_str(), channels.c_str());
                 } else {
                     std::snprintf(m, sizeof(m), "[admin] admin_unlock: %s was not locked", ip.c_str());
                 }
@@ -869,24 +919,29 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         });
 
     // admin_auth_status
-    registry.registerCommand("admin_auth_status",
-                             "admin_auth_status  -- show per-IP auth lockout state for admin and RCON channels",
-                             [ctx](std::span<std::string_view>) -> std::string {
-                                 if (!ctx.sim.broadcaster)
-                                     return "admin_auth_status: not available";
-                                 auto adminS = ctx.sim.broadcaster->getAuthLockoutSummary();
-                                 bool hasRcon = static_cast<bool>(ctx.rcon.getRconAuthSummary);
-                                 auto rconS = hasRcon ? ctx.rcon.getRconAuthSummary() : fl::AuthLockoutSummary{};
+    registry.registerCommand(
+        "admin_auth_status",
+        "admin_auth_status  -- show per-IP auth lockout state for the admin, RCON and HTTP channels",
+        [ctx](std::span<std::string_view>) -> std::string {
+            if (!ctx.sim.broadcaster)
+                return "admin_auth_status: not available";
+            auto adminS = ctx.sim.broadcaster->getAuthLockoutSummary();
+            bool hasRcon = static_cast<bool>(ctx.rcon.getRconAuthSummary);
+            auto rconS = hasRcon ? ctx.rcon.getRconAuthSummary() : fl::AuthLockoutSummary{};
 
-                                 std::string detail = formatAuthSection("MsgAdminCommand channel", adminS);
-                                 if (hasRcon) {
-                                     detail += "\n\n";
-                                     detail += formatAuthSection("RCON channel", rconS);
-                                 }
-                                 std::printf("%s\n", detail.c_str());
-                                 std::fflush(stdout);
-                                 return detail;
-                             });
+            std::string detail = formatAuthSection("MsgAdminCommand channel", adminS);
+            if (hasRcon) {
+                detail += "\n\n";
+                detail += formatAuthSection("RCON channel", rconS);
+            }
+            if (ctx.httpAdmin.getAuthSummary) {
+                detail += "\n\n";
+                detail += formatAuthSection("HTTP admin channel", ctx.httpAdmin.getAuthSummary());
+            }
+            std::printf("%s\n", detail.c_str());
+            std::fflush(stdout);
+            return detail;
+        });
 
     // set_weather <preset>
     registry.registerCommand(

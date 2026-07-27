@@ -10,6 +10,8 @@
 // validate-mission also delegates to, so the linter and the engine cannot drift.
 
 #include "weather/WeatherTypes.h" // WeatherPreset
+#include "world/AirspaceZone.h"   // AirspaceZone — the `airspace_zones:` section (#162)
+#include "world/AlertLevel.h"     // AlertLevel — a side's starting posture (#162)
 
 #include <array>
 #include <optional>
@@ -34,9 +36,14 @@ struct MissionWind {
 // A coalition/side. `allies` names the OTHER sides this side is friendly with (symmetric); any
 // distinct non-allied side is hostile by the wargame default. A flat `sides: [nato, russia]` list
 // yields sides with empty `allies` (two mutually hostile coalitions).
+//
+// `alert` is the side's starting readiness posture (#162). Mission `sides:` stays the single faction
+// source of truth — there is deliberately no separate factions/*.toml — so the starting alert level
+// is a per-side field here rather than a second place to declare a faction.
 struct MissionSide {
     std::string id;
     std::vector<std::string> allies;
+    AlertLevel alert{AlertLevel::Peacetime};
 };
 
 // A per-seat override within a mission object's `crew:` block (#976). A seat is named by `seatIndex`
@@ -164,6 +171,8 @@ struct Mission {
     std::vector<MissionObject> objects;
     std::vector<MissionTrigger> triggers;
     std::vector<MissionShot> shots; // optional `cameras:` block (#910); empty = no scripted cameras
+    // Optional `airspace_zones:` block (#162); empty = no airspace enforcement in this mission.
+    std::vector<AirspaceZone> airspaceZones;
 };
 
 } // namespace fl

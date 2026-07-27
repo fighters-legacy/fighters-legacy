@@ -75,6 +75,7 @@ class FolderContentPack final : public IContentPack {
     std::optional<AirportDefData> loadAirportDef(const char* name) override;
     std::optional<GameModeData> loadGameMode(const char* name) override;
     std::optional<TheaterDefData> loadTheater(const char* name) override;
+    std::optional<ZonePolicyData> loadZonePolicy(const char* name) override;
 
     std::vector<std::string> listAssets(AssetType type) const override;
 

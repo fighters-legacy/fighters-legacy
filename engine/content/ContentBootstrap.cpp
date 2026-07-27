@@ -17,6 +17,8 @@
 #include "weapon/WeaponRegistry.h"
 #include "world/AirportDef.h"
 #include "world/AirportDefParser.h"
+#include "world/EscalationPolicy.h"
+#include "world/EscalationPolicyParser.h"
 
 #include <exception>
 #include <limits>
@@ -69,6 +71,27 @@ uint32_t registerPackAirportDefs(AssetManager& assets, std::vector<AirportDef>& 
         } catch (const std::exception& e) {
             log.log(LogLevel::Warn, __FILE__, __LINE__,
                     (std::string("airport def '") + name + "' parse error: " + e.what() + "; skipping").c_str());
+        }
+    }
+    return appended;
+}
+
+uint32_t registerPackZonePolicies(AssetManager& assets, std::vector<EscalationPolicy>& out, ILogger& log) {
+    uint32_t appended = 0;
+    for (const auto& name : assets.listAssets(AssetType::ZonePolicy)) {
+        auto raw = assets.loadZonePolicy(name.c_str());
+        if (!raw || raw->bytes.empty()) {
+            log.log(LogLevel::Warn, __FILE__, __LINE__,
+                    (std::string("zone policy '") + name + "' could not be loaded; skipping").c_str());
+            continue;
+        }
+        try {
+            out.push_back(parseEscalationPolicy(
+                std::string_view(reinterpret_cast<const char*>(raw->bytes.data()), raw->bytes.size())));
+            ++appended;
+        } catch (const std::exception& e) {
+            log.log(LogLevel::Warn, __FILE__, __LINE__,
+                    (std::string("zone policy '") + name + "' parse error: " + e.what() + "; skipping").c_str());
         }
     }
     return appended;

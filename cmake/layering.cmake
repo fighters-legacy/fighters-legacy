@@ -178,8 +178,11 @@ function(fl_assert_layering)
     set(_violations "")
 
     # Rule 1 — engine isolation: no engine-* target reaches a client/transport backend.
+    # httplib::httplib joins the list with #233: the embedded HTTP SERVER lives in server/fl-server/
+    # for the same reason the outbound HTTP client does — an engine target that could serve HTTP
+    # would make the engine a network service, and the point of the seam is that it is not one.
     set(_client_transport_deny
-        "^(platform-sdl3|platform-vulkan|platform-gui|platform-openal|platform-enet|platform-gns|platform-net|platform-http)$|^SDL3::|^Vulkan::|^OpenAL::|^enet6$|^GameNetworkingSockets::|^CURL::|^imgui$")
+        "^(platform-sdl3|platform-vulkan|platform-gui|platform-openal|platform-enet|platform-gns|platform-net|platform-http)$|^SDL3::|^Vulkan::|^OpenAL::|^enet6$|^GameNetworkingSockets::|^CURL::|^httplib::|^imgui$")
     _fl_all_targets(_all "${CMAKE_SOURCE_DIR}")
     list(REMOVE_DUPLICATES _all)
     list(SORT _all)

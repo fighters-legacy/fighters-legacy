@@ -533,6 +533,22 @@ if(TARGET platform-enet)
         "${CMAKE_CURRENT_SOURCE_DIR}")
     catch_discover_tests(test_content_bootstrap)
 
+    # REST admin API (#233). Every security decision — token table, bearer extraction, constant-time
+    # compare, issuer construction, untrusted body scanning — lives in free functions, so this covers
+    # them without opening a socket (the test_rcon_server recipe). HttpAdminServer.cpp is in no
+    # library, so it is compiled directly.
+    add_executable(test_http_admin test_http_admin.cpp
+        "${CMAKE_SOURCE_DIR}/server/fl-server/HttpAdminServer.cpp")
+    target_link_libraries(test_http_admin PRIVATE
+        Catch2::Catch2WithMain fl-server-config engine-console engine-net httplib::httplib)
+    target_include_directories(test_http_admin PRIVATE
+        "${CMAKE_SOURCE_DIR}/server/fl-server"
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(WIN32)
+        target_link_libraries(test_http_admin PRIVATE ws2_32)
+    endif()
+    catch_discover_tests(test_http_admin)
+
     add_executable(test_rcon_server test_rcon_server.cpp
         "${CMAKE_SOURCE_DIR}/server/fl-server/RconServer.cpp")
     target_link_libraries(test_rcon_server PRIVATE
@@ -612,6 +628,13 @@ catch_discover_tests(test_job_system)
 add_executable(test_faction_registry test_faction_registry.cpp)
 target_link_libraries(test_faction_registry PRIVATE Catch2::Catch2WithMain engine-world)
 catch_discover_tests(test_faction_registry)
+
+# Airspace alert system (#162): zone geometry, the escalation state machine (driven by an explicit
+# simDt, so time is injectable without a clock), the escalation-policy TOML schema, and the
+# sample-order independence the pass needs to stay deterministic.
+add_executable(test_alert_system test_alert_system.cpp)
+target_link_libraries(test_alert_system PRIVATE Catch2::Catch2WithMain engine-world)
+catch_discover_tests(test_alert_system)
 
 add_executable(test_game_mode test_game_mode.cpp)
 target_link_libraries(test_game_mode PRIVATE Catch2::Catch2WithMain engine-match)
@@ -898,6 +921,13 @@ catch_discover_tests(test_capability)
 add_executable(test_world_state test_world_state.cpp)
 target_link_libraries(test_world_state PRIVATE Catch2::Catch2WithMain engine-net)
 catch_discover_tests(test_world_state)
+
+# The match event log (#600): ring bounds + gap detection, JSON schema stability, string escaping,
+# and a concurrent append/read case. Links only engine-net (no SDL/ENet), so it joins the TSan set
+# alongside test_world_state -- the log is written on the sim thread and read from another.
+add_executable(test_match_event_log test_match_event_log.cpp)
+target_link_libraries(test_match_event_log PRIVATE Catch2::Catch2WithMain engine-net)
+catch_discover_tests(test_match_event_log)
 
 # Engine-layer snapshot payload codec (#775; zstd wrapper in engine-compress).
 add_executable(test_snapshot_compression test_snapshot_compression.cpp)

@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+// AlertLevel + isAlertLevelOrdinal for MsgAlertLevelChange (#162). Header-only and stdlib-only, so
+// engine-protocol gains no link dependency and stays zero-dep -- and the wire, the sim system and the
+// Lua bindings share ONE alert-level vocabulary instead of a second enum that can drift.
+#include "world/AlertLevel.h"
+
 #include <cstddef>
 #include <cstdint>
 
@@ -129,15 +134,18 @@ enum class MsgId : uint8_t {
                          // unicast at ~1 Hz to peers holding the GmMap capability. Whole-battlespace,
                          // NOT per-camera interest. Chunked; see MsgGmWorldStateHeader/GmEntityRecord.
     // --- Epic J in-game voice comms (#499) ---
-    VoiceNetDef = 0x23, // server->client, reliable: the server's radio-net table (id/name/kind/profile),
-                        // sent once after ConnectAck beside FactionDef (#532). A net's INDEX in this
-                        // table is its wire netId on every voice frame, so net strings never travel
-                        // per frame. See MsgVoiceNetDefHeader / MsgVoiceNetRecord.
-    VoiceFrame = 0x24,  // client->server, UNRELIABLE on kNetChVoice: one 20 ms Opus frame the client
-                        // wants relayed on a net (#532). The server NEVER decodes it - that is what
-                        // keeps voice near-zero server CPU at 128 players.
-    VoiceRelay = 0x25,  // server->client, UNRELIABLE on kNetChVoice: the same opaque payload plus the
-                        // speaker's participant id and entity index (for a positional net's mix).
+    VoiceNetDef = 0x23,      // server->client, reliable: the server's radio-net table (id/name/kind/profile),
+                             // sent once after ConnectAck beside FactionDef (#532). A net's INDEX in this
+                             // table is its wire netId on every voice frame, so net strings never travel
+                             // per frame. See MsgVoiceNetDefHeader / MsgVoiceNetRecord.
+    VoiceFrame = 0x24,       // client->server, UNRELIABLE on kNetChVoice: one 20 ms Opus frame the client
+                             // wants relayed on a net (#532). The server NEVER decodes it - that is what
+                             // keeps voice near-zero server CPU at 128 players.
+    VoiceRelay = 0x25,       // server->client, UNRELIABLE on kNetChVoice: the same opaque payload plus the
+                             // speaker's participant id and entity index (for a positional net's mix).
+    AlertLevelChange = 0x26, // server->client, reliable: a faction's airspace readiness posture changed
+                             // (#162). Broadcast on change AND unicast per faction after ConnectAck, so
+                             // a late joiner is not left at a stale default. Additive id.
     // ENet message ids occupy 0x00-0x3F. The non-ENet (raw-UDP) boundary was raised from 0x20 to 0x40 in
     // #996 to make room for the Epic E ENet messages above (it was raised from 0x10 to 0x20 in #853). A
     // raw-UDP id lives at 0x40+ and is NEVER dispatched through the ENet onReceive path.
@@ -605,6 +613,25 @@ struct MsgMusicState {
     uint16_t reserved{0};
 }; // 4 bytes, align 2
 static_assert(sizeof(MsgMusicState) == 4u, "MsgMusicState wire size changed");
+
+// A faction's airspace readiness posture changed (#162). Sent when AlertSystem::setAlertLevel moves a
+// faction (a mission Lua world.set_alert_level(), an admin command, or a #163 WorldEvolutionDelta), and
+// once per faction after ConnectAck so a late joiner starts from the live value rather than a default.
+// `level` is an AlertLevel ordinal -- gate it with isAlertLevelOrdinal() before casting. Reliable, so a
+// posture change cannot be silently dropped. Additive id, old clients discard.
+struct MsgAlertLevelChange {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::AlertLevelChange)};
+    uint8_t level{0};         // AlertLevel ordinal
+    uint16_t factionIndex{0}; // FactionRegistry index (matches MsgFactionDef::factionIndex)
+}; // 4 bytes, align 2
+static_assert(sizeof(MsgAlertLevelChange) == 4u, "MsgAlertLevelChange wire size changed");
+static_assert(alignof(MsgAlertLevelChange) == 2u, "MsgAlertLevelChange alignment changed");
+static_assert(offsetof(MsgAlertLevelChange, level) == 1u, "MsgAlertLevelChange::level offset changed");
+static_assert(offsetof(MsgAlertLevelChange, factionIndex) == 2u, "MsgAlertLevelChange::factionIndex offset changed");
+// AlertLevel ordinals are now a wire contract, not just a sim-side enum: renumbering them would
+// silently change what a posture means to every connected client.
+static_assert(static_cast<uint8_t>(AlertLevel::Peacetime) == 0u, "AlertLevel ordinals are a wire contract");
+static_assert(static_cast<uint8_t>(AlertLevel::WarState) == 3u, "AlertLevel ordinals are a wire contract");
 
 // Scripted haptic feedback (#128): a Lua script's rumble()/rumble_triggers()/stop_rumble() reaches the
 // client as this message; the client plays it on its local gamepad (id 0 = the current player). The

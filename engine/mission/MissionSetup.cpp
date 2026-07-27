@@ -60,7 +60,7 @@ MissionSetupResult applyMission(const Mission& mission, EntityManager& em, Facti
     defs.reserve(mission.sides.size() + 1);
     defs.push_back(FactionDef{/*id=*/"", /*name=*/"(neutral)"});
     for (const auto& side : mission.sides)
-        defs.push_back(FactionDef{side.id, side.id});
+        defs.push_back(FactionDef{side.id, side.id, side.alert}); // `alert:` = the starting posture (#162)
     factions.load(std::move(defs));
 
     // Default every distinct pair of real sides to Hostile (the wargame default: you fight whoever you

@@ -25,6 +25,7 @@ static constexpr std::array<AssetPathInfo, static_cast<size_t>(AssetType::Count)
     {"airports", ".toml", ""},     // Airport (#699 — airport/runway definitions)
     {"modes", ".toml", ""},        // GameMode (#521 — multiplayer game-mode definitions)
     {"theaters", ".toml", ""},     // Theater (#847 — geographic theater manifests)
+    {"zones", ".toml", ""},        // ZonePolicy (#162 — airspace escalation policies)
 }};
 
 // THE SIZE ASSERT BELOW IS TAUTOLOGICAL AND CANNOT FAIL. The array's length is *defined* as

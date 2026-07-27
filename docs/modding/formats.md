@@ -1158,23 +1158,93 @@ may not span more than 180° of longitude in one theater.
 
 ---
 
-## Faction Data — TOML
+## Faction Data — declared by the mission, not by a pack file
+
+**There is no `factions/*.toml`.** A pack cannot declare factions, and an earlier draft of this
+document that showed one described a format the engine never gained (#162). A mission's `sides:`
+block is the single source of truth for which coalitions exist, who is allied with whom, and each
+side's starting airspace posture — see [`missions.md`](missions.md#coalitions). Two places to declare
+the same thing is two places to disagree, and the mission is the one that has to be right.
+
+Relationships default from the coalition graph (allied sides are friendly, any other pair is hostile)
+and Lua scripts override them at runtime with `world.set_relationship(a, b, state)`, where `state` is
+`friendly`, `neutral` or `hostile`.
+
+---
+
+## Airspace Escalation Policy — `zones/<id>.toml`
+
+An escalation policy is the *schedule* an airspace zone enforces (#162): how long an intruder may
+dwell before it is warned, intercepted, and finally declared weapons-free. A mission's
+`airspace_zones[].policy` names one by id; the zones themselves live in the mission
+([`missions.md`](missions.md#airspace_zones--restricted-airspace-optional)).
+
+One policy carries **four rows, one per alert level**. The zone owner's *current* level selects the
+row every tick, so a single policy covers a coalition's peacetime posture and its wartime posture,
+and raising the coalition's alert level tightens every zone it owns at once.
 
 ```toml
-# factions/nato.toml
-[faction]
-id    = "nato"
-name  = "NATO"
-color = "#4488FF"
-icon  = "icons/nato.png"
+# zones/military_intercept.toml
+[policy]
+id   = "military_intercept"
+name = "Standard Military Intercept"
 
-[relationships]
-russia = "hostile"
-china  = "neutral"
-un     = "friendly"
+# Dwell thresholds are seconds measured CUMULATIVELY from the moment the intruder enters the zone:
+# below, an intruder is warned at 45 s, intercepted at 90 s and weapons-free at 180 s.
+# A threshold of 0 means the stage is already satisfied on entry.
+
+[escalation.peacetime]
+warning_dwell       = 45
+intercept_dwell     = 90
+hostile_dwell       = 180
+compliance_reset    = true    # leaving the zone unwinds the escalation
+compliance_cooldown = 300     # seconds after departure before the zone forgets the intruder
+
+[escalation.elevated]
+warning_dwell       = 20
+intercept_dwell     = 45
+hostile_dwell       = 90
+compliance_reset    = true
+compliance_cooldown = 180
+
+[escalation.conflict]
+warning_dwell       = 5
+intercept_dwell     = 15
+hostile_dwell       = 60
+compliance_reset    = false   # the violation stands even if they turn back
+compliance_cooldown = 0
+
+[escalation.war_state]
+warning_dwell       = 0       # all zero: weapons free on entry, no warning
+intercept_dwell     = 0
+hostile_dwell       = 0
+compliance_reset    = false
+compliance_cooldown = 0
 ```
 
-Relationship values: `friendly`, `neutral`, `hostile`. Missions and Lua scripts can override at runtime with `world.set_relationship(a, b, state)`.
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `policy.id` | string | yes | Policy id; what a zone's `policy:` names |
+| `policy.name` | string | yes | Display name |
+| `escalation.<level>` | table | no | One row per alert level: `peacetime`, `elevated`, `conflict`, `war_state` |
+| `warning_dwell` | number | no (default 0) | Seconds in-zone before the intruder is warned |
+| `intercept_dwell` | number | no (default 0) | Seconds before interceptors are committed |
+| `hostile_dwell` | number | no (default 0) | Seconds before the intruder is weapons-free |
+| `compliance_reset` | bool | no (default true) | Whether leaving the zone unwinds the escalation |
+| `compliance_cooldown` | number | no (default 0) | Seconds after departure before the intruder is forgotten |
+
+Two authoring mistakes are rejected at load rather than shipped. Thresholds that **decrease** across
+stages (`intercept_dwell` below `warning_dwell`, say) make a stage unreachable, which is invisible
+until a mission plays wrong. And an **unknown level section** — `[escalation.wartime]` for
+`[escalation.war_state]` — is an error rather than a silent no-op, because otherwise the real row
+quietly keeps its defaults and the engine looks like it ignored the author.
+
+An omitted level row keeps the all-zero defaults, so writing only `[escalation.peacetime]` gives you
+a zone that is weapons-free on entry at every higher alert level. Write every row you intend to use.
+
+A zone naming a policy the loaded packs do not ship is **not** an error: it falls back to a builtin
+default posture (the `peacetime` row above, roughly), so a missing pack degrades the zone rather than
+switching enforcement off where nobody would notice.
 
 ---
 

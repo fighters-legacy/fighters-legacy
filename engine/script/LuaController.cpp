@@ -477,6 +477,52 @@ static int luaWorldSetMusicState(lua_State* L) {
     return 0;
 }
 
+// world.set_alert_level(faction_id, level)  level = peacetime|elevated|conflict|war_state (#162)
+static int luaWorldSetAlertLevel(lua_State* L) {
+    LuaController::Impl* impl = worldImpl(L);
+    const char* faction = luaL_checkstring(L, 1);
+    const char* level = luaL_checkstring(L, 2);
+    if (impl->worldApi && impl->worldApi->setAlertLevel)
+        impl->worldApi->setAlertLevel(faction, level);
+    return 0;
+}
+
+// world.get_alert_level(faction_id) -> string (#162). "peacetime" with no host hook, so a script can
+// branch on the result without checking whether the server has an alert system.
+static int luaWorldGetAlertLevel(lua_State* L) {
+    LuaController::Impl* impl = worldImpl(L);
+    const char* faction = luaL_checkstring(L, 1);
+    std::string level = "peacetime";
+    if (impl->worldApi && impl->worldApi->getAlertLevel)
+        level = impl->worldApi->getAlertLevel(faction);
+    lua_pushstring(L, level.c_str());
+    return 1;
+}
+
+// world.get_zone_stage(entity_idx, zone_id) -> string (#162)
+static int luaWorldGetZoneStage(lua_State* L) {
+    LuaController::Impl* impl = worldImpl(L);
+    const int idx = static_cast<int>(luaL_checkinteger(L, 1));
+    const char* zoneId = luaL_checkstring(L, 2);
+    std::string stage = "clean";
+    if (impl->worldApi && impl->worldApi->getZoneStage && idx >= 0)
+        stage = impl->worldApi->getZoneStage(idx, zoneId);
+    lua_pushstring(L, stage.c_str());
+    return 1;
+}
+
+// world.is_in_zone(entity_idx, zone_id) -> bool (#162)
+static int luaWorldIsInZone(lua_State* L) {
+    LuaController::Impl* impl = worldImpl(L);
+    const int idx = static_cast<int>(luaL_checkinteger(L, 1));
+    const char* zoneId = luaL_checkstring(L, 2);
+    bool inside = false;
+    if (impl->worldApi && impl->worldApi->isInZone && idx >= 0)
+        inside = impl->worldApi->isInZone(idx, zoneId);
+    lua_pushboolean(L, inside ? 1 : 0);
+    return 1;
+}
+
 static int luaWorldMissionSuccess(lua_State* L) {
     LuaController::Impl* impl = worldImpl(L);
     if (impl->worldApi && impl->worldApi->setMissionOutcome)
@@ -702,6 +748,10 @@ static void registerWorldModule(lua_State* L, LuaController::Impl* impl) {
         {"despawn", luaWorldDespawn},
         {"set_relationship", luaWorldSetRelationship},
         {"set_music_state", luaWorldSetMusicState},
+        {"set_alert_level", luaWorldSetAlertLevel},
+        {"get_alert_level", luaWorldGetAlertLevel},
+        {"get_zone_stage", luaWorldGetZoneStage},
+        {"is_in_zone", luaWorldIsInZone},
         {"mission_success", luaWorldMissionSuccess},
         {"mission_failure", luaWorldMissionFailure},
         {"score_objective", luaWorldScoreObjective},

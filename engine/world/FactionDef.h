@@ -22,8 +22,10 @@ enum class FactionRelation : uint8_t { Friendly = 0, Neutral = 1, Hostile = 2 };
     return a != 0 && b != 0 && a != b;
 }
 
-// Static faction definition. TOML parsing (factions/*.toml) is deferred to #162; this
-// is the in-memory descriptor loaded into FactionRegistry before the sim starts.
+// Static faction definition. There is deliberately no factions/*.toml: a mission's `sides:` block is
+// the single source of truth for which coalitions exist and each one's starting posture (#162), so
+// this is purely the in-memory descriptor MissionSetup loads into FactionRegistry before the sim
+// starts.
 struct FactionDef {
     std::string id;
     std::string name;

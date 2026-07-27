@@ -180,6 +180,29 @@ struct ServerConfig {
     };
     RconConfig rcon;
 
+    // [http_admin] — the REST admin API + health endpoint (#233). Disabled by default, and bound to
+    // localhost when enabled: an admin surface that appears on 0.0.0.0 the moment an operator flips
+    // one boolean is a footgun, so exposing it takes a second, deliberate edit.
+    //
+    // Tokens are DATA, not roles hardcoded in C++ (the [[voice.nets]] precedent). Each row maps a
+    // bearer token onto a role preset from the #945 capability vocabulary, so the REST frontend
+    // resolves a request to a CommandIssuer and calls the same permission-checked dispatch the ENet
+    // admin channel does -- there is no second permission system to keep in sync.
+    struct HttpAdminToken {
+        std::string token;
+        std::string role = "admin"; // a parseRolePreset name: admin|moderator|gm|faction_leader
+        int faction = -1;           // faction index for a faction-scoped role; -1 = unbound
+    };
+    struct HttpAdminConfig {
+        bool enabled = false;
+        uint16_t port = 8080;
+        std::string bindAddress = "127.0.0.1";
+        std::vector<HttpAdminToken> tokens;
+        int maxAuthFailures = 5; // per-IP lockout threshold, the RCON/admin-channel policy
+        int lockoutSeconds = 300;
+    };
+    HttpAdminConfig httpAdmin;
+
     // [metrics]
     struct MetricsConfig {
         std::string tickJsonPath;           // empty = disabled; atomic per-interval tick-budget JSON export

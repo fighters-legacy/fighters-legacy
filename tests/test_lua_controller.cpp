@@ -834,6 +834,7 @@ struct RecordingWorld {
     std::vector<std::string> music;
     std::vector<bool> outcomes;
     std::vector<std::pair<int, int>> objectives; // (faction, count)
+    std::vector<std::string> alerts;             // "faction|level" (#162)
     int nextIdx{100};
 
     RecordingWorld() {
@@ -849,6 +850,14 @@ struct RecordingWorld {
             relations.push_back(a + "|" + b + "|" + r);
         };
         api.setMusicState = [this](const std::string& s) { music.push_back(s); };
+        api.setAlertLevel = [this](const std::string& f, const std::string& lvl) { alerts.push_back(f + "|" + lvl); };
+        api.getAlertLevel = [](const std::string& f) {
+            return f == "russia" ? std::string("conflict") : std::string("peacetime");
+        };
+        api.getZoneStage = [](int idx, const std::string& zone) {
+            return (idx == 7 && zone == "capital") ? std::string("warned") : std::string("clean");
+        };
+        api.isInZone = [](int idx, const std::string& zone) { return idx == 7 && zone == "capital"; };
         api.setMissionOutcome = [this](bool ok) { outcomes.push_back(ok); };
         api.scoreObjective = [this](int faction, int count) { objectives.emplace_back(faction, count); };
     }
@@ -1137,4 +1146,54 @@ TEST_CASE("LuaController: atc.request_takeoff sequences the entity when a servic
     // After request_takeoff on tick 0 the entity is holding short, which the script reports as throttle 1.
     CHECK(out.throttle == Catch::Approx(1.0f));
     CHECK(atc.clearanceState(id) == fl::atc::ClearanceState::HoldShort);
+}
+
+TEST_CASE("world alert-level and zone bindings route to the host (#162)") {
+    RecordingWorld w;
+    // The query results are reported back through set_relationship, which RecordingWorld already
+    // captures -- so the test reads what the script actually saw without reaching into the sandbox.
+    auto c = makeWorldCtrl("function compute_control(s,t,dt)\n"
+                           "  if t == 0 then\n"
+                           "    world.set_alert_level('russia', 'war_state')\n"
+                           "    world.set_relationship(world.get_alert_level('russia'),\n"
+                           "                           world.get_zone_stage(7, 'capital'),\n"
+                           "                           tostring(world.is_in_zone(7, 'capital')))\n"
+                           "  end\n"
+                           "  return { throttle = 0.5 }\n"
+                           "end\n",
+                           &w.api);
+    REQUIRE(c->isValid());
+    (void)c->sample(EntityState{}, 0, 1.0 / 60.0);
+
+    REQUIRE(w.alerts.size() == 1);
+    CHECK(w.alerts[0] == "russia|war_state");
+    REQUIRE(w.relations.size() == 1);
+    CHECK(w.relations[0] == "conflict|warned|true");
+}
+
+TEST_CASE("world zone bindings are safe no-ops with no host hooks wired (#162)") {
+    // A LuaController with no WorldApi at all. The queries must ANSWER rather than error, so a script
+    // can branch on them without first asking whether the server has an alert system -- and the
+    // answers must be the harmless ones (nobody is at war, nobody is in trouble).
+    RecordingWorld w;
+    w.api.getAlertLevel = nullptr;
+    w.api.getZoneStage = nullptr;
+    w.api.isInZone = nullptr;
+    w.api.setAlertLevel = nullptr;
+    auto c = makeWorldCtrl("function compute_control(s,t,dt)\n"
+                           "  if t == 0 then\n"
+                           "    world.set_alert_level('russia', 'war_state')\n"
+                           "    world.set_relationship(world.get_alert_level('russia'),\n"
+                           "                           world.get_zone_stage(7, 'capital'),\n"
+                           "                           tostring(world.is_in_zone(7, 'capital')))\n"
+                           "  end\n"
+                           "  return {}\n"
+                           "end\n",
+                           &w.api);
+    REQUIRE(c->isValid());
+    (void)c->sample(EntityState{}, 0, 1.0 / 60.0);
+
+    CHECK(w.alerts.empty());
+    REQUIRE(w.relations.size() == 1);
+    CHECK(w.relations[0] == "peacetime|clean|false");
 }

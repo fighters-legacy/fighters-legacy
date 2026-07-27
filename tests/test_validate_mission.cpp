@@ -570,3 +570,155 @@ cameras:
     for (const auto& e : r.errors)
         CHECK(e.find("whoever") == std::string::npos);
 }
+
+// ── airspace_zones (#162) ───────────────────────────────────────────────────────────────────────
+
+static const char* kZoneMission = R"yaml(
+name: "Storm Warning"
+map: ukraine
+layer: ukraine_clear
+time: { hour: 14, minute: 0 }
+wind: { heading: 270, speed: 12 }
+sides:
+  - { id: nato }
+  - { id: russia, alert: elevated }
+airspace_zones:
+  - id: capital_airspace
+    type: circle
+    center: [15000, 0, 8000]
+    radius: 5000
+    alt_floor: 0
+    alt_ceiling: 12000
+    owner: russia
+    policy: military_intercept
+  - id: border_region
+    type: polygon
+    vertices: [[0,0],[10000,0],[15000,5000],[10000,10000],[0,10000]]
+    alt_ceiling: 999999
+    owner: russia
+objects:
+  - type: F22
+    id: player1
+    side: nato
+    pos: [12400, 0, 8800]
+    heading: 90
+triggers:
+  - on: timer(600)
+    do: mission_failure
+)yaml";
+
+TEST_CASE("airspace_zones happy path parses both shapes", "[mission-validator][airspace]") {
+    auto r = parseMission(kZoneMission);
+    for (const auto& e : r.errors)
+        UNSCOPED_INFO("error: " << e);
+    CHECK(r.ok);
+    REQUIRE(r.mission.airspaceZones.size() == 2);
+
+    const fl::AirspaceZone& circle = r.mission.airspaceZones[0];
+    CHECK(circle.id == "capital_airspace");
+    CHECK(circle.shape == fl::ZoneShape::Circle);
+    CHECK(circle.centerX == 15000.0);
+    CHECK(circle.centerZ == 8000.0); // the Y component of `center` is deliberately unused
+    CHECK(circle.radiusM == 5000.0);
+    CHECK(circle.altCeilingM == 12000.0);
+    CHECK(circle.ownerFactionId == "russia");
+    CHECK(circle.policyId == "military_intercept");
+
+    const fl::AirspaceZone& poly = r.mission.airspaceZones[1];
+    CHECK(poly.shape == fl::ZoneShape::Polygon);
+    REQUIRE(poly.vertices.size() == 5);
+    CHECK(poly.vertices[2].first == 15000.0);
+    CHECK(poly.vertices[2].second == 5000.0);
+    CHECK(poly.policyId.empty()); // optional; the engine falls back to the builtin default
+
+    // The per-side starting posture came through too.
+    REQUIRE(r.mission.sides.size() == 2);
+    CHECK(r.mission.sides[0].alert == fl::AlertLevel::Peacetime); // absent = peacetime
+    CHECK(r.mission.sides[1].alert == fl::AlertLevel::Elevated);
+}
+
+TEST_CASE("airspace_zones absent leaves the list empty and the mission valid", "[mission-validator][airspace]") {
+    auto r = parseMission(kValidMission);
+    CHECK(r.ok);
+    CHECK(r.mission.airspaceZones.empty());
+}
+
+TEST_CASE("airspace_zones rejects an unknown shape", "[mission-validator][airspace]") {
+    auto r = parseMission(replace_first(kZoneMission, "type: circle", "type: blob"));
+    CHECK_FALSE(r.ok);
+}
+
+TEST_CASE("airspace_zones rejects an owner that is not a side", "[mission-validator][airspace]") {
+    auto r = parseMission(replace_first(kZoneMission, "owner: russia", "owner: atlantis"));
+    CHECK_FALSE(r.ok);
+    bool named = false;
+    for (const auto& e : r.errors)
+        if (e.find("atlantis") != std::string::npos)
+            named = true;
+    CHECK(named);
+}
+
+TEST_CASE("airspace_zones rejects a duplicate zone id", "[mission-validator][airspace]") {
+    auto r = parseMission(replace_first(kZoneMission, "id: border_region", "id: capital_airspace"));
+    CHECK_FALSE(r.ok);
+    bool dup = false;
+    for (const auto& e : r.errors)
+        if (e.find("duplicated") != std::string::npos)
+            dup = true;
+    CHECK(dup);
+}
+
+TEST_CASE("airspace_zones rejects a non-positive radius", "[mission-validator][airspace]") {
+    auto r = parseMission(replace_first(kZoneMission, "radius: 5000", "radius: 0"));
+    CHECK_FALSE(r.ok);
+}
+
+TEST_CASE("airspace_zones rejects a circle with no center", "[mission-validator][airspace]") {
+    auto r = parseMission(without(kZoneMission, "    center: [15000, 0, 8000]"));
+    CHECK_FALSE(r.ok);
+}
+
+TEST_CASE("airspace_zones rejects a concave polygon", "[mission-validator][airspace]") {
+    // Pull one vertex inward so the ring is no longer convex.
+    auto r = parseMission(replace_first(kZoneMission, "[[0,0],[10000,0],[15000,5000],[10000,10000],[0,10000]]",
+                                        "[[0,0],[10000,0],[5000,5000],[10000,10000],[0,10000]]"));
+    CHECK_FALSE(r.ok);
+    bool convex = false;
+    for (const auto& e : r.errors)
+        if (e.find("convex") != std::string::npos)
+            convex = true;
+    CHECK(convex);
+}
+
+TEST_CASE("airspace_zones rejects a polygon with too few vertices", "[mission-validator][airspace]") {
+    auto r = parseMission(
+        replace_first(kZoneMission, "[[0,0],[10000,0],[15000,5000],[10000,10000],[0,10000]]", "[[0,0],[10000,0]]"));
+    CHECK_FALSE(r.ok);
+}
+
+TEST_CASE("airspace_zones rejects a vertex that is not an [x, z] pair", "[mission-validator][airspace]") {
+    auto r = parseMission(replace_first(kZoneMission, "[[0,0],[10000,0],[15000,5000],[10000,10000],[0,10000]]",
+                                        "[[0,0,0],[10000,0,0],[15000,5000,0]]"));
+    CHECK_FALSE(r.ok);
+}
+
+TEST_CASE("airspace_zones rejects a ceiling at or below the floor", "[mission-validator][airspace]") {
+    auto r = parseMission(replace_first(kZoneMission, "alt_ceiling: 12000", "alt_ceiling: 0"));
+    CHECK_FALSE(r.ok);
+}
+
+TEST_CASE("airspace_zones rejects a non-sequence section", "[mission-validator][airspace]") {
+    auto r = parseMission(replace_first(kZoneMission, "airspace_zones:\n  - id: capital_airspace",
+                                        "airspace_zones: nope\nunused:\n  - id: capital_airspace"));
+    CHECK_FALSE(r.ok);
+}
+
+TEST_CASE("sides rejects an unknown alert level", "[mission-validator][airspace]") {
+    auto r = parseMission(replace_first(kZoneMission, "alert: elevated", "alert: wartime"));
+    CHECK_FALSE(r.ok);
+    bool named = false;
+    for (const auto& e : r.errors)
+        if (e.find("war_state") != std::string::npos)
+            named = true;
+    CHECK(named);
+}

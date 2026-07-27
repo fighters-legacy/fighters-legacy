@@ -78,12 +78,27 @@ A structured, read-only, out-of-band surface:
 - Consumers: MCP tools (below), `fl-director`, `fl-ops`, and the replay recorder (epic #588
   captures the same events, making agent behaviour reviewable offline).
 
-> **Status (2026-07-23):** the aggregation *core* landed with the game-master map (#861): a
-> deterministic, plain-data `WorldStateSnapshot` (`engine/net/WorldState.h`) built once per ~1 Hz from
-> a bounded sim-thread copy in `WorldBroadcaster`'s Serialize phase — the first realization of "the
-> surface designed once for both the GM map and the agent read API." The GM map is its first consumer
-> (via the `MsgGmWorldState` wire feed). The JSON serialization, the append-only event stream, and the
-> out-of-band socket surface remain to build on top of this struct (#600 stays open).
+> **Status (2026-07-26):** built, except for the network transport.
+>
+> - `WorldStateSnapshot` (`engine/net/WorldState.h`) now carries the faction table with per-faction
+>   alert levels and the full relationship matrix, mission/objective state, and wind — the blocks this
+>   section always specified but the #861 GM-map core did not yet need.
+> - `MatchEventLog` (`engine/net/MatchEventLog.h`) is the append-only event stream: a bounded ring of
+>   typed, tick-stamped records covering kills (with attribution and weapon class), spawns, damage
+>   transitions, joins/leaves, chat, admin commands and alert-level changes. It reports `droppedCount`
+>   and `hasGapBefore`, so a consumer that fell behind learns it has a gap instead of receiving a
+>   partial history it believes is complete. `EntityEventType::Spawned` was added to raise the spawn
+>   half — before #600 a spawn was observable nowhere.
+> - JSON lives in `engine/net/WorldStateJson.h`, hand-rolled in the `ServerTickReport` style so
+>   engine-net gains no JSON dependency. It **escapes strings**, unlike `MissionReport::toJson`, because
+>   it carries chat lines and admin commands.
+> - `WorldStatePublisher` is the off-thread handoff: the sim publishes an immutable snapshot and any
+>   thread takes a `shared_ptr` to whatever was current, so a serializer never holds a lock across a
+>   multi-thousand-entity document. `worldState()` remains the sim-thread-only fast path for the GM feed.
+> - Reachable today through the `worldstate` and `events [after_seq] [max]` admin commands (console,
+>   RCON, `MsgAdminCommand`). **The out-of-band HTTP surface is #233**, which fronts exactly these two
+>   reads — REST is a frontend over this, not a second assembly path.
+> - `test_world_state` and `test_match_event_log` join the TSan target set, per §7.
 
 ## 4. MCP surface (Epic M, #601)
 

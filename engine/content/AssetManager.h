@@ -66,8 +66,9 @@ class AssetManager {
     std::shared_ptr<ManualProse> loadManualProse(const char* name);
     std::shared_ptr<LiveryData> loadLivery(const char* name);
     std::shared_ptr<AirportDefData> loadAirportDef(const char* name);
-    std::shared_ptr<GameModeData> loadGameMode(const char* name);  // #521
-    std::shared_ptr<TheaterDefData> loadTheater(const char* name); // #847
+    std::shared_ptr<GameModeData> loadGameMode(const char* name);     // #521
+    std::shared_ptr<TheaterDefData> loadTheater(const char* name);    // #847
+    std::shared_ptr<ZonePolicyData> loadZonePolicy(const char* name); // #162
 
     // Raw pack-relative file bytes, first pack in priority order that provides it (#847). Uncached
     // (like loadConfig). nullopt if no pack has it.

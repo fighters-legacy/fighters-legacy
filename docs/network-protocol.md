@@ -108,6 +108,7 @@ lanes are not configured). Callers must not assume ordering *between* channels.
 | `MatchState` | `0x1D` | server→client | reliable | 80 + n×8 bytes | Match phase + per-team scores + limits + phase clock (#523). Broadcast on change and unicast to a late joiner. Client renders remaining = `phaseEndTick − tickIndex`. Additive ID. |
 | `Scoreboard` | `0x1E` | server→client | unreliable | 8 + n×16 bytes | Per-participant kills/deaths/score/ping (#523), every ~2 s + on admit. Self-describing; a dropped one is replaced. Additive ID. |
 | `TeamRequest` | `0x1F` | client→server | reliable | 4 bytes | Request a mid-match team switch (#522). Guarded against unbalancing server-side. Additive ID. |
+| `AlertLevelChange` | `0x26` | server→client | reliable | 4 bytes | A faction's airspace readiness posture changed (#162). Sent once per faction after `MsgConnectAck` and again on every change, so a late joiner starts from the live value. Carries an `AlertLevel` ordinal (`Peacetime`/`Elevated`/`Conflict`/`WarState`) — gate it with `isAlertLevelOrdinal()` before casting. Additive ID, old clients discard. |
 | `Chat` | `0x20` | client→server | reliable | 4-byte `MsgChatHeader` + NUL-terminated UTF-8 text (≤ `kMaxChatBytes` = 240) | In-match chat line (#646). Header: `channel` @1 (`ChatChannel` All/Team). The server sanitizes (BMP UTF-8, control chars stripped, codepoint-boundary truncation), per-peer rate-limits, applies mute + a moderation hook, then routes a `ChatEvent`. Additive ID. |
 | `ChatEvent` | `0x21` | server→client | reliable | 8-byte `MsgChatEventHeader` + NUL-terminated UTF-8 text | Routed chat line (#646). Header: `channel` @1, `senderPeerId` @4 (participant id; `kNoOwningPeer` = a system line with no sender name). All-channel lines reach every handshake-complete peer incl. the sender's own echo; Team-channel lines reach only the sender's faction. Additive ID. |
 | `LanBeacon` | `0x40` | server→LAN | raw UDP (not ENet) | 76 bytes | LAN server presence broadcast. The ENet id space is `0x00–0x3F`; `0x40+` is reserved for raw-UDP/non-ENet ids (the boundary was raised from `0x20` in #996 to free ENet ids for the Epic E messages). Carries `gameModeFlags` (incl. `kGameModeShuttingDown` #226 and `kGameModePassworded` #998) + `shutdownSeconds`. |
@@ -240,6 +241,26 @@ Skipped entirely when the server has no faction registry — the client then sho
 | 2 | 2 | `factionIndex` | `uint16_t` | `FactionRegistry` index this record describes |
 | 4 | 64 | `id[64]` | `char[64]` | Null-terminated faction id, e.g. `"blue"` |
 | 68 | 64 | `name[64]` | `char[64]` | Null-terminated display name, e.g. `"Blue Coalition"`; empty = fall back to `id` |
+
+### MsgAlertLevelChange — 4 bytes
+
+Server→client, **reliable**. One faction's airspace readiness posture (#162), which selects which
+dwell row every airspace zone that faction owns applies to intruders. Sent on two paths through the
+same message, so the client has one decode branch rather than two: once per faction in the
+`MsgConnectAck` sequence (beside `MsgFactionDef`), and again whenever `AlertSystem::setAlertLevel`
+moves a faction — from a mission Lua `world.set_alert_level()`, an admin action, or a #163
+`WorldEvolutionDelta`. Reliable, because a posture change that goes missing leaves a client
+displaying peacetime during a war.
+
+`level` is an `AlertLevel` ordinal, and those ordinals are a wire contract — renumbering the enum
+would silently change what a posture means to every connected client. Gate the byte with
+`fl::isAlertLevelOrdinal()` before casting it.
+
+| Offset | Size | Field | Type | Notes |
+|--------|------|-------|------|-------|
+| 0 | 1 | `msgId` | `uint8_t` | `0x26` |
+| 1 | 1 | `level` | `uint8_t` | `AlertLevel`: 0 `Peacetime`, 1 `Elevated`, 2 `Conflict`, 3 `WarState` |
+| 2 | 2 | `factionIndex` | `uint16_t` | `FactionRegistry` index; matches `MsgFactionDef::factionIndex` |
 
 ### MsgMissionRoster — 72 bytes
 

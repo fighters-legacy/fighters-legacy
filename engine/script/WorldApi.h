@@ -41,6 +41,21 @@ struct WorldApi {
     // broadcasts it. A no-op on a headless server with no clients.
     std::function<void(const std::string& state)> setMusicState;
 
+    // Set / read a faction's airspace readiness posture (#162). `level` is one of
+    // "peacetime" / "elevated" / "conflict" / "war_state"; an unrecognised value is ignored by the
+    // host. Setting it is server-authoritative and broadcast to clients, and it retunes every zone
+    // that faction owns at once (each zone's escalation policy has a dwell row per level).
+    // getAlertLevel returns the same vocabulary, or "peacetime" for an unknown faction.
+    std::function<void(const std::string& factionId, const std::string& level)> setAlertLevel;
+    std::function<std::string(const std::string& factionId)> getAlertLevel;
+
+    // Airspace-zone queries (#162). `getZoneStage` returns the intruder's escalation stage in that
+    // zone -- "clean" / "in_zone" / "warned" / "intercept" / "hostile" -- and "clean" for an unknown
+    // entity or zone, so a script that names a zone the mission does not define reads as "nobody is
+    // in trouble" rather than erroring mid-tick.
+    std::function<std::string(int entityIdx, const std::string& zoneId)> getZoneStage;
+    std::function<bool(int entityIdx, const std::string& zoneId)> isInZone;
+
     // End the current mission with success (true) or failure (false). The host drives the objective
     // state machine to the terminal state (as if a mission_success/mission_failure trigger fired).
     std::function<void(bool success)> setMissionOutcome;
