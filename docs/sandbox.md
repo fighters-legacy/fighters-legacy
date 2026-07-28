@@ -238,6 +238,28 @@ If another **player** is in your flight, an order is *relayed* to them as a radi
 bandits.") rather than applied: the server cannot fly a person's aircraft for them, and compliance is
 their choice.
 
+### Spoken orders (F8)
+
+The same six commands can be **spoken** instead of picked from the menu (#935). Hold `F8`
+(`WingmanVoiceCommand`), say the order — "two, engage bandits" — and release; the phrase is matched
+against the six ordinals and dispatched through the identical path the menu uses, so a spoken order
+and a menu order cannot behave differently.
+
+**No language model is involved and none is needed.** The match is a deterministic phrase matcher
+(`WingmanPhraseMatch`), which is why this tier works on any machine and on any server, and why it
+behaves the same every time. A phrase that does not resolve is declined rather than guessed at.
+
+This needs a speech-to-text backend, which is **not in the shipped builds**: `FL_ENABLE_WHISPER`
+is off by default, so without a custom build `F8` does nothing and the radio menu above is the way
+to order your flight. If you do build it, no model ships with the game — point `[voice]
+stt_model_path` in `user.toml` at a downloaded `ggml-*.bin`. See
+[development.md](development.md#optional-voice-wingman-commands-fl_enable_whisper).
+
+> **Known conflict:** `V` is bound to both radio push-to-talk and the master arm toggle, and the
+> master-arm handler ignores rebinding — so keying the radio flips your armament between ARM and
+> SAFE. If your weapons stop firing after you talk, press `V` once more. Tracked as
+> [#1050](https://github.com/fighters-legacy/fighters-legacy/issues/1050).
+
 ## Gamepad controls
 
 Standard gamepads (Xbox / PlayStation) are supported in all camera modes. A joystick axis
