@@ -250,7 +250,8 @@ Releases are `chore(release): vX.Y.Z` PRs, then a tag on the merge commit. The t
 
        gh release view vX.Y.Z --json assets -q '.assets[] | "\(.name) \(.size)"'
 
-   Expect `fighters-legacy-{linux,macos,windows}.zip`.
+   Expect `fighters-legacy-{linux,macos,windows}.zip`, plus `stats.md` and `stats.json`
+   (the application statistics, attached to every release — see below).
 
 6. **Hand-author the release body and apply it to this tag.**
 
@@ -259,6 +260,40 @@ Releases are `chore(release): vX.Y.Z` PRs, then a tag on the merge commit. The t
 7. **Read the body back, on the tag you meant.**
 
        gh release view vX.Y.Z --json body -q '.body' | head -3
+
+8. **Minor releases only (`vX.Y.0`) — confirm the statistics block landed.** It is appended
+   automatically *after* the body is hand-authored, by the `Release statistics` workflow, which
+   fires on the `release: edited` event step 6 produces.
+
+       gh release view vX.Y.0 --json body -q '.body' | grep -c 'fl-stats:begin'
+
+   Expect `1`. If it is `0`, the workflow has not run yet (give it a minute) or the release has
+   no `stats.md` asset — re-run it with `gh workflow run "Release statistics" -f tag=vX.Y.0`.
+
+### Application statistics (milestone gates)
+
+`tools/code_stats.py` reports what the release *is*: composition by category — production code,
+test code, documentation, configuration, build system, data, fixtures, media — and the product
+surface, meaning wire messages, configuration keys, admin commands, Lua bindings, CLI tools and
+test counts.
+
+Both `stats.md` and `stats.json` attach to **every** release, so the JSON forms a comparable
+series across versions. The human-readable block is appended to the body of **minor releases
+only** (`vX.Y.0`), because a milestone gate is the thing worth measuring and a table on every
+patch is noise.
+
+Two properties make it safe to run against a hand-authored body:
+
+- It only ever rewrites text **between its own `<!-- fl-stats:begin/end -->` markers**. Prose
+  above them is untouched, and re-running replaces the block rather than stacking copies.
+- It **refuses to write into an empty body**, since an empty body means step 6 has not happened
+  and the first thing a reader would meet would be a statistics table.
+
+The numbers come from the `stats.md` asset generated at tag time, not from a later checkout — the
+statistics have to describe the tagged tree, and re-deriving them from a moving branch would
+quietly report something else. The surface counts are imported from `tools/docs_drift.py` rather
+than re-implemented, so the release notes and the drift gate cannot disagree about how many
+configuration keys the server has.
 
 ### What a release body contains
 

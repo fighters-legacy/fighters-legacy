@@ -72,6 +72,7 @@ aircraft's performance.
 
 | Tool | Purpose |
 |---|---|
+| `code_stats.py` | Application statistics for a release: composition by category plus the product surface. Attached to every release and appended to minor-release bodies — see [the release process](project-management.md#application-statistics-milestone-gates) |
 | `docs_drift.py` | Checks documentation against the code it describes ([the drift gate](https://github.com/fighters-legacy/fighters-legacy/blob/main/.github/workflows/docs-drift.yml)) |
 | `check_deps.py` | Reports which pinned dependencies have newer upstream releases |
 | `lint_workflow_expressions.py` | Catches `${{ }}` interpolation into `run:` blocks |

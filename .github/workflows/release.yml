@@ -163,12 +163,25 @@ jobs:
           echo "$body" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
 
+      # Application statistics for the milestone gate. Produced here, where the tag is checked
+      # out and the numbers are unambiguous; APPLIED to the release body by release-stats.yml,
+      # not here. The hand-authored notes land after this workflow completes and overwrite the
+      # body wholesale (the timing race documented in release-notes-gate.yml), so a block
+      # written here would be silently erased by the very next edit.
+      - name: Generate application statistics
+        run: |
+          python3 tools/code_stats.py --format both --out-dir dist \
+            --version "${GITHUB_REF_NAME}"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         id: release
         with:
           body: ${{ steps.notes.outputs.body }}
-          files: "dist/*.zip"
+          files: |
+            dist/*.zip
+            dist/stats.md
+            dist/stats.json
 
       - name: Attest build provenance
         if: hashFiles('**/*.zip') != ''
