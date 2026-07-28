@@ -3,7 +3,7 @@
 """Unit tests for tools/gpu_contention/{driver,analyze}.py (#782).
 
 Pure-logic coverage only — no network, no model, no GPU, no game binary. Per the initiative's CI
-policy (docs/ai-architecture.md §7) CI must never require a model, so what is exercised here is
+policy (docs/developer/ai-architecture.md §7) CI must never require a model, so what is exercised here is
 the schedule arithmetic and the frame/phase join + summary layer; the HTTP edge and the subprocess
 orchestration are not touched.
 """

@@ -7,7 +7,7 @@
 //
 // This is what runs when `[ai_provider] enabled = false`, when no plugin is configured, or when one
 // fails to load — which is to say, it is the path CI tests and the path most servers run
-// (docs/ai-architecture.md §7: "CI never requires a model"). It is not a placeholder.
+// (docs/developer/ai-architecture.md §7: "CI never requires a model"). It is not a placeholder.
 //
 // It supports NOTHING and says so through supports(), so a caller degrades to its scripted path by
 // asking rather than by discovering. Every request is REFUSED at the call — returning 0 — rather

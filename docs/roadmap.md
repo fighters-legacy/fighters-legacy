@@ -23,7 +23,7 @@ drifted from reality during Phase 2. Ordering constraints are listed instead.
 > **2026-06-28 re-target to 128+ multiplayer.** A new **Phase 5 — Multiplayer at Scale & Live
 > Services** was inserted and former Phases 5–8 renumbered to 6–9 (release slips one phase —
 > a conscious choice). Scaling seams were folded into Phases 3–4. See the
-> [decision record](architecture.md#decision-records) and the cross-cutting initiative below.
+> [decision record](developer/architecture.md#decision-records) and the cross-cutting initiative below.
 
 > **Phase 3 gated at `v0.3.0` (2026-07-10); milestone closed 0 open / 143 closed.** Phase 4 is
 > the active milestone. The scaling spine (Epics A/B/I/L) landed in Phase 3; the `v0.3.x` series
@@ -50,14 +50,14 @@ the release PR merges → `./scripts/tag-release.sh vX.Y.Z` → the tag push run
 artifacts → **hand-author the release notes and read the body back on that tag** →
 **at a phase gate (`v0.N.0`), record + review the phase's demo videos and attach them to the
 Release** → close the milestone. Full procedure and the defect each step prevents:
-[project-management.md → *Cutting a release*](project-management.md#cutting-a-release).
+[project-management.md → *Cutting a release*](developer/project-management.md#cutting-a-release).
 
 **Demo videos (phase gates, epic #909):** record the phase's demo set headless — locally via
 `tools/record_demo/record_demo.py --all --headless`, or from the Actions tab via the opt-in
 `demo-videos` workflow (`workflow_dispatch`, `release_tag` = the gate tag to upload the mp4s).
 **Watch the footage** before attaching (software rendering is slow and never a required CI gate),
 then attach it to the GitHub Release. The always-on gate is only `validate-mission
-missions/demos/*.yaml` (no GPU). Reference: [demo-recording.md](demo-recording.md).
+missions/demos/*.yaml` (no GPU). Reference: [demo-recording.md](developer/demo-recording.md).
 
 **Phase-gate close checklist** (so the docs never lag a gate again, as they did between the
 2026-07-10 Phase 3 close and this revision): tag `v0.N.0` → **record, review, and attach the
@@ -98,7 +98,7 @@ bottleneck in the 96–256 range; L is now a later transport optimisation (encry
 control, connection-count headroom) that pairs with Epic C auth. Its selection spike
 ([#506](https://github.com/fighters-legacy/fighters-legacy/issues/506)) chose **GameNetworkingSockets**
 (BSD-3) behind `INetwork`, with `enet6` retained as the LAN/low-count backend — see
-[docs/transport-selection.md](transport-selection.md). Then (H → C → D) with G alongside
+[docs/developer/decisions/transport-selection.md](developer/decisions/transport-selection.md). Then (H → C → D) with G alongside
 H/C → K last. E, F, and J run in Phase 4 independent of the live-services chain.
 
 **New repos (Go):** `fl-account` (identity), `fl-review` (offline anti-cheat), `fl-operator`
@@ -118,8 +118,8 @@ this in addition to its existing criteria.
 
 ## Cross-Cutting Initiative: Dynamic World & Agentic AI
 
-*(Added 2026-07-01 — see the [decision record](architecture.md#decision-records). Epic letters
-continue from A–L above. Full design: [docs/ai-architecture.md](ai-architecture.md).)*
+*(Added 2026-07-01 — see the [decision record](developer/architecture.md#decision-records). Epic letters
+continue from A–L above. Full design: [docs/developer/ai-architecture.md](developer/ai-architecture.md).)*
 
 A second initiative threads four epics across Phases 4–6: a **pluggable, local-first AI
 runtime** that makes the world dynamic — an agentic campaign director, conversational crew,
@@ -168,11 +168,11 @@ correct bounded allowlisted action with zero unauthorized commands. Sim tick p99
 agents attached (out-of-tick guarantee, validated under Epic I load).
 
 Two of those hold on the **CPU-only** reference instance and one does not — accuracy is a property
-of the model, not the host, so the gap is purely latency (`docs/ai-provider-evaluation.md`). The
+of the model, not the host, so the gap is purely latency (`docs/developer/decisions/ai-provider-evaluation.md`). The
 **wingman's ≥ 90% intent gate is measured on a GPU-backed provider**: no model is both accurate
 enough and inside the 2 s radio-comms budget on CPU, so the natural-language wingman is a **GPU
 feature** and CPU-only servers ship the scripted command grammar (#610) — decided in #769,
-recorded in `docs/ai-architecture.md` §9. The **director's 60 s** figure is a between-mission
+recorded in `docs/developer/ai-architecture.md` §9. The **director's 60 s** figure is a between-mission
 timescale, not a synchronous call: it is missed on CPU at exactly the model sizes worth using, so
 `fl-director` generates mission *N+1* while *N* is flown.
 
@@ -236,9 +236,9 @@ here, in a single registry, rather than as perpetually-open issues that would ro
 
 | Lever | Spike | Trigger | Design |
 |---|---|---|---|
-| Reduced-rate ("LOD") physics for distant AI | [#575](https://github.com/fighters-legacy/fighters-legacy/issues/575) | Integrate-bound: `load_factor` at floor + rising `dropped_ticks` + `integrate_ms.mean > 0.5 × tick_ms.mean` on the reference env under product workload | [physics-lod-design.md](physics-lod-design.md) |
-| Spatial sharding + pre-sharding ladder (shared snapshot encode, governor interest-radius lever #726) | [#572](https://github.com/fighters-legacy/fighters-legacy/issues/572) | Sustained `load_factor` at floor + rising `dropped_ticks` + serialize-dominant tick at max workers on the 8-core reference env (multi-machine is a Phase 5+ product decision) | [spatial-sharding-design.md](spatial-sharding-design.md) + the 2026-07-10 [decision record](architecture.md#decision-records) |
-| enet6 retirement (drop the LAN/low-count backend) | [#652](https://github.com/fighters-legacy/fighters-legacy/issues/652) | GNS parity across LAN/single-player/low-count + Windows/macOS GNS CI legs stable (Phase 5) | [transport-selection.md](transport-selection.md) |
+| Reduced-rate ("LOD") physics for distant AI | [#575](https://github.com/fighters-legacy/fighters-legacy/issues/575) | Integrate-bound: `load_factor` at floor + rising `dropped_ticks` + `integrate_ms.mean > 0.5 × tick_ms.mean` on the reference env under product workload | [physics-lod-design.md](developer/decisions/physics-lod-design.md) |
+| Spatial sharding + pre-sharding ladder (shared snapshot encode, governor interest-radius lever #726) | [#572](https://github.com/fighters-legacy/fighters-legacy/issues/572) | Sustained `load_factor` at floor + rising `dropped_ticks` + serialize-dominant tick at max workers on the 8-core reference env (multi-machine is a Phase 5+ product decision) | [spatial-sharding-design.md](developer/decisions/spatial-sharding-design.md) + the 2026-07-10 [decision record](developer/architecture.md#decision-records) |
+| enet6 retirement (drop the LAN/low-count backend) | [#652](https://github.com/fighters-legacy/fighters-legacy/issues/652) | GNS parity across LAN/single-player/low-count + Windows/macOS GNS CI legs stable (Phase 5) | [transport-selection.md](developer/decisions/transport-selection.md) |
 
 Design-complete deferred levers are registered here, not as open issues; when a trigger fires,
 the lever's spike is re-opened into an implementation epic.
@@ -267,7 +267,7 @@ Phase 2 acceptance is the **standalone playable sandbox** — no content pack re
 - World positions are double-precision throughout; no float precision errors at large scale.
 - GPU particles render for explosion / smoke / fire.
 - Authoritative fl-server + ENet client networking operational on all three platforms.
-- Wire protocol documented (`docs/network-protocol.md`).
+- Wire protocol documented (`docs/developer/network-protocol.md`).
 - enet6 backend active; fl-server binds on `::` dual-stack.
 - Spherical-Earth world model functional; `CentralGravityField` and `TerrainStreamer` curvature correction active.
 - CI green on all three platforms (debug, debug-msvc, macOS).
@@ -279,7 +279,7 @@ Phase 3 acceptance is a **complete engine layer** — all features testable with
 2026-07-01 and are re-validated in their new phase.
 
 > **2026-07-01 Phase 3 close-out re-scope** (see the
-> [decision record](architecture.md#decision-records)): the spherical-Earth epic (#468) and its
+> [decision record](developer/architecture.md#decision-records)): the spherical-Earth epic (#468) and its
 > sub-issues move to Phase 4 (it gates content, not engine seams); NVG (#210) and the FlightHud
 > redesign (#438) move to the Phase 4 avionics epic (#587); renderer-advancement items
 > (#443–#445, #448–#454) move to Phase 8 under epic #597 (milestone renamed "Rendering &

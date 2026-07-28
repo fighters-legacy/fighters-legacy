@@ -4,7 +4,7 @@
 # Weekly deep fuzz run (#710, Sub 3 of #94). The per-PR 60-second smoke lives in ci.yml
 # (fuzz-changes -> fuzz-run -> fuzz-smoke); this goes 30 minutes per harness to reach states the
 # smoke never will. A finding fails the run, uploads the reproducer, and auto-files (or extends) a
-# `fuzzing`-labeled issue. Policy: docs/development.md "Fuzzing".
+# `fuzzing`-labeled issue. Policy: docs/developer/development.md "Fuzzing".
 #
 # Unlike the fighters-codex reference (all harnesses serially in one 180-min job), this fans the
 # harnesses across a matrix — 13+ harnesses x 30 min would blow past GitHub's 6-hour job cap, and the
@@ -108,7 +108,7 @@ jobs:
 
           - Run: $run_url
           - Reproducers: the per-harness \`fuzz-deep-findings-*\` artifacts on that run.
-          - Policy (docs/development.md \"Fuzzing\"): minimize with \`-minimize_crash=1\`, fix, and in the
+          - Policy (docs/developer/development.md \"Fuzzing\"): minimize with \`-minimize_crash=1\`, fix, and in the
             same PR commit the minimized input as a \`regress-*.bin\` seed plus a Catch2 regression test."
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label fuzzing --state open \
                        --search 'in:title "fuzz: scheduled deep-run findings"' \

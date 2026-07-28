@@ -230,7 +230,7 @@ struct ServerConfig {
     // `enabled = true` before the server will talk to any model at all.
     //
     // Every AI feature degrades to its scripted path when this is off, and that fallback is the
-    // CI-tested one (docs/ai-architecture.md §7).
+    // CI-tested one (docs/developer/ai-architecture.md §7).
     struct AiProviderConfig {
         bool enabled = false;
         std::string plugin;   // path to an IWorldAiProvider shared library; empty = NullAiProvider

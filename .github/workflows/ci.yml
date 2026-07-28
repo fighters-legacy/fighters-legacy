@@ -401,7 +401,7 @@ jobs:
         run: python3 -m pytest tests/test_scale_gate.py -v
 
       # Pure scoring/extraction logic only — no endpoint is contacted. CI never requires a model
-      # (docs/ai-architecture.md section 7); the sweep itself is run locally / on the reference env.
+      # (docs/developer/ai-architecture.md section 7); the sweep itself is run locally / on the reference env.
       - name: Unit test ai_eval/ai_eval.py (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         run: python3 -m pytest tests/test_ai_eval.py -v

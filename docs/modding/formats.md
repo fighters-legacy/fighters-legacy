@@ -632,7 +632,7 @@ Each sensor is a standalone TOML file in `sensors/*.toml`, parsed by `fl::sensor
 theater pack can re-tune an aircraft's radar without forking the aircraft.
 
 **One sensor vocabulary, three consumers.** The same def is read by player avionics, AI detection,
-and missile seekers (2026-07-12 decision record, [architecture.md](../architecture.md)). A radar, an
+and missile seekers (2026-07-12 decision record, [architecture.md](../developer/architecture.md)). A radar, an
 IRST, a laser designator and a human eyeball differ in their *parameters*, not in their model: each
 is a cone, a range band, and a probability of seeing something inside it.
 
@@ -1117,8 +1117,8 @@ unreadable or wrong-sized PNG falls back to the procedural generator rather than
 
 Land cover drives biome selection (ESA WorldCover classes); satellite imagery, when present,
 replaces biome shading for that tile. Generate all three with
-[`tools/gen_terrain_tiles.py`](../../tools/gen_terrain_tiles.py) and
-[`tools/gen_terrain_color.py`](../../tools/gen_terrain_color.py); see
+[`tools/gen_terrain_tiles.py`](https://github.com/fighters-legacy/fighters-legacy/blob/main/tools/gen_terrain_tiles.py) and
+[`tools/gen_terrain_color.py`](https://github.com/fighters-legacy/fighters-legacy/blob/main/tools/gen_terrain_color.py); see
 [satellite-terrain.md](satellite-terrain.md).
 
 **There is no terrain JSON manifest to author.** `TerrainManifest` carries only the terrain id and

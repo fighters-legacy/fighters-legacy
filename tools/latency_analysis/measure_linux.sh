@@ -4,7 +4,7 @@
 # ENet loopback latency measurement — Fedora Linux (epoll)
 #
 # Prerequisites: sockperf (sudo dnf install sockperf)
-#   See docs/development.md — "Loopback latency analysis" section.
+#   See docs/developer/development.md — "Loopback latency analysis" section.
 #
 # Usage: bash tools/latency_analysis/measure_linux.sh [build_dir]
 #   build_dir defaults to build/debug relative to repo root.
@@ -69,7 +69,7 @@ if command -v sockperf &>/dev/null; then
     echo "$SOCKPERF_SUMMARY"
 else
     echo "WARN: sockperf not found — skipping UDP baseline."
-    echo "      Install: sudo dnf install sockperf  (see docs/development.md)"
+    echo "      Install: sudo dnf install sockperf  (see docs/developer/development.md)"
 fi
 
 # Start fl-server

@@ -75,7 +75,7 @@ imagery; the CC BY / CC BY-SA bucket is not needed and is not taken.
   from one is a derivative work of the drawing. They are easy to mistake for neutral reference
   because they look technical rather than artistic and carry no licence tag — they are neither
   neutral nor free. Tracing a Jane's cutaway would breach in the *content* the very clean-room rule
-  `docs/architecture.md` already imposes on the *engine*.
+  `docs/developer/architecture.md` already imposes on the *engine*.
 - **No aerodynamic or performance values lifted from another simulator's data files.** Not from
   DCS, not from BMS, not from a Flight Simulator add-on, not from a wiki that copied one of them.
 - No reference material marked export-controlled (ITAR/EAR), classified, or "distribution limited".
@@ -99,7 +99,7 @@ published numbers, and CI fails it when it stops doing so.
 
 This is the same clean-room standard the engine already holds itself to with respect to Jane's
 Fighters Anthology: *design lesson only, no code or tuning values copied*
-(`docs/architecture.md`). The content is held to it too.
+(`docs/developer/architecture.md`). The content is held to it too.
 
 ## 4. Markings and liveries
 

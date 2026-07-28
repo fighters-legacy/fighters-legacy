@@ -3,7 +3,7 @@
 """Unit tests for tools/ai_eval/ai_eval.py (#599).
 
 Pure-logic coverage only — no network, no model, no validate-mission binary. Per the initiative's
-CI policy (docs/ai-architecture.md §7) CI must never require a model, so everything exercised here
+CI policy (docs/developer/ai-architecture.md §7) CI must never require a model, so everything exercised here
 is the extraction/scoring/aggregation layer; the HTTP and subprocess edges are not touched.
 """
 
@@ -332,7 +332,7 @@ def test_intent_grammar_matches_the_shipped_wingman_commands():
     model against a vocabulary the game does not speak — and it would look like a model regression.
 
     Deliberately regex, not a build artifact: this test must run with zero network calls, no model,
-    and no compiled binary (docs/ai-architecture.md §7 — CI never requires a model).
+    and no compiled binary (docs/developer/ai-architecture.md §7 — CI never requires a model).
     """
     header = REPO_ROOT / "engine" / "ai" / "WingmanCommand.h"
     text = header.read_text(encoding="utf-8")

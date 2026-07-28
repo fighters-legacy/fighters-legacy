@@ -117,7 +117,7 @@ CONFIG_ARRAY_FIELDS = {
 
 
 def check_config_keys() -> CheckResult:
-    result = CheckResult("config-keys: server.toml vs docs/fl-server-config.md")
+    result = CheckResult("config-keys: server.toml vs docs/server-ops/server-config.md")
     src = read("server/fl-server/server_config.cpp")
 
     code: set[str] = set()
@@ -144,7 +144,7 @@ def check_config_keys() -> CheckResult:
         )
 
     code = {k for k in code if k not in CONFIG_SUBTABLE_ROOTS and not is_array_row_field(k)}
-    doc = {k for k in extract_config_doc_keys(read("docs/fl-server-config.md")) if not is_array_row_field(k)}
+    doc = {k for k in extract_config_doc_keys(read("docs/server-ops/server-config.md")) if not is_array_row_field(k)}
 
     result.code_count = len(code)
     result.doc_count = len(doc)
@@ -246,9 +246,9 @@ def _enum_entries(src: str, enum_name: str) -> dict[str, str]:
 
 
 def check_msg_ids() -> CheckResult:
-    result = CheckResult("msg-ids: GameProtocol.h vs docs/network-protocol.md")
+    result = CheckResult("msg-ids: GameProtocol.h vs docs/developer/network-protocol.md")
     src = read("engine/net/GameProtocol.h")
-    doc = read("docs/network-protocol.md")
+    doc = read("docs/developer/network-protocol.md")
 
     code: set[str] = set()
     for enum_name in ("MsgId", "ExtTag"):
@@ -385,9 +385,12 @@ def check_commands() -> CheckResult:
     docs = "\n".join(
         read(p)
         for p in (
-            "docs/fl-server-config.md",
-            "docs/sandbox.md",
-            "docs/ai-architecture.md",
+            "docs/server-ops/server-config.md",
+            "docs/server-ops/admin-api.md",
+            "docs/server-ops/mcp-agent-surface.md",
+            "docs/user-guide/controls.md",
+            "docs/developer/debug-console.md",
+            "docs/developer/ai-architecture.md",
         )
     )
     documented: set[str] = set()
@@ -447,7 +450,7 @@ def check_tools_list() -> CheckResult:
     cmake = read("tools/CMakeLists.txt")
     code = set(re.findall(r"add_executable\(\s*([A-Za-z0-9_-]+)", cmake)) - TOOLS_NOT_DOCUMENTED
 
-    doc_paths = ["docs/development.md", "README.md"]
+    doc_paths = ["docs/developer/development.md", "README.md"]
     tools_catalog = REPO_ROOT / "docs/developer/tools.md"
     if tools_catalog.is_file():
         doc_paths.append("docs/developer/tools.md")

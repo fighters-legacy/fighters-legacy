@@ -35,7 +35,7 @@ inline int64_t cellCoordFloor(double v) noexcept {
 // of flight dynamics, so a uniform grid stays O(cells x local_density) on range queries. A
 // tree-based index (quad-tree, k-d tree) only outperforms this when N > ~10,000 entities in
 // highly non-uniform configurations — well beyond the planned entity scale of this sim.
-// See docs/architecture.md (engine-spatial section) for the full rationale.
+// See docs/developer/architecture.md (engine-spatial section) for the full rationale.
 //
 // Cell size is a runtime knob, not a constant: 10 km is a sensible DEFAULT, but at high entity
 // density with a large draw distance a smaller cell keeps queryRadius from degenerating toward

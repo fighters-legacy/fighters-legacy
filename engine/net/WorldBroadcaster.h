@@ -715,7 +715,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // A recorder cannot reuse a per-peer snapshot: those are interest-filtered and budget-capped, so
     // they describe what one player could see, not what happened. Re-quantizing in the recorder would
     // be a SECOND quantization implementation free to disagree with the first about what 0.125 m
-    // means -- the thing docs/replay-format.md exists to prevent. So the tap reuses the blobs the
+    // means -- the thing docs/developer/replay-format.md exists to prevent. So the tap reuses the blobs the
     // encode-once pass (#725) already built this tick and stitches them into one complete stream.
     struct ReplayTickRecords {
         uint64_t tick{0};

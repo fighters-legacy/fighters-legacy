@@ -7,7 +7,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 Measures what a **resident local LLM does to the renderer's frame time** — the question spike #609
 asked on all three platforms and could only answer on Linux/CUDA, and the reason
-`docs/ai-architecture.md` §8 carried an unmeasured risk next to its client-local-inference row.
+`docs/developer/ai-architecture.md` §8 carried an unmeasured risk next to its client-local-inference row.
 
 The answer matters to one decision: whether intent inference could ever run **client-local**. #769
 chose server-side hosting, which takes the LLM off the client's frame budget entirely. If that is
@@ -232,11 +232,11 @@ the run's phases, never as an absolute.
 
 ## CI
 
-This never runs in CI, and **CI never requires a model** (`docs/ai-architecture.md` §7). Only the
+This never runs in CI, and **CI never requires a model** (`docs/developer/ai-architecture.md` §7). Only the
 pure logic — schedule arithmetic, the frame/phase join, the summary math — is unit-tested, in
 `tests/test_gpu_contention.py`, with no network, GPU, model, or game binary.
 
 ## Recording results
 
-Findings go in `docs/ai-provider-evaluation.md` under "GPU contention (#782)". Paste the analyzer's
+Findings go in `docs/developer/decisions/ai-provider-evaluation.md` under "GPU contention (#782)". Paste the analyzer's
 Markdown, then add the run's row to the summary table.

@@ -1266,7 +1266,7 @@ static_assert(offsetof(MsgRadioCommand, command) == 4u, "MsgRadioCommand::comman
 
 // One spoken radio line (#703), server->client reliable, unicast (directed) or broadcast. The text is
 // server-rendered + localizable; voiceKey is a stable key for TTS / a content-pack OGG (empty = no
-// audio, subtitle only — the docs/ai-architecture.md degradation path).
+// audio, subtitle only — the docs/developer/ai-architecture.md degradation path).
 struct MsgRadioTransmission {
     uint8_t msgId{static_cast<uint8_t>(MsgId::RadioTransmission)};
     // The radio net this line was spoken on (#532/#925), or kInvalidRadioNet for a line with no net.

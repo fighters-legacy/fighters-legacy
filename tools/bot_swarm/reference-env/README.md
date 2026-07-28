@@ -14,7 +14,7 @@ pessimistic — always characterise optimized):
 
 Both run the same in‑guest script (`run-benchmark.sh`): build `fl-server` + `bot_swarm`
 Release, then sweep `run_loadtest.sh` over client counts × patterns. Reports land in
-`tools/bot_swarm/results/` (git‑ignored). See [docs/load-testing.md](../../../docs/load-testing.md).
+`tools/bot_swarm/results/` (git‑ignored). See [docs/developer/load-testing.md](../../../docs/developer/load-testing.md).
 
 **Determinism.** Each path pins a fixed userspace so the toolchain (GCC) doesn't drift with whatever
 each distro ships — the **container** on **Fedora 44** (`fedora:44`, GCC 16, the primary benchmark
@@ -118,7 +118,7 @@ container↔VM difference is shared‑kernel vs own‑kernel.
 
 ## Interpreting results
 
-The scale‑gate targets (per [docs/load-testing.md](../../../docs/load-testing.md)): **128 clients
+The scale‑gate targets (per [docs/developer/load-testing.md](../../../docs/developer/load-testing.md)): **128 clients
 @ 60 Hz, sim tick ≤ 16.6 ms p99 (observed tick‑Hz ≈ 60), ≤ ~150 KB/s/client** downstream,
 soak‑stable. Watch **observed server tick‑Hz min** fall away from 60 as you sweep up — the knee
 is the ceiling. Run `idle` (overhead floor) and `weave`/`aggressive` (with physics) to separate

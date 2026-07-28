@@ -13,7 +13,7 @@
 //      FL_PERSISTENT, FL_LOBBY_REGISTER, FL_LOBBY_URL, FL_LOBBY_VISIBILITY,
 //      FL_AI_DIFFICULTY_FLOOR  (highest precedence)
 //
-// See docs/fl-server-config.md for the full operator configuration reference.
+// See docs/server-ops/server-config.md for the full operator configuration reference.
 // fl-lobby integration is tracked in issue #36.
 #include "GameModeSource.h"
 #include "HttpAdminServer.h"
@@ -250,7 +250,7 @@ int main(int argc, char** argv) {
                 "  FL_OPERATOR_PASSWORD    Operator password for network admin commands (overrides server.toml)\n"
                 "\n"
                 "Config file is written with defaults on first run if absent.\n"
-                "See docs/fl-server-config.md for the full operator reference.\n");
+                "See docs/server-ops/server-config.md for the full operator reference.\n");
             return 0;
         }
         if (std::strcmp(argv[i], "--version") == 0 || std::strcmp(argv[i], "-v") == 0) {

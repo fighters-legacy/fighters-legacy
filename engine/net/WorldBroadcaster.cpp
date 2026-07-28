@@ -3156,7 +3156,7 @@ void WorldBroadcaster::resolveHitscan(const FireRequest& req, const WeaponDef& d
 
     // Lag compensation (#425/#979): a PLAYER's gun tests targets where they were when the shooter saw
     // them — `tickIndex − estimatedDelayTicks`, clamped to the history ring (≈533 ms; the bound on
-    // the "shot from around the corner" effect, see docs/network-protocol.md). AI shooters have no
+    // the "shot from around the corner" effect, see docs/developer/network-protocol.md). AI shooters have no
     // latency and rewind 0; projectiles fly real-time and never rewind — both deliberate.
     //
     // The rewind is keyed off the SHOOTING SEAT'S occupant (#979): a turret gunner's shot must
@@ -4555,7 +4555,7 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         // Mutating commands enqueue via gameLoop.enqueueSimCallback() internally.
         std::string result = m_adminDispatch(cmdView, issuer);
 
-        // The audit record docs/ai-architecture.md §4 requires (#600): until now the only trace an admin
+        // The audit record docs/developer/ai-architecture.md §4 requires (#600): until now the only trace an admin
         // command left was the Info log line below, which no consumer can read.
         {
             MatchEvent me;

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// `.flrep` writer/reader (#643) — the format from docs/replay-format.md.
+// `.flrep` writer/reader (#643) — the format from docs/developer/replay-format.md.
 //
 // Two things are being defended here. The first is ROUND-TRIP FIDELITY: what comes out of the file
 // must be what went in, in the quantized domain the codec actually transmits, because a replay that

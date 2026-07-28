@@ -462,7 +462,7 @@ if state.hp < state.max_hp * 0.3 then
 end
 ```
 
-See [`docs/haptics.md`](../haptics.md) for the full haptic design and the wire path.
+See [`docs/developer/haptics.md`](../developer/haptics.md) for the full haptic design and the wire path.
 
 ## `atc.*` — air-traffic control (#705)
 

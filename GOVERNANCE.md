@@ -61,7 +61,7 @@ Required for:
 During primary development — before the `kProtocolVersion` / 1.0 freeze — the Project Lead may
 revise a previously-locked architectural decision via a **dated decision record** instead of
 the full 14-day RFC, provided the change and its rationale are recorded in
-[docs/architecture.md](docs/architecture.md#decision-records). This keeps pre-1.0 architecture
+[docs/developer/architecture.md](docs/developer/architecture.md#decision-records). This keeps pre-1.0 architecture
 velocity without leaving the locked-decisions table silently stale. Once the protocol freezes,
 the full RFC process is required for the same classes of change. The 2026-06-28 re-target to
 128+ multiplayer is the first such record.

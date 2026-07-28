@@ -8,7 +8,7 @@ per-field TOML tables; this document explains how the pieces fit together and ho
 theater plays the way you intend.
 
 It is the deliverable of Epic F (combat sensors, datalink & EW). The wire side is documented in
-[network-protocol.md](../network-protocol.md); the validators (`validate-sensor`, `validate-weapon`,
+[network-protocol.md](../developer/network-protocol.md); the validators (`validate-sensor`, `validate-weapon`,
 `validate-entity`) enforce the rules below at pack-build time.
 
 ---
@@ -54,7 +54,7 @@ laser scale **linearly**. A hot, low-RCS strike aircraft is the natural expressi
 numbers: hard to find on radar, easy on IR.
 
 Per-crew acquisition quality is separate from the hardware — see `[ai]` skill/reaction in
-[formats.md](formats.md#entity-ai-tuning).
+[formats.md](formats.md).
 
 ---
 
@@ -304,8 +304,8 @@ onto the lead point instead of firing along a fixed nose.
 ## See also
 
 - [formats.md](formats.md) — the exhaustive per-field TOML tables for sensors, weapons, and entities.
-- [network-protocol.md](../network-protocol.md) — `MsgDatalink`, `MsgClientInput` EW bits, the
+- [network-protocol.md](../developer/network-protocol.md) — `MsgDatalink`, `MsgClientInput` EW bits, the
   `SnapshotEffects`/`CountermeasureRelease` cosmetic channel.
 - [missions.md](missions.md) — faction assignment and the relationship matrix that drives IFF.
-- [sandbox.md](../sandbox.md) — the pilot key map (R radar mode, E dispense, J ECM).
+- [controls.md](../user-guide/controls.md) — the pilot key map (R radar mode, E dispense, J ECM).
 - `validate-sensor`, `validate-weapon`, `validate-entity` — pack-build validators for everything above.

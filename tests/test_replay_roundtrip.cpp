@@ -12,7 +12,7 @@
 // framing, the compression, the ordering or the delta/keyframe bookkeeping breaks that equality.
 //
 // The hash is deliberately NOT stored in the file. Storing it would let a recorder assert its own
-// correctness, which docs/replay-format.md §6 calls out as not being a test.
+// correctness, which docs/developer/replay-format.md §6 calls out as not being a test.
 //
 // The other half of #644 -- does the SIM produce the same world twice -- is in test_world_broadcaster
 // ([determinism]), in process, because two networked runs are not tick-aligned and a two-process

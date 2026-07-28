@@ -15,7 +15,7 @@ set -euo pipefail
 # reference-runner leg builds FL_ENABLE_GNS=ON — GNS is the DEFAULT internet transport and, since
 # #773, the primary `reference` profile plus every characterisation profile pins `transport: gns`.
 # GNS v1.6.0 needs the PRE-ABSEIL protobuf 3.21.x line, which Fedora still ships (3.19.x) — see
-# docs/gns-backend.md. Without these, cmake/dependencies.cmake silently force-disables GNS and the
+# docs/developer/gns-backend.md. Without these, cmake/dependencies.cmake silently force-disables GNS and the
 # legs would measure enet6; the workflow asserts FL_ENABLE_GNS stayed ON after configure so that
 # can't pass silently.
 dnf -y install \

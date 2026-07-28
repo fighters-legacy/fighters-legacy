@@ -24,7 +24,7 @@
 //
 // Everything after the model is in this header, and all of it is pure. That is deliberate: player
 // text is untrusted input, so the defence has to be somewhere a test can aim at it directly, with no
-// model in the loop (docs/ai-architecture.md §7 — CI never requires a model).
+// model in the loop (docs/developer/ai-architecture.md §7 — CI never requires a model).
 //
 // ── WHAT BOUNDS A PROMPT INJECTION ───────────────────────────────────────────────────────────────
 //

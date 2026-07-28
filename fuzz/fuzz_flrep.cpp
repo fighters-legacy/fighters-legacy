@@ -3,7 +3,7 @@
 // Fuzz target: the `.flrep` replay reader (#643).
 //
 // A replay is the one artifact this engine produces that a player DOWNLOADS FROM A STRANGER, so the
-// reader parses attacker-controlled bytes by definition — docs/replay-format.md §5 says so, and
+// reader parses attacker-controlled bytes by definition — docs/developer/replay-format.md §5 says so, and
 // says the reader joins fuzz/ for that reason.
 //
 // Two entry points, because the file has two parsers with different exposure:

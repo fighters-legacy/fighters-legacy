@@ -428,7 +428,7 @@ def contention_metrics(frame_report, driver, settle_s=SETTLE_S, scene="", label=
 
 
 def render_markdown(report):
-    """Markdown in the style of docs/ai-provider-evaluation.md, ready to paste into the results table."""
+    """Markdown in the style of docs/developer/decisions/ai-provider-evaluation.md, ready to paste into the results table."""
     lines = []
     lines.append(f"### GPU contention — {report['os']}")
     lines.append("")

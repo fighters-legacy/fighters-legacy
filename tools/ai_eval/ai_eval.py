@@ -13,9 +13,9 @@ three initiative workloads:
     ops      — server metrics snapshot -> triage recommendation over an action allowlist
                (Epic P; budget 60 s)
 
-This harness NEVER runs in ctest and CI never requires a model (docs/ai-architecture.md §7).
+This harness NEVER runs in ctest and CI never requires a model (docs/developer/ai-architecture.md §7).
 It is a developer/reference-environment tool: run it locally against a local endpoint, then
-record the numbers in docs/ai-provider-evaluation.md.
+record the numbers in docs/developer/decisions/ai-provider-evaluation.md.
 
     python3 tools/ai_eval/ai_eval.py --models ollama/qwen2.5-coder-14b --suite all \
         --base-url http://localhost:4000 --api-key-env FL_AI_API_KEY

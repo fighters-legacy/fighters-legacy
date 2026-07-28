@@ -153,7 +153,7 @@ jobs:
               "These GitHub Releases do not pass the release-notes gate:" "" "$list" "" \
               "A release body must be hand-authored prose — a one-to-two paragraph thematic summary naming" \
               "the release's major theme(s) and the *why*, followed by the categorized per-issue detail" \
-              "(the matching CHANGELOG section). See \`docs/project-management.md\` → *Cutting a release*." "" \
+              "(the matching CHANGELOG section). See \`docs/developer/project-management.md\` → *Cutting a release*." "" \
               "Fix each with:" "" \
               "    gh release edit <tag> --notes-file <file>" "" \
               "Editing a body re-triggers this gate, which closes this issue automatically once all pass." "" \

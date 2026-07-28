@@ -121,7 +121,7 @@ target_include_directories(fuzz_client_msg PRIVATE "${CMAKE_SOURCE_DIR}/game/fig
 fl_add_fuzzer(fuzz_asset_validator)
 target_link_libraries(fuzz_asset_validator PRIVATE engine-content)
 
-# .flrep replay reader (#643): a file downloaded from a stranger, per docs/replay-format.md §5.
+# .flrep replay reader (#643): a file downloaded from a stranger, per docs/developer/replay-format.md §5.
 fl_add_fuzzer(fuzz_flrep)
 target_link_libraries(fuzz_flrep PRIVATE engine-replay)
 

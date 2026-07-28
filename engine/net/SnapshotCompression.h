@@ -8,7 +8,7 @@
 // Chosen against a captured 64-client corpus on the real snapshot stream (idle/weave/aggressive):
 // zstd L1 removes 81/28/20 % of payload at ~7 us/packet compress, ~3.5 us decompress — beating
 // enet6's range coder on every pattern (LZ4 missed idle parity badly; zstd L3 bought +2 % for
-// +20 % CPU). See docs/network-protocol.md for the framing and #775 for the measurement.
+// +20 % CPU). See docs/developer/network-protocol.md for the framing and #775 for the measurement.
 //
 // Lives in its own target (engine-compress): engine-protocol must stay stdlib-only (layering rule
 // 2, cmake/layering.cmake), so the zstd dependency hangs off engine-net/the game client instead.

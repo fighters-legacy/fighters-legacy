@@ -160,7 +160,7 @@ class INetwork {
     // (k_ESteamNetworkingConfig_NagleTime — small sends and protocol acks wait up to this long to
     // share a datagram; its library default is 5000). 0 = keep the backend default. ENet manages
     // its own packet aggregation and no-ops it. Trades per-datagram framing overhead against up to
-    // `nagleUs` of added delivery latency — measure, don't assume (docs/load-testing.md).
+    // `nagleUs` of added delivery latency — measure, don't assume (docs/developer/load-testing.md).
     virtual void setNagleTime(uint32_t /*nagleUs*/) {}
 };
 

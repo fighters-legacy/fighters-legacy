@@ -3,7 +3,7 @@
 # ENet loopback latency measurement — Windows 10/11 (IOCP)
 #
 # No extra prerequisites required.
-#   See docs/development.md — "Loopback latency analysis" section.
+#   See docs/developer/development.md — "Loopback latency analysis" section.
 #
 # Usage: .\tools\latency_analysis\measure_windows.ps1 [-BuildDir <path>]
 #   BuildDir defaults to build\debug relative to repo root.

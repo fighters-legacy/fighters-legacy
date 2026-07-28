@@ -2,9 +2,9 @@
 
 Measures **latency**, **structured-output reliability** and **task correctness** of any
 OpenAI-compatible endpoint on the workloads of the Dynamic World & Agentic AI initiative
-(`docs/ai-architecture.md`). It is the reusable harness that spike #599 owes the follow-on epics,
+(`docs/developer/ai-architecture.md`). It is the reusable harness that spike #599 owes the follow-on epics,
 and the instrument behind the model-size guidance in
-[`docs/ai-provider-evaluation.md`](../../docs/ai-provider-evaluation.md).
+[`docs/developer/decisions/ai-provider-evaluation.md`](../../docs/developer/decisions/ai-provider-evaluation.md).
 
 **CI never requires a model.** This harness is a developer / reference-environment tool — it is not
 wired into `ctest`, and nothing in the default CI path calls an inference endpoint. Only the pure
@@ -77,4 +77,4 @@ every failure) and `results/ai-eval-<stamp>.md` (the comparison table). `results
   is the hallucination rate, and it is the number that decides whether a model can be trusted behind
   a validated execution path.
 - **Accuracy** — schema-valid **and** the expected answer.
-- **p95 / in-budget** — against the per-workload budgets in `docs/ai-architecture.md` §9.
+- **p95 / in-budget** — against the per-workload budgets in `docs/developer/ai-architecture.md` §9.

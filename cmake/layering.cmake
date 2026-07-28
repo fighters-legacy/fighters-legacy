@@ -2,7 +2,7 @@
 #
 # The monorepo is kept *split-ready* (2026-06-28 decision record): a future
 # fl-engine/fl-client/fl-server repo split must be nearly free, so the module boundaries a split
-# would cut are asserted here at configure time. The policy is documented in docs/architecture.md
+# would cut are asserted here at configure time. The policy is documented in docs/developer/architecture.md
 # ("Module Boundary Policy"); this file is its enforcement. Four rules:
 #
 #   1. Engine isolation (transitive): no `engine-*` target may reach a client or transport
@@ -234,7 +234,7 @@ function(fl_assert_layering)
             string(APPEND _msg "  ${_v}\n")
         endforeach()
         string(APPEND _msg
-            "See 'Module Boundary Policy' in docs/architecture.md (enforced by cmake/layering.cmake).")
+            "See 'Module Boundary Policy' in docs/developer/architecture.md (enforced by cmake/layering.cmake).")
         message(FATAL_ERROR "${_msg}")
     endif()
 endfunction()

@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-// ReplayWriter (#643) — writes a `.flrep` per docs/replay-format.md.
+// ReplayWriter (#643) — writes a `.flrep` per docs/developer/replay-format.md.
 //
 // Layout, in the order it hits the disk:
 //

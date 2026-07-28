@@ -12,7 +12,7 @@
 # empty one above it. Nothing is generated, nothing is overwritten.
 #
 # The full procedure — including the steps AFTER the tag, which are the ones that get skipped —
-# is docs/project-management.md, "Cutting a release".
+# is docs/developer/project-management.md, "Cutting a release".
 set -euo pipefail
 
 VERSION="${1:?Usage: $0 vMAJOR.MINOR.PATCH}"
@@ -85,7 +85,7 @@ BEFORE OPENING THE PR, edit the new [$SEMVER] section:
 Open a PR: https://github.com/fighters-legacy/fighters-legacy/compare/$RELEASE_BRANCH
 After merging, run: ./scripts/tag-release.sh $VERSION
 
-The release is NOT done when the tag is pushed. See docs/project-management.md,
+The release is NOT done when the tag is pushed. See docs/developer/project-management.md,
 "Cutting a release" — the hand-authored release notes are step 6, and they are the step
 that has been skipped most often.
 EOF

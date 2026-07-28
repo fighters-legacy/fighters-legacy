@@ -39,7 +39,7 @@ class VoiceCalloutManager {
 
     // Play a callout whose subtitle text is ALREADY resolved (#704) — the server sends the rendered
     // line, not a localization key. audioAsset may be null/empty (subtitle only — the no-pack-audio
-    // degradation path in docs/ai-architecture.md). Safe to call before init()/without an audio device.
+    // degradation path in docs/developer/ai-architecture.md). Safe to call before init()/without an audio device.
     //
     // `radio` (#925): when non-null, the audio is put through the SAME radio treatment human voice
     // gets — band-limited and compressed by RadioFilter, bracketed with the key-down click and the

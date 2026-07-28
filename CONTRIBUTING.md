@@ -10,7 +10,7 @@ drive the PR title lint and the release workflow's fallback notes.
 
 **`CHANGELOG.md` is hand-curated, not generated.** Every PR adds its own entry under `[Unreleased]`
 — one per issue closed, with its own rationale — because a generated line collapses a multi-issue PR
-to a single subject and loses the *why*. See [project-management.md](docs/project-management.md) for
+to a single subject and loses the *why*. See [project-management.md](docs/developer/project-management.md) for
 the entry convention and the release procedure.
 
 ### Format
@@ -104,7 +104,7 @@ and voice recordings: state whether it is your own work, its CC0/compatible sour
 of it was generated — say so explicitly.
 
 Per the ratified AI content policy (#932, decision record dated 2026-07-27 in
-`docs/architecture.md`), **shipped creative assets are human-authored or CC0 and are never
+`docs/developer/architecture.md`), **shipped creative assets are human-authored or CC0 and are never
 generative-AI output.** Content the engine generates at runtime — briefings, debriefs, radio
 chatter, TTS speech — is a different thing: it is ephemeral, opt-in per server and per client, and
 is never baked back into a shipped pack.
@@ -148,11 +148,11 @@ and platform-specific HAL shims are excluded from the threshold.
 
 1. Fork the repository and clone locally
 2. Create a branch: `git checkout -b feat/your-feature`
-3. Install prerequisites and build: see [docs/development.md](docs/development.md)
+3. Install prerequisites and build: see [docs/developer/development.md](docs/developer/development.md)
 4. Install the DCO hook: `cp scripts/hooks/commit-msg .git/hooks/ && chmod +x .git/hooks/commit-msg`
 5. Make your changes and add tests
 6. Update `CHANGELOG.md` under `[Unreleased]`
 7. Sign off and commit: `git commit -s -m "feat(scope): description"`
 8. Open a pull request against `main` and fill in the PR template
 
-For full build workflow, IDE setup, and the release process, see [docs/development.md](docs/development.md). For upstream documentation on every technology used in the engine, see [docs/references.md](docs/references.md).
+For full build workflow, IDE setup, and the release process, see [docs/developer/development.md](docs/developer/development.md). For upstream documentation on every technology used in the engine, see [docs/developer/references.md](docs/developer/references.md).

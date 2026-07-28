@@ -1,0 +1,128 @@
+site_name: Fighters Legacy
+site_description: A general-purpose combat flight simulator engine with a first-class mod and plugin system.
+site_url: https://fighters-legacy.github.io/fighters-legacy/
+repo_url: https://github.com/fighters-legacy/fighters-legacy
+repo_name: fighters-legacy/fighters-legacy
+edit_uri: edit/main/docs/
+copyright: GPL-3.0-or-later
+
+docs_dir: docs
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - content.code.copy
+    - search.highlight
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue grey
+      accent: amber
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue grey
+      accent: amber
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - tables
+  # GitHub's slug algorithm, not Python-Markdown's. Every existing cross-reference was written
+  # against GitHub's rendering (`#voice--in-game-voice-comms-epic-j-532`), and the docs are still
+  # read on GitHub as well as here -- so the site matches GitHub rather than the other way round.
+  - toc:
+      permalink: true
+      slugify: !!python/object/apply:pymdownx.slugs.slugify {kwds: {case: lower}}
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets:
+      check_paths: false
+
+plugins:
+  - search
+
+# Every page lives under exactly one persona. A page that is not listed here does not appear in the
+# nav, and `mkdocs build --strict` reports it -- which is the guard that stops the index and the
+# tree drifting apart the way the two hand-maintained README tables did.
+nav:
+  - Home: index.md
+  - User Guide:
+      - user-guide/index.md
+      - Installation: user-guide/installation.md
+      - Quick start: user-guide/quickstart.md
+      - Controls: user-guide/controls.md
+      - Wingman & voice: user-guide/voice-and-wingman.md
+      - Replays & photo mode: user-guide/replays-and-photo-mode.md
+      - Multiplayer: user-guide/multiplayer.md
+      - Linux gamepad setup: user-guide/gamepad-linux.md
+  - Server Ops:
+      - server-ops/index.md
+      - Server configuration: server-ops/server-config.md
+      - Admin API: server-ops/admin-api.md
+      - Agent surface (MCP): server-ops/mcp-agent-surface.md
+      - Metrics: server-ops/metrics.md
+      - Lobby API: server-ops/lobby-api.md
+  - Modding:
+      - modding/index.md
+      - Pack manifest: modding/manifest-reference.md
+      - Asset formats: modding/formats.md
+      - Missions: modding/missions.md
+      - AI scripting: modding/ai.md
+      - Flight models: modding/flight-model.md
+      - 3D models: modding/3d-models.md
+      - Textures: modding/textures.md
+      - Liveries: modding/liveries.md
+      - Weapons & sensors: modding/weapons-sensors.md
+      - Game modes: modding/game-modes.md
+      - Satellite terrain: modding/satellite-terrain.md
+      - Localization: modding/localization.md
+      - Aircraft likeness policy: legal/aircraft-likeness.md
+  - Developer:
+      - developer/index.md
+      - Development: developer/development.md
+      - Architecture: developer/architecture.md
+      - Design: developer/design.md
+      - Roadmap: roadmap.md
+      - Prior art: developer/prior-art.md
+      - Project management: developer/project-management.md
+      - References: developer/references.md
+      - Reference:
+          - Network protocol: developer/network-protocol.md
+          - Replay format: developer/replay-format.md
+          - AI architecture: developer/ai-architecture.md
+          - Voice: developer/voice.md
+          - Haptics: developer/haptics.md
+          - Rendering: developer/rendering.md
+          - GNS backend: developer/gns-backend.md
+      - Tooling:
+          - Tools: developer/tools.md
+          - Debug console: developer/debug-console.md
+          - Load testing: developer/load-testing.md
+          - Demo recording: developer/demo-recording.md
+      - Decision records:
+          - developer/decisions/index.md
+          - Transport selection: developer/decisions/transport-selection.md
+          - Congestion control: developer/decisions/congestion-control-design.md
+          - Snapshot quantization: developer/decisions/snapshot-quantization.md
+          - Server job system: developer/decisions/server-job-system-design.md
+          - Spatial sharding: developer/decisions/spatial-sharding-design.md
+          - Physics LOD: developer/decisions/physics-lod-design.md
+          - Entity scale: developer/decisions/entity-scale-characterization.md
+          - Turret hit registration: developer/decisions/turret-hit-registration.md
+          - Loopback latency: developer/decisions/loopback-latency-analysis.md
+          - AI provider evaluation: developer/decisions/ai-provider-evaluation.md
+          - Distribution strategy: developer/decisions/distribution.md

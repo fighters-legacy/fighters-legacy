@@ -35,7 +35,7 @@ namespace fl::mcp {
 // structured tool output (`outputSchema` + `structuredContent`), and resource subscriptions.
 //
 // It is also the revision that REMOVED JSON-RPC batching, which is why a batch request here is an
-// error rather than an unimplemented feature. See docs/ai-architecture.md §4.
+// error rather than an unimplemented feature. See docs/developer/ai-architecture.md §4.
 inline constexpr std::string_view kProtocolRevision = "2025-06-18";
 
 inline constexpr std::string_view kServerName = "fighters-legacy/fl-server";
