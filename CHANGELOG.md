@@ -17,6 +17,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **ai**: deterministic voice-command tier — push-to-talk speech-to-text fuzzy-matched onto the six scripted `WingmanCommand` ordinals with no LLM, over a new `ISpeechToText` HAL with a whisper.cpp backend behind `FL_ENABLE_WHISPER` (off by default, CPU-only); audio is captured, transcribed and matched locally, and only the command ordinal leaves the machine (#935)
 - **ai**: chat-to-intent bridge — free-text wingman commands over team chat, mapped by the provider onto the six scripted `WingmanCommand` ordinals and executed through the same order path the radio menu drives; templated prompts, response-schema validation and a grammar allowlist, so a prompt injection is bounded to a real command at the wrong time; `[ai.chat_intent]` config, disabled by default (#611)
 
+- **docs**: ratified the player-facing AI content policy (#932) — shipped creative assets are human-authored or CC0 and never generative output; runtime-generated content is ephemeral, opt-in per server and per client, labeled, and never baked into a shipped pack. Dated decision record, normative Principle 6, and a CONTRIBUTING asset-provenance rule (#932)
+
 ### Changed
 
 - **engine**: the schema-only `validateMission` moved from `validate-mission` into `engine-mission`, next to the `parseMission` it delegates to, so fl-server can validate a submitted mission in-process; `validate-mission` keeps its `--pack` cross-check and every existing caller is unchanged (#601)

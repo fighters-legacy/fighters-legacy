@@ -220,6 +220,33 @@ revised by a dated decision record instead of a full RFC, provided the change is
 with its rationale. This keeps the velocity of pre-1.0 architecture work without leaving the
 locked table silently stale.
 
+**2026-07-27 — player-facing AI content policy, RATIFIED (#932, RFC resolved).** Player sentiment
+toward generative AI in games is strongly negative (mid-2026 surveys ~85 % below neutral). A project
+that ships an agentic-AI initiative into that without a stated position invites every player to
+assume the worst thing they can imagine, and the assumption compounds because it cannot be disproven
+after the fact. So the position is stated, dated, and narrow enough to be verifiable:
+
+1. **Shipped creative assets are human-authored or CC0, never generative output.** Art, music, story
+   campaigns and voice packs. fl-base-pack `music/`, and the campaigns in fighters-legacy/fl-base-pack#3
+   / #14 / #15, stay human-authored. This is the line the project does not cross, and it is the one
+   players actually care about — a bought or downloaded pack is a thing they keep.
+2. **Runtime-generated ephemeral content is permitted, opt-in per server AND per client, labeled,
+   and never baked back into a shipped pack.** Briefings, debriefs, radio chatter, TTS speech.
+   Ephemeral is the load-bearing word: it exists for one session and is not an asset.
+3. **Servers advertise which AI features are enabled** — `/status` and the server browser — so a
+   player chooses with the information in front of them rather than discovering it mid-match.
+4. **Contributors declare asset provenance in PRs** (a CONTRIBUTING rule in both repos).
+
+Nothing built in Stages 1–3 violates this: every AI feature is opt-in and off by default, everything
+generated is per-session, and the CI-tested path is the one with no model at all. The near-collision
+to keep clean is #614/#013, TTS versus a human voice pack — a voice PACK is a shipped creative asset
+under (1), while TTS speech synthesised at runtime is ephemeral under (2), and the distinction is the
+artifact's lifetime rather than how it sounded.
+
+Ratifying costs the project a capability it might otherwise have wanted later: generated art or music
+in a shipped pack is now off the table without a new decision record superseding this one. That is
+the point of writing it down.
+
 **2026-07-27 — a replay file is versioned for real, and the world it describes is fingerprinted by
 its quantized state, not its floats (#643/#644, plan #1036 D6/D8).** `.flrep` is the first artifact
 this engine produces that OUTLIVES THE BUILD THAT WROTE IT, so it does not inherit FLIT's frozen

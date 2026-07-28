@@ -29,6 +29,13 @@ security, degradation, and testing rules every AI feature must satisfy.
 5. **Player text is untrusted agent input.** Chat messages, callsigns, and server names entering a
    prompt are treated as data, never instructions (templated prompts, schema-validated outputs,
    grammar allowlists, audit logging).
+6. **Generative AI never produces a shipped creative asset.** Art, music, story campaigns and voice
+   packs are human-authored or CC0. Runtime-generated content (briefings, debriefs, chatter, TTS
+   speech) is **ephemeral**: opt-in per server *and* per client, labeled, advertised by the server,
+   and never baked back into a shipped pack. Contributors declare asset provenance in PRs. The
+   distinction that decides any given case is the artifact's **lifetime**, not how it was made:
+   a thing a player keeps is an asset, a thing that exists for one session is not.
+   Ratified 2026-07-27 (#932); see the decision record in `architecture.md`.
 
 ## 2. Provider seam
 
