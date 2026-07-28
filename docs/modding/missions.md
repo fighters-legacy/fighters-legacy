@@ -337,7 +337,7 @@ schedule for the next intruder — it never revokes a weapons-free call already 
 A zone whose `owner` does not name a side is a hard error at parse time. A zone whose `policy` names a
 file the loaded packs do not ship is **not** an error: it falls back to the builtin default posture, so
 a missing pack degrades the zone rather than silently switching enforcement off. Escalation policy TOML
-is documented in [`formats.md`](formats.md#airspace-escalation-policy-toml).
+is documented in [`formats.md`](formats.md).
 
 Zone state is readable from Lua via `world.get_zone_stage(entity_idx, zone_id)` and
 `world.is_in_zone(entity_idx, zone_id)`; see [`ai.md`](ai.md).
@@ -347,7 +347,7 @@ Zone state is readable from Lua via `world.get_zone_stage(entity_idx, zone_id)` 
 ## `cameras` — cinematic shots (optional)
 
 The optional `cameras:` block scripts camera shots for the **cinematic demo-recording pipeline**
-(`docs/demo-recording.md`). It is **presentation-only**: the server parses and ignores it, and the
+(`docs/developer/demo-recording.md`). It is **presentation-only**: the server parses and ignores it, and the
 recording client's `ShotDirector` consumes it to drive the camera while recording. A normal
 single-player or multiplayer session ignores it entirely.
 

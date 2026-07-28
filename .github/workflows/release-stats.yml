@@ -1,0 +1,120 @@
+# SPDX-FileCopyrightText: 2026 MKZ Systems LLC
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Release statistics
+
+# Appends the application-statistics block to a MINOR release's body (x.Y.0 — the milestone
+# gates). Patch releases get the stats.json asset from release.yml but no body block; a gate is
+# the thing worth measuring, and a block on every patch would be noise.
+#
+# WHY THIS IS NOT A STEP IN release.yml. The hand-authored notes are applied AFTER that workflow
+# finishes and replace the body wholesale — the same timing race that made v0.3.8 carry another
+# version's notes, documented at length in release-notes-gate.yml. A block written at publish time
+# is erased by the first hand edit. So this runs on `release: edited` as well, and re-applies
+# itself after the prose lands.
+#
+# THE SAFETY PROPERTY: this only ever touches text between its own markers. Everything above
+# `<!-- fl-stats:begin -->` is left byte-for-byte alone, so a hand-authored release body cannot be
+# damaged by it. It refuses to write into an EMPTY body, because an empty body means the notes are
+# not written yet and the first thing a reader would see would be a statistics table.
+#
+# The numbers come from the stats.md asset release.yml attached at tag time, not from a fresh
+# checkout — the statistics must describe the tagged tree, and re-deriving them later from a
+# moving branch would quietly report the wrong thing.
+
+on:
+  release:
+    types: [edited, published]
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  schedule:
+    - cron: "23 7 * * 4" # Thursdays 07:23 UTC — clear of the other scheduled sweeps
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to update (default: sweep all minor releases)"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    name: Apply statistics block
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Apply statistics to minor releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Event data reaches the script as environment variables, never as expressions
+          # interpolated into the shell — a release body is free text and would otherwise
+          # become shell source (tools/lint_workflow_expressions.py enforces this).
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          target="${INPUT_TAG:-${EVENT_TAG:-}}"
+          if [ -n "$target" ]; then
+            tags="$target"
+          else
+            tags="$(gh release list --limit 100 --json tagName -q '.[].tagName')"
+          fi
+
+          for tag in $tags; do
+            # Minor releases only: x.Y.0.
+            case "$tag" in
+              v[0-9]*.[0-9]*.0) ;;
+              *) echo "skip $tag (not a minor release)"; continue ;;
+            esac
+
+            if ! gh release download "$tag" --pattern stats.md --dir /tmp/stats --clobber 2>/dev/null; then
+              echo "skip $tag (no stats.md asset)"
+              continue
+            fi
+
+            gh release view "$tag" --json body -q .body > /tmp/body.md
+            if [ ! -s /tmp/body.md ]; then
+              echo "skip $tag (empty body — release notes not authored yet)"
+              rm -f /tmp/stats/stats.md
+              continue
+            fi
+
+            python3 - "$tag" <<'PY'
+          import os, subprocess, sys
+
+          tag = sys.argv[1]
+          BEGIN, END = "<!-- fl-stats:begin -->", "<!-- fl-stats:end -->"
+          body = open("/tmp/body.md", encoding="utf-8").read()
+          stats = open("/tmp/stats/stats.md", encoding="utf-8").read().strip()
+
+          block = (
+              f"{BEGIN}\n"
+              "<details>\n<summary>Application statistics</summary>\n\n"
+              f"{stats}\n\n"
+              "</details>\n"
+              f"{END}"
+          )
+
+          if BEGIN in body and END in body:
+              head, rest = body.split(BEGIN, 1)
+              _, tail = rest.split(END, 1)
+              updated = head + block + tail
+          else:
+              updated = body.rstrip() + "\n\n---\n\n" + block + "\n"
+
+          if updated == body:
+              print(f"{tag}: already current")
+              sys.exit(0)
+
+          open("/tmp/new-body.md", "w", encoding="utf-8").write(updated)
+          subprocess.run(
+              ["gh", "release", "edit", tag, "--notes-file", "/tmp/new-body.md"], check=True
+          )
+          print(f"{tag}: statistics block applied")
+          PY
+
+            rm -f /tmp/stats/stats.md
+          done

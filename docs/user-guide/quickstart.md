@@ -1,0 +1,92 @@
+# Quick start
+
+Getting airborne, in about five minutes. Assumes the game is [installed](installation.md).
+
+## Get in the air
+
+Start the game and pick **Instant Action** from the menu. That drops you straight into a skirmish
+with an aircraft, a wingman and something to shoot at. **Free Flight** gives you the same aircraft
+in an empty world if you would rather just fly.
+
+You start airborne. There is no takeoff to get wrong.
+
+## Fly it
+
+| Key | Does |
+|---|---|
+| `W` / `S` | Nose down / up |
+| `A` / `D` | Roll left / right |
+| `Q` / `E` | Rudder left / right |
+| `↑` / `↓` | Throttle up / down |
+| `Left Shift` | Afterburner |
+| `Space` | Airbrake |
+
+Pull gently. These are combat aircraft with real aerodynamics behind them — yank the stick at speed
+and you will bleed energy, buffet and depart. The HUD's left column shows airspeed, altitude and
+altitude above ground; the right column shows throttle and fuel.
+
+The full map is in [Controls](controls.md).
+
+## Look around
+
+| Key | View |
+|---|---|
+| `F1` | Cockpit |
+| `F2` | Chase |
+| `F4` | Free camera — fly the camera anywhere with `WASD`/`QE`, drag with the left mouse button |
+| `F5` | Padlock — keeps the target in view |
+
+Hold the right mouse button in cockpit view to look around without changing where the aircraft is
+going.
+
+## Shoot something
+
+Your aircraft starts armed.
+
+| Key | Does |
+|---|---|
+| `N` / `P` | Cycle to the next / previous target |
+| `Num 1` / `Num 2` | Select the next / previous weapon station |
+| `Space` | Fire the gun |
+| `Left Ctrl` | Release the selected store |
+
+The HUD's right column reads `ARM <weapon> x<rounds>`. In cockpit view you get a gun pipper with
+ballistic lead, and a designator box around the target with range and closure.
+
+If your weapons stop working after you have used the radio, press `V` — it toggles master arm
+between ARM and SAFE, and it shares a key with push-to-talk
+([#1050](https://github.com/fighters-legacy/fighters-legacy/issues/1050)).
+
+## Order your wingman
+
+Press `C`, then a number.
+
+| Key | Order |
+|---|---|
+| `1` | Attack my target — whatever you are looking at |
+| `2` | Engage bandits near itself |
+| `3` | Rejoin formation |
+| `4` | Cover me |
+| `5` | Hold fire |
+| `6` | Return to base |
+
+The menu does not freeze the aircraft — you keep flying while it is open, because a radio call is a
+sub-second action and being frozen mid-fight to make one would be wrong.
+
+In single-player you always have a wingman. On a dedicated server you only get one if the operator
+configured a flight. More in [Wingman & voice](voice-and-wingman.md).
+
+## Other things worth knowing early
+
+- **`` ` `` opens the console.** Careful: it *does* suspend your flight controls, unlike the radio
+  menu.
+- **`F3` cycles the performance overlay** — frame rate, entity count, tick time.
+- **`Escape` pauses** in single-player and opens the menu.
+- **Every match is recorded.** A server records by default, and you can watch a match back with a
+  scrubbable timeline and any camera. See [Replays & photo mode](replays-and-photo-mode.md).
+
+## Where next
+
+- [Controls](controls.md) — the complete map, gamepads and HOTAS
+- [Multiplayer](multiplayer.md) — finding and joining servers
+- [Installation](installation.md#content-packs) — installing real aircraft

@@ -8,7 +8,7 @@ JSON report, compares the machine-independent ``downstream_kbs_per_client`` metr
 committed baseline, prints a Markdown summary (to ``$GITHUB_STEP_SUMMARY`` when set, else stdout),
 and exits nonzero on any runner failure or baseline regression.
 
-Division of responsibility (see docs/load-testing.md):
+Division of responsibility (see docs/developer/load-testing.md):
   * Absolute ceilings (max-kbs / max-tick-ms / min-tick-hz) are enforced by ``bot_swarm`` itself via
     the ``--assert-*`` flags this driver forwards — that stays the single source of truth and is
     unit-tested in tests/test_bot_swarm.cpp.

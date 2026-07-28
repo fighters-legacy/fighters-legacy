@@ -19,7 +19,7 @@ bool VoiceCalloutManager::init(IAudio* audio, AssetManager* assets, SubtitleQueu
     m_synth = synth;
 
     // Null audio device (headless / no device): keep the subtitle path live but create no sources.
-    // playText/play then push subtitles and skip audio (docs/ai-architecture.md degradation).
+    // playText/play then push subtitles and skip audio (docs/developer/ai-architecture.md degradation).
     if (!audio)
         return false;
 

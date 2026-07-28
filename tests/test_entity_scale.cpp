@@ -8,7 +8,7 @@
 // Assertions here are correctness invariants only; the wall-times are printed (INFO / stdout) as
 // characterisation data, not gated — timing thresholds are too machine-dependent for CI. The
 // authoritative end-to-end budget is the fl-server --metrics-json server_tick block driven by the
-// bot_swarm entity-scale profile (see docs/load-testing.md).
+// bot_swarm entity-scale profile (see docs/developer/load-testing.md).
 
 #include "entity/EntityPool.h"
 #include "spatial/SpatialIndex.h"

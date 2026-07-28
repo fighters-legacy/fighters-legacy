@@ -8,7 +8,7 @@
 #include <string>
 
 // Air-traffic-control shared types (#702, epic #673). The ATC layer is a pure deterministic FSM —
-// no model involvement anywhere (docs/ai-architecture.md), and this is the CI-tested path. Every
+// no model involvement anywhere (docs/developer/ai-architecture.md), and this is the CI-tested path. Every
 // transmission is a stable, enumerable phrase so the AI-voice ATC epic (#591/#936) can bind TTS to
 // it 1:1 without touching this logic.
 namespace fl::atc {

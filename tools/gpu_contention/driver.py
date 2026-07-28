@@ -17,7 +17,7 @@ ACCURACY, strictly sequentially, one request in flight. This is a load generator
 optional concurrency. The one thing they genuinely share — the HTTP edge — is imported from it rather
 than copied, so there is one place where a request is formed.
 
-This never runs in CI and CI never requires a model (docs/ai-architecture.md §7). The pure scheduling
+This never runs in CI and CI never requires a model (docs/developer/ai-architecture.md §7). The pure scheduling
 logic is unit-tested in tests/test_gpu_contention.py.
 
     python3 tools/gpu_contention/driver.py --model qwen2.5-coder:14b \

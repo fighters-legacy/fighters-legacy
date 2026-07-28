@@ -48,7 +48,7 @@ $ErrorActionPreference = "Stop"
 
 $ScriptDir = $PSScriptRoot
 $RepoRoot = (Resolve-Path (Join-Path $ScriptDir "..\..")).Path
-# `release` is the Clang/GCC-on-Windows preset; `release-msvc` is the one docs/development.md tells
+# `release` is the Clang/GCC-on-Windows preset; `release-msvc` is the one docs/developer/development.md tells
 # Windows developers to build, so fall back to it rather than making -BuildDir mandatory here.
 if (-not $BuildDir) {
     $BuildDir = Join-Path $RepoRoot "build\release"

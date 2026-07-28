@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         Epics group related work into a single initiative tracked via sub-issues.
-        See [docs/project-management.md](../../docs/project-management.md) for how epics,
+        See [docs/developer/project-management.md](../../docs/developer/project-management.md) for how epics,
         milestones, and the Project board fit together.
 
   - type: dropdown

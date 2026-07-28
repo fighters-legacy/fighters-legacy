@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         A spike is research, not a feature — it answers a question and produces a decision
-        plus follow-on issues. See [docs/project-management.md](../../docs/project-management.md).
+        plus follow-on issues. See [docs/developer/project-management.md](../../docs/developer/project-management.md).
 
   - type: dropdown
     id: component

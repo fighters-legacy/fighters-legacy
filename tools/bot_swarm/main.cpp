@@ -9,7 +9,7 @@
 // observed server tick-Hz (from snapshot tickIndex progression), and worker loop dt.
 //
 // Pure client — point it at an existing host:port. See tools/bot_swarm/run_loadtest.sh to
-// launch fl-server with a load-test config, and docs/load-testing.md for the methodology.
+// launch fl-server with a load-test config, and docs/developer/load-testing.md for the methodology.
 //
 // Usage: bot_swarm [host] [port] [--clients N] [--duration S] [--rate HZ] [--ramp-ms MS]
 //                  [--threads N] [--pattern NAME] [--transport enet|gns] [--json PATH]
@@ -91,7 +91,7 @@ void printHelp() {
                 "Headless load generator: connects N synthetic clients to a running fl-server.\n"
                 "Point it at an existing host:port (default 127.0.0.1:4778). The server must allow\n"
                 "the client count (max_peers) and rapid connects (connect_rate_limit) — see\n"
-                "tools/bot_swarm/run_loadtest.sh and docs/load-testing.md.\n"
+                "tools/bot_swarm/run_loadtest.sh and docs/developer/load-testing.md.\n"
                 "\n"
                 "Options:\n"
                 "  --clients N            Number of synthetic clients (default: 32)\n"

@@ -9,7 +9,7 @@ namespace fl::sensor {
 
 // What physical channel a sensor observes. The four types differ in their PARAMETERS, not in their
 // model: a radar, an IRST, a laser designator and a human eyeball are all "a cone, a range band, and
-// a probability of seeing something in it" (2026-07-12 decision record, docs/architecture.md).
+// a probability of seeing something in it" (2026-07-12 decision record, docs/developer/architecture.md).
 //
 // The type selects which of an entity's signature multipliers the detection math reads, and whether
 // the emissions kernel applies: radar and laser TRACK lobes require the observer to be emitting.

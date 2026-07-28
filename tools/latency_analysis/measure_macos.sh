@@ -4,7 +4,7 @@
 # ENet loopback latency measurement — macOS (kqueue)
 #
 # Prerequisites: iperf3 (brew install iperf3)
-#   See docs/development.md — "Loopback latency analysis" section.
+#   See docs/developer/development.md — "Loopback latency analysis" section.
 #
 # Usage: bash tools/latency_analysis/measure_macos.sh [build_dir]
 #   build_dir defaults to build/debug relative to repo root.
@@ -70,7 +70,7 @@ if command -v iperf3 &>/dev/null; then
     echo "$IPERF3_SUMMARY"
 else
     echo "WARN: iperf3 not found — skipping UDP baseline."
-    echo "      Install: brew install iperf3  (see docs/development.md)"
+    echo "      Install: brew install iperf3  (see docs/developer/development.md)"
 fi
 
 # Start fl-server

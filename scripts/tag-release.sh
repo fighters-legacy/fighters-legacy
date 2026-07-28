@@ -2,7 +2,7 @@
 # Tags main with vX.Y.Z and pushes to trigger the release workflow.
 # Run after the release PR (created by cut-release.sh) is merged.
 #
-# The tag is NOT the last step. See docs/project-management.md, "Cutting a release" — the
+# The tag is NOT the last step. See docs/developer/project-management.md, "Cutting a release" — the
 # hand-authored release notes come after the workflow finishes, and they are the step that has
 # been skipped most often.
 set -euo pipefail
@@ -52,7 +52,7 @@ cat <<EOF
 Tag $VERSION pushed. Release workflow:
   https://github.com/fighters-legacy/fighters-legacy/actions/workflows/release.yml
 
-THE RELEASE IS NOT DONE. Remaining steps (docs/project-management.md, "Cutting a release"):
+THE RELEASE IS NOT DONE. Remaining steps (docs/developer/project-management.md, "Cutting a release"):
 
   1. WAIT for the Release workflow to COMPLETE. Its softprops/action-gh-release step SETS the
      release body to git-cliff's collapsed list, so notes applied before it finishes are

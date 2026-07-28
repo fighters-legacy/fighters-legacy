@@ -9,7 +9,7 @@
 // The scripted wingman command grammar (#610) — the SINGLE SOURCE OF TRUTH for the vocabulary.
 //
 // This is the zero-AI half of Epic O and the CI-tested path: with no provider configured (or on a
-// CPU-only server, which cannot meet the 2 s intent budget — decision #769, docs/ai-architecture.md
+// CPU-only server, which cannot meet the 2 s intent budget — decision #769, docs/developer/ai-architecture.md
 // §9), the wingman is driven entirely by these six commands from the in-game radio menu. It also
 // satisfies the Phase 4 acceptance criterion on its own ("wingman follows player and responds to all
 // six commands").
@@ -89,7 +89,7 @@ inline constexpr std::string_view kWingmanCommandNames[kWingmanCommandCount] = {
 // An engage order implies weapons-free: ordering the wingman to attack anything while it is under a
 // hold_fire is contradictory, so the engage orders implicitly clear the hold. (The hold itself has
 // no teeth until weapons land in #583 — today it means "break off and rejoin", plus a roster flag
-// that will gate the AI's firing trigger. Documented in docs/sandbox.md.)
+// that will gate the AI's firing trigger. Documented in docs/user-guide/controls.md.)
 [[nodiscard]] inline constexpr bool clearsWeaponsHold(WingmanCommand cmd) noexcept {
     return cmd == WingmanCommand::AttackMyTarget || cmd == WingmanCommand::EngageBandits;
 }

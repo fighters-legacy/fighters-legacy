@@ -1,7 +1,7 @@
 # Loopback Latency Analysis
 
 Per-platform ENet loopback RTT measurement scripts for fighters-legacy.
-See [docs/loopback-latency-analysis.md](../../docs/loopback-latency-analysis.md) for
+See [docs/developer/decisions/loopback-latency-analysis.md](../../docs/developer/decisions/loopback-latency-analysis.md) for
 the analysis methodology, decision record, and guidance on interpreting results.
 
 ## Prerequisites
@@ -15,7 +15,7 @@ Install the OS-level baseline tools before running (not required for the ENet be
 | macOS           | `brew install iperf3`         |
 | Windows         | *(no extra tools required)*   |
 
-See [docs/development.md](../../docs/development.md) — "Loopback latency analysis" section.
+See [docs/developer/development.md](../../docs/developer/development.md) — "Loopback latency analysis" section.
 
 ## Build first
 
@@ -46,5 +46,5 @@ python3 tools/latency_analysis/compare.py
 ```
 
 Prints a Markdown table of ENet RTT statistics (min / mean / max / p99) across all
-result files. Copy the table into [docs/loopback-latency-analysis.md](../../docs/loopback-latency-analysis.md)
+result files. Copy the table into [docs/developer/decisions/loopback-latency-analysis.md](../../docs/developer/decisions/loopback-latency-analysis.md)
 to update the baseline results.

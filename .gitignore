@@ -127,3 +127,4 @@ cache/
 fuzz/corpus/*/*
 !fuzz/corpus/*/seed-*
 !fuzz/corpus/*/regress-*
+site

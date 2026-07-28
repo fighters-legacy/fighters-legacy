@@ -401,7 +401,7 @@ jobs:
         run: python3 -m pytest tests/test_scale_gate.py -v
 
       # Pure scoring/extraction logic only — no endpoint is contacted. CI never requires a model
-      # (docs/ai-architecture.md section 7); the sweep itself is run locally / on the reference env.
+      # (docs/developer/ai-architecture.md section 7); the sweep itself is run locally / on the reference env.
       - name: Unit test ai_eval/ai_eval.py (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         run: python3 -m pytest tests/test_ai_eval.py -v
@@ -423,6 +423,19 @@ jobs:
       - name: Unit test record_demo/record_demo.py (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         run: python3 -m pytest tests/test_record_demo.py -v
+
+      # Fixture-driven extractor coverage. The drift check itself runs in docs-drift.yml against
+      # the real tree; this guards the checker, which is the piece that fails silently — a broken
+      # extractor diffs two empty sets and calls the documentation perfect.
+      - name: Unit test docs_drift.py (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 -m pytest tests/test_docs_drift.py -v
+
+      # Classification logic + the guard that every tracked file lands in a category. A file type
+      # nobody classified would silently shrink every number in a published release.
+      - name: Unit test code_stats.py (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 -m pytest tests/test_code_stats.py -v
 
       - name: Smoke test gen_unifont_header.py --help (Ubuntu)
         if: matrix.os == 'ubuntu-latest'

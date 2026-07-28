@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-// ReplayReader (#643) — reads a `.flrep` per docs/replay-format.md.
+// ReplayReader (#643) — reads a `.flrep` per docs/developer/replay-format.md.
 //
 // It treats the file as HOSTILE INPUT, because it is: a replay is something a player downloads from
 // a stranger. Every declared length is checked against what is actually left in the file before it is

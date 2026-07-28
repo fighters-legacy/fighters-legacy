@@ -8,7 +8,7 @@ namespace fl {
 //
 // Values are UNITLESS MULTIPLIERS against a baseline fighter (1.0). A sensor def quotes its range
 // against that baseline; a target's signature scales it. Radar detection range scales by
-// `sqrt(sig)`, IR and visual linearly (2026-07-12 decision record, docs/architecture.md): the square
+// `sqrt(sig)`, IR and visual linearly (2026-07-12 decision record, docs/developer/architecture.md): the square
 // root echoes the fourth-power range dependence of the radar equation closely enough to make stealth
 // feel right, without dragging a real radar equation — and its calibration burden — into a content
 // pack. So an aircraft with `rcs = 0.01` is seen at a tenth of a radar's baseline range, and one

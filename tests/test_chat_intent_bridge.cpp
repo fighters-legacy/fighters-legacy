@@ -12,7 +12,7 @@ using namespace fl::ai;
 //
 // No model anywhere in this file — every case feeds a CANNED response, which is the point: player
 // text is untrusted, and the defence has to be somewhere a test can aim at directly. CI never
-// requires a model (docs/ai-architecture.md §7).
+// requires a model (docs/developer/ai-architecture.md §7).
 //
 // The rejection paths matter more than the happy one. A bridge that maps "engage" correctly and also
 // maps a crafted sentence onto a command is worse than no bridge, because the wrong order arrives

@@ -34,7 +34,7 @@ class InputTraceWriter {
     // std::filesystem::path, not std::string (#643): on Windows a std::string path is interpreted in
     // the active code page, so a player whose profile directory contains non-ASCII cannot write a
     // trace at all. This is the bug engine/config/ConfigFile.h exists to avoid, and the one
-    // docs/replay-format.md names as the mistake `.flrep` must not repeat.
+    // docs/developer/replay-format.md names as the mistake `.flrep` must not repeat.
     InputTraceWriter(const std::filesystem::path& path, uint32_t tickRate)
         : m_file(std::make_unique<std::ofstream>(path, std::ios::binary | std::ios::trunc)) {
         if (m_file->good()) {

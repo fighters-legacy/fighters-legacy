@@ -12,7 +12,7 @@ recorder client, waits for it to finish, and ffprobes the output as an end-to-en
 
 `--all` records every demo in missions/demos/demos.json. `--headless` sets the lavapipe environment
 (VK_ICD_FILENAMES + unset DISPLAY) so it renders with no display and no GPU. `--png` writes a PNG
-sequence instead of an mp4 (no ffmpeg/libx264 needed). See docs/demo-recording.md.
+sequence instead of an mp4 (no ffmpeg/libx264 needed). See docs/developer/demo-recording.md.
 
 Only the pure helpers (manifest parse, duration bounds) are unit-tested (tests/test_record_demo.py); the
 subprocess orchestration is exercised manually and by the optional demo-videos CI job (#918).

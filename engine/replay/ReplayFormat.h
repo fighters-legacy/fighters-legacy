@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
-// `.flrep` — the on-disk replay format (#643), implementing docs/replay-format.md (#187).
+// `.flrep` — the on-disk replay format (#643), implementing docs/developer/replay-format.md (#187).
 //
 // The spec is the contract; this header is the code side of it and deliberately adds nothing the
 // document does not describe. Read the document for WHY the fields exist -- particularly why

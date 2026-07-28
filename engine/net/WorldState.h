@@ -26,7 +26,7 @@
 // function over the sim's entity/formation/peer state, deterministic given a fixed entity set
 // (golden-JSON-friendly), so it joins the SDL/ENet-free unit-test set. The sim thread's only cost is
 // the bounded copy; any expensive serialization (JSON, wire encode) happens off-thread from the
-// result. See docs/ai-architecture.md §3 and docs/architecture.md.
+// result. See docs/developer/ai-architecture.md §3 and docs/developer/architecture.md.
 
 namespace fl {
 

@@ -94,7 +94,7 @@ FetchContent_Declare(enet6
 # Declared here (gated on FL_ENABLE_GNS); platform/net links OpenSSL + protobuf and calls
 # FetchContent_MakeAvailable(GameNetworkingSockets).
 #
-# Crypto = OpenSSL (GNS rejects libsodium AES on ARM / Apple Silicon, see docs/transport-selection.md).
+# Crypto = OpenSSL (GNS rejects libsodium AES on ARM / Apple Silicon, see docs/developer/decisions/transport-selection.md).
 # protobuf = SYSTEM. find_package(Protobuf) here both gates GNS on availability AND seeds the module
 # cache vars that GNS's own find_package(Protobuf) reuses. If OpenSSL or system protobuf is absent,
 # FL_ENABLE_GNS is force-disabled and the build stays enet6-only — so build legs that don't install
@@ -333,7 +333,7 @@ if(Vulkan_FOUND)
     # Dear ImGui — immediate-mode GUI behind the IGui HAL (#156; platform-gui, Vulkan-gated).
     # Ships loose sources + backends/ with no CMakeLists, so populate-only (the stb/Lua idiom);
     # the actual `imgui` static library target is built in platform/gui/CMakeLists.txt from
-    # ${imgui_SOURCE_DIR}. MIT-licensed (recorded in docs/development.md).
+    # ${imgui_SOURCE_DIR}. MIT-licensed (recorded in docs/developer/development.md).
     # ---------------------------------------------------------------------------
     message(STATUS "Dear ImGui: FetchContent (populate-only)")
     FetchContent_Declare(imgui

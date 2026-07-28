@@ -1,0 +1,76 @@
+# SPDX-FileCopyrightText: 2026 MKZ Systems LLC
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Docs drift
+
+# Born from the v0.4.0 pre-gate documentation audit (#1047), which found ~50 places where the
+# prose and the binary had quietly diverged over three releases. Two of them were the dangerous
+# kind: a config key documented under the wrong section (an operator sets it, nothing happens)
+# and REST/admin surfaces shipped with no reference at all.
+#
+# Every defect in those two classes is mechanically detectable, so it is now detected on every PR
+# rather than at the next audit. What this gate does NOT check is whether the prose is CORRECT --
+# ranges, defaults, semantics and worked examples are judgment and stay with the reviewer. This
+# checks existence in both directions, which is exactly the part a human sweep does worst.
+#
+# WHY A WEEKLY SWEEP TOO. The path filter below means a PR that touches neither the docs nor a
+# source of truth does not run the gate -- correct, but it also means a check added or widened
+# later never sees the existing tree until something unrelated happens to touch it. The schedule
+# closes that window the same way the release-notes gate's does.
+
+on:
+  pull_request:
+    paths:
+      - "docs/**"
+      - "README.md"
+      - "tools/docs_drift.py"
+      - "tests/test_docs_drift.py"
+      - ".github/workflows/docs-drift.yml"
+      # The sources of truth. A PR that adds a config key or a wire message without documenting
+      # it is exactly what this gate is for, so changing one of these must run the check.
+      - "server/fl-server/server_config.cpp"
+      - "server/fl-server/ServerCommands.cpp"
+      - "server/fl-server/HttpAdminServer.cpp"
+      - "server/fl-server/McpProtocol.cpp"
+      - "engine/net/GameProtocol.h"
+      - "engine/script/LuaController.cpp"
+      - "tools/CMakeLists.txt"
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "tools/docs_drift.py"
+      - "server/fl-server/**"
+      - "engine/net/GameProtocol.h"
+      - "engine/script/LuaController.cpp"
+  schedule:
+    - cron: "17 6 * * 3" # Wednesdays 06:17 UTC — off the Tuesday fuzz and Monday CodeQL sweeps
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: Documentation drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      # Only pytest. The checker itself is stdlib-only, and this job reads markdown and source
+      # text -- it does not build anything, so it deliberately skips the install-linux-deps
+      # composite action rather than pulling a compiler and the X11 headers into a docs check.
+      - name: Install pytest
+        run: pip install --quiet pytest
+
+      - name: Unit-test the checker
+        # The checker runs first against its own fixtures. An extractor that has stopped
+        # matching would otherwise diff two empty sets and pass, reporting the documentation
+        # as perfect precisely when it can no longer see it.
+        run: python3 -m pytest tests/test_docs_drift.py -v
+
+      - name: Check documentation against the code it describes
+        run: python3 tools/docs_drift.py all

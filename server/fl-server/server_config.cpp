@@ -19,7 +19,7 @@ static const char* kDefaultToml =
     "name = \"Unnamed Server\"\n"
     "\n"
     "# UDP port fl-server binds on. Port 4778 is the fighters-legacy default.\n"
-    "# See IANA registration note in docs/architecture.md.\n"
+    "# See IANA registration note in docs/developer/architecture.md.\n"
     "port = 4778\n"
     "\n"
     "# Network interface to bind on.\n"
@@ -262,7 +262,7 @@ static const char* kDefaultToml =
     "[metrics]\n"
     "# Per-phase server tick-budget JSON export. Empty path = disabled. Written atomically each\n"
     "# interval; consumed by bot_swarm (--server-metrics) and any external scraper. See\n"
-    "# docs/load-testing.md for the JSON schema.\n"
+    "# docs/developer/load-testing.md for the JSON schema.\n"
     "tick_json_path = \"\"\n"
     "tick_json_interval_ms = 1000\n"
     "\n"
@@ -278,11 +278,11 @@ static const char* kDefaultToml =
     "# MsgClientInput is recorded to a per-peer FLIT trace (trace_peer<id>_<n>.flit) in that\n"
     "# directory, capturing real sessions for bot_swarm `--pattern trace:<file>` replay and the\n"
     "# Phase 4 replay epic. Empty = disabled. The trace_start [dir] / trace_stop admin commands\n"
-    "# toggle it at runtime. See docs/load-testing.md for the trace format.\n"
+    "# toggle it at runtime. See docs/developer/load-testing.md for the trace format.\n"
     "input_trace_dir = \"\"\n"
     "\n"
     "[replay]\n"
-    "# Server-side match recording to the .flrep replay format (#643, docs/replay-format.md). Every\n"
+    "# Server-side match recording to the .flrep replay format (#643, docs/developer/replay-format.md). Every\n"
     "# match is recorded automatically; the client plays these back with full camera control and a\n"
     "# scrubbable timeline. Disk use is bounded by rotation, not by remembering to clean up.\n"
     "enabled = true\n"
@@ -304,7 +304,7 @@ static const char* kDefaultToml =
     "[network]\n"
     "# Transport backend: \"gns\" (GameNetworkingSockets — encrypted UDP, congestion control, 128+\n"
     "# headroom; default for dedicated servers) or \"enet\" (enet6 — LAN / low-count). See\n"
-    "# docs/transport-selection.md. Requires a server restart to change.\n"
+    "# docs/developer/decisions/transport-selection.md. Requires a server restart to change.\n"
     "transport = \"gns\"\n"
     "# GNS only: accept unauthenticated peers (standalone GNS has no Steam PKI). true = encrypted but\n"
     "# unauthenticated (opportunistic, like TLS-without-cert). Ignored by the enet backend.\n"
@@ -1139,7 +1139,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
             log->log(LogLevel::Warn, __FILE__, __LINE__,
                      "ai.mcp.autonomy is 'act' but ai.mcp.allowlist is empty; no command can be run");
 
-        // [ai.provider] (#163) — namespaced under [ai] beside [ai.mcp], per docs/ai-architecture.md §2.
+        // [ai.provider] (#163) — namespaced under [ai] beside [ai.mcp], per docs/developer/ai-architecture.md §2.
         // (#163's body predates that namespacing and says [ai_provider]; the design doc and the
         // already-shipped [ai.mcp] win, so the two AI sections read as siblings.)
         if (auto v = tbl["ai"]["provider"]["enabled"].value<bool>())
