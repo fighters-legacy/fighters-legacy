@@ -94,6 +94,12 @@ enum class InputAction : uint32_t {
     PushToTalkSecondary,
     VoiceNetCycle,
 
+    // Voice wingman commands (#935). A THIRD key, not one of the two above: those transmit to other
+    // players, this one is captured locally, transcribed on this machine and never leaves it except
+    // as a command ordinal. Sharing a key would mean either broadcasting every order to the team or
+    // silently swallowing radio calls the pilot meant others to hear.
+    WingmanVoiceCommand,
+
     Count
 };
 

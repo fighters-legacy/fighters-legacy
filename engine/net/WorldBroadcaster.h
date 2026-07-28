@@ -82,11 +82,16 @@ inline constexpr float kAutoSpawnAirspeed = -1.f;
 struct PeerInputState {
     // 8-byte fields first to avoid padding.
     uint64_t lastActivityTick{0}; // tick of last MsgClientInput or MsgHeartbeat; set in onConnect
-    uint64_t lastInputTick{0};    // m_currentTick at last accepted MsgClientInput (inter-arrival jitter timing)
-    uint64_t ackedTick{0};        // highest WorldSnapshot tick this peer has acknowledged (echoed in
-                                  // MsgClientInput/MsgHeartbeat tickIndex; clamped to m_currentTick).
-                                  // Drives client-acked delta baselines: an entity is sent full until
-                                  // the client confirms it decoded the tick its full streak started on.
+    // #576: which lever spaced this peer's last snapshot. Written in the serial gather each tick,
+    // read by forEachPeer / the metrics writer. Sim-thread only, like the rest of this struct.
+    uint32_t effectiveIntervalTicks{1};
+    bool governorBinding{false};
+    bool congestionBinding{false};
+    uint64_t lastInputTick{0}; // m_currentTick at last accepted MsgClientInput (inter-arrival jitter timing)
+    uint64_t ackedTick{0};     // highest WorldSnapshot tick this peer has acknowledged (echoed in
+                               // MsgClientInput/MsgHeartbeat tickIndex; clamped to m_currentTick).
+                               // Drives client-acked delta baselines: an entity is sent full until
+                               // the client confirms it decoded the tick its full streak started on.
     // 4-byte fields next.
     uint32_t ackMask{0}; // selective-ack bitmask paired with ackedTick (#566); adopted together on a
                          // strict high-water advance. Bit b = decoded tick ackedTick-1-b (see AckWindow.h).
@@ -199,6 +204,12 @@ struct PeerInfo {
     uint32_t effectiveBudget{}; // current congestion-scaled per-snapshot byte budget (0 = unlimited)
     float packetLoss{};         // last sampled ENet mean loss fraction (0..1)
     CapabilityMask caps{};      // granted authority mask (#946); 0 = no grant (ordinary peer)
+    // #576: WHICH lever is decimating this peer, which is the question an operator actually has.
+    // sendRateHz above says a peer is being slowed; these say by what, and the two causes call for
+    // opposite responses — shed work off the server, or look at that player's link.
+    uint32_t effectiveIntervalTicks{1}; // composed snapshot spacing (1 = full rate)
+    bool governorBinding{false};        // the server-wide overrun governor is the binding lever
+    bool congestionBinding{false};      // this peer's own congestion controller is the binding lever
 };
 
 // One simulated entity together with its control source. The registry is EntityId-keyed (not peer-
@@ -1116,6 +1127,35 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     using TargetDesignator = std::function<EntityId(const EntityState& commander, const float viewAxis[3])>;
     void setTargetDesignator(TargetDesignator fn);
 
+    // Send one MsgServerNotice to a single peer. The client surfaces it in the console and as a
+    // banner. Text longer than the wire field is truncated safely. Sim-thread.
+    //
+    // Extracted because three call sites had already open-coded the same three lines, and #611 would
+    // have been the fourth.
+    void sendNoticeTo(uint32_t peerId, const char* text);
+
+    // Issue a wingman order on behalf of `peerId` — the SAME path MsgWingmanCommand takes, minus the
+    // wire parsing, the sequence guard and the per-peer order rate limit that only a packet needs.
+    // Same authority check, same boresight target designation, same dispatch, same ack to the
+    // commander. Sim-thread only.
+    //
+    // The #611 chat-to-intent bridge calls THIS rather than a lookalike of it, which is what "the
+    // model chooses among validated commands and execution goes through the scripted grammar" means
+    // once it is code rather than a design note.
+    WingmanResult issueWingmanOrder(uint32_t peerId, uint8_t command, uint16_t flightId = kOwnFlight,
+                                    uint32_t memberIdx = kFlightAll, bool cascade = false);
+
+    // A team-chat line that passed moderation and the rate limit (#611). Fires on the SIM THREAD,
+    // after the veto and after the line is recorded, so a suppressed line never reaches a model.
+    // Unset ⇒ the intent tier is off and chat is chat.
+    //
+    // The hook is deliberately given the text and nothing else: everything it may do with the result
+    // goes back through issueWingmanOrder above.
+    using ChatIntentHook = std::function<void(uint32_t peerId, uint8_t channel, std::string_view text)>;
+    void setChatIntentHook(ChatIntentHook fn) {
+        m_chatIntentHook = std::move(fn);
+    }
+
     // Max wingman orders a peer may issue per second before the excess is refused with RateLimited.
     // Acked once per window, never per packet — an ack per rejected packet would be an amplifier.
     void setFlightCommandRateLimit(int perSecond) noexcept;
@@ -1495,6 +1535,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     bool m_chatEnabled{true};                                          // #646: false = drop all chat
     int m_chatRateLimit{2};                                            // #646: chat lines per second per peer
     ChatModerationHook m_chatModerationHook;                           // #646: null = every line passes
+    ChatIntentHook m_chatIntentHook;                                   // #611: null = the intent tier is off
     // Voice comms (#532). The table is server-authoritative and replicated at admit time.
     RadioNetTable m_radioNets;
     bool m_voiceEnabled{true};
@@ -1948,6 +1989,12 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         double center[3]{};                    // interest center: the pilot's entity, or the observer's point
         bool spectator{false};                 // #403: observer or dead pilot — eligible for the snapshot delay
 
+        // #576: which lever is actually spacing THIS peer's snapshots, frozen with the rest of the
+        // per-peer work in the serial gather. The governor's numbers are server-wide, but whether
+        // they BIND for a given peer depends on that peer's own congestion interval, so the
+        // comparison has to be made per peer and cannot be read off the governor alone.
+        uint32_t sendIntervalTicks{1}; // the composed interval this peer is actually being sent at
+        bool governorBinding{false};   // true when the SERVER's governor is what widened it
         PeerInputState* pin{nullptr};
         std::unordered_map<uint32_t, PeerEntityRec>* knownGens{nullptr};
         std::unordered_map<uint32_t, uint8_t>* pending{nullptr};

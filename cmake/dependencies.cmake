@@ -694,3 +694,64 @@ else()
         add_library(fl::opus ALIAS fl-opus)
     endif()
 endif()
+
+# ---------------------------------------------------------------------------
+# whisper.cpp (#935) — the deterministic voice-command tier's speech-to-text.
+#
+# OFF by default (FL_ENABLE_WHISPER). Off, platform-stt still builds and hands back
+# NullSpeechToText, so nothing else in the tree changes shape.
+#
+# ⚠ EVERY AUTO-DETECTED ACCELERATOR IS FORCED OFF, EXPLICITLY.
+#
+# This is the cpp-httplib lesson from #233 applied before it costs us a release. There,
+# HTTPLIB_REQUIRE_OPENSSL looked like the switch and was not — detection is a separate
+# HTTPLIB_USE_*_IF_AVAILABLE family, default ON — so cpp-httplib silently linked OpenSSL and zlib on
+# every platform while the docs claimed no TLS. ggml has the same shape and more of it: CUDA, Metal,
+# Vulkan, BLAS, OpenMP and friends each auto-enable when their SDK happens to be installed, which
+# would make the resulting binary depend on whatever was on the build machine.
+#
+# The generalisation from #1037: for any FetchContent dependency, REQUIRE_* is not the off switch.
+# Name every detector and turn it off.
+# ---------------------------------------------------------------------------
+if(FL_ENABLE_WHISPER)
+    set(WHISPER_BUILD_TESTS     OFF CACHE BOOL "" FORCE)
+    set(WHISPER_BUILD_EXAMPLES  OFF CACHE BOOL "" FORCE)
+    set(WHISPER_BUILD_SERVER    OFF CACHE BOOL "" FORCE)
+    set(BUILD_SHARED_LIBS       OFF CACHE BOOL "" FORCE)
+    # The accelerator detectors. CPU-only is the POINT of this tier (#769): it must run on a server
+    # or a client with no GPU budget to spare, and a build that quietly picked up CUDA would not be
+    # the thing that was measured.
+    set(GGML_CUDA       OFF CACHE BOOL "" FORCE)
+    set(GGML_HIP        OFF CACHE BOOL "" FORCE)
+    set(GGML_METAL      OFF CACHE BOOL "" FORCE)
+    set(GGML_VULKAN     OFF CACHE BOOL "" FORCE)
+    set(GGML_SYCL       OFF CACHE BOOL "" FORCE)
+    set(GGML_OPENCL     OFF CACHE BOOL "" FORCE)
+    set(GGML_BLAS       OFF CACHE BOOL "" FORCE)
+    set(GGML_OPENMP     OFF CACHE BOOL "" FORCE)
+    set(GGML_CCACHE     OFF CACHE BOOL "" FORCE)
+    set(GGML_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+    set(GGML_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+
+    set(FL_SAVED_BUILD_TESTING "${BUILD_TESTING}")
+    set(BUILD_TESTING OFF)
+    # Third-party C/C++ sources must not inherit our -Werror (the Lua/zstd/opus blocks above).
+    set(CMAKE_COMPILE_WARNING_AS_ERROR OFF)
+    FetchContent_Declare(whisper_cpp
+        GIT_REPOSITORY https://github.com/ggml-org/whisper.cpp.git
+        GIT_TAG        v1.7.4
+        GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
+        SYSTEM
+    )
+    FetchContent_MakeAvailable(whisper_cpp)
+    unset(CMAKE_COMPILE_WARNING_AS_ERROR)
+    set(BUILD_TESTING "${FL_SAVED_BUILD_TESTING}")
+    unset(FL_SAVED_BUILD_TESTING)
+    foreach(_t whisper ggml ggml-base ggml-cpu)
+        if(TARGET ${_t})
+            set_target_properties(${_t} PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
+        endif()
+    endforeach()
+    message(STATUS "whisper.cpp: enabled (CPU-only; every ggml accelerator explicitly disabled)")
+endif()

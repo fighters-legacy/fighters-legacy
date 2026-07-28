@@ -97,6 +97,23 @@ All new `.cpp` and `.h` files must begin with an SPDX identifier:
 
 This is machine-readable and avoids reproducing the full license text in every file.
 
+## Asset provenance
+
+**Declare where a creative asset came from, in the PR that adds it.** Art, music, campaign prose,
+and voice recordings: state whether it is your own work, its CC0/compatible source, or — if any part
+of it was generated — say so explicitly.
+
+Per the ratified AI content policy (#932, decision record dated 2026-07-27 in
+`docs/architecture.md`), **shipped creative assets are human-authored or CC0 and are never
+generative-AI output.** Content the engine generates at runtime — briefings, debriefs, radio
+chatter, TTS speech — is a different thing: it is ephemeral, opt-in per server and per client, and
+is never baked back into a shipped pack.
+
+The distinction that decides any given case is the artifact's **lifetime**, not how it was made: a
+thing a player keeps is an asset, a thing that exists for one session is not. If you are unsure which
+side of that line something falls on, ask in the PR rather than guessing — an asset with unclear
+provenance is far more expensive to remove later than to question now.
+
 ## Developer Certificate of Origin (DCO)
 
 This project uses the [Developer Certificate of Origin](https://developercertificate.org/) instead of a CLA.

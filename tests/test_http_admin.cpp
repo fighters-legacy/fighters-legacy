@@ -32,7 +32,8 @@ TEST_CASE("http_admin: role presets map onto the capability vocabulary", "[http_
     std::vector<ha::TokenGrant> table;
     std::string err;
     REQUIRE(ha::buildTokenTable(
-        cfgWith({{"tok-admin", "admin", -1}, {"tok-mod", "moderator", -1}, {"tok-gm", "gm", -1}}), table, err));
+        cfgWith({{"tok-admin", "admin", -1, ""}, {"tok-mod", "moderator", -1, ""}, {"tok-gm", "gm", -1, ""}}),
+        "observe", table, err));
     REQUIRE(table.size() == 3);
 
     CHECK(table[0].caps == kAdminCaps);
@@ -49,14 +50,15 @@ TEST_CASE("http_admin: an unknown role preset is rejected, not silently downgrad
     std::string err;
     // A typo must not yield a token that authenticates and then refuses everything -- that reads as
     // the server being broken rather than the config being wrong.
-    CHECK_FALSE(ha::buildTokenTable(cfgWith({{"tok", "moderatr", -1}}), table, err));
+    CHECK_FALSE(ha::buildTokenTable(cfgWith({{"tok", "moderatr", -1, ""}}), "observe", table, err));
     CHECK(err.find("moderatr") != std::string::npos);
 }
 
 TEST_CASE("http_admin: a faction-scoped token carries its binding", "[http_admin]") {
     std::vector<ha::TokenGrant> table;
     std::string err;
-    REQUIRE(ha::buildTokenTable(cfgWith({{"t1", "faction_leader", 2}, {"t2", "admin", -1}}), table, err));
+    REQUIRE(ha::buildTokenTable(cfgWith({{"t1", "faction_leader", 2, ""}, {"t2", "admin", -1, ""}}), "observe", table,
+                                err));
     CHECK(table[0].factionIndex == 2);
     CHECK(table[1].factionIndex == PeerAuthority::kNoFactionBinding); // -1 = unbound
 }
@@ -88,7 +90,8 @@ TEST_CASE("http_admin: token comparison is length- and content-safe", "[http_adm
 TEST_CASE("http_admin: token resolution", "[http_admin]") {
     std::vector<ha::TokenGrant> table;
     std::string err;
-    REQUIRE(ha::buildTokenTable(cfgWith({{"alpha", "admin", -1}, {"beta", "moderator", -1}}), table, err));
+    REQUIRE(ha::buildTokenTable(cfgWith({{"alpha", "admin", -1, ""}, {"beta", "moderator", -1, ""}}), "observe", table,
+                                err));
 
     REQUIRE(ha::resolveToken(table, "beta") != nullptr);
     CHECK(ha::resolveToken(table, "beta")->caps == kModeratorCaps);
@@ -170,7 +173,7 @@ TEST_CASE("http_admin: an unauthenticated API refuses to start", "[http_admin]")
 TEST_CASE("http_admin: a bad role preset stops the server starting", "[http_admin]") {
     MockLogger log;
     CommandRegistry reg;
-    HttpAdminServer srv(reg, cfgWith({{"tok", "sysadmin", -1}}), log);
+    HttpAdminServer srv(reg, cfgWith({{"tok", "sysadmin", -1, ""}}), log);
     CHECK_FALSE(srv.start());
 }
 
@@ -178,7 +181,7 @@ TEST_CASE("http_admin: lockout accessors work with no listener open", "[http_adm
     MockLogger log;
     CommandRegistry reg;
     // start() is never called, so no socket exists; this exercises the pimpl + mutex paths only.
-    HttpAdminServer srv(reg, cfgWith({{"tok", "admin", -1}}), log);
+    HttpAdminServer srv(reg, cfgWith({{"tok", "admin", -1, ""}}), log);
     CHECK_FALSE(srv.clearLockout("1.2.3.4"));
     const AuthLockoutSummary s = srv.getAuthSummary();
     CHECK(s.activeCount == 0);
@@ -293,7 +296,7 @@ TEST_CASE("http_admin: a live server enforces auth and routes to the command reg
     reg.registerCommand("set_weather", "set_weather", capBit(Capability::ServerConfig),
                         [](std::span<std::string_view>) -> std::string { return "weather set"; });
 
-    ServerConfig::HttpAdminConfig cfg = cfgWith({{"admin-tok", "admin", -1}, {"mod-tok", "moderator", -1}});
+    ServerConfig::HttpAdminConfig cfg = cfgWith({{"admin-tok", "admin", -1, ""}, {"mod-tok", "moderator", -1, ""}});
     cfg.bindAddress = "127.0.0.1";
     cfg.port = 0; // let the OS pick, so the test never fights over a fixed port
 
@@ -378,7 +381,7 @@ TEST_CASE("http_admin: repeated bad tokens lock the source IP out", "[http_admin
     CommandRegistry reg;
     reg.registerCommand("status", "status", 0, [](std::span<std::string_view>) -> std::string { return "ok"; });
 
-    ServerConfig::HttpAdminConfig cfg = cfgWith({{"good", "admin", -1}});
+    ServerConfig::HttpAdminConfig cfg = cfgWith({{"good", "admin", -1, ""}});
     cfg.bindAddress = "127.0.0.1";
     cfg.port = 0;
     cfg.maxAuthFailures = 3;

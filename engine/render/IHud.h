@@ -53,8 +53,14 @@ struct HudFrameInput {
     float terrainElevation{0.0f};              // terrain radial elevation at ownship XZ (AGL = MSL - this)
     uint32_t latencyMs{0};                     // receiving peer one-way latency (SnapshotPeerLatency TLV)
     bool showLatency{false};                   // gate for the latency indicator
-    double planetRadiusM{kEarthRadiusM};       // for the local-level attitude frame (#479)
-    RadarView radar{};                         // fused datalink track picture + RWR (#528/#642)
+    // #576: the SERVER is shedding work and is deliberately sending us fewer snapshots. Distinct
+    // from a congested link — the symptom is identical (updates arrive late) and the cause is the
+    // opposite end of the connection, so the HUD says which one rather than letting a player
+    // conclude their connection is bad when it is fine.
+    bool serverThrottled{false};
+    uint8_t serverLoadPct{100};          // meaningful only while serverThrottled
+    double planetRadiusM{kEarthRadiusM}; // for the local-level attitude frame (#479)
+    RadarView radar{};                   // fused datalink track picture + RWR (#528/#642)
 
     // Combat symbology (#641). Populated by FlightScreen from the target-designation module (#696).
     const EntityRenderEntry* designatedTarget{nullptr}; // the designated target, snapshot-lifetime (do not retain)

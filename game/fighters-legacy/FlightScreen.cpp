@@ -15,7 +15,8 @@
 #include "IWindow.h"
 #include "InsetViewMath.h" // target-slaved inset camera math (#698)
 #include "ManualOverlay.h"
-#include "TargetDesignation.h" // designated-target cycling (#696)
+#include "TargetDesignation.h"   // designated-target cycling (#696)
+#include "VoiceCommandCapture.h" // voice wingman commands (#935)
 #include "config/ControlsSettings.h"
 #include "config/UserConfig.h"
 #include "console/GameConsole.h"
@@ -364,6 +365,16 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     const bool uiFocused =
         (d.wingmanMenu && d.wingmanMenu->isOpen()) || (d.commsMenu && d.commsMenu->isOpen()) || chatOpen || gmMapOpen;
 
+    // Voice wingman commands (#935). Hold the key, speak, release: captured locally, transcribed
+    // locally, matched locally, and what leaves the machine is the SAME MsgWingmanCommand the radio
+    // menu sends — the pilot's voice never does. `uiFocused` closes the gate for the same reason
+    // VoiceChat's does: typing "engage" into chat must not also say it.
+    if (d.voiceCommands && d.inputBindings) {
+        const bool held =
+            bindingDown(input, d.inputBindings->get(fl::InputAction::WingmanVoiceCommand)) && !d.gameConsole->isOpen();
+        d.voiceCommands->update(held, uiFocused);
+    }
+
     // Planet radius (m) from the server's MsgConnectAck; drives the autopilot's local-level altitude/
     // heading as well as the HUD attitude/horizon below. Earth default until the ack arrives.
     const double radiusM =
@@ -586,6 +597,11 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     hin.terrainElevation = terrainElev;
     hin.latencyMs = latencyMs;
     hin.showLatency = showLat;
+    // #576: presence of the server-throttle TLV, latched. Independent of showLatency — a player who
+    // turned the latency readout off still needs to know the SERVER is the reason their world is
+    // updating slowly, because that is not a thing they can fix.
+    hin.serverThrottled = d.clientNetHandler && d.clientNetHandler->serverThrottled();
+    hin.serverLoadPct = d.clientNetHandler ? d.clientNetHandler->serverThrottleLoadPct() : 100;
     hin.planetRadiusM = radiusM;
     hin.radar = radar;
     // Radar MFD page state (#642); annunciate the requested radar mode from the collector.

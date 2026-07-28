@@ -16,6 +16,11 @@ namespace fl {
 // the net's display label. A server whose table is shorter than the array simply leaves the tail
 // unused; a longer one is impossible (kMaxRadioNets bounds both).
 struct VoiceSettings {
+    // Path to a whisper.cpp model for the deterministic voice-command tier (#935). Empty = no voice
+    // commands; the radio menu is the path. The project ships no model — it is an operator/player
+    // choice of size vs accuracy, and bundling one would add hundreds of megabytes to every install
+    // for a feature most players will not use.
+    std::string sttModelPath;
     bool enabled{true};         // master switch; false = neither transmit nor receive
     bool transmitEnabled{true}; // false = listen-only (no capture device opened at all)
 

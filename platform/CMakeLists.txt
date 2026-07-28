@@ -59,3 +59,4 @@ add_subdirectory(gui)
 add_subdirectory(openal)
 add_subdirectory(net)
 add_subdirectory(http)
+add_subdirectory(stt)   # #935: speech-to-text HAL; whisper.cpp backend behind FL_ENABLE_WHISPER

@@ -26,6 +26,11 @@ endif()
 # (system) into the game/fl-server build. OFF yields an enet6-only build for lean tool/CI configs.
 # Auto-disabled in dependencies.cmake if OpenSSL is not found.
 option(FL_ENABLE_GNS "Build the GameNetworkingSockets transport backend (protobuf + OpenSSL)" ON)
+# #935: the whisper.cpp speech-to-text backend for the deterministic voice-command tier.
+# OFF by default — it is a sizeable dependency and the feature also needs a model file the project
+# does not ship, so a default-on build would cost every contributor build time for something they
+# cannot use out of the box. OFF gets NullSpeechToText and the radio menu, which is the #769 path.
+option(FL_ENABLE_WHISPER "Build the whisper.cpp speech-to-text backend (voice wingman commands)" OFF)
 
 # libFuzzer harnesses (#708). OFF by default; ON only via the clang-only `fuzz` preset. Gates the
 # top-level fuzz/ subdir, which needs a libFuzzer main (-fsanitize=fuzzer) and clang coverage

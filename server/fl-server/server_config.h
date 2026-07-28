@@ -192,6 +192,10 @@ struct ServerConfig {
         std::string token;
         std::string role = "admin"; // a parseRolePreset name: admin|moderator|gm|faction_leader
         int faction = -1;           // faction index for a faction-scoped role; -1 = unbound
+        // Per-token MCP autonomy tier override (#601): observe|recommend|act. Empty = inherit
+        // [ai.mcp] autonomy. One token table serves REST and MCP (plan #1036 D3) — the tier is an
+        // ADDITIONAL gate in front of the role's capability mask, never a replacement for it.
+        std::string autonomy;
     };
     struct HttpAdminConfig {
         bool enabled = false;
@@ -202,6 +206,60 @@ struct ServerConfig {
         int lockoutSeconds = 300;
     };
     HttpAdminConfig httpAdmin;
+
+    // [ai.mcp] — the Model Context Protocol surface (#601). A SECOND FRONTEND on the [http_admin]
+    // listener, not a second server: it shares that listener, that token table and that per-IP
+    // lockout, so enabling MCP requires [http_admin] to be enabled too.
+    //
+    // Distinct from the [ai] difficulty section above, which is what the sim runs.
+    struct McpConfig {
+        bool enabled = false;
+        std::string path = "/mcp"; // Streamable HTTP endpoint: POST for calls, GET for notifications
+        // Default autonomy tier for a token whose row does not override it. `observe` — read-only —
+        // because a default that could act would make forgetting a field into granting authority.
+        std::string autonomy = "observe";
+        // Commands an `act`-tier token may run. EMPTY PERMITS NOTHING: enabling MCP without listing
+        // commands does not implicitly authorize all of them.
+        std::vector<std::string> allowlist;
+        int rateLimitPerMin = 120; // per token; <= 0 disables the limiter
+        int maxSessions = 32;      // concurrent MCP sessions; oldest idle is evicted beyond this
+    };
+    McpConfig mcp;
+
+    // [ai.provider] — the generative-AI provider seam (#163). OPT-IN: an operator must set
+    // `enabled = true` before the server will talk to any model at all.
+    //
+    // Every AI feature degrades to its scripted path when this is off, and that fallback is the
+    // CI-tested one (docs/ai-architecture.md §7).
+    struct AiProviderConfig {
+        bool enabled = false;
+        std::string plugin;   // path to an IWorldAiProvider shared library; empty = NullAiProvider
+        std::string endpoint; // backend-specific; interpreted by the plugin, not by fl-server
+        std::string model;
+        // The API key is NEVER a config value. `apiKeyEnv` names the ENVIRONMENT VARIABLE holding
+        // it, defaulting to FL_AI_API_KEY — the same rule the ai_eval harness follows and the same
+        // reason: a key in server.toml gets committed, and a key on a command line shows up in `ps`.
+        std::string apiKeyEnv = "FL_AI_API_KEY";
+        int maxCallsPerMinute = 10;
+        int worldEvolutionIntervalMin = 60; // in-game minutes between evolution calls
+    };
+    AiProviderConfig aiProvider;
+
+    // [ai.chat_intent] — free-text wingman commands over team chat (#611).
+    //
+    // Needs [ai.provider] with the `intent` capability. With either missing, the radio menu is the
+    // path — which is the #769 decision, not a degradation to apologise for.
+    struct ChatIntentConfig {
+        bool enabled = false;
+        // Intent requests per minute per peer. Separate from the chat rate limit and much lower: a
+        // chat line is free, a model call is not, and the team channel must not become a lever
+        // against the server's own inference budget.
+        int rateLimitPerMin = 6;
+        // Tell the pilot when a call was understood, declined, or not attempted. Off would leave a
+        // player unable to tell "the wingman ignored me" from "the feature is not on".
+        bool notifyOnDecline = true;
+    };
+    ChatIntentConfig chatIntent;
 
     // [metrics]
     struct MetricsConfig {

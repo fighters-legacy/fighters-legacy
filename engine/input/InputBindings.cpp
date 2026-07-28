@@ -60,6 +60,7 @@ static constexpr const char* kActionNames[] = {
     "PushToTalkPrimary",
     "PushToTalkSecondary",
     "VoiceNetCycle",
+    "WingmanVoiceCommand",
 };
 static_assert(std::size(kActionNames) == static_cast<size_t>(InputAction::Count),
               "kActionNames must have one entry per InputAction");
@@ -704,6 +705,11 @@ void InputBindings::applyDefaults() {
                                                                      static_cast<uint32_t>(Key::B), false};
     m_primary[static_cast<int>(InputAction::VoiceNetCycle)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::M),
                                                                false};
+    // #935: F8. Every letter is spoken for — N/P cycle targets, T and Y are the comms menus, V/B are
+    // the two voice PTTs, M cycles nets, Z/X are rudder, J is ECM, R is radar, K/L/U are lights.
+    // Rebindable like everything else; the default just has to be a key that is not already an order.
+    m_primary[static_cast<int>(InputAction::WingmanVoiceCommand)] = {BindingSource::Keyboard,
+                                                                     static_cast<uint32_t>(Key::F8), false};
 
     // Gamepad alt defaults
     m_alt[static_cast<int>(InputAction::PitchAxis)] = {BindingSource::GamepadAxis,

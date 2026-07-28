@@ -173,6 +173,11 @@ void FlightHud::drawFrame(Ctx& c) {
     pushText(HudAlign::Right, 0.98f, 0.05f, kHudR, kHudG, kHudB, "%02d:%02d", hr, mn);
     if (c.in.showLatency && c.in.latencyMs > 0)
         pushText(HudAlign::Right, 0.98f, 0.09f, kHudR, kHudG, kHudB, "%u ms", c.in.latencyMs);
+    // #576: name the CAUSE. A player whose updates are arriving late will otherwise blame their own
+    // connection, restart their router, and be wrong — the server is shedding work under load and
+    // there is nothing on their end to fix. Amber rather than red: degraded, not broken.
+    if (c.in.serverThrottled)
+        pushText(HudAlign::Right, 0.98f, 0.13f, 1.0f, 0.75f, 0.2f, "SERVER LOAD %u%%", c.in.serverLoadPct);
     if (c.in.nvgActive)
         pushText(HudAlign::Left, 0.02f, 0.05f, 0.2f, 1.0f, 0.3f, "%s", "NVG");
 

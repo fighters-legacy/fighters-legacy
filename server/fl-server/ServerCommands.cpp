@@ -302,7 +302,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
     // peers
     registry.registerCommand("peers",
                              "peers  -- list connected peers (peerId, address, entity, delay, EWMA delay, jitter, buf "
-                             "fill/max, send rate, loss)",
+                             "fill/max, send rate, throttle lever, loss)",
                              0, [ctx](std::span<std::string_view>) -> std::string {
                                  if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
                                      return "peers: not available";
@@ -315,14 +315,25 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                                          if (!roleName.empty())
                                              std::snprintf(roleCol, sizeof(roleCol), "  role=%.*s",
                                                            static_cast<int>(roleName.size()), roleName.data());
+                                         // #576: WHICH lever is decimating this peer. "who is being
+                                         // decimated and by which lever" is the operator's actual
+                                         // question, and the two answers call for opposite responses
+                                         // -- shed work off the server, or look at that link.
+                                         char throttleCol[48] = "";
+                                         if (pi.governorBinding)
+                                             std::snprintf(throttleCol, sizeof(throttleCol), "  throttle=SERVER(1/%u)",
+                                                           pi.effectiveIntervalTicks);
+                                         else if (pi.congestionBinding)
+                                             std::snprintf(throttleCol, sizeof(throttleCol), "  throttle=link(1/%u)",
+                                                           pi.effectiveIntervalTicks);
                                          std::snprintf(
                                              m, sizeof(m),
                                              "[admin] peer %u  %s  entity=%u/%u  delay=%ut (~%ums)"
-                                             "  ewma=%.1ft  jitter=%.1ft  buf=%u/%u  rate=%.0fHz  loss=%.1f%%%s",
+                                             "  ewma=%.1ft  jitter=%.1ft  buf=%u/%u  rate=%.0fHz  loss=%.1f%%%s%s",
                                              pi.peerId, pi.addr.c_str(), pi.eid.index, pi.eid.generation, pi.delayTicks,
                                              (pi.delayTicks * 1000u + 30u) / 60u, pi.ewmaDelayTicks, pi.ewmaJitterTicks,
                                              pi.queueDepth, pi.bufferMaxDepth, static_cast<double>(pi.sendRateHz),
-                                             static_cast<double>(pi.packetLoss) * 100.0, roleCol);
+                                             static_cast<double>(pi.packetLoss) * 100.0, roleCol, throttleCol);
                                          std::printf("%s\n", m);
                                          if (ctx.rcon.shell)
                                              ctx.rcon.shell->print(m);

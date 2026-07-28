@@ -11567,3 +11567,147 @@ TEST_CASE("WorldBroadcaster: the state hash notices a changed world (#644)", "[w
     REQUIRE(base.size() == more.size());
     CHECK(base != more);
 }
+
+// ── #576: per-peer throttle attribution + the server-throttle TLV ────────────────────────────────
+
+namespace {
+
+// Does a snapshot carry the #576 server-throttle tag?
+[[nodiscard]] bool hasServerThrottleTlv(const std::vector<uint8_t>& snap) {
+    fl::MsgWorldSnapshotHeader hdr{};
+    if (!fl::readMsg(snap.data(), snap.size(), hdr))
+        return false;
+    const std::size_t extOff =
+        sizeof(hdr) + static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double) + hdr.bitstreamBytes;
+    if (extOff >= snap.size())
+        return false;
+    std::uint16_t len = 0;
+    return fl::findExt(snap.data() + extOff, snap.size() - extOff,
+                       static_cast<uint16_t>(fl::ExtTag::SnapshotServerThrottle), len) != nullptr;
+}
+
+} // namespace
+
+TEST_CASE("WorldBroadcaster: a healthy server emits no server-throttle TLV and is byte-identical",
+          "[world_broadcaster][overrun]") {
+    // THE regression this tag must not cause. A new TLV that appears on the healthy path would
+    // change every snapshot on every server, for a condition almost none of them are in — the same
+    // rule SnapshotCrew and SnapshotArticulation follow (zero cost in the degenerate case).
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    ManualClock clock; // never advances: the tick is always inside budget
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setClock(clock);
+    connectPilotPeer(broadcaster, net, 0u);
+
+    for (uint64_t tick = 1; tick <= 60; ++tick)
+        broadcaster.onTick(1.0 / 60.0, tick);
+
+    const auto snaps = snapshotsFor(net, 0u);
+    REQUIRE_FALSE(snaps.empty());
+    for (const auto& s : snaps)
+        CHECK_FALSE(hasServerThrottleTlv(s));
+
+    broadcaster.forEachPeer([](const fl::PeerInfo& pi) {
+        CHECK_FALSE(pi.governorBinding);
+        CHECK_FALSE(pi.congestionBinding);
+        CHECK(pi.effectiveIntervalTicks == 1u);
+        CHECK(pi.sendRateHz == Catch::Approx(60.f));
+    });
+}
+
+TEST_CASE("WorldBroadcaster: an overrun server attributes the throttle to itself and says so on the wire",
+          "[world_broadcaster][overrun]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    AutoAdvanceClock clock(std::chrono::milliseconds(3)); // every tick blows the 16.6 ms budget
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setClock(clock);
+    fl::TickGovernorParams gp = fl::makeTickGovernorParams(true, 0.90f, 0.60f, 15.0f, 4u, 400u);
+    gp.evalIntervalTicks = 1u;
+    gp.ewmaAlpha = 1.0f;
+    broadcaster.setGovernorParams(gp);
+    connectPilotPeer(broadcaster, net, 0u);
+
+    for (uint64_t tick = 1; tick <= 120; ++tick)
+        broadcaster.onTick(1.0 / 60.0, tick);
+
+    REQUIRE(broadcaster.getOverrunStatus().degraded);
+
+    // The peer is attributed to the SERVER, not to its own link — the link is perfect here (a mock
+    // network reports zero loss), which is exactly the case the #599 sweep's models got backwards.
+    int seen = 0;
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) {
+        ++seen;
+        CHECK(pi.governorBinding);
+        CHECK_FALSE(pi.congestionBinding);
+        CHECK(pi.effectiveIntervalTicks > 1u);
+        // The reported rate is the EFFECTIVE one, composed from both levers. Before #576 this read
+        // the congestion interval alone and reported 60 Hz on a server decimating to a third of it.
+        CHECK(pi.sendRateHz < 60.f);
+    });
+    CHECK(seen == 1);
+
+    const auto snaps = snapshotsFor(net, 0u);
+    REQUIRE_FALSE(snaps.empty());
+    // The tag tracks the CONDITION, not the session: the opening snapshots precede the governor
+    // engaging and correctly carry nothing. What matters is that once it engages the tag is on every
+    // snapshot rather than sent once as a state change — a client that joins mid-degradation learns
+    // about it from the first packet it receives, and the latch has something to keep refreshing.
+    CHECK(hasServerThrottleTlv(snaps.back()));
+    const auto tagged = static_cast<std::size_t>(std::count_if(snaps.begin(), snaps.end(), hasServerThrottleTlv));
+    CHECK(tagged > 0);
+    CHECK(tagged < snaps.size()); // the healthy opening ticks are genuinely untagged
+    // Contiguous tail: no gaps once it turned on.
+    std::size_t firstTagged = 0;
+    while (firstTagged < snaps.size() && !hasServerThrottleTlv(snaps[firstTagged]))
+        ++firstTagged;
+    for (std::size_t i = firstTagged; i < snaps.size(); ++i)
+        CHECK(hasServerThrottleTlv(snaps[i]));
+}
+
+TEST_CASE("WorldBroadcaster: the server-throttle TLV reports a plausible load and interval",
+          "[world_broadcaster][overrun]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    AutoAdvanceClock clock(std::chrono::milliseconds(3));
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setClock(clock);
+    fl::TickGovernorParams gp = fl::makeTickGovernorParams(true, 0.90f, 0.60f, 15.0f, 4u, 400u);
+    gp.evalIntervalTicks = 1u;
+    gp.ewmaAlpha = 1.0f;
+    broadcaster.setGovernorParams(gp);
+    connectPilotPeer(broadcaster, net, 0u);
+
+    for (uint64_t tick = 1; tick <= 120; ++tick)
+        broadcaster.onTick(1.0 / 60.0, tick);
+
+    const auto snaps = snapshotsFor(net, 0u);
+    REQUIRE_FALSE(snaps.empty());
+    const auto& last = snaps.back();
+    fl::MsgWorldSnapshotHeader hdr{};
+    REQUIRE(fl::readMsg(last.data(), last.size(), hdr));
+    const std::size_t extOff =
+        sizeof(hdr) + static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double) + hdr.bitstreamBytes;
+    std::uint16_t len = 0;
+    const std::uint8_t* p = fl::findExt(last.data() + extOff, last.size() - extOff,
+                                        static_cast<uint16_t>(fl::ExtTag::SnapshotServerThrottle), len);
+    REQUIRE(p != nullptr);
+    REQUIRE(len >= 2);
+    // loadPct is clamped to [1,100]: 0 would read as "no load" on a server that is at its floor.
+    CHECK(p[0] >= 1);
+    CHECK(p[0] <= 100);
+    CHECK(p[1] >= 2); // the tag is only emitted when the interval actually widened
+}

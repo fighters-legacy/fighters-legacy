@@ -29,6 +29,13 @@ security, degradation, and testing rules every AI feature must satisfy.
 5. **Player text is untrusted agent input.** Chat messages, callsigns, and server names entering a
    prompt are treated as data, never instructions (templated prompts, schema-validated outputs,
    grammar allowlists, audit logging).
+6. **Generative AI never produces a shipped creative asset.** Art, music, story campaigns and voice
+   packs are human-authored or CC0. Runtime-generated content (briefings, debriefs, chatter, TTS
+   speech) is **ephemeral**: opt-in per server *and* per client, labeled, advertised by the server,
+   and never baked back into a shipped pack. Contributors declare asset provenance in PRs. The
+   distinction that decides any given case is the artifact's **lifetime**, not how it was made:
+   a thing a player keeps is an asset, a thing that exists for one session is not.
+   Ratified 2026-07-27 (#932); see the decision record in `architecture.md`.
 
 ## 2. Provider seam
 
@@ -101,6 +108,19 @@ A structured, read-only, out-of-band surface:
 > - `test_world_state` and `test_match_event_log` join the TSan target set, per §7.
 
 ## 4. MCP surface (Epic M, #601)
+
+> **Status: SHIPPED (v0.3.13).** Revision **`2025-06-18`**, pinned in
+> `fl::mcp::kProtocolRevision`. Streamable HTTP on the #233 listener — `POST <path>` for calls,
+> `GET <path>` for the notification stream. Tools `world_state`/`events` (observe),
+> `submit_mission` (recommend) and `admin_command` (act, allowlisted). Config, the three
+> authorization gates, and the audit story are documented in
+> [`fl-server-config.md` `[ai.mcp]`](fl-server-config.md).
+>
+> Two things worth stating because they are easy to assume otherwise: the autonomy tier is a
+> **ceiling, not a bypass** — an `act` token still meets the #945 capability mask inside
+> `CommandRegistry::dispatch`, so an `act`-tier `moderator` is refused `shutdown` — and
+> `2025-06-18` **removed JSON-RPC batching**, so a batch is an explicit error rather than an
+> unimplemented feature.
 
 `fl-server` exposes a **Model Context Protocol** server — a **first-class operator and modding
 surface**, not merely the agent door. It is the single command/read path behind the campaign

@@ -23,6 +23,13 @@ add_library(engine-ai STATIC
     TurretGunnerController.cpp
     Threat.cpp
     WingmanBehavior.cpp
+    # The chat-to-intent bridge (#611). Pure logic — prompt templating, response validation, the
+    # grammar gate — with no provider dependency at all, so the defence against untrusted player text
+    # is testable with no model in the loop.
+    ChatIntentBridge.cpp
+    # Deterministic phrase matching for the voice tier (#935). Integer scoring, no RNG, no model —
+    # the same transcript yields the same command on every machine.
+    WingmanPhraseMatch.cpp
 )
 
 # Expose engine/ as the public include root so consumers can use

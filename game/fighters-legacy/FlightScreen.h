@@ -37,6 +37,7 @@ class SimRenderBridge;
 class TerrainStreamer;
 class WindshieldRain;
 class WingmanMenu;
+class VoiceCommandCapture;
 class CommsMenu;
 class ManualOverlay;
 class ChatOverlay;
@@ -73,6 +74,7 @@ struct FlightScreenDeps {
     float* nvgIntensity{nullptr};                  // NVG gain sink read by Game.cpp -> setNightVision (#210)
     HeadTracker* headTracker{nullptr};             // opentrack head tracking (#927); null = disabled
     WingmanMenu* wingmanMenu{nullptr};             // null = no radio menu (#610)
+    VoiceCommandCapture* voiceCommands{nullptr};   // null = no voice wingman commands (#935)
     CommsMenu* commsMenu{nullptr};                 // null = no ATC comms menu (#704)
     ManualOverlay* manual{nullptr};                // null = no in-flight aircraft manual (#821)
     ChatOverlay* chat{nullptr};                    // null = no in-match chat (#646)

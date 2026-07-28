@@ -29,6 +29,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         SettingsScreen.cpp
         FlightScreen.cpp
         WingmanMenu.cpp
+        VoiceCommandCapture.cpp   # #935: PTT -> STT -> phrase match -> the same MsgWingmanCommand the menu sends
         CommsMenu.cpp
         PauseMenuScreen.cpp
         DebriefScreen.cpp
@@ -69,6 +70,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         platform-openal
         platform-net
         platform-http
+        platform-stt   # #935: speech-to-text HAL (null backend unless FL_ENABLE_WHISPER)
         platform-hal
         Vulkan::Vulkan
         SDL3::SDL3

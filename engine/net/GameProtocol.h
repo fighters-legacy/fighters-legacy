@@ -1513,6 +1513,15 @@ enum class ExtTag : uint16_t {
                                    // (occupancy lives in the reliable MsgCrewRoster), so a world of only single-seat
                                    // entities emits no SnapshotCrew TLV and its snapshot is byte-identical to pre-#972.
                                    // Unreliable/interest-filtered: a dropped packet loses one tick of turret aim.
+    SnapshotServerThrottle = 0x0108, // #576: the SERVER is intentionally decimating this peer's snapshots because the
+                                     // tick-overrun governor (#514) is shedding work — as distinct from the peer's own
+                                     // link being congested (#518), which the client already infers from RTT and loss.
+                                     // The two look identical from the client (snapshots arrive late) and mean opposite
+                                     // things, so the HUD must not blame a player's connection for a server problem.
+                                     // Payload: uint8 loadPct (round(loadFactor*100), 1..100) + uint8 intervalTicks
+                                     // (the governor's snapshot spacing, >= 2 whenever this tag is emitted at all).
+                                     // OMITTED ENTIRELY when the governor is not throttling this peer, so the healthy
+                                     // path is BYTE-IDENTICAL to pre-#576 — the SnapshotCrew/SnapshotArticulation rule.
 
     ConnectAckAuthority = 0x0201, // #949: granted-authority TLV appended to MsgConnectAck (after the
                                   // entity-type records). Payload = { uint64 caps (LE), uint16

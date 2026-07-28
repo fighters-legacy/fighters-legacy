@@ -740,8 +740,15 @@ void WorldBroadcaster::forEachPeer(std::function<void(const PeerInfo&)> fn) cons
             pi.bufferMaxDepth = ps.jitterBuffer.maxDepth();
             pi.ewmaDelayTicks = ps.ewmaDelayTicks;
             pi.ewmaJitterTicks = ps.ewmaJitterTicks;
-            const uint32_t interval = ps.congestion.sendIntervalTicks();
-            pi.sendRateHz = interval > 0u ? 60.f / static_cast<float>(interval) : 60.f;
+            // #576: the EFFECTIVE interval, composed from both levers — not the congestion
+            // controller's alone. Reporting the congestion interval as "the send rate" understated
+            // the decimation whenever the governor was the wider of the two, which is exactly the
+            // case an operator is looking at when they run `peers` on a loaded server.
+            const uint32_t interval = std::max(ps.effectiveIntervalTicks, uint32_t{1u});
+            pi.sendRateHz = 60.f / static_cast<float>(interval);
+            pi.effectiveIntervalTicks = interval;
+            pi.governorBinding = ps.governorBinding;
+            pi.congestionBinding = ps.congestionBinding;
             pi.effectiveBudget = ps.congestion.effectiveBudget(m_snapshotBudgetBytes.load(std::memory_order_relaxed));
             pi.packetLoss = m_net.getPeerLinkStats(peerId).packetLoss; // live ENet mean loss fraction
             pi.caps = ps.authority.caps;                               // granted authority (#946)
@@ -1002,6 +1009,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     const uint32_t govSnapInterval = m_tickGovernor.snapshotIntervalTicks();
     const uint32_t govAiStride = m_tickGovernor.aiSampleStride();
     const float govInterestScale = m_tickGovernor.interestScale();
+    const float govLoadFactor = m_tickGovernor.loadFactor(); // #576: reported per throttled peer
     m_overrunLoadFactor.store(m_tickGovernor.loadFactor(), std::memory_order_relaxed);
     m_overrunSnapInterval.store(govSnapInterval, std::memory_order_relaxed);
     m_overrunAiStride.store(govAiStride, std::memory_order_relaxed);
@@ -1624,11 +1632,22 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     for (auto& [peerId, pin] : m_peerInputs) {
         if (!pin.handshakeComplete)
             continue;
-        const uint32_t sendInterval = std::max(pin.congestion.sendIntervalTicks(), govSnapInterval);
+        const uint32_t congInterval = pin.congestion.sendIntervalTicks();
+        const uint32_t sendInterval = std::max(congInterval, govSnapInterval);
         if (pin.sentSnapshot && tickIndex - pin.lastSnapshotSentTick < sendInterval)
             continue; // adaptive send-rate decimation: too few ticks since the last send
         PeerSnapWork w;
         w.peerId = peerId;
+        // #576: record WHICH lever set that interval, here in the serial gather where both numbers
+        // are in hand. The governor is server-wide but only BINDS for a peer whose own congestion
+        // interval is narrower — so "is the server throttling this peer" is a per-peer question and
+        // is answered per peer. Ties count as the governor: at equal intervals the server is
+        // shedding work regardless of what the link is doing.
+        w.sendIntervalTicks = sendInterval;
+        w.governorBinding = govSnapInterval > 1 && govSnapInterval >= congInterval;
+        pin.effectiveIntervalTicks = sendInterval;
+        pin.governorBinding = w.governorBinding;
+        pin.congestionBinding = congInterval > 1 && congInterval > govSnapInterval;
         // A pilot centers interest on its aircraft; an observer on its stored interest point (the #858
         // camera-position seam). peerEid invalid + peerState null flag the entity-less case downstream.
         // #972: peerEid is the entity the peer OCCUPIES A SEAT IN (m_peerSeat) — a Fly-seat pilot's own
@@ -1921,6 +1940,17 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                 appendExt(buf, static_cast<uint16_t>(ExtTag::SnapshotPeerLatency), latMs);
                 const auto delayTicks = static_cast<uint16_t>(std::min(pin.estimatedDelayTicks, uint32_t{65535u}));
                 appendExt(buf, static_cast<uint16_t>(ExtTag::SnapshotPeerDelayTicks), delayTicks);
+            }
+            // Server-throttle TLV (#576). OMITTED unless the governor is the binding lever for THIS
+            // peer, which keeps the healthy path byte-identical to pre-#576 — the same rule
+            // SnapshotCrew and SnapshotArticulation follow. A client that never sees this tag
+            // cannot mistake a bad link for server overload, because the server never claimed it.
+            if (w.governorBinding) {
+                const uint8_t loadPct =
+                    static_cast<uint8_t>(std::clamp(static_cast<int>(std::lround(govLoadFactor * 100.f)), 1, 100));
+                const uint8_t intervalTicks = static_cast<uint8_t>(std::min(w.sendIntervalTicks, uint32_t{255u}));
+                const uint8_t payload[2] = {loadPct, intervalTicks};
+                appendExtRaw(buf, static_cast<uint16_t>(ExtTag::SnapshotServerThrottle), payload, sizeof(payload));
             }
             // Exact acked-seqNum (#427): the seqNum of the last input the server applied for this peer.
             // The client replays inputs newer than this rather than approximating from delay ticks.
@@ -4599,14 +4629,18 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
                 if (allowed) {
                     setPeerFaction(peerId, req.factionIndex);
                 } else {
-                    MsgServerNotice notice;
-                    std::snprintf(notice.text, sizeof(notice.text), "Team switch denied (would unbalance).");
-                    m_net.send(peerId, &notice, sizeof(notice), /*reliable=*/true);
+                    sendNoticeTo(peerId, "Team switch denied (would unbalance).");
                 }
             }
         }
     }
     // Unknown msgIds: silently discard (no log spam; future protocol versions may add new IDs)
+}
+
+void WorldBroadcaster::sendNoticeTo(uint32_t peerId, const char* text) {
+    MsgServerNotice notice;
+    std::snprintf(notice.text, sizeof(notice.text), "%s", text);
+    m_net.send(peerId, &notice, sizeof(notice), /*reliable=*/true);
 }
 
 void WorldBroadcaster::sendWingmanAck(uint32_t peerId, uint8_t command, WingmanResult result, uint16_t flightId,
@@ -5142,9 +5176,7 @@ void WorldBroadcaster::handleChat(uint32_t peerId, const void* data, std::size_t
         if (ps.chatCount > static_cast<uint32_t>(m_chatRateLimit)) {
             if (!ps.chatRateLimitWarned) {
                 ps.chatRateLimitWarned = true;
-                MsgServerNotice notice;
-                std::snprintf(notice.text, sizeof(notice.text), "You are sending chat too fast.");
-                m_net.send(peerId, &notice, sizeof(notice), /*reliable=*/true);
+                sendNoticeTo(peerId, "You are sending chat too fast.");
             }
             return;
         }
@@ -5166,6 +5198,12 @@ void WorldBroadcaster::handleChat(uint32_t peerId, const void* data, std::size_t
         me.text = std::string(text);
         m_matchEventLog.append(std::move(me));
     }
+
+    // Offer the line to the intent tier (#611) — after the veto and after the record, so a line that
+    // was suppressed never reaches a model, and what a model saw is what the match log says was
+    // said. Team channel only: the wingman answers to their flight, not to everyone in the server.
+    if (m_chatIntentHook && static_cast<ChatChannel>(hdr.channel) == ChatChannel::Team)
+        m_chatIntentHook(peerId, hdr.channel, text);
 
     const auto channel = static_cast<ChatChannel>(hdr.channel);
     const uint16_t senderFaction = (channel == ChatChannel::Team) ? factionForPeer(peerId) : kNoFaction;
@@ -5448,16 +5486,29 @@ void WorldBroadcaster::handleWingmanCommand(uint32_t peerId, const void* data, s
         }
     }
 
+    issueWingmanOrder(peerId, msg.command, msg.flightId, msg.memberIdx, (msg.flags & kFlightFlagCascade) != 0);
+}
+
+// The order path itself, reached identically by the wire (MsgWingmanCommand above), by the radio
+// menu that produces it, and by the #611 chat-to-intent bridge. That the bridge lands HERE rather
+// than in a lookalike of it is what "the LLM chooses among validated commands, and execution goes
+// through the scripted grammar" actually means in code.
+WingmanResult WorldBroadcaster::issueWingmanOrder(uint32_t peerId, uint8_t command, uint16_t flightId,
+                                                  uint32_t memberIdx, bool cascade) {
+    if (!m_flightOrderHandler)
+        return WingmanResult::Rejected;
+    auto& ps = m_peerInputs[peerId];
+
     // Resolve the addressed formation. kOwnFlight = "the one I command" — the common case, so a
     // pilot who leads a single flight never has to know its id. A commander of several (an AWACS, a
     // package commander) MUST name one, because "my flight" is then ambiguous: refuse rather than
     // guess which of their formations they meant.
-    fl::FormationId fid = msg.flightId;
+    fl::FormationId fid = flightId;
     if (fid == kOwnFlight) {
         const std::vector<fl::FormationId> mine = m_formations.commandedBy(peerId);
         if (mine.size() != 1) {
-            sendWingmanAck(peerId, msg.command, WingmanResult::NoFlight, kNoFlightId, 0, kFlightAll, kNoTarget);
-            return;
+            sendWingmanAck(peerId, command, WingmanResult::NoFlight, kNoFlightId, 0, kFlightAll, kNoTarget);
+            return WingmanResult::NoFlight;
         }
         fid = mine.front();
     }
@@ -5469,15 +5520,15 @@ void WorldBroadcaster::handleWingmanCommand(uint32_t peerId, const void* data, s
     // it gets NoFlight — deliberately the same code an unknown formation returns, so the order
     // channel cannot be used to enumerate which formations exist or who leads them.
     if (!formation || !m_formations.commands(peerId, fid)) {
-        sendWingmanAck(peerId, msg.command, WingmanResult::NoFlight, kNoFlightId, 0, kFlightAll, kNoTarget);
-        return;
+        sendWingmanAck(peerId, command, WingmanResult::NoFlight, kNoFlightId, 0, kFlightAll, kNoTarget);
+        return WingmanResult::NoFlight;
     }
 
-    if (!fl::ai::isWingmanCommandOrdinal(msg.command)) {
-        sendWingmanAck(peerId, msg.command, WingmanResult::Rejected, fid, 0, kFlightAll, kNoTarget);
-        return;
+    if (!fl::ai::isWingmanCommandOrdinal(command)) {
+        sendWingmanAck(peerId, command, WingmanResult::Rejected, fid, 0, kFlightAll, kNoTarget);
+        return WingmanResult::Rejected;
     }
-    const auto cmd = static_cast<fl::ai::WingmanCommand>(msg.command);
+    const auto cmd = static_cast<fl::ai::WingmanCommand>(command);
 
     // Designate a target for attack_my_target from the COMMANDER's own boresight — state the server
     // already owns (PeerInputState::viewAxis, refreshed at 60 Hz from MsgClientInput). Nothing in the
@@ -5492,16 +5543,15 @@ void WorldBroadcaster::handleWingmanCommand(uint32_t peerId, const void* data, s
         }
         if (!designated.valid()) {
             const auto liveNow = static_cast<uint8_t>(std::min<std::size_t>(formation->members.size(), 255));
-            sendWingmanAck(peerId, msg.command, WingmanResult::NoTarget, fid, liveNow, msg.memberIdx, kNoTarget);
-            return;
+            sendWingmanAck(peerId, command, WingmanResult::NoTarget, fid, liveNow, memberIdx, kNoTarget);
+            return WingmanResult::NoTarget;
         }
     }
 
     const auto callerEnt = m_peerEntities.find(peerId);
     const uint32_t callerIdx = callerEnt != m_peerEntities.end() ? callerEnt->second.index : kFlightAll;
 
-    const FlightOrderReport rep = dispatchOrder(fid, msg.command, msg.memberIdx, (msg.flags & kFlightFlagCascade) != 0,
-                                                designated, peerId, callerIdx);
+    const FlightOrderReport rep = dispatchOrder(fid, command, memberIdx, cascade, designated, peerId, callerIdx);
 
     // Fold the per-member outcomes into one answer for the commander.
     WingmanResult result = WingmanResult::NoFlight;
@@ -5516,8 +5566,9 @@ void WorldBroadcaster::handleWingmanCommand(uint32_t peerId, const void* data, s
     }
 
     const auto liveMembers = static_cast<uint8_t>(std::min(rep.aiRetasked + rep.humansRelayed, 255));
-    sendWingmanAck(peerId, msg.command, result, fid, liveMembers, msg.memberIdx,
+    sendWingmanAck(peerId, command, result, fid, liveMembers, memberIdx,
                    designated.valid() ? designated.index : kNoTarget);
+    return result;
 }
 
 WorldBroadcaster::FlightOrderReport WorldBroadcaster::applyFlightOrder(fl::FormationId fid, uint8_t command,

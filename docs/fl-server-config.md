@@ -1877,11 +1877,16 @@ Example using `mcrcon`:
 | `FL_LOBBY_URL` | `"https://lobby.fighters-legacy.org"` | `lobby.url` |
 | `FL_LOBBY_VISIBILITY` | `"public"` | `lobby.visibility` |
 | `FL_AI_DIFFICULTY_FLOOR` | `"recruit"` | `ai.difficulty_floor` |
+| `FL_AI_API_KEY` | — | The AI provider's API key (#163). **Read only from the environment**; the variable name is configurable via `ai.provider.api_key_env` |
 
-**Not available as env vars:** `server.game_modes`, `mods.stack`, `rotation.items` —
-arrays are awkward in environment strings; use a mounted config file in container
-environments. `server.password` is also config-file-only; see the security note in the
-[password](#password) section.
+**Not available as env vars:** `server.game_modes`, `mods.stack`, `rotation.items`,
+`ai.mcp.allowlist` — arrays are awkward in environment strings; use a mounted config file in
+container environments. `server.password` and the `[[http_admin.tokens]]` secrets are also
+config-file-only; see the security note in the [password](#password) section.
+
+**`FL_AI_API_KEY` is the reverse of that rule and deliberately so**: it is a secret, so it is
+available *only* as an environment variable and has no config key at all. Setting
+`ai.provider.api_key` in the file is logged as an error rather than accepted.
 
 Boolean env vars (`FL_PERSISTENT`, `FL_LOBBY_REGISTER`) accept `"true"` or `"1"`.
 
@@ -1975,6 +1980,7 @@ role  = "admin"          # admin | moderator | gm | faction_leader
 token = "another-secret"
 role  = "faction_leader"
 faction = 1              # faction index for a faction-scoped role; -1 = unbound
+autonomy = "observe"     # MCP tier for this token; empty = the [ai.mcp] default
 ```
 
 | Key | Type | Default | Description |
@@ -1987,6 +1993,7 @@ faction = 1              # faction index for a faction-scoped role; -1 = unbound
 | `[[http_admin.tokens]].token` | string | — | The bearer credential; a row with an empty token is dropped with a warning |
 | `[[http_admin.tokens]].role` | string | `"admin"` | A capability preset. An **unknown name stops the server starting** rather than silently granting nothing |
 | `[[http_admin.tokens]].faction` | int | `-1` | Faction binding for a faction-scoped role |
+| `[[http_admin.tokens]].autonomy` | string | `""` | MCP tier override (#601): `observe` \| `recommend` \| `act`. Empty inherits `[ai.mcp] autonomy`. An **unknown name stops the server starting**, same rule as `role` |
 
 ### Endpoints
 
@@ -2022,5 +2029,216 @@ and is refused `POST /shutdown` with a `403`.
 **Transport security is out of scope here.** Tokens travel as plain Bearer credentials over plain
 HTTP. Keep the listener on the loopback for probes, or front it with a TLS-terminating reverse proxy;
 the same caveat the `[rcon]` section carries.
+
+---
+
+## `[ai.provider]` — generative-AI provider seam (#163)
+
+The plugin seam connecting fl-server to a model for **generative content**: missions, campaign
+events, narrative text, faction decisions, and the free-text wingman intent tier (#611). Distinct
+from the Lua AI (#33), which scripts unit behaviour, and from `[ai]`, which is the difficulty the sim
+runs.
+
+**Opt-in.** With this off — the default — every AI feature degrades to its scripted path, and that
+fallback is the CI-tested one.
+
+```toml
+[ai.provider]
+enabled = false
+plugin = ""                      # path to an IWorldAiProvider shared library
+endpoint = ""
+model = ""
+api_key_env = "FL_AI_API_KEY"
+max_calls_per_minute = 10
+world_evolution_interval_min = 60
+```
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Off = `NullAiProvider`, which supports nothing and says so |
+| `plugin` | string | `""` | Shared library exporting `fighters_legacy_create_ai_provider`. Empty = no plugin. A **configured plugin that fails to load is logged as an error**, not silently ignored |
+| `endpoint` | string | `""` | Backend-specific; interpreted by the plugin, not by fl-server |
+| `model` | string | `""` | Backend-specific |
+| `api_key_env` | string | `"FL_AI_API_KEY"` | The **name of the environment variable** holding the key |
+| `max_calls_per_minute` | int | `10` | `[0, 100000]`; `0` = unlimited |
+| `world_evolution_interval_min` | int | `60` | In-game minutes between world-evolution calls |
+
+**There is no `api_key` key, deliberately.** A key in `server.toml` gets committed and shared, and a
+key on a command line shows up in `ps`. Setting `ai.provider.api_key` is logged as an error naming
+the environment variable to use instead — the same rule `[security] password` follows and the same
+one `tools/ai_eval` follows.
+
+### Capabilities and degradation
+
+A provider declares what it can actually do, and fl-server logs the list at startup. A caller
+degrades by **asking** `supports()`, not by discovering an empty result three seconds later — a
+backend on a small local model may map intent well and write narrative badly, and an operator should
+find that out at boot rather than from missing briefings three missions in.
+
+### Applying a world-evolution delta
+
+What a model returns is a **suggestion**, and it may be confused, out of date, or steered by the
+player chat it was shown. Every change is validated before it is made, and anything that does not
+hold is dropped **and reported** — a delta that silently half-applies is indistinguishable from one
+that worked. Rejected: a faction index out of range, a faction set hostile to itself, a spawn naming
+an entity type outside the vocabulary the context advertised, a non-finite position or heading, and
+any change whose sink is not wired.
+
+`zoneChanges` are currently always rejected: zone ownership comes from the mission's
+`airspace_zones:` section, which `MissionParser` owns, and `AlertSystem` has no runtime setter for
+it. Re-owning a live zone needs a decision about what that means mid-match, so it is a follow-on
+rather than a quiet half-implementation.
+
+### Platform notes
+
+- **Windows**: a plugin DLL must share CRT linkage with fl-server (`/MT` in release), and it is
+  loaded by **full path** — `LoadLibrary` with a bare name searches, and what it finds is not
+  necessarily what the operator installed.
+- **macOS**: loading a plugin from an arbitrary path needs the
+  `com.apple.security.cs.disable-library-validation` entitlement or per-plugin notarization. Tracked
+  against the packaging issue (#158), not solved here.
+- The plugin handle is **never closed**. Objects a provider created outlive any scope that could own
+  it, and unloading underneath them is a crash whose stack frames have no symbols left.
+
+---
+
+## `[ai.chat_intent]` — free-text wingman commands (#611)
+
+Team-chat lines become **one scripted wingman command**. Needs `[ai.provider]` with the `intent`
+capability; without one the in-game radio menu is the path, which is decision #769 rather than a
+degradation to apologise for.
+
+```toml
+[ai.chat_intent]
+enabled = false
+rate_limit_per_min = 6
+notify_on_decline = true
+```
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Warns at startup if `[ai.provider]` is off |
+| `rate_limit_per_min` | int | `6` | Model calls per minute **per peer**; `0` = unlimited |
+| `notify_on_decline` | bool | `true` | Tell the pilot when a call was rate-limited or unavailable |
+
+### The pipeline
+
+```
+player text → local address check → templated prompt → model → {"command": "<name>"}
+                                                                        ↓
+                                                       schema validation + grammar allowlist
+                                                                        ↓
+                                              the SAME order path MsgWingmanCommand drives
+```
+
+The last step is literal: the bridge calls `WorldBroadcaster::issueWingmanOrder`, the same function
+the wire path calls after parsing its packet. Same authority check, same boresight target
+designation, same dispatch, same ack.
+
+The **local address check** comes first and is deliberately conservative — a model call per chat line
+would make the team channel a lever against the server's own inference budget, and would ask a model
+to classify every word said in a match.
+
+### What bounds a prompt injection
+
+**Not the prompt.** The template helps — the utterance is delimited, labelled as data, has control
+characters flattened and its angle-runs scrubbed so it cannot forge the delimiter — but the
+load-bearing property is that the only thing which can come back is **one of six parameterless
+ordinals**.
+
+So even a completely successful injection buys "a real command at the wrong time", which is what
+pressing a key on the radio menu would also have bought. `attack_my_target` carries **no target**:
+the target is resolved server-side from the commander's own boresight, from state the server already
+owns. A model that names a command which does not exist is refused; a model that answers `unknown`
+has declined, which is correct and is deliberately not an executable ordinal.
+
+---
+
+## `[ai.mcp]` — Model Context Protocol surface (#601)
+
+A **Model Context Protocol** endpoint for agents, operator tooling, and community spectator clients.
+It is a **second frontend on the `[http_admin]` listener above** — same port, same token table, same
+per-IP lockout — so it needs `[http_admin]` enabled too. Enabling `ai.mcp` alone is refused at
+startup with a message saying why, rather than coming up reporting MCP as on and serving nothing.
+
+Distinct from `[ai]`, which is the difficulty the sim runs.
+
+```toml
+[ai.mcp]
+enabled = true
+path = "/mcp"
+autonomy = "observe"                    # default tier for a token that sets none
+allowlist = ["status", "peers", "set_weather"]
+rate_limit_per_min = 120
+max_sessions = 32
+```
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Requires `[http_admin] enabled`; otherwise refused at startup |
+| `path` | string | `"/mcp"` | Must start with `/`, or the default is used and a warning logged |
+| `autonomy` | string | `"observe"` | `observe` \| `recommend` \| `act`. An unknown name **stops the server starting** |
+| `allowlist` | string[] | `[]` | Commands an `act`-tier token may run. **Empty permits nothing** |
+| `rate_limit_per_min` | int | `120` | Calls per minute **per token**; `0` disables the limiter |
+| `max_sessions` | int | `32` | Concurrent MCP sessions; the idlest is evicted beyond this |
+
+**Protocol revision: `2025-06-18`, pinned.** That revision carries the three things this surface
+needs — Streamable HTTP (SSE-only transport is deprecated), structured tool output (`outputSchema` +
+`structuredContent`), and resource subscriptions. It is also the revision that **removed JSON-RPC
+batching**, so a batched request is answered with an error that says so rather than a generic parse
+failure. Bumping the pin is a deliberate change, not a dependency drifting underneath the server.
+
+### Transport
+
+One endpoint, two methods:
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `<path>` | JSON-RPC 2.0 requests. `initialize` returns an `Mcp-Session-Id` header; every later call must present it |
+| GET | `<path>` | `text/event-stream` of notifications for that session. Requires `Mcp-Session-Id` |
+
+Both authenticate with the same `Authorization: Bearer <token>` as the REST routes.
+
+### Tools
+
+| Tool | Minimum tier | Description |
+|---|---|---|
+| `world_state` | `observe` | The ~1 Hz world snapshot (#600), as `structuredContent` |
+| `events` | `observe` | Match event tail; `after` cursor and `max` (capped at 1000) |
+| `submit_mission` | `recommend` | Validates a YAML mission against the engine's own schema. **Validates only — it does not load it.** Documents over 512 KiB are refused |
+| `admin_command` | `act` | Runs one command, if the allowlist AND the token's capabilities both permit it |
+
+A tool the caller's tier cannot reach is **omitted from `tools/list`**, so an agent does not spend a
+turn discovering it is not allowed to do something.
+
+### Resources
+
+`fl://world_state` and `fl://events` are readable and subscribable. A subscription produces
+`notifications/resources/updated` when the underlying data advances — the notification says *what
+changed*, not what it now says, so a subscriber decides whether to spend a read rather than having a
+multi-thousand-entity snapshot pushed at it every second.
+
+### Authorization
+
+**Three independent gates, and the third is the one that matters.**
+
+1. The **bearer token** must resolve to a row in the `[http_admin]` token table.
+2. The token's **autonomy tier** must reach the tool (`observe` < `recommend` < `act`).
+3. For `admin_command`, the verb must be on the **allowlist**, and then
+   `CommandRegistry::dispatch(line, issuer)` applies the **capability mask** of the token's role.
+
+Gate 3 is why MCP is a frontend rather than a parallel admin path: an `act`-tier token whose role is
+`moderator` is still refused `shutdown`, by the same check that refuses it over REST, RCON and the
+in-game admin channel. `act` is a ceiling, not a bypass.
+
+**Every tool invocation is audit-logged** as a `MatchEventLog` `agent_action` record — which means it
+appears in the `events` stream *and* in the `.flrep` recording of the match it affected (#643), with
+no second log to collect. Refused attempts are recorded too; a refusal is exactly what an operator
+reading an audit trail wants to see.
+
+**Player chat and callsigns reach agents through `world_state` and `events` and are untrusted.** They
+are JSON-escaped on the way out, but an agent must treat their *content* as data, never as
+instruction — the prompt-injection screening suite in `tools/ai_eval` (#934) is the regression gate
+for any model put on this path. The threat model coordinates with the anti-cheat work in #545.
 
 ---

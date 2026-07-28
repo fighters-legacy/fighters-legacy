@@ -1,5 +1,28 @@
 # Development Guide
 
+## Optional: voice wingman commands (`FL_ENABLE_WHISPER`)
+
+The deterministic voice-command tier (#935) — hold a key, say "two, engage bandits", release — needs
+the whisper.cpp speech-to-text backend, which is **off by default**:
+
+```bash
+cmake --preset debug -DFL_ENABLE_WHISPER=ON
+```
+
+Off, `platform-stt` still builds and hands back `NullSpeechToText`, so nothing else in the tree
+changes shape and the in-game radio menu is the way to order your flight (decision #769).
+
+**No model ships with the game.** Model size is a player's trade of accuracy against RAM and CPU, and
+bundling one would add hundreds of megabytes to every install for a feature most players will not
+use. Point `[voice] stt_model_path` in `user.toml` at a downloaded `ggml-*.bin`; `base.en` is a
+reasonable starting point for six short commands.
+
+The build is **CPU-only on purpose**. Every ggml accelerator (CUDA, HIP, Metal, Vulkan, SYCL, OpenCL,
+BLAS, OpenMP) is explicitly disabled in `cmake/dependencies.cmake`. This tier exists precisely
+because it does not need a GPU, and a build that quietly picked up CUDA because the machine happened
+to have the SDK installed would not be the thing that was measured. See the comment there — it is the
+cpp-httplib lesson from #233, where `REQUIRE_*` turned out not to be the off switch.
+
 ## Prerequisites
 
 ### Linux — Fedora (primary maintainer platform)

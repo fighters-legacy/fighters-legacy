@@ -24,6 +24,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace fl {
 
@@ -84,6 +85,23 @@ struct ServerTickReport {
     double wireInKbs{0.0};            // host ingress KB/s
     double wireOutPacketsPerSec{0.0}; // host egress datagrams/s
     int wirePeers{0};                 // peers connected when the wire sample was taken (NOT the live `peers` count)
+
+    // Per-peer throttle attribution (#576). Optional and ADDITIVE: an empty vector emits no
+    // `peer_throttle` key at all, so every existing consumer and every golden file is unchanged.
+    //
+    // NO SCHEMA BUMP. kServerTickSchemaVersion is frozen at 6 (#686) and the rule is to bump only
+    // when a field's MEANING changes under an unchanged name. This is a new, name-keyed array whose
+    // producer and consumer land together — exactly the case the freeze was written for. (#576's own
+    // text says "schema version bump per its versioning rules"; those rules say don't.)
+    struct PeerThrottle {
+        uint32_t peerId{0};
+        double sendRateHz{60.0};
+        uint32_t intervalTicks{1};
+        bool governorBinding{false};   // the SERVER's overrun governor is spacing this peer
+        bool congestionBinding{false}; // this peer's own link is
+        double packetLoss{0.0};
+    };
+    std::vector<PeerThrottle> peerThrottle;
 
     // Egress per connected client, KB/s — the per-client comparable of `downstream_kbs_per_client`,
     // but wire rather than payload.
@@ -173,7 +191,26 @@ inline std::string toJson(const ServerTickReport& r, int indentSpaces = 0) {
         const std::string name = std::string(tickPhaseName(static_cast<TickPhase>(i))) + "_ms";
         out += detail::statJson(name.c_str(), r.phases[i], in) + ",\n";
     }
-    out += detail::statJson("other_ms", r.other, in) + "\n";
+    out += detail::statJson("other_ms", r.other, in);
+    // #576: per-peer attribution, emitted only when there is any. Ordered by the caller (ascending
+    // peerId) so two runs of the same session produce byte-comparable files.
+    if (!r.peerThrottle.empty()) {
+        out += ",\n" + in + "\"peer_throttle\": [\n";
+        for (std::size_t i = 0; i < r.peerThrottle.size(); ++i) {
+            const auto& pt = r.peerThrottle[i];
+            char row[256];
+            std::snprintf(row, sizeof(row),
+                          "%s  {\"peer\": %u, \"send_hz\": %.4f, \"interval_ticks\": %u, "
+                          "\"lever\": \"%s\", \"loss\": %.4f}%s\n",
+                          in.c_str(), pt.peerId, pt.sendRateHz, pt.intervalTicks,
+                          pt.governorBinding ? "server" : (pt.congestionBinding ? "link" : "none"), pt.packetLoss,
+                          i + 1 < r.peerThrottle.size() ? "," : "");
+            out += row;
+        }
+        out += in + "]\n";
+    } else {
+        out += "\n";
+    }
     out += pad + "}";
     return out;
 }

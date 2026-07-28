@@ -62,6 +62,17 @@ class WingmanMenu {
         return m_brevity;
     }
 
+    // The order sequence counter, shared with the voice tier (#935) so a spoken order and a menu
+    // order cannot collide on a seqNum — the server's dup/reorder guard drops a repeat, which would
+    // silently swallow whichever arrived second.
+    [[nodiscard]] uint32_t nextSeq() noexcept {
+        return ++m_seqNum;
+    }
+
+    // Short pilot-facing status from the voice tier ("Listening...", "Say again?"), rendered in the
+    // same place a brevity line is. Empty clears it.
+    void setVoiceStatus(std::string status);
+
   private:
     void setBrevity(std::string_view line);
 
