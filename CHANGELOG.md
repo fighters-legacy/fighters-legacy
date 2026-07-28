@@ -7,6 +7,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **tools**: `docs_drift.py` + a `docs-drift` CI gate — checks the documentation against the code it describes in both directions (config keys, wire message ids, Lua bindings, admin/REST/MCP surfaces, the tool list). Undocumented additions and ghost entries are both failures; a ghost is the worse of the two, because a reader acts on it. Every extractor asserts a minimum match count, so a pattern that breaks turns the gate red instead of reporting perfection over an empty set (#1047)
+
 ## [0.3.13] - 2026-07-28
 
 ### Added
