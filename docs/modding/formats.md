@@ -1087,35 +1087,50 @@ check — the original issue's third check does not survive contact with a full 
 
 ---
 
-## Terrain — Streaming Heightmap Chunks + JSON
+## Terrain — Streaming Cube-Sphere Tiles
 
-The engine uses a single continuous world terrain. Theaters are geographic regions within it — they are mission conditions, not separate grids.
+The engine streams one continuous planet-wide terrain. Theaters are geographic regions within it —
+mission conditions, not separate grids or separate maps.
 
-- **Terrain ID:** `"world"` is the canonical ID used by fl-base-pack. Theater packs override individual chunks at higher mod priority.
-- **Chunk size:** 15,360 m (512 intervals × 30 m — native Copernicus GLO-30 resolution, no upsampling required)
-- **Chunk format:** 513×513 pixels, 16-bit grayscale PNG
-- **LOD levels:** LOD 0 = 513×513 px (30 m/px), LOD 1 = 257×257 px (60 m/px), LOD 2 = 129×129 px (120 m/px)
-- **Chunk path convention:** `terrain/<id>/lod<n>/chunk_<x>_<y>.png` — all lowercase, 4-digit zero-padded coordinates (e.g. `chunk_0003_0007.png`). Paths are fully determined by convention; no manifest field needed.
+The world is the six faces of a **cube-sphere quadtree**. A tile is addressed by
+`(face, level, i, j)`, and resolution comes from *quadtree depth* rather than from per-tile LOD
+pyramids: every tile carries the same 129×129 grid, and a deeper level covers less ground with it.
+Level 12 is roughly 30 m per sample on Earth — native Copernicus GLO-30, no upsampling.
 
-**World manifest (`terrain/world.json`):**
+- **Terrain ID:** `world` is the canonical id. A theater pack overrides individual tiles at higher
+  mod priority; it never replaces the world.
+- **Tile grid:** 129×129 samples (`kTileHeightmapSize`), 16-bit grayscale PNG.
+- **Height encoding:** `uint16 = clamp(elevation_m + 32768, 0, 65535)`, where `elevation_m` is the
+  **radial** height above the sphere datum — not height above a plane. Decode with `value - 32768`.
+- **Path convention:**
 
-```json
-{
-  "name": "World",
-  "chunk_size_m": 15360,
-  "lod_levels": 3,
-  "grid_width": 256,
-  "grid_height": 256,
-  "elevation_scale": 10,
-  "textures": {
-    "0": "terrain_grass.ktx2",
-    "1": "terrain_water.ktx2",
-    "2": "terrain_urban.ktx2",
-    "3": "terrain_desert.ktx2"
-  }
-}
-```
+      terrain/<id>/f<face>/l<level>/tile_<i>_<j>.png       # height (required)
+      terrain/<id>/f<face>/l<level>/tile_<i>_<j>_lc.png    # land cover (optional)
+      terrain/<id>/f<face>/l<level>/tile_<i>_<j>_sat.ktx2  # satellite imagery (optional)
 
+  `face` is `0`–`5`, `level` is the quadtree depth, and `i`/`j` are **plain unpadded integers** —
+  `tile_3_7.png`, not `tile_0003_0007.png`. A tile the pack does not provide is generated
+  procedurally, so a partial pack is valid and streams without gaps.
+
+Only the height layer is required. A tile finalizes once its required layer arrives; a missing,
+unreadable or wrong-sized PNG falls back to the procedural generator rather than leaving a hole.
+
+Land cover drives biome selection (ESA WorldCover classes); satellite imagery, when present,
+replaces biome shading for that tile. Generate all three with
+[`tools/gen_terrain_tiles.py`](../../tools/gen_terrain_tiles.py) and
+[`tools/gen_terrain_color.py`](../../tools/gen_terrain_color.py); see
+[satellite-terrain.md](satellite-terrain.md).
+
+**There is no terrain JSON manifest to author.** `TerrainManifest` carries only the terrain id and
+the deepest level the streamer refines to, and paths are fully determined by the convention above.
+
+> **Superseded.** Before the cube-sphere rewrite the format was a planar chunk grid —
+> `terrain/<id>/lod<n>/chunk_<x>_<y>.png` with 513×513 chunks, three LOD levels, four-digit
+> zero-padded coordinates, and a `terrain/world.json` manifest carrying `chunk_size_m`,
+> `grid_width`, `grid_height`, `elevation_scale` and a `textures` map. **None of that is read any
+> more** — the manifest fields no longer exist on `TerrainManifest`, and a pack laid out that way
+> resolves no tiles at all and renders as pure procedural terrain. `tools/gen_terrain_chunks.py`
+> still produces the old layout and is kept only for the legacy planar path.
 ---
 
 ## Theater Manifest — TOML

@@ -9,6 +9,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **docs**: the mod-author terrain format documented the **superseded planar chunk grid** — `terrain/<id>/lod<n>/chunk_<x>_<y>.png`, 513×513 chunks, three LOD levels, zero-padded coordinates and a `terrain/world.json` manifest whose fields no longer exist on `TerrainManifest`. The engine has read cube-sphere quadtree tiles since #472/#473 (`terrain/<id>/f<face>/l<level>/tile_<i>_<j>.png`, 129×129, unpadded integers, optional `_lc`/`_sat` layers), so a pack authored from the old text resolved no tiles at all and rendered as pure procedural terrain. Rewritten against `FolderContentPack::resolveTilePath`, with the old layout retained as an explicit superseded note (#1047)
+- **docs**: the Lua sandbox deny-list listed four of the six nil'd globals — `dofile` and `loadfile` were missing, as was the rejection of precompiled bytecode (#1047)
 - **docs**: operator configuration reference corrected against the v0.3.13 binary (#1047). `[trace] input_trace_dir` was documented inside the `[replay]` section, so the one key that enables input tracing appeared to belong to a section that does not parse it; the FLIT record size was stated as 28 bytes and is 32. `[bots]` was entirely undocumented — including that backfill silently does nothing without teams. `[flight]` documented 1 of its 10 keys, `[discovery]` neither of its query-responder keys, `[world]` neither `test_spawn_entity_type` nor `entity_soft_cap`, and the `respawn`/`spectate` admin commands were absent from the command reference. `ai.provider.api_key` is now documented as the rejected key it is. `[world] entity_soft_cap` is documented as **parsed but not enforced**, which is what the code does
 
 ### Added

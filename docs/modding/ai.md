@@ -2,8 +2,9 @@
 
 Fighters Legacy supports Lua 5.5 AI scripts that drive server-side entity behavior through
 the same `IEntityController` seam used by the built-in C++ autopilot controllers. Scripts are
-sandboxed: the `io`, `os`, `debug`, and `package` globals are nil; `require()` is restricted to
-the pack's own `ai/` directory.
+sandboxed: the `io`, `os`, `package`, `debug`, `dofile` and `loadfile` globals are all nil,
+`require()` is restricted to the pack's own `ai/` directory, and precompiled bytecode is
+rejected — a script must ship as source.
 
 ---
 
