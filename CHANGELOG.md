@@ -7,24 +7,27 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.13] - 2026-07-28
+
 ### Added
 
-- **server**: MCP (Model Context Protocol) surface for agents, operator tooling and spectator clients — revision `2025-06-18` over Streamable HTTP on the existing `[http_admin]` listener, with `world_state`/`events`/`submit_mission`/`admin_command` tools, subscribable world-state and event resources, per-token autonomy tiers, a command allowlist, per-token rate limiting, and every invocation audit-logged into the match event log and therefore into the match's `.flrep` recording; `[ai.mcp]` config, disabled by default (#601)
-- **engine**: `IWorldAiProvider` — the generative-AI provider seam for missions, campaign events, narrative, faction decisions and free-text intent, with `NullAiProvider` as the no-provider path, plugin loading, and a `WorldEvolutionDelta` application path that validates every change a model proposes and reports what it dropped; `[ai.provider]` config and `FL_AI_API_KEY`, disabled by default (#163)
-
-- **server**: per-peer overrun telemetry — the `peers` command and `--metrics-json` now name **which lever** is decimating each peer (the server's overrun governor or that peer's own link), and the reported send rate is the effective one composed from both; new snapshot `ExtTag 0x0108` tells a client the *server* is throttling it, omitted entirely when it is not so the healthy path stays byte-identical, with a HUD hint that distinguishes server overload from link congestion (#576)
-- **tools**: four new `ai_eval` suites and a runbook-scoring extension — `injection` (prompt-injection screening, promoted to a model-adoption gate, reporting obedience separately from wrongness), `intent_asr` (ASR-noise cases, kept separate so clean intent numbers stay comparable), `narrative` (deterministic citation-grounding scorer), `gci` (numerically checked calls with correct bearing wrap), and congestion-vs-server-fault discrimination cases in `ops`; suites remain data and CI still never requires a model (#934)
-- **ai**: deterministic voice-command tier — push-to-talk speech-to-text fuzzy-matched onto the six scripted `WingmanCommand` ordinals with no LLM, over a new `ISpeechToText` HAL with a whisper.cpp backend behind `FL_ENABLE_WHISPER` (off by default, CPU-only); audio is captured, transcribed and matched locally, and only the command ordinal leaves the machine (#935)
-- **ai**: chat-to-intent bridge — free-text wingman commands over team chat, mapped by the provider onto the six scripted `WingmanCommand` ordinals and executed through the same order path the radio menu drives; templated prompts, response-schema validation and a grammar allowlist, so a prompt injection is bounded to a real command at the wrong time; `[ai.chat_intent]` config, disabled by default (#611)
-
-- **docs**: ratified the player-facing AI content policy (#932) — shipped creative assets are human-authored or CC0 and never generative output; runtime-generated content is ephemeral, opt-in per server and per client, labeled, and never baked into a shipped pack. Dated decision record, normative Principle 6, and a CONTRIBUTING asset-provenance rule (#932)
+- **server**: MCP (Model Context Protocol) surface — revision `2025-06-18` over Streamable HTTP on the `[http_admin]` listener; `world_state`/`events`/`submit_mission`/`admin_command` tools, subscribable resources, per-token autonomy tiers, command allowlist, rate limiting, and every invocation audit-logged into the match event log and the match's `.flrep`; `[ai.mcp]`, disabled by default (#601)
+- **engine**: `IWorldAiProvider` — the generative-AI provider seam, with `NullAiProvider`, plugin loading, and a `WorldEvolutionDelta` application path that validates every change a model proposes and reports what it dropped; `[ai.provider]` + `FL_AI_API_KEY`, disabled by default (#163)
+- **ai**: chat-to-intent bridge — free-text wingman commands over team chat, mapped onto the six scripted ordinals and executed through the radio menu's own order path; templated prompts, schema validation, grammar allowlist; `[ai.chat_intent]`, disabled by default (#611)
+- **ai**: deterministic voice-command tier — push-to-talk STT fuzzy-matched onto the six ordinals with no LLM, over a new `ISpeechToText` HAL with a whisper.cpp backend behind `FL_ENABLE_WHISPER` (off by default, CPU-only) (#935)
+- **server**: per-peer overrun telemetry — `peers` and `--metrics-json` name which lever is decimating each peer; snapshot `ExtTag 0x0108` tells a client the *server* is throttling it, omitted when it is not; HUD hint distinguishes server overload from link congestion (#576)
+- **tools**: four new `ai_eval` suites — `injection` (prompt-injection screening, a model-adoption gate), `intent_asr`, `narrative` (deterministic citation grounding), `gci` — plus runbook scoring and congestion-vs-server-fault cases in `ops` (#934)
+- **docs**: ratified the player-facing AI content policy — shipped creative assets are human-authored or CC0; runtime-generated content is ephemeral, opt-in, labeled, and never baked into a pack (#932)
 
 ### Changed
 
-- **engine**: the schema-only `validateMission` moved from `validate-mission` into `engine-mission`, next to the `parseMission` it delegates to, so fl-server can validate a submitted mission in-process; `validate-mission` keeps its `--pack` cross-check and every existing caller is unchanged (#601)
-- **server**: `peers` reported each peer's send rate from its congestion controller alone, understating the decimation whenever the server-wide overrun governor was the wider of the two levers — which is exactly the case an operator is looking at on a loaded server (#576)
-- **server**: the wingman order path is now reachable as `WorldBroadcaster::issueWingmanOrder`, so the wire, the radio menu and the chat-intent bridge share one implementation of authority, target designation and dispatch rather than a lookalike each (#611)
-- **engine**: `dlopen`/`LoadLibrary` extracted from `ModLoader` into the shared `engine-dynlib`, so content packs and AI provider plugins load through one implementation instead of two (#163)
+- **engine**: the schema-only `validateMission` moved from `validate-mission` into `engine-mission`, so fl-server can validate a submitted mission in-process (#601)
+- **engine**: `dlopen`/`LoadLibrary` extracted from `ModLoader` into the shared `engine-dynlib` (#163)
+- **server**: the wingman order path is reachable as `WorldBroadcaster::issueWingmanOrder`, so the wire, the radio menu and the chat-intent bridge share one implementation (#611)
+
+### Fixed
+
+- **server**: `peers` reported each peer's send rate from its congestion controller alone, understating the decimation whenever the server-wide overrun governor was the wider lever (#576)
 
 ## [0.3.12] - 2026-07-27
 
