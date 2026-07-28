@@ -21,7 +21,7 @@ Committers can review and merge pull requests within their designated module sco
 - **Global committer** — sustained multi-module contributions over time; unrestricted merge rights
 - **Emeritus** — 12+ months inactive; retains title, no active merge rights
 
-The current list of committers is maintained in [CONTRIBUTORS.md](CONTRIBUTORS.md) once it is created.
+The current list of committers is maintained in [AUTHORS](AUTHORS).
 
 ### Contributors
 

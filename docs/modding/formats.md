@@ -1712,7 +1712,7 @@ control inputs to drive the entity's flight integrator.
 **File location:** `ai/<name>.lua` inside the content pack directory.  
 **Function required:** `function compute_control(state, tick, dt) → table`
 
-See [`docs/modding/ai.md`](../ai.md) for the complete API reference including the `state`
+See [`docs/modding/ai.md`](ai.md) for the complete API reference including the `state`
 table fields, `guidance.*` math module, `nearby_entities()`, `get_entity()`, and worked
 examples.
 

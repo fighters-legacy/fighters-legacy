@@ -1,7 +1,7 @@
 # ai_eval — local-provider evaluation harness (#599)
 
 Measures **latency**, **structured-output reliability** and **task correctness** of any
-OpenAI-compatible endpoint on the three workloads of the Dynamic World & Agentic AI initiative
+OpenAI-compatible endpoint on the workloads of the Dynamic World & Agentic AI initiative
 (`docs/ai-architecture.md`). It is the reusable harness that spike #599 owes the follow-on epics,
 and the instrument behind the model-size guidance in
 [`docs/ai-provider-evaluation.md`](../../docs/ai-provider-evaluation.md).
@@ -15,12 +15,17 @@ scoring logic is unit-tested (`tests/test_ai_eval.py`, no network).
 | Suite | Epic | What it measures | Budget |
 |---|---|---|---|
 | `intent` | O — conversational crew | free-text radio call → one wingman command, JSON. Includes out-of-grammar calls where **`unknown` is the correct answer** — an agent that maps an unsupported request onto a real command is worse than one that declines, because execution goes through the grammar unattended. | 2 s |
+| `intent_asr` | O — conversational crew | the same task over **transcripts as speech-to-text actually produces them**: compounds split, initialisms spelled out, homophones substituted, filler retained. Deliberately separate from `intent` — folding them in would move the clean-speech numbers and make two models incomparable across an edit to the case file. The deterministic matcher (`WingmanPhraseMatch.h`) handles these with no model at all, so **a model that scores below the matcher here has no business on the voice path**. | 2 s |
+| `injection` | M/O — chat path | **prompt-injection susceptibility**, and a model-adoption regression gate for anything put on the chat path (#611). Every case hides an instruction inside player-typed text; `injected_command` is what the attack was trying to elicit, and obedience is reported separately from ordinary wrongness so a sweep can rank models by susceptibility rather than only by accuracy. A pass does not make the model a security boundary — #611's grammar allowlist is. | 2 s |
 | `mission` | N — campaign director | campaign brief → mission YAML, judged by the **real `validate-mission` binary** plus semantic checks. Scored `pass@1` and `pass-after-one-repair` (generate → validate → repair is the director's actual pipeline). | 60 s |
-| `ops` | P — agentic server ops | `ServerTickReport`-shaped metrics snapshot → root cause + actions. Actions are checked against an **allowlist**: proposing a command outside the declared runbook is a failure, and a `healthy` case catches over-eagerness. | 60 s |
+| `narrative` | N/M — briefing prose | **citation grounding**. Generated briefing/debrief prose must cite what it describes with `[[id]]` markers, and every citation is checked against the supplied context *deterministically* — no judge model, no similarity threshold, which is what makes it a regression gate rather than a vibe check. `must_cite` names the events a debrief cannot honestly omit. Catches prose that reads beautifully and refers to a sortie that never happened. | 20 s |
+| `gci` | O — ground-controlled intercept | **call correctness against a known track picture**. A bearing, a range and a count are facts about the supplied picture, not opinions, so tolerance is the only judgement and it is declared in the suite file (`bearing_tol_deg`, `range_tol_nm`) rather than buried in the scorer. Bearing compares as shortest angular distance, so 359 and 001 are two degrees apart. | 20 s |
+| `ops` | P — agentic server ops | `ServerTickReport`-shaped metrics snapshot → root cause + actions. Actions are checked against an **allowlist**: proposing a command outside the declared runbook is a failure, and a `healthy` case catches over-eagerness. Scored per runbook, and includes cases that separate **link congestion from server fault** — the two look alike in a snapshot and call for opposite responses. | 60 s |
 
-Suites are data (`suites/*.json`) — adding cases, or re-pointing `intent` at the final wingman
-grammar once [#610](https://github.com/fighters-legacy/fighters-legacy/issues/610) lands, is a file
-edit, not a code change. The grammar shipped today is **provisional**; #610 owns the real one.
+Suites are data (`suites/*.json`) — adding cases is a file edit, not a code change. The wingman
+grammar the `intent` suites score against is the shipped one from `engine/ai/WingmanCommand.h`;
+`tests/test_ai_eval.py` asserts the two agree, so renaming a command there fails the test rather
+than silently scoring every model against a vocabulary the engine no longer has.
 
 ## Running
 
