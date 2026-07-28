@@ -82,11 +82,16 @@ inline constexpr float kAutoSpawnAirspeed = -1.f;
 struct PeerInputState {
     // 8-byte fields first to avoid padding.
     uint64_t lastActivityTick{0}; // tick of last MsgClientInput or MsgHeartbeat; set in onConnect
-    uint64_t lastInputTick{0};    // m_currentTick at last accepted MsgClientInput (inter-arrival jitter timing)
-    uint64_t ackedTick{0};        // highest WorldSnapshot tick this peer has acknowledged (echoed in
-                                  // MsgClientInput/MsgHeartbeat tickIndex; clamped to m_currentTick).
-                                  // Drives client-acked delta baselines: an entity is sent full until
-                                  // the client confirms it decoded the tick its full streak started on.
+    // #576: which lever spaced this peer's last snapshot. Written in the serial gather each tick,
+    // read by forEachPeer / the metrics writer. Sim-thread only, like the rest of this struct.
+    uint32_t effectiveIntervalTicks{1};
+    bool governorBinding{false};
+    bool congestionBinding{false};
+    uint64_t lastInputTick{0}; // m_currentTick at last accepted MsgClientInput (inter-arrival jitter timing)
+    uint64_t ackedTick{0};     // highest WorldSnapshot tick this peer has acknowledged (echoed in
+                               // MsgClientInput/MsgHeartbeat tickIndex; clamped to m_currentTick).
+                               // Drives client-acked delta baselines: an entity is sent full until
+                               // the client confirms it decoded the tick its full streak started on.
     // 4-byte fields next.
     uint32_t ackMask{0}; // selective-ack bitmask paired with ackedTick (#566); adopted together on a
                          // strict high-water advance. Bit b = decoded tick ackedTick-1-b (see AckWindow.h).
@@ -199,6 +204,12 @@ struct PeerInfo {
     uint32_t effectiveBudget{}; // current congestion-scaled per-snapshot byte budget (0 = unlimited)
     float packetLoss{};         // last sampled ENet mean loss fraction (0..1)
     CapabilityMask caps{};      // granted authority mask (#946); 0 = no grant (ordinary peer)
+    // #576: WHICH lever is decimating this peer, which is the question an operator actually has.
+    // sendRateHz above says a peer is being slowed; these say by what, and the two causes call for
+    // opposite responses — shed work off the server, or look at that player's link.
+    uint32_t effectiveIntervalTicks{1}; // composed snapshot spacing (1 = full rate)
+    bool governorBinding{false};        // the server-wide overrun governor is the binding lever
+    bool congestionBinding{false};      // this peer's own congestion controller is the binding lever
 };
 
 // One simulated entity together with its control source. The registry is EntityId-keyed (not peer-
@@ -1978,6 +1989,12 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         double center[3]{};                    // interest center: the pilot's entity, or the observer's point
         bool spectator{false};                 // #403: observer or dead pilot — eligible for the snapshot delay
 
+        // #576: which lever is actually spacing THIS peer's snapshots, frozen with the rest of the
+        // per-peer work in the serial gather. The governor's numbers are server-wide, but whether
+        // they BIND for a given peer depends on that peer's own congestion interval, so the
+        // comparison has to be made per peer and cannot be read off the governor alone.
+        uint32_t sendIntervalTicks{1}; // the composed interval this peer is actually being sent at
+        bool governorBinding{false};   // true when the SERVER's governor is what widened it
         PeerInputState* pin{nullptr};
         std::unordered_map<uint32_t, PeerEntityRec>* knownGens{nullptr};
         std::unordered_map<uint32_t, uint8_t>* pending{nullptr};

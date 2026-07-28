@@ -2751,10 +2751,23 @@ int main(int argc, char** argv) {
             const fl::OverrunStatus ov = broadcaster.getOverrunStatus();
             const fl::CongestionTelemetry ct = broadcaster.getCongestionTelemetry();
             const fl::WireTelemetry wt = broadcaster.getWireTelemetry(); // #772 socket bytes, not payload
-            const fl::ServerTickReport rep = fl::makeServerTickReport(
+            // #576: per-peer throttle attribution, in ascending peerId so two runs of the same
+            // session produce byte-comparable metrics files.
+            std::vector<fl::ServerTickReport::PeerThrottle> throttles;
+            broadcaster.forEachPeer([&throttles](const fl::PeerInfo& pi) {
+                if (!pi.governorBinding && !pi.congestionBinding)
+                    return; // a peer at full rate has nothing to attribute
+                throttles.push_back({pi.peerId, static_cast<double>(pi.sendRateHz), pi.effectiveIntervalTicks,
+                                     pi.governorBinding, pi.congestionBinding, static_cast<double>(pi.packetLoss)});
+            });
+            std::sort(throttles.begin(), throttles.end(),
+                      [](const auto& a, const auto& b) { return a.peerId < b.peerId; });
+
+            fl::ServerTickReport rep = fl::makeServerTickReport(
                 broadcaster.getTickBudget(), broadcaster.getPeerCount(), entityManager.liveCount(), ov.loadFactor,
                 droppedTicks, fl::currentRssKb(), rssStartupKb, ov.interestScale, ct.minSendHz, ct.recoveredSendHz,
                 ct.maxPacketLoss, wt.outKbs, wt.inKbs, wt.outPacketsPerSec, wt.peersAtSample);
+            rep.peerThrottle = std::move(throttles);
             fl::writeConfigFile(metricsPath, fl::toJson(rep) + "\n", *log);
             nextMetricsWrite = std::chrono::steady_clock::now() + metricsInterval;
         }

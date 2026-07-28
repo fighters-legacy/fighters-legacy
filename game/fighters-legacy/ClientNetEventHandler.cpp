@@ -356,6 +356,21 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             if (fl::readExtValue(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerDelayTicks), delayTicks))
                 m_estimatedDelayTicks = delayTicks;
 
+            // Server-throttle TLV (#576). PRESENCE is the signal: the server emits it only while its
+            // overrun governor is the lever spacing OUR snapshots. Absence is the healthy case and is
+            // also what an old server sends, so nothing has to be assumed from silence.
+            //
+            // Latched with a timeout rather than cleared on the first snapshot without it: snapshots
+            // are unreliable, and a single dropped packet must not flicker the indicator off and back
+            // on while the server is still shedding work.
+            std::uint16_t throttleLen = 0;
+            if (const std::uint8_t* tp =
+                    fl::findExt(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotServerThrottle), throttleLen);
+                tp != nullptr && throttleLen >= 2) {
+                m_serverThrottleLoadPct = tp[0];
+                m_serverThrottleUntilTick = hdr.tickIndex + kServerThrottleHoldTicks;
+            }
+
             // Exact acked seqNum (#427): the seqNum the server last applied for us. Present only once
             // the server has applied one of our inputs; absent → prediction falls back to delay ticks.
             uint32_t acked{};

@@ -411,6 +411,18 @@ struct ClientNetEventHandler : INetworkEventHandler {
     uint32_t snapshotLatencyMs() const noexcept {
         return m_snapshotLatencyMs;
     }
+    // #576: true while the SERVER is intentionally decimating our snapshots because its overrun
+    // governor is shedding work — as distinct from our own link being congested, which the #518
+    // path already covers. The two look identical from here (snapshots arrive late) and mean
+    // opposite things, so the HUD must be able to tell a player which one they are looking at.
+    [[nodiscard]] bool serverThrottled() const noexcept {
+        return m_lastSnapshotTick < m_serverThrottleUntilTick;
+    }
+    // Server load while throttled, as a percentage (1..100). Meaningless unless serverThrottled().
+    [[nodiscard]] uint8_t serverThrottleLoadPct() const noexcept {
+        return m_serverThrottleLoadPct;
+    }
+
     bool hasSnapshotLatency() const noexcept {
         return m_hasSnapshotLatency;
     }
@@ -500,6 +512,13 @@ struct ClientNetEventHandler : INetworkEventHandler {
     uint32_t m_lastRttMs{0};        // ms from last MsgPeerDelay; 0 = not yet received
     bool m_rttValid{false};         // true once first MsgPeerDelay with delayTicks > 0 arrives
     std::chrono::steady_clock::time_point m_lastHeartbeatSentAt{}; // throttle to 1 Hz
+
+    // #576: server-throttle latch. Held for a few ticks past the last tagged snapshot because the
+    // snapshot channel is unreliable — clearing on the first snapshot that lacks the tag would make
+    // the indicator flicker on every dropped packet while the server is still shedding.
+    static constexpr uint64_t kServerThrottleHoldTicks = 180; // ~3 s at 60 Hz
+    uint64_t m_serverThrottleUntilTick{0};
+    uint8_t m_serverThrottleLoadPct{100};
 
     // Per-peer snapshot latency (SnapshotPeerLatency TLV, ExtTag::SnapshotPeerLatency = 0x0101).
     uint16_t m_snapshotLatencyMs{0};  // ms from last snapshot TLV; 0 = not yet received

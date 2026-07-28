@@ -597,6 +597,11 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     hin.terrainElevation = terrainElev;
     hin.latencyMs = latencyMs;
     hin.showLatency = showLat;
+    // #576: presence of the server-throttle TLV, latched. Independent of showLatency — a player who
+    // turned the latency readout off still needs to know the SERVER is the reason their world is
+    // updating slowly, because that is not a thing they can fix.
+    hin.serverThrottled = d.clientNetHandler && d.clientNetHandler->serverThrottled();
+    hin.serverLoadPct = d.clientNetHandler ? d.clientNetHandler->serverThrottleLoadPct() : 100;
     hin.planetRadiusM = radiusM;
     hin.radar = radar;
     // Radar MFD page state (#642); annunciate the requested radar mode from the collector.

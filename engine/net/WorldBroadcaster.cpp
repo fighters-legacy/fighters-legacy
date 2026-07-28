@@ -740,8 +740,15 @@ void WorldBroadcaster::forEachPeer(std::function<void(const PeerInfo&)> fn) cons
             pi.bufferMaxDepth = ps.jitterBuffer.maxDepth();
             pi.ewmaDelayTicks = ps.ewmaDelayTicks;
             pi.ewmaJitterTicks = ps.ewmaJitterTicks;
-            const uint32_t interval = ps.congestion.sendIntervalTicks();
-            pi.sendRateHz = interval > 0u ? 60.f / static_cast<float>(interval) : 60.f;
+            // #576: the EFFECTIVE interval, composed from both levers — not the congestion
+            // controller's alone. Reporting the congestion interval as "the send rate" understated
+            // the decimation whenever the governor was the wider of the two, which is exactly the
+            // case an operator is looking at when they run `peers` on a loaded server.
+            const uint32_t interval = std::max(ps.effectiveIntervalTicks, uint32_t{1u});
+            pi.sendRateHz = 60.f / static_cast<float>(interval);
+            pi.effectiveIntervalTicks = interval;
+            pi.governorBinding = ps.governorBinding;
+            pi.congestionBinding = ps.congestionBinding;
             pi.effectiveBudget = ps.congestion.effectiveBudget(m_snapshotBudgetBytes.load(std::memory_order_relaxed));
             pi.packetLoss = m_net.getPeerLinkStats(peerId).packetLoss; // live ENet mean loss fraction
             pi.caps = ps.authority.caps;                               // granted authority (#946)
@@ -1002,6 +1009,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     const uint32_t govSnapInterval = m_tickGovernor.snapshotIntervalTicks();
     const uint32_t govAiStride = m_tickGovernor.aiSampleStride();
     const float govInterestScale = m_tickGovernor.interestScale();
+    const float govLoadFactor = m_tickGovernor.loadFactor(); // #576: reported per throttled peer
     m_overrunLoadFactor.store(m_tickGovernor.loadFactor(), std::memory_order_relaxed);
     m_overrunSnapInterval.store(govSnapInterval, std::memory_order_relaxed);
     m_overrunAiStride.store(govAiStride, std::memory_order_relaxed);
@@ -1624,11 +1632,22 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     for (auto& [peerId, pin] : m_peerInputs) {
         if (!pin.handshakeComplete)
             continue;
-        const uint32_t sendInterval = std::max(pin.congestion.sendIntervalTicks(), govSnapInterval);
+        const uint32_t congInterval = pin.congestion.sendIntervalTicks();
+        const uint32_t sendInterval = std::max(congInterval, govSnapInterval);
         if (pin.sentSnapshot && tickIndex - pin.lastSnapshotSentTick < sendInterval)
             continue; // adaptive send-rate decimation: too few ticks since the last send
         PeerSnapWork w;
         w.peerId = peerId;
+        // #576: record WHICH lever set that interval, here in the serial gather where both numbers
+        // are in hand. The governor is server-wide but only BINDS for a peer whose own congestion
+        // interval is narrower — so "is the server throttling this peer" is a per-peer question and
+        // is answered per peer. Ties count as the governor: at equal intervals the server is
+        // shedding work regardless of what the link is doing.
+        w.sendIntervalTicks = sendInterval;
+        w.governorBinding = govSnapInterval > 1 && govSnapInterval >= congInterval;
+        pin.effectiveIntervalTicks = sendInterval;
+        pin.governorBinding = w.governorBinding;
+        pin.congestionBinding = congInterval > 1 && congInterval > govSnapInterval;
         // A pilot centers interest on its aircraft; an observer on its stored interest point (the #858
         // camera-position seam). peerEid invalid + peerState null flag the entity-less case downstream.
         // #972: peerEid is the entity the peer OCCUPIES A SEAT IN (m_peerSeat) — a Fly-seat pilot's own
@@ -1921,6 +1940,17 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                 appendExt(buf, static_cast<uint16_t>(ExtTag::SnapshotPeerLatency), latMs);
                 const auto delayTicks = static_cast<uint16_t>(std::min(pin.estimatedDelayTicks, uint32_t{65535u}));
                 appendExt(buf, static_cast<uint16_t>(ExtTag::SnapshotPeerDelayTicks), delayTicks);
+            }
+            // Server-throttle TLV (#576). OMITTED unless the governor is the binding lever for THIS
+            // peer, which keeps the healthy path byte-identical to pre-#576 — the same rule
+            // SnapshotCrew and SnapshotArticulation follow. A client that never sees this tag
+            // cannot mistake a bad link for server overload, because the server never claimed it.
+            if (w.governorBinding) {
+                const uint8_t loadPct =
+                    static_cast<uint8_t>(std::clamp(static_cast<int>(std::lround(govLoadFactor * 100.f)), 1, 100));
+                const uint8_t intervalTicks = static_cast<uint8_t>(std::min(w.sendIntervalTicks, uint32_t{255u}));
+                const uint8_t payload[2] = {loadPct, intervalTicks};
+                appendExtRaw(buf, static_cast<uint16_t>(ExtTag::SnapshotServerThrottle), payload, sizeof(payload));
             }
             // Exact acked-seqNum (#427): the seqNum of the last input the server applied for this peer.
             // The client replays inputs newer than this rather than approximating from delay ticks.
