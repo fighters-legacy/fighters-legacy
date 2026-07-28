@@ -4599,14 +4599,18 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
                 if (allowed) {
                     setPeerFaction(peerId, req.factionIndex);
                 } else {
-                    MsgServerNotice notice;
-                    std::snprintf(notice.text, sizeof(notice.text), "Team switch denied (would unbalance).");
-                    m_net.send(peerId, &notice, sizeof(notice), /*reliable=*/true);
+                    sendNoticeTo(peerId, "Team switch denied (would unbalance).");
                 }
             }
         }
     }
     // Unknown msgIds: silently discard (no log spam; future protocol versions may add new IDs)
+}
+
+void WorldBroadcaster::sendNoticeTo(uint32_t peerId, const char* text) {
+    MsgServerNotice notice;
+    std::snprintf(notice.text, sizeof(notice.text), "%s", text);
+    m_net.send(peerId, &notice, sizeof(notice), /*reliable=*/true);
 }
 
 void WorldBroadcaster::sendWingmanAck(uint32_t peerId, uint8_t command, WingmanResult result, uint16_t flightId,
@@ -5142,9 +5146,7 @@ void WorldBroadcaster::handleChat(uint32_t peerId, const void* data, std::size_t
         if (ps.chatCount > static_cast<uint32_t>(m_chatRateLimit)) {
             if (!ps.chatRateLimitWarned) {
                 ps.chatRateLimitWarned = true;
-                MsgServerNotice notice;
-                std::snprintf(notice.text, sizeof(notice.text), "You are sending chat too fast.");
-                m_net.send(peerId, &notice, sizeof(notice), /*reliable=*/true);
+                sendNoticeTo(peerId, "You are sending chat too fast.");
             }
             return;
         }
@@ -5166,6 +5168,12 @@ void WorldBroadcaster::handleChat(uint32_t peerId, const void* data, std::size_t
         me.text = std::string(text);
         m_matchEventLog.append(std::move(me));
     }
+
+    // Offer the line to the intent tier (#611) — after the veto and after the record, so a line that
+    // was suppressed never reaches a model, and what a model saw is what the match log says was
+    // said. Team channel only: the wingman answers to their flight, not to everyone in the server.
+    if (m_chatIntentHook && static_cast<ChatChannel>(hdr.channel) == ChatChannel::Team)
+        m_chatIntentHook(peerId, hdr.channel, text);
 
     const auto channel = static_cast<ChatChannel>(hdr.channel);
     const uint16_t senderFaction = (channel == ChatChannel::Team) ? factionForPeer(peerId) : kNoFaction;
@@ -5448,16 +5456,29 @@ void WorldBroadcaster::handleWingmanCommand(uint32_t peerId, const void* data, s
         }
     }
 
+    issueWingmanOrder(peerId, msg.command, msg.flightId, msg.memberIdx, (msg.flags & kFlightFlagCascade) != 0);
+}
+
+// The order path itself, reached identically by the wire (MsgWingmanCommand above), by the radio
+// menu that produces it, and by the #611 chat-to-intent bridge. That the bridge lands HERE rather
+// than in a lookalike of it is what "the LLM chooses among validated commands, and execution goes
+// through the scripted grammar" actually means in code.
+WingmanResult WorldBroadcaster::issueWingmanOrder(uint32_t peerId, uint8_t command, uint16_t flightId,
+                                                  uint32_t memberIdx, bool cascade) {
+    if (!m_flightOrderHandler)
+        return WingmanResult::Rejected;
+    auto& ps = m_peerInputs[peerId];
+
     // Resolve the addressed formation. kOwnFlight = "the one I command" — the common case, so a
     // pilot who leads a single flight never has to know its id. A commander of several (an AWACS, a
     // package commander) MUST name one, because "my flight" is then ambiguous: refuse rather than
     // guess which of their formations they meant.
-    fl::FormationId fid = msg.flightId;
+    fl::FormationId fid = flightId;
     if (fid == kOwnFlight) {
         const std::vector<fl::FormationId> mine = m_formations.commandedBy(peerId);
         if (mine.size() != 1) {
-            sendWingmanAck(peerId, msg.command, WingmanResult::NoFlight, kNoFlightId, 0, kFlightAll, kNoTarget);
-            return;
+            sendWingmanAck(peerId, command, WingmanResult::NoFlight, kNoFlightId, 0, kFlightAll, kNoTarget);
+            return WingmanResult::NoFlight;
         }
         fid = mine.front();
     }
@@ -5469,15 +5490,15 @@ void WorldBroadcaster::handleWingmanCommand(uint32_t peerId, const void* data, s
     // it gets NoFlight — deliberately the same code an unknown formation returns, so the order
     // channel cannot be used to enumerate which formations exist or who leads them.
     if (!formation || !m_formations.commands(peerId, fid)) {
-        sendWingmanAck(peerId, msg.command, WingmanResult::NoFlight, kNoFlightId, 0, kFlightAll, kNoTarget);
-        return;
+        sendWingmanAck(peerId, command, WingmanResult::NoFlight, kNoFlightId, 0, kFlightAll, kNoTarget);
+        return WingmanResult::NoFlight;
     }
 
-    if (!fl::ai::isWingmanCommandOrdinal(msg.command)) {
-        sendWingmanAck(peerId, msg.command, WingmanResult::Rejected, fid, 0, kFlightAll, kNoTarget);
-        return;
+    if (!fl::ai::isWingmanCommandOrdinal(command)) {
+        sendWingmanAck(peerId, command, WingmanResult::Rejected, fid, 0, kFlightAll, kNoTarget);
+        return WingmanResult::Rejected;
     }
-    const auto cmd = static_cast<fl::ai::WingmanCommand>(msg.command);
+    const auto cmd = static_cast<fl::ai::WingmanCommand>(command);
 
     // Designate a target for attack_my_target from the COMMANDER's own boresight — state the server
     // already owns (PeerInputState::viewAxis, refreshed at 60 Hz from MsgClientInput). Nothing in the
@@ -5492,16 +5513,15 @@ void WorldBroadcaster::handleWingmanCommand(uint32_t peerId, const void* data, s
         }
         if (!designated.valid()) {
             const auto liveNow = static_cast<uint8_t>(std::min<std::size_t>(formation->members.size(), 255));
-            sendWingmanAck(peerId, msg.command, WingmanResult::NoTarget, fid, liveNow, msg.memberIdx, kNoTarget);
-            return;
+            sendWingmanAck(peerId, command, WingmanResult::NoTarget, fid, liveNow, memberIdx, kNoTarget);
+            return WingmanResult::NoTarget;
         }
     }
 
     const auto callerEnt = m_peerEntities.find(peerId);
     const uint32_t callerIdx = callerEnt != m_peerEntities.end() ? callerEnt->second.index : kFlightAll;
 
-    const FlightOrderReport rep = dispatchOrder(fid, msg.command, msg.memberIdx, (msg.flags & kFlightFlagCascade) != 0,
-                                                designated, peerId, callerIdx);
+    const FlightOrderReport rep = dispatchOrder(fid, command, memberIdx, cascade, designated, peerId, callerIdx);
 
     // Fold the per-member outcomes into one answer for the commander.
     WingmanResult result = WingmanResult::NoFlight;
@@ -5516,8 +5536,9 @@ void WorldBroadcaster::handleWingmanCommand(uint32_t peerId, const void* data, s
     }
 
     const auto liveMembers = static_cast<uint8_t>(std::min(rep.aiRetasked + rep.humansRelayed, 255));
-    sendWingmanAck(peerId, msg.command, result, fid, liveMembers, msg.memberIdx,
+    sendWingmanAck(peerId, command, result, fid, liveMembers, memberIdx,
                    designated.valid() ? designated.index : kNoTarget);
+    return result;
 }
 
 WorldBroadcaster::FlightOrderReport WorldBroadcaster::applyFlightOrder(fl::FormationId fid, uint8_t command,

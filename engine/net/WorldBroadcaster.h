@@ -1116,6 +1116,35 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     using TargetDesignator = std::function<EntityId(const EntityState& commander, const float viewAxis[3])>;
     void setTargetDesignator(TargetDesignator fn);
 
+    // Send one MsgServerNotice to a single peer. The client surfaces it in the console and as a
+    // banner. Text longer than the wire field is truncated safely. Sim-thread.
+    //
+    // Extracted because three call sites had already open-coded the same three lines, and #611 would
+    // have been the fourth.
+    void sendNoticeTo(uint32_t peerId, const char* text);
+
+    // Issue a wingman order on behalf of `peerId` — the SAME path MsgWingmanCommand takes, minus the
+    // wire parsing, the sequence guard and the per-peer order rate limit that only a packet needs.
+    // Same authority check, same boresight target designation, same dispatch, same ack to the
+    // commander. Sim-thread only.
+    //
+    // The #611 chat-to-intent bridge calls THIS rather than a lookalike of it, which is what "the
+    // model chooses among validated commands and execution goes through the scripted grammar" means
+    // once it is code rather than a design note.
+    WingmanResult issueWingmanOrder(uint32_t peerId, uint8_t command, uint16_t flightId = kOwnFlight,
+                                    uint32_t memberIdx = kFlightAll, bool cascade = false);
+
+    // A team-chat line that passed moderation and the rate limit (#611). Fires on the SIM THREAD,
+    // after the veto and after the line is recorded, so a suppressed line never reaches a model.
+    // Unset ⇒ the intent tier is off and chat is chat.
+    //
+    // The hook is deliberately given the text and nothing else: everything it may do with the result
+    // goes back through issueWingmanOrder above.
+    using ChatIntentHook = std::function<void(uint32_t peerId, uint8_t channel, std::string_view text)>;
+    void setChatIntentHook(ChatIntentHook fn) {
+        m_chatIntentHook = std::move(fn);
+    }
+
     // Max wingman orders a peer may issue per second before the excess is refused with RateLimited.
     // Acked once per window, never per packet — an ack per rejected packet would be an amplifier.
     void setFlightCommandRateLimit(int perSecond) noexcept;
@@ -1495,6 +1524,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     bool m_chatEnabled{true};                                          // #646: false = drop all chat
     int m_chatRateLimit{2};                                            // #646: chat lines per second per peer
     ChatModerationHook m_chatModerationHook;                           // #646: null = every line passes
+    ChatIntentHook m_chatIntentHook;                                   // #611: null = the intent tier is off
     // Voice comms (#532). The table is server-authoritative and replicated at admit time.
     RadioNetTable m_radioNets;
     bool m_voiceEnabled{true};

@@ -42,6 +42,7 @@
 #include <ILogger.h>
 #include <Platform.h>
 #include <ai/AiControllerFactory.h>
+#include <ai/ChatIntentBridge.h> // free-text wingman commands over team chat (#611)
 #include <ai/FormationController.h>
 #include <ai/LoiterController.h>
 #include <ai/PursuitController.h>
@@ -2512,6 +2513,87 @@ int main(int argc, char** argv) {
         // for it. A zone_control change is therefore rejected with a reason rather than silently
         // dropped. Wiring it is a follow-on that has to decide what re-owning a live zone means.
         // spawn likewise stays null until a delta-driven spawn has a home for its controller.
+    }
+
+    // ---- Chat-to-intent bridge (#611) ----
+    //
+    // Team chat -> a templated prompt -> the provider -> a grammar name -> the SAME order path the
+    // radio menu drives. The model chooses among validated commands; it never invents an action and
+    // never supplies a target.
+    if (cfg.chatIntent.enabled && aiProvider->supports(fl::WorldAiCapability::Intent)) {
+        // Per-peer, per-minute budget. Deliberately separate from (and far below) the chat rate
+        // limit: a chat line costs nothing and a model call costs money and latency, so the team
+        // channel must not be a lever against the server's own inference budget.
+        struct IntentBudget {
+            std::chrono::steady_clock::time_point windowStart{};
+            int count{0};
+            bool warned{false};
+        };
+        auto budgets = std::make_shared<std::unordered_map<uint32_t, IntentBudget>>();
+        const std::string systemPrompt = fl::ai::buildIntentSystemPrompt();
+
+        broadcaster.setChatIntentHook(
+            [&, budgets, systemPrompt](uint32_t peerId, uint8_t /*channel*/, std::string_view text) {
+                // Cheap local gate first: most team chat is not addressed to the flight, and asking a
+                // model to classify every word said in a match would be both expensive and pointless.
+                if (!fl::ai::looksLikeWingmanAddress(text))
+                    return;
+
+                auto& b = (*budgets)[peerId];
+                const auto now = std::chrono::steady_clock::now();
+                if (now - b.windowStart >= std::chrono::minutes(1)) {
+                    b.windowStart = now;
+                    b.count = 0;
+                    b.warned = false;
+                }
+                if (cfg.chatIntent.rateLimitPerMin > 0 && ++b.count > cfg.chatIntent.rateLimitPerMin) {
+                    if (!b.warned && cfg.chatIntent.notifyOnDecline) {
+                        b.warned = true; // once per window; a flood must not be amplified back at the sender
+                        broadcaster.sendNoticeTo(peerId, "Voice/chat orders are rate limited; use the radio menu.");
+                    }
+                    return;
+                }
+
+                fl::WorldAiContext ctx;
+                ctx.snapshot = broadcaster.worldStatePublisher().get();
+                ctx.utterance = std::string(text);
+                ctx.operatorHint = systemPrompt;
+
+                const fl::WorldAiRequestId id =
+                    aiProvider->requestIntent(ctx, [&, peerId](std::string name, std::string error) {
+                        // Fires on the MAIN thread (provider->service()), so nothing here may touch the sim
+                        // directly. Validate here — pure — then hand the ordinal to the sim thread.
+                        if (!error.empty())
+                            return;
+                        const fl::ai::IntentResult r = fl::ai::validateIntentResponse(name);
+                        if (!r.command) {
+                            if (cfg.chatIntent.notifyOnDecline && r.rejection != fl::ai::IntentRejection::Declined) {
+                                // A DECLINE is the model behaving correctly and needs no apology; a malformed
+                                // or out-of-grammar answer is a backend problem the operator should see.
+                                char nbuf[128];
+                                std::snprintf(nbuf, sizeof(nbuf), "intent mapping rejected (%.*s)",
+                                              static_cast<int>(fl::ai::intentRejectionName(r.rejection).size()),
+                                              fl::ai::intentRejectionName(r.rejection).data());
+                                log->log(LogLevel::Warn, __FILE__, __LINE__, nbuf);
+                            }
+                            return;
+                        }
+                        const auto ordinal = static_cast<uint8_t>(*r.command);
+                        gameLoop.enqueueSimCallback([&broadcaster, peerId, ordinal] {
+                            // THE SAME call the wire path makes. Authority, target designation, dispatch and
+                            // the ack to the commander are all the scripted path's, unchanged.
+                            (void)broadcaster.issueWingmanOrder(peerId, ordinal);
+                        });
+                    });
+                if (id == 0 && cfg.chatIntent.notifyOnDecline)
+                    broadcaster.sendNoticeTo(peerId, "Voice/chat orders are unavailable; use the radio menu.");
+            });
+        log->log(LogLevel::Info, __FILE__, __LINE__,
+                 "ai.chat_intent: free-text wingman commands enabled over team chat");
+    } else if (cfg.chatIntent.enabled) {
+        log->log(LogLevel::Warn, __FILE__, __LINE__,
+                 "ai.chat_intent is enabled but the provider does not support intent mapping; "
+                 "the radio menu remains the path");
     }
 
     // ---- REST admin API + health probe (#233) ----

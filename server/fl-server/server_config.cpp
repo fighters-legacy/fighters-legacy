@@ -237,6 +237,18 @@ static const char* kDefaultToml =
     "max_calls_per_minute = 10\n"
     "world_evolution_interval_min = 60\n"
     "\n"
+    "[ai.chat_intent]\n"
+    "# Free-text wingman commands over TEAM chat (#611). Needs [ai.provider] with the `intent`\n"
+    "# capability; without one the in-game radio menu is the path (decision #769).\n"
+    "# The model only ever CHOOSES among the six scripted commands -- it never invents an action and\n"
+    "# never supplies a target, so a successful prompt injection buys \"a real command at the wrong\n"
+    "# time\", which is what pressing a menu key would also buy.\n"
+    "enabled = false\n"
+    "# Model calls per minute per peer. Much lower than the chat rate limit: a chat line is free and\n"
+    "# a model call is not.\n"
+    "rate_limit_per_min = 6\n"
+    "notify_on_decline = true\n"
+    "\n"
     "[rcon]\n"
     "# Source Engine RCON (TCP) remote admin channel. Disabled by default.\n"
     "# Set a strong password before enabling. Password travels over plain TCP;\n"
@@ -1164,6 +1176,27 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                          "ai.provider.world_evolution_interval_min out of range [1,100000]; using default");
             else
                 cfg.aiProvider.worldEvolutionIntervalMin = static_cast<int>(*v);
+        }
+
+        // [ai.chat_intent] (#611)
+        if (auto v = tbl["ai"]["chat_intent"]["enabled"].value<bool>())
+            cfg.chatIntent.enabled = *v;
+        if (auto v = tomlInt(tbl["ai"]["chat_intent"]["rate_limit_per_min"])) {
+            if (*v < 0 || *v > 10000)
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "ai.chat_intent.rate_limit_per_min out of range [0,10000]; using default");
+            else
+                cfg.chatIntent.rateLimitPerMin = static_cast<int>(*v);
+        }
+        if (auto v = tbl["ai"]["chat_intent"]["notify_on_decline"].value<bool>())
+            cfg.chatIntent.notifyOnDecline = *v;
+        // The intent tier is a CONSUMER of the provider seam. Enabled without one it would map
+        // nothing and look broken, so say why rather than leaving a player wondering why their
+        // wingman ignores them.
+        if (cfg.chatIntent.enabled && !cfg.aiProvider.enabled) {
+            log->log(LogLevel::Warn, __FILE__, __LINE__,
+                     "ai.chat_intent.enabled is true but [ai.provider] is disabled; free-text wingman "
+                     "commands need a provider -- the radio menu remains the path");
         }
 
         // [metrics]

@@ -553,6 +553,12 @@ if(TARGET platform-enet)
     endif()
     catch_discover_tests(test_http_admin)
 
+    # Chat-to-intent bridge (#611). Pure logic, canned responses, no model — the rejection and
+    # injection paths are the point.
+    add_executable(test_chat_intent_bridge test_chat_intent_bridge.cpp)
+    target_link_libraries(test_chat_intent_bridge PRIVATE Catch2::Catch2WithMain engine-ai)
+    catch_discover_tests(test_chat_intent_bridge)
+
     # AI provider seam (#163): the NullAiProvider contract and the WorldEvolutionDelta application
     # path, which is the one that has to be hostile to model output. No plugin on disk is needed —
     # the load-failure case uses a path that does not exist.

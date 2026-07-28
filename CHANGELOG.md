@@ -12,9 +12,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **server**: MCP (Model Context Protocol) surface for agents, operator tooling and spectator clients — revision `2025-06-18` over Streamable HTTP on the existing `[http_admin]` listener, with `world_state`/`events`/`submit_mission`/`admin_command` tools, subscribable world-state and event resources, per-token autonomy tiers, a command allowlist, per-token rate limiting, and every invocation audit-logged into the match event log and therefore into the match's `.flrep` recording; `[ai.mcp]` config, disabled by default (#601)
 - **engine**: `IWorldAiProvider` — the generative-AI provider seam for missions, campaign events, narrative, faction decisions and free-text intent, with `NullAiProvider` as the no-provider path, plugin loading, and a `WorldEvolutionDelta` application path that validates every change a model proposes and reports what it dropped; `[ai.provider]` config and `FL_AI_API_KEY`, disabled by default (#163)
 
+- **ai**: chat-to-intent bridge — free-text wingman commands over team chat, mapped by the provider onto the six scripted `WingmanCommand` ordinals and executed through the same order path the radio menu drives; templated prompts, response-schema validation and a grammar allowlist, so a prompt injection is bounded to a real command at the wrong time; `[ai.chat_intent]` config, disabled by default (#611)
+
 ### Changed
 
 - **engine**: the schema-only `validateMission` moved from `validate-mission` into `engine-mission`, next to the `parseMission` it delegates to, so fl-server can validate a submitted mission in-process; `validate-mission` keeps its `--pack` cross-check and every existing caller is unchanged (#601)
+- **server**: the wingman order path is now reachable as `WorldBroadcaster::issueWingmanOrder`, so the wire, the radio menu and the chat-intent bridge share one implementation of authority, target designation and dispatch rather than a lookalike each (#611)
 - **engine**: `dlopen`/`LoadLibrary` extracted from `ModLoader` into the shared `engine-dynlib`, so content packs and AI provider plugins load through one implementation instead of two (#163)
 
 ## [0.3.12] - 2026-07-27

@@ -245,6 +245,22 @@ struct ServerConfig {
     };
     AiProviderConfig aiProvider;
 
+    // [ai.chat_intent] — free-text wingman commands over team chat (#611).
+    //
+    // Needs [ai.provider] with the `intent` capability. With either missing, the radio menu is the
+    // path — which is the #769 decision, not a degradation to apologise for.
+    struct ChatIntentConfig {
+        bool enabled = false;
+        // Intent requests per minute per peer. Separate from the chat rate limit and much lower: a
+        // chat line is free, a model call is not, and the team channel must not become a lever
+        // against the server's own inference budget.
+        int rateLimitPerMin = 6;
+        // Tell the pilot when a call was understood, declined, or not attempted. Off would leave a
+        // player unable to tell "the wingman ignored me" from "the feature is not on".
+        bool notifyOnDecline = true;
+    };
+    ChatIntentConfig chatIntent;
+
     // [metrics]
     struct MetricsConfig {
         std::string tickJsonPath;           // empty = disabled; atomic per-interval tick-budget JSON export

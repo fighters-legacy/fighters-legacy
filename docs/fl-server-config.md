@@ -2102,6 +2102,58 @@ rather than a quiet half-implementation.
 
 ---
 
+## `[ai.chat_intent]` — free-text wingman commands (#611)
+
+Team-chat lines become **one scripted wingman command**. Needs `[ai.provider]` with the `intent`
+capability; without one the in-game radio menu is the path, which is decision #769 rather than a
+degradation to apologise for.
+
+```toml
+[ai.chat_intent]
+enabled = false
+rate_limit_per_min = 6
+notify_on_decline = true
+```
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Warns at startup if `[ai.provider]` is off |
+| `rate_limit_per_min` | int | `6` | Model calls per minute **per peer**; `0` = unlimited |
+| `notify_on_decline` | bool | `true` | Tell the pilot when a call was rate-limited or unavailable |
+
+### The pipeline
+
+```
+player text → local address check → templated prompt → model → {"command": "<name>"}
+                                                                        ↓
+                                                       schema validation + grammar allowlist
+                                                                        ↓
+                                              the SAME order path MsgWingmanCommand drives
+```
+
+The last step is literal: the bridge calls `WorldBroadcaster::issueWingmanOrder`, the same function
+the wire path calls after parsing its packet. Same authority check, same boresight target
+designation, same dispatch, same ack.
+
+The **local address check** comes first and is deliberately conservative — a model call per chat line
+would make the team channel a lever against the server's own inference budget, and would ask a model
+to classify every word said in a match.
+
+### What bounds a prompt injection
+
+**Not the prompt.** The template helps — the utterance is delimited, labelled as data, has control
+characters flattened and its angle-runs scrubbed so it cannot forge the delimiter — but the
+load-bearing property is that the only thing which can come back is **one of six parameterless
+ordinals**.
+
+So even a completely successful injection buys "a real command at the wrong time", which is what
+pressing a key on the radio menu would also have bought. `attack_my_target` carries **no target**:
+the target is resolved server-side from the commander's own boresight, from state the server already
+owns. A model that names a command which does not exist is refused; a model that answers `unknown`
+has declined, which is correct and is deliberately not an executable ordinal.
+
+---
+
 ## `[ai.mcp]` — Model Context Protocol surface (#601)
 
 A **Model Context Protocol** endpoint for agents, operator tooling, and community spectator clients.
