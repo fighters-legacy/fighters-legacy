@@ -358,6 +358,39 @@ beacon advertises a passworded flag so a browser can prompt. Sent plaintext over
 
 ---
 
+## [bots] — AI backfill (#87)
+
+Keeps a match populated by spawning server-side AI participants up to a target head-count, so a
+half-empty server still plays like a match. Bots are **not network peers** — the transport never
+sees them; they are ordinary AI entities that also appear on the scoreboard.
+
+**Two conditions both have to hold or no bot is ever spawned**, and neither is reported as an
+error: `fill` must be greater than zero, and the match must have **teams**. A free-for-all has
+nothing to balance against, so backfill stays off there by design. When backfill does engage the
+server logs `bots: AI backfill enabled` once at startup — the quickest way to tell which of the two
+conditions you are missing.
+
+```toml
+[bots]
+fill          = 0     # total participants wanted, humans included; 0 = no bots
+max_bots      = 16
+ai_script     = "builtin:fighter"
+balance_teams = true
+# entity_type = ""    # empty = [world] player_entity_type
+```
+
+| Key | Type | Default | Range | Notes |
+|---|---|---|---|---|
+| `fill` | integer | `0` | `[0, 128]` | Desired **total** participants, humans and bots together — not a bot count. Bots retire as players arrive. `0` disables backfill. |
+| `max_bots` | integer | `16` | `[0, 127]` | Hard cap on live bots regardless of `fill`. |
+| `entity_type` | string | `""` | — | Entity type flown by bots. Empty inherits `[world] player_entity_type`, so bots fly what players fly unless you say otherwise. |
+| `ai_script` | string | `"builtin:fighter"` | — | Compiled-in AI script the bots fly. An empty or unresolvable name falls back to `builtin:fighter` rather than spawning an inert aircraft. |
+| `balance_teams` | bool | `true` | — | Spread bots evenly across the teams instead of stacking one side. |
+
+The roster is re-evaluated about once a second and changes by **at most one bot per pass** — it
+adds or retires gradually rather than dumping the whole difference into a single tick when a
+squad joins or leaves. Bots killed in combat are reaped and replaced on the same cadence.
+
 ## [lobby] — Lobby registration
 
 Registers the server with an `fl-lobby` service over HTTP (#143) so it appears in players' in-game server
@@ -749,6 +782,33 @@ many real clients — see [entity-scale-characterization.md](entity-scale-charac
 that many players at rate. Leave at `0` for normal operation. Out-of-range values are rejected with a
 Warn and the default is used. **Requires restart** (entities are spawned before the sim loop starts).
 
+### `test_spawn_entity_type`
+
+| Type | Default |
+|---|---|
+| string | `""` (= `builtin:debug-entity`) |
+
+Entity type the load-spawn above uses. Empty means `builtin:debug-entity`, the plain AI airframe.
+Set it to `builtin:bomber` to make every pre-spawned entity a **crewed** aircraft (#980), which
+exercises the seat/turret path that a world of single-seat entities never touches — the crew
+snapshot extension is omitted entirely when no crewed aircraft are in interest, so a load test
+without this measures a code path the real workload does not have. **Requires restart.**
+
+### `entity_soft_cap`
+
+| Type | Default | Range |
+|---|---|---|
+| integer | `0` (unlimited) | `>= 0` |
+
+Intended as a ceiling on live world objects, refusing further spawns rather than letting a runaway
+mission script or a stuck respawn loop exhaust memory.
+
+> **Not currently enforced.** The value is parsed and range-checked, but as of v0.3.13 it is never
+> applied to the entity pool, so setting it has no effect and produces no warning. The pool's
+> soft-cap mechanism itself works — only the wiring from this key is missing. **Do not rely on this
+> as a resource control**; bound entity count through mission and pack content instead. Tracked as
+> a code defect by the v0.4.0 documentation audit (#1047).
+
 ### `test_spawn_ai_mix` / `test_projectile_rate` / `test_projectile_ttl_s`
 
 | Key | Type | Default | Range |
@@ -934,6 +994,34 @@ servers where LAN presence is undesirable (e.g. tournament setups, cloud deploym
 How often to broadcast the beacon, in milliseconds. Out-of-range values are ignored and the
 default is kept (a warning is logged).
 
+### `query_enabled`
+
+| Type | Default |
+|---|---|
+| bool | `true` |
+
+Runs the **server-info query responder** (#997) — a small UDP listener that answers A2S-style
+requests with live details (name, player count, mode flags) for a browser's ping and details
+columns. It is a separate socket from the beacon above: the beacon announces the server on a LAN,
+the responder answers a specific question from anywhere and so is the one that matters for an
+internet server listed in a lobby.
+
+The port is advertised inside the beacon, so a browser that found the server on a LAN learns
+where to query it without configuration.
+
+If the socket cannot bind, the server logs a warning and continues with queries disabled — a
+port conflict never stops the game server from starting.
+
+### `query_port`
+
+| Type | Default | Valid range |
+|---|---|---|
+| integer | `0` (auto) | 0–65535 |
+
+UDP port for the query responder. `0` means **game port + 1**, which is why two servers on one
+host need at least two ports between them: a second server at `port + 1` would collide with the
+first one's query socket, and the loser logs a bind warning rather than failing loudly.
+
 ---
 
 ## [flight] — The player's flight (AI wingmen)
@@ -962,6 +1050,22 @@ size = 0  # AI wingmen spawned per connecting player; 0 = disabled; [0, 8]
 # designate_half_angle_deg = 15.0     # boresight cone half-angle; [1, 90]
 # command_rate_limit_per_s = 4        # wingman orders per second per player; [1, 60]
 ```
+
+| Key | Type | Default | Range | Notes |
+|---|---|---|---|---|
+| `size` | integer | `0` | `[0, 8]` | AI wingmen per connecting player; `0` disables. See below. |
+| `entity_type` | string | `"builtin:debug-entity"` | — | Entity type spawned for each member. An empty value is rejected with a warning and the default kept. |
+| `lateral_m` | float | `150.0` | `[10, 5000]` | Formation slot spacing, lateral, per rank |
+| `aft_m` | float | `100.0` | `[0, 5000]` | Formation slot spacing, aft, per rank |
+| `vertical_m` | float | `-15.0` | `[-1000, 1000]` | Formation slot spacing, vertical, per rank; negative steps the flight down |
+| `engage_range_m` | float | `12000.0` | `[500, 200000]` | `engage_bandits` trigger radius, measured about **the wingman** |
+| `cover_range_m` | float | `6000.0` | `[500, 200000]` | `cover_me` trigger radius, measured about **the lead** — this is the one substitution that separates covering the leader from fighting whatever turns up |
+| `designate_range_m` | float | `15000.0` | `[500, 200000]` | `attack_my_target`: how far the boresight designation reaches |
+| `designate_half_angle_deg` | float | `15.0` | `[1, 90]` | Boresight cone half-angle for designation |
+| `command_rate_limit_per_s` | integer | `4` | `[1, 60]` | Wingman orders accepted per second, per player |
+
+Every value out of range is a warning at startup with the default kept, never a refusal to
+start — a mistuned formation is a cosmetic problem, not a security one.
 
 ### `size`
 
@@ -1573,6 +1677,13 @@ Disabled when `input_trace_dir` is empty; toggle at runtime with the `trace_star
 input_trace_dir = ""   # empty = disabled; per-peer FLIT traces written here
 ```
 
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `input_trace_dir` | string | `""` | Directory for per-peer traces, relative to the working directory; created if missing. Empty disables tracing. |
+
+The FLIT trace format (a 10-byte header + 32-byte records) is documented in
+[docs/load-testing.md](load-testing.md#trace-replay-560).
+
 ## [replay] — Match recording
 
 Records the match to a `.flrep` replay file — the server's own view of what happened, tick by tick,
@@ -1653,13 +1764,6 @@ The hash is taken over the **decoded** records — what a replay will actually s
 taken before encoding and one taken after do not compare: the smallest-three orientation encoding
 drops the largest-magnitude component, and a rotation whose two largest components are nearly equal
 can have that choice tip when quantized.
-
-| Key | Type | Default | Notes |
-|---|---|---|---|
-| `input_trace_dir` | string | `""` | Directory for per-peer traces; empty disables tracing. |
-
-The FLIT trace format (header + 28-byte records) is documented in
-[docs/load-testing.md](load-testing.md#trace-replay-560).
 
 ## [spawn] — Peer spawn locations
 
@@ -1770,6 +1874,8 @@ for any authenticated caller.
 | `flight` | `list \| create <anchorIdx> [--commander <peerId>] [--parent <id>] [--callsign <name>] \| add <id> <entityIdx> [slot] \| order <id> <command> [--member <idx>] [--target <entityIdx>] [--cascade] \| disband <id>` | The formation / command-hierarchy surface (#610) — the **game-master and AWACS path** (requires `command_any_ai`). Build formations (including all-AI flights and nested strike packages) and order them. `order` takes the six wingman commands (`attack_my_target`, `engage_bandits`, `rejoin`, `cover_me`, `hold_fire`, `return_to_base`); `--cascade` applies it to every sub-formation beneath the addressed one. Dispatches through the **same** code as the network order path, so a console order and a radio order cannot behave differently. `attack_my_target` needs a designated target: pass **`--target <entityIdx>`** (the #861 game-master map supplies it from a clicked entity), or use `spawn --ai pursuit <idx>`. |
 | `kill` | `<idx>` | Remove a live entity by pool index (see `peers` output) |
 | `tp` | `<idx> <x> <y> <z>` | Teleport entity `<idx>` to world position; also used by the game client's game console to teleport the player entity |
+| `respawn` | `<peerId>` | Force a dead peer back into the world immediately rather than waiting out `[world] spectate_delay_s` (requires `spawn_any`). Queued to the sim tick |
+| `spectate` | `<peerId> <entityIdx\|off>` | Lock a dead or observer peer's view onto a specific entity (#403), or `off` to release it back to free camera (requires `spectate_any`). Moves that peer's interest centre too, so the entity is actually in their snapshot rather than merely aimed at. Queued to the sim tick |
 | `seats` | `<entityIdx>` | Show a crewed aircraft's seat roster and occupancy (#974): per seat the role, occupancy (`human peer=N` / `bot` / `empty`), and the Fly-seat marker. Reports an error for a single-seat / unknown entity |
 | `set_seat` | `<entityIdx> <seat> <peerId\|bot\|empty>` | Force a **non-fly** seat's occupancy (#974): bind a human peer, resume the authored bot, or silence the seat. The Fly seat is not settable (use `set_role` / respawn). Queued to the sim tick |
 | `reload_config` | — | Re-read `server.toml` and apply: `name` (beacon), `motd`, `motd_display_s`, `draw_distance_km`, `snapshot_budget_bytes`, `jitter_buffer_depth`, `jitter_buffer_adapt_window`, `jitter_buffer_hysteresis`, `jitter_buffer_jitter_multiplier`, `congestion_*`, `overrun_governor_enabled`, `overrun_high_watermark`, `overrun_low_watermark`, `overrun_min_snapshot_hz`, `overrun_max_ai_stride`, `overrun_budget_floor_bytes` (all take effect on the next sim tick; `max_catchup_ticks`, `sim_worker_threads`, `spatial_cell_size_km`, and the `test_spawn_*` keys require restart) |
@@ -2060,6 +2166,7 @@ world_evolution_interval_min = 60
 | `endpoint` | string | `""` | Backend-specific; interpreted by the plugin, not by fl-server |
 | `model` | string | `""` | Backend-specific |
 | `api_key_env` | string | `"FL_AI_API_KEY"` | The **name of the environment variable** holding the key |
+| `api_key` | — | — | **Not a supported key.** Present only so the mistake is caught: a literal secret here logs an error at startup naming `api_key_env` instead. `server.toml` gets committed and shared, so accepting it quietly would leak keys into repositories. |
 | `max_calls_per_minute` | int | `10` | `[0, 100000]`; `0` = unlimited |
 | `world_evolution_interval_min` | int | `60` | In-game minutes between world-evolution calls |
 

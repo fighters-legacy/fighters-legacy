@@ -195,9 +195,11 @@ def extract_config_doc_keys(text: str) -> set[str]:
                 array = array_heading.group(1)
                 continue
             array = None
-            key_heading = re.match(r"^###\s+`([a-z_]+)`", line)
-            if key_heading and section:
-                keys.add(f"{section}.{key_heading.group(1)}")
+            if line.startswith("### ") and section:
+                # One heading may cover several keys that share an explanation, e.g.
+                # "### `incoming_bandwidth_bps` / `outgoing_bandwidth_bps`".
+                for key in re.findall(r"`([a-z_]+)`", line):
+                    keys.add(f"{section}.{key}")
             continue
 
         if line.startswith("|"):
@@ -280,7 +282,16 @@ def check_lua_names() -> CheckResult:
     src = read("engine/script/LuaController.cpp")
 
     code = _lua_binding_names(src)
-    docs = "\n".join(read(p) for p in ("docs/modding/ai.md", "docs/modding/missions.md"))
+    docs = "\n".join(
+        read(p)
+        for p in (
+            "docs/modding/ai.md",
+            "docs/modding/missions.md",
+            # The scoring bindings are documented with the game modes that award points,
+            # which is where an author looking for them actually is.
+            "docs/modding/game-modes.md",
+        )
+    )
 
     documented: set[str] = set()
     for name in code:
@@ -385,7 +396,9 @@ def check_commands() -> CheckResult:
             documented.add(f"cmd:{name}")
     for entry in {n for n in code if n.startswith("rest:")}:
         route = entry.split(" ", 1)[1]
-        if re.search(rf"`{re.escape(route)}`", docs):
+        # An endpoint reference spells the route with its query string --
+        # `/events?after=N&max=M` -- so anchor on the path and allow a documented suffix.
+        if re.search(rf"`{re.escape(route)}[?` ]", docs):
             documented.add(entry)
     for entry in {n for n in code if n.startswith("mcp:")}:
         tool = entry.split(":", 1)[1]

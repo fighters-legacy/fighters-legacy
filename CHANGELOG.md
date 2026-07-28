@@ -7,6 +7,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **docs**: operator configuration reference corrected against the v0.3.13 binary (#1047). `[trace] input_trace_dir` was documented inside the `[replay]` section, so the one key that enables input tracing appeared to belong to a section that does not parse it; the FLIT record size was stated as 28 bytes and is 32. `[bots]` was entirely undocumented — including that backfill silently does nothing without teams. `[flight]` documented 1 of its 10 keys, `[discovery]` neither of its query-responder keys, `[world]` neither `test_spawn_entity_type` nor `entity_soft_cap`, and the `respawn`/`spectate` admin commands were absent from the command reference. `ai.provider.api_key` is now documented as the rejected key it is. `[world] entity_soft_cap` is documented as **parsed but not enforced**, which is what the code does
+
 ### Added
 
 - **tools**: `docs_drift.py` + a `docs-drift` CI gate — checks the documentation against the code it describes in both directions (config keys, wire message ids, Lua bindings, admin/REST/MCP surfaces, the tool list). Undocumented additions and ghost entries are both failures; a ghost is the worse of the two, because a reader acts on it. Every extractor asserts a minimum match count, so a pattern that breaks turns the gate red instead of reporting perfection over an empty set (#1047)
