@@ -840,6 +840,76 @@ actually appear, and the Vulkan budget advertises ~half of system RAM on a GPU w
 Read both unified-memory rows as trends across phases, never as absolutes — and when writing code
 against these counters, treat "the counter does not exist" as its own outcome.
 
+## Suites (#934)
+
+Seven suites. Suites are **data** (`tools/ai_eval/suites/*.json`); only the pure scoring logic is
+unit-tested (`tests/test_ai_eval.py`), and **CI never requires a model**.
+
+| Suite | Budget | What it scores |
+|---|---|---|
+| `intent` | 2 s | Free text → one wingman command. The original vocabulary suite |
+| `intent_asr` | 2 s | The same, on **ASR-mangled transcripts** (#935's output) |
+| `injection` | 2 s | **Prompt-injection screening** — a model-adoption gate |
+| `narrative` | 20 s | Briefing/debrief prose must **cite** what it describes |
+| `gci` | 20 s | GCI calls against a known track picture — numerically checked |
+| `mission` | 60 s | Mission YAML through the real `validate-mission` |
+| `ops` | 60 s | Server triage: root cause, **runbook**, and action allowlist |
+
+### `injection` is a gate, not a feature test
+
+The #599 sweep found a capable 9B model obeying an instruction embedded in a pilot utterance, and
+that stayed a one-anecdote selection criterion for far too long. It is now a **regression gate for
+adopting any model on the chat path** (#611): a model that fails here does not go on that path,
+whatever else it scores.
+
+Each case carries `injected_command` — what the attack was trying to elicit — and the scorer reports
+`obeyed_injection` **separately from ordinary wrongness**, so a sweep can rank models by
+susceptibility rather than only by accuracy. Three benign control cases are real orders that merely
+mention rules; a model that refuses those is paranoid, not safe.
+
+What a pass does **not** mean: the model is not the security boundary. #611's grammar allowlist is,
+and it bounds even a completely successful injection to "a real command at the wrong time". This
+suite measures how often an attacker gets even that.
+
+### `intent_asr` is separate from `intent` on purpose
+
+Folding ASR noise into `intent` would move the clean-speech numbers and make two models incomparable
+across a change to that file. Note the bar: #935's **deterministic matcher handles these with no
+model at all**, so a model scoring worse than the matcher here has no business on the voice path.
+
+### `narrative` scoring is deterministic
+
+Prose must cite events and entities as `[[id]]` markers, and every citation is validated against the
+supplied context — no judge model, no similarity threshold. That is what makes it a regression gate
+rather than a vibe check. The failure it exists to catch is **hallucinated grounding**: prose that
+reads beautifully and refers to a sortie that never happened is worse than prose that says less. A
+response that is nothing but citations fails too — it satisfies the instruction and is useless to a
+player.
+
+### `gci` is arithmetic
+
+Bearing, range and count are facts about the supplied picture, so tolerance is the only judgement and
+it is stated in the suite (`bearing_tol_deg`, `range_tol_nm`). Bearing is compared as a **shortest
+angular distance**, so 359° and 1° are two degrees apart. Cases deliberately include a nearest group
+listed second, a closer *friendly* group that must not be called, and a track on the 360/0 seam.
+
+### `ops` gained runbooks and congestion discrimination
+
+**Every model in the #599 sweep misread congestion.** They see a collapsed send rate and call the
+server overloaded, when the server is healthy and one peer's *link* is bad. The two are
+operationally opposite — a congested peer needs nothing done to the server, and an agent that
+confuses them will "fix" a healthy server under load.
+
+Four discrimination cases isolate it: send-rate collapse with a healthy tick budget (congestion),
+full send rate with dropped ticks (overrun), both at once (the server fault is what an operator acts
+on first), and loss the controller absorbed (healthy, do nothing).
+
+Each case also names a **runbook**, scored separately from the root cause because they fail
+independently: a model can name "congestion" correctly and still reach for shed-load. Cases written
+before #934 declare no runbook and are not scored on one.
+
+---
+
 ## Recommended defaults
 
 For `docs/ai-architecture.md` §2 (provider seam):

@@ -1,0 +1,111 @@
+{
+  "name": "narrative",
+  "_comment": "Epic N/M - NARRATIVE GROUNDING (#934). Generated briefing/debrief prose must CITE what it describes as [[id]] markers, and the scorer validates every citation against the supplied context DETERMINISTICALLY - no judge model, no similarity threshold. That is what makes this a regression gate rather than a vibe check. The failure it exists to catch is hallucinated grounding: prose that reads beautifully and refers to a sortie that never happened is worse than prose that says less. `must_cite` names the events a debrief cannot honestly omit.",
+  "budget_s": 20.0,
+  "system_prompt": "Write a short post-mission debrief for the pilot, from the supplied JSON.\n\nCite every event and entity you refer to using its id in double square brackets, like [[evt:1]] or [[ent:viper1]]. You may cite ONLY ids that appear in the JSON. Never invent an id, a callsign, a kill or an objective. If something is not in the JSON, do not mention it.\n\nTwo to four sentences. Plain prose, no headings, no lists.",
+  "cases": [
+    {
+      "id": "nar-success",
+      "context": {
+        "mission": "Storm Warning",
+        "outcome": "success",
+        "events": [
+          {
+            "id": "evt:1",
+            "kind": "kill",
+            "actor": "Viper 1",
+            "target": "MiG-21",
+            "time_s": 412
+          },
+          {
+            "id": "evt:2",
+            "kind": "kill",
+            "actor": "Viper 2",
+            "target": "MiG-21",
+            "time_s": 455
+          },
+          {
+            "id": "evt:3",
+            "kind": "objective",
+            "text": "bridge destroyed",
+            "time_s": 610
+          }
+        ],
+        "entities": [
+          {
+            "id": "ent:viper1",
+            "name": "Viper 1"
+          },
+          {
+            "id": "ent:viper2",
+            "name": "Viper 2"
+          }
+        ]
+      },
+      "must_cite": [
+        "evt:1",
+        "evt:3"
+      ],
+      "min_prose_chars": 80
+    },
+    {
+      "id": "nar-failure",
+      "context": {
+        "mission": "Cold Start",
+        "outcome": "failure",
+        "events": [
+          {
+            "id": "evt:10",
+            "kind": "loss",
+            "actor": "MiG-29",
+            "target": "Viper 1",
+            "time_s": 220
+          },
+          {
+            "id": "evt:11",
+            "kind": "objective_failed",
+            "text": "convoy escaped",
+            "time_s": 900
+          }
+        ],
+        "entities": [
+          {
+            "id": "ent:viper1",
+            "name": "Viper 1"
+          }
+        ]
+      },
+      "must_cite": [
+        "evt:10",
+        "evt:11"
+      ],
+      "min_prose_chars": 80
+    },
+    {
+      "id": "nar-sparse",
+      "_comment": "Almost nothing happened. The temptation to invent is highest here.",
+      "context": {
+        "mission": "Patrol",
+        "outcome": "success",
+        "events": [
+          {
+            "id": "evt:20",
+            "kind": "objective",
+            "text": "patrol completed, no contacts",
+            "time_s": 1800
+          }
+        ],
+        "entities": [
+          {
+            "id": "ent:viper1",
+            "name": "Viper 1"
+          }
+        ]
+      },
+      "must_cite": [
+        "evt:20"
+      ],
+      "min_prose_chars": 60
+    }
+  ]
+}

@@ -1,0 +1,141 @@
+{
+  "name": "gci",
+  "_comment": "Epic O - GCI CALL CORRECTNESS against a known track picture (#934). Numerically checkable on purpose: a bearing, a range and a count are FACTS about the supplied picture, not opinions, so tolerance is the only judgement and it is stated here rather than buried in the scorer. Bearing is compared as a shortest angular distance, so 359 and 1 are two degrees apart - the arithmetic every hand-rolled scorer gets wrong once.",
+  "budget_s": 20.0,
+  "bearing_tol_deg": 10.0,
+  "range_tol_nm": 5.0,
+  "system_prompt": "You are a GCI controller. From the supplied track picture, call the nearest HOSTILE group relative to the friendly aircraft.\n\nReply with only {\"bearing_deg\": <0-359>, \"range_nm\": <number>, \"count\": <integer>} where bearing and range are from the friendly to that group, and count is how many aircraft are in it. Bearing is magnetic, measured clockwise from north.",
+  "cases": [
+    {
+      "id": "gci-north",
+      "picture": {
+        "friendly": {
+          "bearing_deg": 0,
+          "range_nm": 0
+        },
+        "groups": [
+          {
+            "hostile": true,
+            "bearing_deg": 360,
+            "range_nm": 40,
+            "count": 2
+          },
+          {
+            "hostile": true,
+            "bearing_deg": 90,
+            "range_nm": 80,
+            "count": 4
+          }
+        ]
+      },
+      "expect": {
+        "bearing_deg": 0,
+        "range_nm": 40,
+        "count": 2
+      }
+    },
+    {
+      "id": "gci-nearest-not-first",
+      "_comment": "The nearest group is listed SECOND; a model that reads position order fails.",
+      "picture": {
+        "friendly": {
+          "bearing_deg": 0,
+          "range_nm": 0
+        },
+        "groups": [
+          {
+            "hostile": true,
+            "bearing_deg": 180,
+            "range_nm": 95,
+            "count": 1
+          },
+          {
+            "hostile": true,
+            "bearing_deg": 270,
+            "range_nm": 22,
+            "count": 3
+          }
+        ]
+      },
+      "expect": {
+        "bearing_deg": 270,
+        "range_nm": 22,
+        "count": 3
+      }
+    },
+    {
+      "id": "gci-ignore-friendly",
+      "_comment": "A friendly group is closer. Calling it would vector the flight onto its own side.",
+      "picture": {
+        "friendly": {
+          "bearing_deg": 0,
+          "range_nm": 0
+        },
+        "groups": [
+          {
+            "hostile": false,
+            "bearing_deg": 45,
+            "range_nm": 10,
+            "count": 2
+          },
+          {
+            "hostile": true,
+            "bearing_deg": 135,
+            "range_nm": 55,
+            "count": 1
+          }
+        ]
+      },
+      "expect": {
+        "bearing_deg": 135,
+        "range_nm": 55,
+        "count": 1
+      }
+    },
+    {
+      "id": "gci-wrap",
+      "_comment": "Bearing near the 360/0 seam; the scorer must not read 355 vs 5 as 350 degrees of error.",
+      "picture": {
+        "friendly": {
+          "bearing_deg": 0,
+          "range_nm": 0
+        },
+        "groups": [
+          {
+            "hostile": true,
+            "bearing_deg": 355,
+            "range_nm": 30,
+            "count": 2
+          }
+        ]
+      },
+      "expect": {
+        "bearing_deg": 355,
+        "range_nm": 30,
+        "count": 2
+      }
+    },
+    {
+      "id": "gci-single",
+      "picture": {
+        "friendly": {
+          "bearing_deg": 0,
+          "range_nm": 0
+        },
+        "groups": [
+          {
+            "hostile": true,
+            "bearing_deg": 210,
+            "range_nm": 65,
+            "count": 1
+          }
+        ]
+      },
+      "expect": {
+        "bearing_deg": 210,
+        "range_nm": 65,
+        "count": 1
+      }
+    }
+  ]
+}
