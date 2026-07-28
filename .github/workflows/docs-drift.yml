@@ -56,6 +56,16 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      # Only pytest. The checker itself is stdlib-only, and this job reads markdown and source
+      # text -- it does not build anything, so it deliberately skips the install-linux-deps
+      # composite action rather than pulling a compiler and the X11 headers into a docs check.
+      - name: Install pytest
+        run: pip install --quiet pytest
+
       - name: Unit-test the checker
         # The checker runs first against its own fixtures. An extractor that has stopped
         # matching would otherwise diff two empty sets and pass, reporting the documentation
