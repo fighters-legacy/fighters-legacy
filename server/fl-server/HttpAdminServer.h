@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "McpProtocol.h"
 #include "server_config.h"
 
 #include <ILogger.h>
@@ -8,10 +9,12 @@
 #include <net/Capability.h>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace fl {
 class CommandRegistry;
@@ -31,14 +34,19 @@ struct TokenGrant {
     CapabilityMask caps{0};
     uint16_t factionIndex{PeerAuthority::kNoFactionBinding};
     std::string role;
+    // MCP autonomy tier (#601), resolved from the row's override or the [ai.mcp] default. Read-only
+    // unless something says otherwise, and orthogonal to `caps`: the tier gates which TOOLS the
+    // token may reach, `caps` still gates what any command it runs may do.
+    mcp::Autonomy autonomy{mcp::Autonomy::Observe};
 };
 
-// Build the token table from config. A row naming an unknown role preset is REJECTED rather than
-// silently downgraded: an operator who typos "moderatr" must not end up with a token that
-// authenticates and then refuses everything, because that reads as the server being broken.
-// Returns false and fills `error` on the first bad row.
-[[nodiscard]] bool buildTokenTable(const ServerConfig::HttpAdminConfig& cfg, std::vector<TokenGrant>& out,
-                                   std::string& error);
+// Build the token table from config. A row naming an unknown role preset — or an unknown autonomy
+// tier — is REJECTED rather than silently downgraded: an operator who typos "moderatr" must not end
+// up with a token that authenticates and then refuses everything, because that reads as the server
+// being broken. `defaultAutonomy` is the [ai.mcp] tier a row inherits when it sets none; an unknown
+// value there is likewise an error. Returns false and fills `error` on the first bad row.
+[[nodiscard]] bool buildTokenTable(const ServerConfig::HttpAdminConfig& cfg, std::string_view defaultAutonomy,
+                                   std::vector<TokenGrant>& out, std::string& error);
 
 // Extract the credential from an `Authorization: Bearer <token>` header value. Returns an empty
 // string when the header is absent, malformed, or uses a different scheme. The scheme match is
@@ -75,6 +83,25 @@ struct TokenGrant {
 
 namespace fl {
 
+// What fl-server lends the MCP frontend (#601). Each hook is optional; a null hook degrades that
+// capability rather than the endpoint.
+//
+// They are std::functions rather than direct references for the reason the codebase already uses
+// them (setAdminDispatch, setMissionSlotBinder, WorldApi): the caller owns where each call goes, and
+// this class keeps knowing nothing about WorldBroadcaster.
+struct McpHooks {
+    // Record an agent tool invocation as MatchEventType::AgentAction. Stage 2 already interleaves
+    // the MatchEventLog into every .flrep, so wiring this puts agent actions in recordings for free
+    // -- which is the audit trail #588/#601 asked for, not a second log to keep.
+    std::function<void(std::string_view tool, const CommandIssuer& issuer, std::string_view detail)> auditAgentAction;
+    // Tick of the currently published world snapshot; 0 = none published yet. The notification
+    // stream watches this to tell a subscriber the world-state resource changed, instead of
+    // re-serializing a snapshot nobody asked for.
+    std::function<uint64_t()> worldStateTick;
+    // Next match-event sequence number. Same purpose for the events resource.
+    std::function<uint64_t()> matchEventSeq;
+};
+
 // The embedded REST admin API (#233).
 //
 // Every route resolves the request's bearer token to a CommandIssuer and then calls the SAME
@@ -91,6 +118,11 @@ class HttpAdminServer {
     HttpAdminServer(const CommandRegistry& registry, const ServerConfig::HttpAdminConfig& cfg, ILogger& log,
                     CommandShell* shell = nullptr);
     ~HttpAdminServer();
+
+    // Turn on the MCP frontend (#601) over this same listener. Call before start(); calling it is
+    // what installs the routes, so a server whose [ai.mcp] is disabled has no MCP surface at all
+    // rather than one that answers every request with a refusal.
+    void enableMcp(const ServerConfig::McpConfig& cfg, McpHooks hooks);
 
     // Bind and launch the listener thread. Returns false on a bad token table or a bind failure; the
     // server then continues without the REST API rather than refusing to boot.

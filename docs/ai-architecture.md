@@ -102,6 +102,19 @@ A structured, read-only, out-of-band surface:
 
 ## 4. MCP surface (Epic M, #601)
 
+> **Status: SHIPPED (v0.3.13).** Revision **`2025-06-18`**, pinned in
+> `fl::mcp::kProtocolRevision`. Streamable HTTP on the #233 listener — `POST <path>` for calls,
+> `GET <path>` for the notification stream. Tools `world_state`/`events` (observe),
+> `submit_mission` (recommend) and `admin_command` (act, allowlisted). Config, the three
+> authorization gates, and the audit story are documented in
+> [`fl-server-config.md` `[ai.mcp]`](fl-server-config.md).
+>
+> Two things worth stating because they are easy to assume otherwise: the autonomy tier is a
+> **ceiling, not a bypass** — an `act` token still meets the #945 capability mask inside
+> `CommandRegistry::dispatch`, so an `act`-tier `moderator` is refused `shutdown` — and
+> `2025-06-18` **removed JSON-RPC batching**, so a batch is an explicit error rather than an
+> unimplemented feature.
+
 `fl-server` exposes a **Model Context Protocol** server — a **first-class operator and modding
 surface**, not merely the agent door. It is the single command/read path behind the campaign
 director, the ops agent, the game-master overview map (#861), the Epic G web admin (#550), the

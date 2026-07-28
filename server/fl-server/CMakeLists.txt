@@ -9,7 +9,7 @@ target_include_directories(fl-server-config PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
     PRIVATE "${CMAKE_SOURCE_DIR}/engine")  # config/TomlNumeric.h — header-only, no link needed
 
 add_executable(fl-server main.cpp ServerCommands.cpp IpListFile.cpp RconServer.cpp HttpAdminServer.cpp
-    StdinCommandReader.cpp ReplayRecorder.cpp)
+    StdinCommandReader.cpp ReplayRecorder.cpp HttpAdminAuth.cpp McpProtocol.cpp McpEndpoint.cpp)
 # platform-net is the backend-selecting facade (enet6 always, GNS when FL_ENABLE_GNS); fl-server
 # picks the transport at runtime via createNetwork(cfg.network.transport).
 target_link_libraries(fl-server PRIVATE

@@ -15,17 +15,8 @@ namespace fl {
 
 namespace fs = std::filesystem;
 
-// The schema lives in the engine's own parser (engine-mission), so a mission this tool passes is a
-// mission the engine loads — the same anti-drift rule as validate-weapon/-sensor/-entity.
-MissionValidationResult validateMission(std::string_view yamlContent) {
-    MissionParseResult parsed = parseMission(yamlContent);
-
-    MissionValidationResult r;
-    r.ok = parsed.ok;
-    r.errors = std::move(parsed.errors);
-    r.warnings = std::move(parsed.warnings);
-    return r;
-}
+// The schema-only overload now lives in engine-mission (MissionValidator.cpp) so fl-server's MCP
+// submit_mission tool can reach it; this file keeps the --pack cross-check that needs a pack on disk.
 
 namespace {
 // Load every entities/*.toml in a pack into an id -> EntityDef map (only the fields parseEntityDef

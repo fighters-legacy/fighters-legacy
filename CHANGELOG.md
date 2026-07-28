@@ -7,6 +7,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **server**: MCP (Model Context Protocol) surface for agents, operator tooling and spectator clients — revision `2025-06-18` over Streamable HTTP on the existing `[http_admin]` listener, with `world_state`/`events`/`submit_mission`/`admin_command` tools, subscribable world-state and event resources, per-token autonomy tiers, a command allowlist, per-token rate limiting, and every invocation audit-logged into the match event log and therefore into the match's `.flrep` recording; `[ai.mcp]` config, disabled by default (#601)
+
+### Changed
+
+- **engine**: the schema-only `validateMission` moved from `validate-mission` into `engine-mission`, next to the `parseMission` it delegates to, so fl-server can validate a submitted mission in-process; `validate-mission` keeps its `--pack` cross-check and every existing caller is unchanged (#601)
+
 ## [0.3.12] - 2026-07-27
 
 ### Added

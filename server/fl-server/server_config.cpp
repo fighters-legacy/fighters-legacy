@@ -203,6 +203,23 @@ static const char* kDefaultToml =
     "# token = \"change-me\"\n"
     "# role  = \"admin\"   # admin | moderator | gm | faction_leader\n"
     "# faction = -1        # faction index for a faction-scoped role; -1 = unbound\n"
+    "# autonomy = \"\"     # MCP tier override: observe | recommend | act. Empty = [ai.mcp] autonomy\n"
+    "\n"
+    "[ai.mcp]\n"
+    "# Model Context Protocol surface (#601). A SECOND FRONTEND on the [http_admin] listener above --\n"
+    "# same port, same token table, same per-IP lockout -- so this needs http_admin enabled too.\n"
+    "# Streamable HTTP: POST <path> for calls, GET <path> for the notification stream.\n"
+    "# Tools: world_state, events (observe) | submit_mission (recommend) | admin_command (act).\n"
+    "# A tool call is ALSO checked against the token's role capabilities, so 'act' is a ceiling and\n"
+    "# not a bypass: an act-tier moderator token still cannot shut the server down.\n"
+    "enabled = false\n"
+    "path = \"/mcp\"\n"
+    "# Default tier for a token row that does not set its own. Read-only by default.\n"
+    "autonomy = \"observe\"\n"
+    "# Commands an act-tier token may run. EMPTY PERMITS NOTHING -- list them explicitly.\n"
+    "allowlist = []\n"
+    "rate_limit_per_min = 120\n"
+    "max_sessions = 32\n"
     "\n"
     "[rcon]\n"
     "# Source Engine RCON (TCP) remote admin channel. Disabled by default.\n"
@@ -1026,6 +1043,8 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                     row.role = std::move(*v);
                 if (auto v = tomlInt((*t)["faction"]))
                     row.faction = static_cast<int>(*v);
+                if (auto v = (*t)["autonomy"].value<std::string>())
+                    row.autonomy = std::move(*v);
                 // A token row that names no secret authenticates nobody; dropping it here means the
                 // server cannot start up believing it has an admin token that can never be presented.
                 if (row.token.empty()) {
@@ -1044,6 +1063,53 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                      "refusing to start an unauthenticated admin API -- add a token or disable it");
             cfg.httpAdmin.enabled = false;
         }
+
+        // [ai.mcp] (#601) — the MCP frontend on the [http_admin] listener.
+        if (auto v = tbl["ai"]["mcp"]["enabled"].value<bool>())
+            cfg.mcp.enabled = *v;
+        if (auto v = tbl["ai"]["mcp"]["path"].value<std::string>()) {
+            // A path that is not rooted would make cpp-httplib's route never match, and the server
+            // would come up reporting MCP as enabled while answering nothing.
+            if (v->empty() || v->front() != '/')
+                log->log(LogLevel::Warn, __FILE__, __LINE__, "ai.mcp.path must start with '/'; using default");
+            else
+                cfg.mcp.path = std::move(*v);
+        }
+        if (auto v = tbl["ai"]["mcp"]["autonomy"].value<std::string>())
+            cfg.mcp.autonomy = std::move(*v);
+        if (auto* list = tbl["ai"]["mcp"]["allowlist"].as_array()) {
+            for (auto& node : *list)
+                if (auto s = node.value<std::string>(); s && !s->empty())
+                    cfg.mcp.allowlist.push_back(std::move(*s));
+        }
+        if (auto v = tomlInt(tbl["ai"]["mcp"]["rate_limit_per_min"])) {
+            if (*v < 0 || *v > 100000)
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "ai.mcp.rate_limit_per_min out of range [0,100000]; using default");
+            else
+                cfg.mcp.rateLimitPerMin = static_cast<int>(*v);
+        }
+        if (auto v = tomlInt(tbl["ai"]["mcp"]["max_sessions"])) {
+            if (*v < 1 || *v > 4096)
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "ai.mcp.max_sessions out of range [1,4096]; using default");
+            else
+                cfg.mcp.maxSessions = static_cast<int>(*v);
+        }
+        // MCP has no listener of its own by design (plan #1036 D2): it is a second frontend on the
+        // [http_admin] one, sharing its token table and per-IP lockout. Enabling it alone would be a
+        // config that reads as "MCP is on" and serves nothing, so say why rather than failing quietly.
+        if (cfg.mcp.enabled && !cfg.httpAdmin.enabled) {
+            log->log(LogLevel::Error, __FILE__, __LINE__,
+                     "ai.mcp.enabled is true but [http_admin] is disabled; MCP shares that listener and "
+                     "its token table -- enable http_admin (with tokens) or disable ai.mcp");
+            cfg.mcp.enabled = false;
+        }
+        // An act-tier default with nothing allowlisted can run nothing, which is safe but is almost
+        // certainly not what the operator meant to configure.
+        if (cfg.mcp.enabled && cfg.mcp.allowlist.empty() && cfg.mcp.autonomy == "act")
+            log->log(LogLevel::Warn, __FILE__, __LINE__,
+                     "ai.mcp.autonomy is 'act' but ai.mcp.allowlist is empty; no command can be run");
 
         // [metrics]
         if (auto v = tbl["metrics"]["tick_json_path"].value<std::string>())

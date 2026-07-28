@@ -1975,6 +1975,7 @@ role  = "admin"          # admin | moderator | gm | faction_leader
 token = "another-secret"
 role  = "faction_leader"
 faction = 1              # faction index for a faction-scoped role; -1 = unbound
+autonomy = "observe"     # MCP tier for this token; empty = the [ai.mcp] default
 ```
 
 | Key | Type | Default | Description |
@@ -1987,6 +1988,7 @@ faction = 1              # faction index for a faction-scoped role; -1 = unbound
 | `[[http_admin.tokens]].token` | string | — | The bearer credential; a row with an empty token is dropped with a warning |
 | `[[http_admin.tokens]].role` | string | `"admin"` | A capability preset. An **unknown name stops the server starting** rather than silently granting nothing |
 | `[[http_admin.tokens]].faction` | int | `-1` | Faction binding for a faction-scoped role |
+| `[[http_admin.tokens]].autonomy` | string | `""` | MCP tier override (#601): `observe` \| `recommend` \| `act`. Empty inherits `[ai.mcp] autonomy`. An **unknown name stops the server starting**, same rule as `role` |
 
 ### Endpoints
 
@@ -2022,5 +2024,94 @@ and is refused `POST /shutdown` with a `403`.
 **Transport security is out of scope here.** Tokens travel as plain Bearer credentials over plain
 HTTP. Keep the listener on the loopback for probes, or front it with a TLS-terminating reverse proxy;
 the same caveat the `[rcon]` section carries.
+
+---
+
+## `[ai.mcp]` — Model Context Protocol surface (#601)
+
+A **Model Context Protocol** endpoint for agents, operator tooling, and community spectator clients.
+It is a **second frontend on the `[http_admin]` listener above** — same port, same token table, same
+per-IP lockout — so it needs `[http_admin]` enabled too. Enabling `ai.mcp` alone is refused at
+startup with a message saying why, rather than coming up reporting MCP as on and serving nothing.
+
+Distinct from `[ai]`, which is the difficulty the sim runs.
+
+```toml
+[ai.mcp]
+enabled = true
+path = "/mcp"
+autonomy = "observe"                    # default tier for a token that sets none
+allowlist = ["status", "peers", "set_weather"]
+rate_limit_per_min = 120
+max_sessions = 32
+```
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Requires `[http_admin] enabled`; otherwise refused at startup |
+| `path` | string | `"/mcp"` | Must start with `/`, or the default is used and a warning logged |
+| `autonomy` | string | `"observe"` | `observe` \| `recommend` \| `act`. An unknown name **stops the server starting** |
+| `allowlist` | string[] | `[]` | Commands an `act`-tier token may run. **Empty permits nothing** |
+| `rate_limit_per_min` | int | `120` | Calls per minute **per token**; `0` disables the limiter |
+| `max_sessions` | int | `32` | Concurrent MCP sessions; the idlest is evicted beyond this |
+
+**Protocol revision: `2025-06-18`, pinned.** That revision carries the three things this surface
+needs — Streamable HTTP (SSE-only transport is deprecated), structured tool output (`outputSchema` +
+`structuredContent`), and resource subscriptions. It is also the revision that **removed JSON-RPC
+batching**, so a batched request is answered with an error that says so rather than a generic parse
+failure. Bumping the pin is a deliberate change, not a dependency drifting underneath the server.
+
+### Transport
+
+One endpoint, two methods:
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `<path>` | JSON-RPC 2.0 requests. `initialize` returns an `Mcp-Session-Id` header; every later call must present it |
+| GET | `<path>` | `text/event-stream` of notifications for that session. Requires `Mcp-Session-Id` |
+
+Both authenticate with the same `Authorization: Bearer <token>` as the REST routes.
+
+### Tools
+
+| Tool | Minimum tier | Description |
+|---|---|---|
+| `world_state` | `observe` | The ~1 Hz world snapshot (#600), as `structuredContent` |
+| `events` | `observe` | Match event tail; `after` cursor and `max` (capped at 1000) |
+| `submit_mission` | `recommend` | Validates a YAML mission against the engine's own schema. **Validates only — it does not load it.** Documents over 512 KiB are refused |
+| `admin_command` | `act` | Runs one command, if the allowlist AND the token's capabilities both permit it |
+
+A tool the caller's tier cannot reach is **omitted from `tools/list`**, so an agent does not spend a
+turn discovering it is not allowed to do something.
+
+### Resources
+
+`fl://world_state` and `fl://events` are readable and subscribable. A subscription produces
+`notifications/resources/updated` when the underlying data advances — the notification says *what
+changed*, not what it now says, so a subscriber decides whether to spend a read rather than having a
+multi-thousand-entity snapshot pushed at it every second.
+
+### Authorization
+
+**Three independent gates, and the third is the one that matters.**
+
+1. The **bearer token** must resolve to a row in the `[http_admin]` token table.
+2. The token's **autonomy tier** must reach the tool (`observe` < `recommend` < `act`).
+3. For `admin_command`, the verb must be on the **allowlist**, and then
+   `CommandRegistry::dispatch(line, issuer)` applies the **capability mask** of the token's role.
+
+Gate 3 is why MCP is a frontend rather than a parallel admin path: an `act`-tier token whose role is
+`moderator` is still refused `shutdown`, by the same check that refuses it over REST, RCON and the
+in-game admin channel. `act` is a ceiling, not a bypass.
+
+**Every tool invocation is audit-logged** as a `MatchEventLog` `agent_action` record — which means it
+appears in the `events` stream *and* in the `.flrep` recording of the match it affected (#643), with
+no second log to collect. Refused attempts are recorded too; a refusal is exactly what an operator
+reading an audit trail wants to see.
+
+**Player chat and callsigns reach agents through `world_state` and `events` and are untrusted.** They
+are JSON-escaped on the way out, but an agent must treat their *content* as data, never as
+instruction — the prompt-injection screening suite in `tools/ai_eval` (#934) is the regression gate
+for any model put on this path. The threat model coordinates with the anti-cheat work in #545.
 
 ---

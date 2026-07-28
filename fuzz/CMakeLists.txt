@@ -62,15 +62,23 @@ target_link_libraries(fuzz_wire_tlv PRIVATE engine-protocol)
 fl_add_fuzzer(fuzz_lobby_list)
 target_link_libraries(fuzz_lobby_list PRIVATE engine-net)
 
-# REST admin API request-body scanners (#233): the bytes a POST /kick or /ban carries. Same recipe as
-# fuzz_rcon_packet -- HttpAdminServer.cpp lives in no library, so it is compiled in directly.
+# REST admin API request-body scanners (#233): the bytes a POST /kick or /ban carries. The pure
+# helpers moved into their own TU with #601, so this harness no longer drags in an HTTP server to
+# fuzz a field scanner.
 fl_add_fuzzer(fuzz_http_admin_body)
-target_sources(fuzz_http_admin_body PRIVATE "${CMAKE_SOURCE_DIR}/server/fl-server/HttpAdminServer.cpp")
-target_link_libraries(fuzz_http_admin_body PRIVATE fl-server-config engine-console engine-net httplib::httplib)
+# McpProtocol.cpp comes along for parseAutonomy, which buildTokenTable resolves per token row.
+target_sources(fuzz_http_admin_body PRIVATE
+    "${CMAKE_SOURCE_DIR}/server/fl-server/HttpAdminAuth.cpp"
+    "${CMAKE_SOURCE_DIR}/server/fl-server/McpProtocol.cpp")
+target_link_libraries(fuzz_http_admin_body PRIVATE fl-server-config engine-console engine-net)
 target_include_directories(fuzz_http_admin_body PRIVATE "${CMAKE_SOURCE_DIR}/server/fl-server")
-if(WIN32)
-    target_link_libraries(fuzz_http_admin_body PRIVATE ws2_32)
-endif()
+
+# MCP JSON-RPC envelope + depth-aware member scanner (#601): the first code to touch an MCP request
+# body. Pure logic, no sockets — McpProtocol.cpp links nothing but engine-net's jsonEscape.
+fl_add_fuzzer(fuzz_mcp)
+target_sources(fuzz_mcp PRIVATE "${CMAKE_SOURCE_DIR}/server/fl-server/McpProtocol.cpp")
+target_link_libraries(fuzz_mcp PRIVATE fl-server-config engine-net)
+target_include_directories(fuzz_mcp PRIVATE "${CMAKE_SOURCE_DIR}/server/fl-server")
 
 # Source-Engine RCON packet decoder: fl::rcon::decodePacket. RconServer.cpp is not in any library
 # (fl-server compiles it directly), so mirror tests/CMakeLists.txt's test_rcon_server recipe.

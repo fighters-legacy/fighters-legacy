@@ -2448,6 +2448,38 @@ int main(int argc, char** argv) {
     // Started before RCON only so the two log lines read in config order; they are independent.
     if (cfg.httpAdmin.enabled) {
         httpAdminServer = std::make_unique<fl::HttpAdminServer>(adminRegistry, cfg.httpAdmin, *log, &adminShell);
+
+        // ---- MCP surface (#601) ----
+        // A second frontend on the listener above, so it is enabled before start() rather than
+        // started separately. The three hooks are all it needs from the sim.
+        if (cfg.mcp.enabled) {
+            fl::McpHooks hooks;
+            hooks.auditAgentAction = [&broadcaster](std::string_view tool, const fl::CommandIssuer& issuer,
+                                                    std::string_view detail) {
+                // Into the ONE match event log (plan D1), which the replay recorder already
+                // interleaves into every .flrep — so an agent's actions are in the recording of the
+                // match they affected, not in a side channel someone has to think to collect.
+                fl::MatchEvent ev;
+                ev.type = fl::MatchEventType::AgentAction;
+                ev.actor = issuer.peerId;
+                ev.factionIndex = issuer.factionIndex;
+                // The published snapshot's tick, not the live one: m_currentTick is sim-thread-only
+                // and this runs on an HTTP thread. It lags by up to the ~1 Hz republish interval,
+                // which is the honest number available here — and an ordering that is exact is
+                // already carried by `seq`, which append() stamps.
+                if (const auto snap = broadcaster.worldStatePublisher().get())
+                    ev.tick = snap->tick;
+                ev.text = std::string(tool) + " " + std::string(detail);
+                broadcaster.matchEventLog().append(std::move(ev));
+            };
+            hooks.worldStateTick = [&broadcaster]() -> uint64_t {
+                const auto snap = broadcaster.worldStatePublisher().get();
+                return snap ? snap->tick : 0;
+            };
+            hooks.matchEventSeq = [&broadcaster]() -> uint64_t { return broadcaster.matchEventLog().nextSeq(); };
+            httpAdminServer->enableMcp(cfg.mcp, std::move(hooks));
+        }
+
         if (!httpAdminServer->start()) {
             log->log(LogLevel::Warn, __FILE__, __LINE__,
                      "http_admin failed to start; continuing without the REST admin API");

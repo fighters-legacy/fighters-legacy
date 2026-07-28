@@ -538,16 +538,35 @@ if(TARGET platform-enet)
     # them without opening a socket (the test_rcon_server recipe). HttpAdminServer.cpp is in no
     # library, so it is compiled directly.
     add_executable(test_http_admin test_http_admin.cpp
-        "${CMAKE_SOURCE_DIR}/server/fl-server/HttpAdminServer.cpp")
+        "${CMAKE_SOURCE_DIR}/server/fl-server/HttpAdminServer.cpp"
+        "${CMAKE_SOURCE_DIR}/server/fl-server/HttpAdminAuth.cpp"
+        "${CMAKE_SOURCE_DIR}/server/fl-server/McpProtocol.cpp"
+        "${CMAKE_SOURCE_DIR}/server/fl-server/McpEndpoint.cpp")
     target_link_libraries(test_http_admin PRIVATE
-        Catch2::Catch2WithMain fl-server-config engine-console engine-net httplib::httplib)
+        Catch2::Catch2WithMain fl-server-config engine-console engine-net engine-mission httplib::httplib)
     target_include_directories(test_http_admin PRIVATE
         "${CMAKE_SOURCE_DIR}/server/fl-server"
+        "${CMAKE_BINARY_DIR}/engine"  # generated Version.h, via McpEndpoint's initialize response
         "${CMAKE_CURRENT_SOURCE_DIR}")
     if(WIN32)
         target_link_libraries(test_http_admin PRIVATE ws2_32)
     endif()
     catch_discover_tests(test_http_admin)
+
+    # MCP surface (#601). McpEndpoint is transport-free by design, so this drives every method, tier
+    # refusal and session path without binding a port — and it links no httplib at all. engine-mission
+    # arrives for submit_mission's in-process validateMission. SDL/ENet-free, so it joins the TSan set.
+    add_executable(test_mcp_protocol test_mcp_protocol.cpp
+        "${CMAKE_SOURCE_DIR}/server/fl-server/McpProtocol.cpp"
+        "${CMAKE_SOURCE_DIR}/server/fl-server/McpEndpoint.cpp"
+        "${CMAKE_SOURCE_DIR}/server/fl-server/HttpAdminAuth.cpp")
+    target_link_libraries(test_mcp_protocol PRIVATE
+        Catch2::Catch2WithMain fl-server-config engine-console engine-net engine-mission)
+    target_include_directories(test_mcp_protocol PRIVATE
+        "${CMAKE_SOURCE_DIR}/server/fl-server"
+        "${CMAKE_BINARY_DIR}/engine"  # generated Version.h — reported in initialize's serverInfo
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+    catch_discover_tests(test_mcp_protocol)
 
     add_executable(test_rcon_server test_rcon_server.cpp
         "${CMAKE_SOURCE_DIR}/server/fl-server/RconServer.cpp")

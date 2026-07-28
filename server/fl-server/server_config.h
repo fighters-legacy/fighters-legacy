@@ -192,6 +192,10 @@ struct ServerConfig {
         std::string token;
         std::string role = "admin"; // a parseRolePreset name: admin|moderator|gm|faction_leader
         int faction = -1;           // faction index for a faction-scoped role; -1 = unbound
+        // Per-token MCP autonomy tier override (#601): observe|recommend|act. Empty = inherit
+        // [ai.mcp] autonomy. One token table serves REST and MCP (plan #1036 D3) — the tier is an
+        // ADDITIONAL gate in front of the role's capability mask, never a replacement for it.
+        std::string autonomy;
     };
     struct HttpAdminConfig {
         bool enabled = false;
@@ -202,6 +206,25 @@ struct ServerConfig {
         int lockoutSeconds = 300;
     };
     HttpAdminConfig httpAdmin;
+
+    // [ai.mcp] — the Model Context Protocol surface (#601). A SECOND FRONTEND on the [http_admin]
+    // listener, not a second server: it shares that listener, that token table and that per-IP
+    // lockout, so enabling MCP requires [http_admin] to be enabled too.
+    //
+    // Distinct from the [ai] difficulty section above, which is what the sim runs.
+    struct McpConfig {
+        bool enabled = false;
+        std::string path = "/mcp"; // Streamable HTTP endpoint: POST for calls, GET for notifications
+        // Default autonomy tier for a token whose row does not override it. `observe` — read-only —
+        // because a default that could act would make forgetting a field into granting authority.
+        std::string autonomy = "observe";
+        // Commands an `act`-tier token may run. EMPTY PERMITS NOTHING: enabling MCP without listing
+        // commands does not implicitly authorize all of them.
+        std::vector<std::string> allowlist;
+        int rateLimitPerMin = 120; // per token; <= 0 disables the limiter
+        int maxSessions = 32;      // concurrent MCP sessions; oldest idle is evicted beyond this
+    };
+    McpConfig mcp;
 
     // [metrics]
     struct MetricsConfig {

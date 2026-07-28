@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "HttpAdminServer.h"
 
+#include "McpEndpoint.h"
+
 #include <console/CommandRegistry.h>
 #include <console/CommandShell.h>
 #include <net/WorldStateJson.h> // jsonEscape — one escaper for every JSON this server emits
@@ -9,158 +11,12 @@
 
 #include <atomic>
 #include <cctype>
-#include <charconv>
 #include <chrono>
 #include <cstdio>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
-
-namespace fl::httpadmin {
-
-bool buildTokenTable(const ServerConfig::HttpAdminConfig& cfg, std::vector<TokenGrant>& out, std::string& error) {
-    out.clear();
-    for (const ServerConfig::HttpAdminToken& row : cfg.tokens) {
-        const auto caps = parseRolePreset(row.role);
-        if (!caps) {
-            error = "unknown role preset '" + row.role + "' (expected admin|moderator|gm|faction_leader)";
-            return false;
-        }
-        TokenGrant g;
-        g.token = row.token;
-        g.caps = *caps;
-        g.role = row.role;
-        g.factionIndex = row.faction >= 0 && row.faction <= 0xFFFE ? static_cast<uint16_t>(row.faction)
-                                                                   : PeerAuthority::kNoFactionBinding;
-        out.push_back(std::move(g));
-    }
-    return true;
-}
-
-std::string extractBearer(std::string_view authHeader) {
-    constexpr std::string_view kScheme = "bearer";
-    if (authHeader.size() <= kScheme.size())
-        return {};
-    for (std::size_t i = 0; i < kScheme.size(); ++i)
-        if (std::tolower(static_cast<unsigned char>(authHeader[i])) != kScheme[i])
-            return {};
-    std::size_t pos = kScheme.size();
-    // Require at least one space, then skip any run of them.
-    if (authHeader[pos] != ' ')
-        return {};
-    while (pos < authHeader.size() && authHeader[pos] == ' ')
-        ++pos;
-    return std::string(authHeader.substr(pos));
-}
-
-bool constantTimeEquals(std::string_view a, std::string_view b) noexcept {
-    // Fold the length difference into the accumulator instead of returning early, so the comparison
-    // takes the same shape whatever the presented credential looks like.
-    unsigned diff = static_cast<unsigned>(a.size() ^ b.size());
-    const std::size_t n = a.size() < b.size() ? a.size() : b.size();
-    for (std::size_t i = 0; i < n; ++i)
-        diff |= static_cast<unsigned>(static_cast<unsigned char>(a[i]) ^ static_cast<unsigned char>(b[i]));
-    return diff == 0;
-}
-
-const TokenGrant* resolveToken(const std::vector<TokenGrant>& table, std::string_view presented) {
-    if (presented.empty())
-        return nullptr;
-    const TokenGrant* found = nullptr;
-    for (const TokenGrant& g : table)
-        if (constantTimeEquals(g.token, presented))
-            found = &g; // no break: every row is compared, so timing does not reveal which matched
-    return found;
-}
-
-CommandIssuer issuerFor(const TokenGrant& grant) noexcept {
-    // Built in one expression on purpose. A default-constructed CommandIssuer is ADMIN, so any code
-    // path that fills fields one at a time can forget `caps` and silently grant everything.
-    return CommandIssuer{kIssuerNoPeer, grant.caps, grant.factionIndex};
-}
-
-namespace {
-
-// Locate `"key"` at an object level we are willing to read: these bodies are one flat object, so
-// anything nested is not a field this endpoint accepts.
-[[nodiscard]] std::size_t findKey(std::string_view json, std::string_view key) {
-    const std::string needle = "\"" + std::string(key) + "\"";
-    const std::size_t k = json.find(needle);
-    if (k == std::string_view::npos)
-        return std::string_view::npos;
-    std::size_t p = k + needle.size();
-    while (p < json.size() && (json[p] == ' ' || json[p] == '\t' || json[p] == '\n' || json[p] == '\r'))
-        ++p;
-    if (p >= json.size() || json[p] != ':')
-        return std::string_view::npos;
-    ++p;
-    while (p < json.size() && (json[p] == ' ' || json[p] == '\t' || json[p] == '\n' || json[p] == '\r'))
-        ++p;
-    return p;
-}
-
-} // namespace
-
-std::optional<double> jsonNumberField(std::string_view json, std::string_view key) {
-    const std::size_t p = findKey(json, key);
-    if (p == std::string_view::npos || p >= json.size())
-        return std::nullopt;
-    // strtod, not from_chars: Apple Clang has no floating-point from_chars (the JsonScan.h rule).
-    const std::string tail(json.substr(p, 64));
-    char* end = nullptr;
-    const double v = std::strtod(tail.c_str(), &end);
-    if (end == tail.c_str())
-        return std::nullopt;
-    return v;
-}
-
-std::optional<std::string> jsonStringField(std::string_view json, std::string_view key) {
-    const std::size_t p = findKey(json, key);
-    if (p == std::string_view::npos || p >= json.size() || json[p] != '"')
-        return std::nullopt;
-    std::string out;
-    // Bound the field: a body is untrusted, and an unterminated quote must not make us scan forever
-    // or return a megabyte because someone sent one.
-    constexpr std::size_t kMaxField = 512;
-    for (std::size_t i = p + 1; i < json.size() && out.size() <= kMaxField; ++i) {
-        const char c = json[i];
-        if (c == '"')
-            return out;
-        if (c == '\\') {
-            if (++i >= json.size())
-                return std::nullopt;
-            switch (json[i]) {
-            case 'n':
-                out += '\n';
-                break;
-            case 'r':
-                out += '\r';
-                break;
-            case 't':
-                out += '\t';
-                break;
-            case '"':
-                out += '"';
-                break;
-            case '\\':
-                out += '\\';
-                break;
-            default:
-                out += json[i];
-                break;
-            }
-            continue;
-        }
-        out += c;
-    }
-    return std::nullopt; // unterminated or over-long
-}
-
-std::string errorJson(std::string_view message) {
-    return "{\"error\": \"" + jsonEscape(message) + "\"}";
-}
-
-} // namespace fl::httpadmin
 
 namespace fl {
 
@@ -180,6 +36,11 @@ struct HttpAdminServer::Impl {
     std::atomic<bool> running{false};
     std::atomic<uint16_t> port{0};
 
+    // MCP (#601). Null until enableMcp(); its routes are installed only when it exists, so a server
+    // with [ai.mcp] disabled serves no MCP path at all rather than one that refuses everything.
+    ServerConfig::McpConfig mcpCfg;
+    std::unique_ptr<McpEndpoint> mcp;
+
     std::mutex authMutex;
     AuthTracker auth;
     const IClock* clock{&SystemClock::instance()};
@@ -188,16 +49,20 @@ struct HttpAdminServer::Impl {
     Impl(const CommandRegistry& reg, const ServerConfig::HttpAdminConfig& c, ILogger& l, CommandShell* sh)
         : registry(reg), cfg(c), log(l), shell(sh), auth(c.maxAuthFailures, c.lockoutSeconds) {}
 
-    // Resolve a request to an issuer, applying the per-IP lockout. Returns nullopt and fills
-    // `status`/`body` when the request must be refused.
-    std::optional<CommandIssuer> authorize(const httplib::Request& req, int& status, std::string& body) {
+    // Resolve a request to the GRANT behind it, applying the per-IP lockout. Returns nullptr and
+    // fills `status`/`body` when the request must be refused.
+    //
+    // MCP needs the grant itself, not just the issuer it implies — the autonomy tier and the token
+    // string (for per-token rate limiting) both live on it — and it must inherit exactly this
+    // lockout policy rather than growing a second one.
+    const httpadmin::TokenGrant* authorizeGrant(const httplib::Request& req, int& status, std::string& body) {
         const std::string ip = req.remote_addr;
         {
             std::lock_guard<std::mutex> lk(authMutex);
             if (auth.isLockedOut(ip)) {
                 status = 429;
                 body = httpadmin::errorJson("too many failed authentications; try again later");
-                return std::nullopt;
+                return nullptr;
             }
         }
 
@@ -213,13 +78,21 @@ struct HttpAdminServer::Impl {
                 log.log(LogLevel::Warn, __FILE__, __LINE__, "http_admin: IP locked out after repeated auth failures");
             status = 401;
             body = httpadmin::errorJson("unauthorized");
-            return std::nullopt;
+            return nullptr;
         }
 
         {
             std::lock_guard<std::mutex> lk(authMutex);
             auth.recordSuccess(ip);
         }
+        return grant;
+    }
+
+    // The REST routes only ever want the issuer, so they keep asking for exactly that.
+    std::optional<CommandIssuer> authorize(const httplib::Request& req, int& status, std::string& body) {
+        const httpadmin::TokenGrant* grant = authorizeGrant(req, status, body);
+        if (!grant)
+            return std::nullopt;
         return httpadmin::issuerFor(*grant);
     }
 
@@ -259,6 +132,14 @@ struct HttpAdminServer::Impl {
     }
 
     void installRoutes();
+    void installMcpRoutes();
+
+    // The notification stream wakes on a short interval so a stop() is noticed promptly, and only
+    // polls the hooks every kSseWakeupsPerPoll of those — a ~1 s effective poll against a snapshot
+    // the sim republishes at about that rate, without a listener thread that ignores shutdown for a
+    // whole second.
+    static constexpr auto kSseWakeupInterval = std::chrono::milliseconds(100);
+    static constexpr int kSseWakeupsPerPoll = 10;
 };
 
 void HttpAdminServer::Impl::installRoutes() {
@@ -377,9 +258,83 @@ void HttpAdminServer::Impl::installRoutes() {
                     return true;
                 }));
 
+    if (mcp)
+        installMcpRoutes();
+
     server.set_exception_handler([](const httplib::Request&, httplib::Response& res, std::exception_ptr) {
         res.status = 500;
         res.set_content("{\"error\": \"internal error\"}", "application/json");
+    });
+}
+
+// The MCP frontend (#601): one Streamable HTTP endpoint, POST for calls and GET for notifications.
+// Both authenticate through the SAME authorizeGrant the REST routes use, so the per-IP lockout,
+// the token table and the capability model are shared rather than mirrored.
+void HttpAdminServer::Impl::installMcpRoutes() {
+    server.Post(mcpCfg.path, [this](const httplib::Request& req, httplib::Response& res) {
+        int status = 0;
+        std::string body;
+        const httpadmin::TokenGrant* grant = authorizeGrant(req, status, body);
+        if (!grant) {
+            res.status = status;
+            res.set_content(body, "application/json");
+            return;
+        }
+        const auto outcome = mcp->handle(req.body, *grant, req.get_header_value("Mcp-Session-Id"));
+        res.status = outcome.httpStatus;
+        if (!outcome.newSessionId.empty())
+            res.set_header("Mcp-Session-Id", outcome.newSessionId);
+        // Echo the revision we implement on every response; 2025-06-18 has clients send it back on
+        // subsequent requests, and a client that never sees it cannot.
+        res.set_header("MCP-Protocol-Version", std::string(mcp::kProtocolRevision));
+        if (outcome.body.empty())
+            res.set_content("", "application/json"); // a notification: accepted, no body
+        else
+            res.set_content(outcome.body, "application/json");
+    });
+
+    server.Get(mcpCfg.path, [this](const httplib::Request& req, httplib::Response& res) {
+        int status = 0;
+        std::string body;
+        const httpadmin::TokenGrant* grant = authorizeGrant(req, status, body);
+        if (!grant) {
+            res.status = status;
+            res.set_content(body, "application/json");
+            return;
+        }
+        const std::string sessionId = req.get_header_value("Mcp-Session-Id");
+        if (!mcp->sessionExists(sessionId)) {
+            // No anonymous streams: a notification stream belongs to an initialized session, or it
+            // is a socket held open by something that never handshook.
+            res.status = 404;
+            res.set_content(httpadmin::errorJson("no such MCP session; call initialize first"), "application/json");
+            return;
+        }
+        res.set_header("MCP-Protocol-Version", std::string(mcp::kProtocolRevision));
+        res.set_chunked_content_provider(
+            "text/event-stream",
+            [this, sessionId](std::size_t /*offset*/, httplib::DataSink& sink) {
+                // Poll rather than push: the sim publishes a world snapshot about once a second and
+                // has no business knowing an HTTP stream exists. Waking on this interval keeps the
+                // seam a std::function returning a tick, not a subscription the sim has to maintain.
+                for (int i = 0; i < kSseWakeupsPerPoll && running.load(std::memory_order_relaxed); ++i) {
+                    std::this_thread::sleep_for(kSseWakeupInterval);
+                    if (!sink.is_writable())
+                        return false;
+                }
+                if (!running.load(std::memory_order_relaxed))
+                    return false;
+                for (const std::string& frame : mcp->pollNotifications(sessionId)) {
+                    const std::string chunk = "data: " + frame + "\n\n";
+                    if (!sink.write(chunk.data(), chunk.size()))
+                        return false;
+                }
+                // An SSE comment doubles as the keep-alive: it costs two bytes and stops a proxy
+                // from reaping an idle stream on a quiet server.
+                static constexpr std::string_view kKeepAlive = ":\n\n";
+                return sink.write(kKeepAlive.data(), kKeepAlive.size());
+            },
+            [this, sessionId](bool) { mcp->dropSession(sessionId); });
     });
 }
 
@@ -391,9 +346,15 @@ HttpAdminServer::~HttpAdminServer() {
     stop();
 }
 
+void HttpAdminServer::enableMcp(const ServerConfig::McpConfig& cfg, McpHooks hooks) {
+    m_impl->mcpCfg = cfg;
+    m_impl->mcp = std::make_unique<McpEndpoint>(m_impl->registry, cfg, m_impl->log, std::move(hooks));
+    m_impl->mcp->setClock(*m_impl->clock);
+}
+
 bool HttpAdminServer::start() {
     std::string err;
-    if (!httpadmin::buildTokenTable(m_impl->cfg, m_impl->tokens, err)) {
+    if (!httpadmin::buildTokenTable(m_impl->cfg, m_impl->mcpCfg.autonomy, m_impl->tokens, err)) {
         m_impl->log.log(LogLevel::Error, __FILE__, __LINE__, ("http_admin: " + err).c_str());
         return false;
     }
@@ -437,6 +398,17 @@ bool HttpAdminServer::start() {
     std::snprintf(buf, sizeof(buf), "http_admin: listening on http://%s:%d (%zu token(s))",
                   m_impl->cfg.bindAddress.c_str(), bound, m_impl->tokens.size());
     m_impl->log.log(LogLevel::Info, __FILE__, __LINE__, buf);
+
+    if (m_impl->mcp) {
+        // Name the allowlist size explicitly: an operator reading "MCP enabled" and assuming their
+        // agent can act is the misreading this line exists to prevent.
+        char mbuf[256];
+        std::snprintf(mbuf, sizeof(mbuf),
+                      "http_admin: MCP surface on %s (revision %.*s, default autonomy %s, %zu allowlisted command(s))",
+                      m_impl->mcpCfg.path.c_str(), static_cast<int>(mcp::kProtocolRevision.size()),
+                      mcp::kProtocolRevision.data(), m_impl->mcpCfg.autonomy.c_str(), m_impl->mcpCfg.allowlist.size());
+        m_impl->log.log(LogLevel::Info, __FILE__, __LINE__, mbuf);
+    }
     return true;
 }
 
@@ -473,6 +445,10 @@ uint16_t HttpAdminServer::boundPort() const noexcept {
 void HttpAdminServer::setClock(const IClock& clock) {
     m_impl->clock = &clock;
     m_impl->auth.setClock(clock);
+    // Forward to MCP too, whichever order the two setters were called in — otherwise a test that
+    // enables MCP first ends up with a rate limiter on the real clock and no way to advance it.
+    if (m_impl->mcp)
+        m_impl->mcp->setClock(clock);
 }
 
 } // namespace fl
