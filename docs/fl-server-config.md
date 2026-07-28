@@ -1877,11 +1877,16 @@ Example using `mcrcon`:
 | `FL_LOBBY_URL` | `"https://lobby.fighters-legacy.org"` | `lobby.url` |
 | `FL_LOBBY_VISIBILITY` | `"public"` | `lobby.visibility` |
 | `FL_AI_DIFFICULTY_FLOOR` | `"recruit"` | `ai.difficulty_floor` |
+| `FL_AI_API_KEY` | — | The AI provider's API key (#163). **Read only from the environment**; the variable name is configurable via `ai.provider.api_key_env` |
 
-**Not available as env vars:** `server.game_modes`, `mods.stack`, `rotation.items` —
-arrays are awkward in environment strings; use a mounted config file in container
-environments. `server.password` is also config-file-only; see the security note in the
-[password](#password) section.
+**Not available as env vars:** `server.game_modes`, `mods.stack`, `rotation.items`,
+`ai.mcp.allowlist` — arrays are awkward in environment strings; use a mounted config file in
+container environments. `server.password` and the `[[http_admin.tokens]]` secrets are also
+config-file-only; see the security note in the [password](#password) section.
+
+**`FL_AI_API_KEY` is the reverse of that rule and deliberately so**: it is a secret, so it is
+available *only* as an environment variable and has no config key at all. Setting
+`ai.provider.api_key` in the file is logged as an error rather than accepted.
 
 Boolean env vars (`FL_PERSISTENT`, `FL_LOBBY_REGISTER`) accept `"true"` or `"1"`.
 
@@ -2024,6 +2029,76 @@ and is refused `POST /shutdown` with a `403`.
 **Transport security is out of scope here.** Tokens travel as plain Bearer credentials over plain
 HTTP. Keep the listener on the loopback for probes, or front it with a TLS-terminating reverse proxy;
 the same caveat the `[rcon]` section carries.
+
+---
+
+## `[ai.provider]` — generative-AI provider seam (#163)
+
+The plugin seam connecting fl-server to a model for **generative content**: missions, campaign
+events, narrative text, faction decisions, and the free-text wingman intent tier (#611). Distinct
+from the Lua AI (#33), which scripts unit behaviour, and from `[ai]`, which is the difficulty the sim
+runs.
+
+**Opt-in.** With this off — the default — every AI feature degrades to its scripted path, and that
+fallback is the CI-tested one.
+
+```toml
+[ai.provider]
+enabled = false
+plugin = ""                      # path to an IWorldAiProvider shared library
+endpoint = ""
+model = ""
+api_key_env = "FL_AI_API_KEY"
+max_calls_per_minute = 10
+world_evolution_interval_min = 60
+```
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Off = `NullAiProvider`, which supports nothing and says so |
+| `plugin` | string | `""` | Shared library exporting `fighters_legacy_create_ai_provider`. Empty = no plugin. A **configured plugin that fails to load is logged as an error**, not silently ignored |
+| `endpoint` | string | `""` | Backend-specific; interpreted by the plugin, not by fl-server |
+| `model` | string | `""` | Backend-specific |
+| `api_key_env` | string | `"FL_AI_API_KEY"` | The **name of the environment variable** holding the key |
+| `max_calls_per_minute` | int | `10` | `[0, 100000]`; `0` = unlimited |
+| `world_evolution_interval_min` | int | `60` | In-game minutes between world-evolution calls |
+
+**There is no `api_key` key, deliberately.** A key in `server.toml` gets committed and shared, and a
+key on a command line shows up in `ps`. Setting `ai.provider.api_key` is logged as an error naming
+the environment variable to use instead — the same rule `[security] password` follows and the same
+one `tools/ai_eval` follows.
+
+### Capabilities and degradation
+
+A provider declares what it can actually do, and fl-server logs the list at startup. A caller
+degrades by **asking** `supports()`, not by discovering an empty result three seconds later — a
+backend on a small local model may map intent well and write narrative badly, and an operator should
+find that out at boot rather than from missing briefings three missions in.
+
+### Applying a world-evolution delta
+
+What a model returns is a **suggestion**, and it may be confused, out of date, or steered by the
+player chat it was shown. Every change is validated before it is made, and anything that does not
+hold is dropped **and reported** — a delta that silently half-applies is indistinguishable from one
+that worked. Rejected: a faction index out of range, a faction set hostile to itself, a spawn naming
+an entity type outside the vocabulary the context advertised, a non-finite position or heading, and
+any change whose sink is not wired.
+
+`zoneChanges` are currently always rejected: zone ownership comes from the mission's
+`airspace_zones:` section, which `MissionParser` owns, and `AlertSystem` has no runtime setter for
+it. Re-owning a live zone needs a decision about what that means mid-match, so it is a follow-on
+rather than a quiet half-implementation.
+
+### Platform notes
+
+- **Windows**: a plugin DLL must share CRT linkage with fl-server (`/MT` in release), and it is
+  loaded by **full path** — `LoadLibrary` with a bare name searches, and what it finds is not
+  necessarily what the operator installed.
+- **macOS**: loading a plugin from an arbitrary path needs the
+  `com.apple.security.cs.disable-library-validation` entitlement or per-plugin notarization. Tracked
+  against the packaging issue (#158), not solved here.
+- The plugin handle is **never closed**. Objects a provider created outlive any scope that could own
+  it, and unloading underneath them is a crash whose stack frames have no symbols left.
 
 ---
 

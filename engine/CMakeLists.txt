@@ -20,7 +20,19 @@ target_link_libraries(engine-content
     PUBLIC  platform-hal
     PRIVATE tomlplusplus::tomlplusplus
             engine-crypto      # SHA-256 for ContentDownloader verification (#490)
-            ${CMAKE_DL_LIBS}   # dlopen on Linux; empty on Windows/macOS (auto-linked)
+            engine-dynlib      # the shared dlopen/LoadLibrary (#163) ModLoader used to keep privately
+)
+
+# The one dlopen/LoadLibrary in the tree (#163). Its own target because BOTH engine-content (native
+# content packs) and engine-worldai (AI provider plugins) need it, and neither should link the other
+# to get it. Pure stdlib + the platform's dl library; reaches no backend.
+add_library(engine-dynlib STATIC
+    dynlib/DynLib.cpp
+)
+target_include_directories(engine-dynlib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(engine-dynlib
+    PUBLIC  platform-hal       # ILogger
+    PRIVATE ${CMAKE_DL_LIBS}   # dlopen on Linux; empty on Windows/macOS (auto-linked)
 )
 
 add_library(engine-input STATIC
@@ -474,6 +486,26 @@ target_link_libraries(engine-net
 if(WIN32)
     target_link_libraries(engine-net PRIVATE ws2_32)
 endif()
+
+# The generative-AI provider seam (#163): IWorldAiProvider + NullAiProvider + plugin loading + the
+# WorldEvolutionDelta application path.
+#
+# ITS OWN TARGET, ABOVE engine-net, and that placement is forced. Plan #1036 D5 builds WorldAiContext
+# on WorldStateSnapshot rather than a parallel struct — one source of truth for "what agents see",
+# shared with #601's world_state tool — but WorldStateSnapshot and MatchEvent live in engine-net,
+# and engine-net PUBLIC-links engine-world. Putting this in engine-world, as #163's body assumed,
+# would be a cycle. Same shape as engine-replay in Stage 2: a seam consuming two layers sits above
+# them. Reaches no client backend, so it stays inside the engine-isolation rule.
+add_library(engine-worldai STATIC
+    world/NullAiProvider.cpp
+    world/WorldAiProviderHost.cpp
+)
+target_include_directories(engine-worldai PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(engine-worldai
+    PUBLIC  engine-net       # WorldStateSnapshot + MatchEvent — the context IS the snapshot
+            engine-world     # AlertLevel / FactionRelation — what a delta changes
+    PRIVATE engine-dynlib    # provider plugins load through the one shared dlopen
+)
 
 # Per-frame stats collection and debug overlay line builder.
 add_library(engine-perf STATIC

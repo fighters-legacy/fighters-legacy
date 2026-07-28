@@ -15,7 +15,7 @@ add_executable(fl-server main.cpp ServerCommands.cpp IpListFile.cpp RconServer.c
 target_link_libraries(fl-server PRIVATE
     fl-server-config platform-net engine-net engine-entity engine-loop engine-weather engine-console
     engine-config engine-render engine-content engine-difficulty engine-flight engine-ai engine-script
-    engine-replay engine-perf engine-weapon engine-bootstrap engine-sensor engine-mission engine-campaign engine-campaign-png engine-match
+    engine-replay engine-perf engine-weapon engine-bootstrap engine-sensor engine-mission engine-campaign engine-campaign-png engine-match engine-worldai
     platform-stdfs platform-http
     # cpp-httplib: the embedded REST admin API + /health (#233), and in Stage 3 the MCP endpoint
     # (#601). Confined to this binary by cmake/layering.cmake -- no engine-* target may link it.

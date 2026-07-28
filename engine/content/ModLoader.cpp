@@ -7,14 +7,9 @@
 #include "ILogger.h"
 #include "content/FolderContentPack.h"
 #include "content/IContentPackEventHandler.h"
+#include "dynlib/DynLib.h" // the shared dlopen/LoadLibrary this file used to keep to itself (#163)
 
 #include <toml++/toml.hpp>
-
-#if defined(_WIN32)
-#include <windows.h> // LoadLibraryA, GetProcAddress, FreeLibrary
-#else
-#include <dlfcn.h> // dlopen, dlsym, dlclose
-#endif
 
 #include <algorithm>
 #include <unordered_set>
@@ -87,44 +82,15 @@ std::optional<ModLoader::Manifest> ModLoader::parseManifest(const char* path) {
 // ---------------------------------------------------------------------------
 
 static IContentPack* loadNativePlugin(const std::string& absolutePath, ILogger& logger) {
-#if defined(_WIN32)
-    HMODULE handle = LoadLibraryA(absolutePath.c_str());
-    if (!handle) {
-        logger.log(LogLevel::Error, __FILE__, __LINE__,
-                   ("failed to load plugin '" + absolutePath + "' via LoadLibrary").c_str());
+    // The platform half moved to engine/dynlib (#163) when the AI provider seam became the second
+    // thing in the tree that loads a factory symbol out of a shared library. The handle is still
+    // deliberately never closed: plugins load for process lifetime.
+    void* sym = loadLibrarySymbol(absolutePath, IContentPack::kFactorySymbol, logger);
+    if (!sym)
         return nullptr;
-    }
-    using FactoryFn = IContentPack* (*)();
-    auto* factory = reinterpret_cast<FactoryFn>(GetProcAddress(handle, IContentPack::kFactorySymbol));
-    if (!factory) {
-        logger.log(LogLevel::Error, __FILE__, __LINE__,
-                   ("plugin '" + absolutePath + "': symbol '" + IContentPack::kFactorySymbol + "' not found").c_str());
-        FreeLibrary(handle);
-        return nullptr;
-    }
-#else
-    void* handle = dlopen(absolutePath.c_str(), RTLD_LOCAL | RTLD_NOW);
-    if (!handle) {
-        const char* err = dlerror();
-        logger.log(
-            LogLevel::Error, __FILE__, __LINE__,
-            (std::string("failed to load plugin '") + absolutePath + "': " + (err ? err : "unknown error")).c_str());
-        return nullptr;
-    }
     using FactoryFn = IContentPack* (*)();
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-    auto* factory = reinterpret_cast<FactoryFn>(dlsym(handle, IContentPack::kFactorySymbol));
-    if (!factory) {
-        const char* err = dlerror();
-        logger.log(LogLevel::Error, __FILE__, __LINE__,
-                   (std::string("plugin '") + absolutePath + "': symbol '" + IContentPack::kFactorySymbol +
-                    "' not found: " + (err ? err : "unknown error"))
-                       .c_str());
-        dlclose(handle);
-        return nullptr;
-    }
-#endif
-    // Plugin handle intentionally not stored — plugins are loaded for process lifetime.
+    auto factory = reinterpret_cast<FactoryFn>(sym);
     return factory();
 }
 

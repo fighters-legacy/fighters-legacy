@@ -103,6 +103,8 @@
 #include <world/BuiltinAirport.h>
 #include <world/EscalationPolicy.h>
 #include <world/FactionRegistry.h>
+#include <world/NullAiProvider.h>      // the no-provider path (#163)
+#include <world/WorldAiProviderHost.h> // provider loading + WorldEvolutionDelta application (#163)
 
 #include <array>
 #include <cctype>
@@ -2444,6 +2446,74 @@ int main(int argc, char** argv) {
         }
     }
 
+    // ---- Generative-AI provider seam (#163) ----
+    //
+    // Always constructed, never null: loadWorldAiProvider hands back a NullAiProvider when the seam
+    // is off or a plugin fails, so callers ask supports() rather than checking for null and there is
+    // ONE degradation path instead of two.
+    std::unique_ptr<fl::IWorldAiProvider> aiProvider;
+    fl::WorldEvolutionSinks aiSinks;
+    {
+        bool pluginLoadFailed = false;
+        const std::string pluginPath = cfg.aiProvider.enabled ? cfg.aiProvider.plugin : std::string{};
+        aiProvider = fl::loadWorldAiProvider(pluginPath, *log, pluginLoadFailed);
+        if (pluginLoadFailed) {
+            // Loud, because the alternative is a server quietly running scripted content for a week
+            // because a path was mistyped, with nothing in the log that says so.
+            log->log(LogLevel::Error, __FILE__, __LINE__,
+                     ("ai_provider: plugin '" + cfg.aiProvider.plugin +
+                      "' could not be loaded; continuing with no provider (every AI feature falls back "
+                      "to its scripted path)")
+                         .c_str());
+        }
+        if (!aiProvider->init(*log)) {
+            const char* why = aiProvider->getLastError();
+            log->log(
+                LogLevel::Error, __FILE__, __LINE__,
+                (std::string("ai_provider: init failed (") + (why ? why : "unknown") + "); continuing with no provider")
+                    .c_str());
+            aiProvider = std::make_unique<fl::NullAiProvider>();
+            (void)aiProvider->init(*log);
+        }
+        if (cfg.aiProvider.enabled) {
+            // Report what it can actually do at startup rather than at first use: an operator who
+            // configured a provider for narrative and got one that only maps intent should find out
+            // now, not from missing briefings three missions in.
+            std::string caps;
+            for (uint8_t i = 0; i < static_cast<uint8_t>(fl::WorldAiCapability::Count); ++i) {
+                const auto c = static_cast<fl::WorldAiCapability>(i);
+                if (aiProvider->supports(c))
+                    caps += (caps.empty() ? "" : ", ") + std::string(fl::worldAiCapabilityName(c));
+            }
+            log->log(LogLevel::Info, __FILE__, __LINE__,
+                     ("ai_provider: " + (caps.empty() ? std::string("no capabilities (scripted fallback everywhere)")
+                                                      : "capabilities: " + caps))
+                         .c_str());
+        }
+
+        // The sinks a WorldEvolutionDelta is applied through. Each returns false when the change
+        // does not hold, and applyWorldEvolution turns that into a counted, reported rejection.
+        aiSinks.factionCount = [&missionFactions]() -> uint16_t { return missionFactions.count(); };
+        aiSinks.setAlertLevel = [&](uint16_t idx, fl::AlertLevel level) {
+            // Through AlertSystem, not straight to the registry: the system is what fires the change
+            // hook that reaches the wire, so a delta applied around it would be invisible to clients.
+            const fl::FactionDef* def = missionFactions.get(idx);
+            if (!def)
+                return false;
+            alertSystem.setAlertLevel(def->id, level);
+            return true;
+        };
+        aiSinks.setRelationship = [&](uint16_t a, uint16_t b, fl::FactionRelation rel) {
+            missionFactions.setRelationship(a, b, rel);
+            return true;
+        };
+        // setZoneOwner is deliberately LEFT NULL: zone ownership comes from the mission's
+        // `airspace_zones:` section, which MissionParser owns, and AlertSystem has no runtime setter
+        // for it. A zone_control change is therefore rejected with a reason rather than silently
+        // dropped. Wiring it is a follow-on that has to decide what re-owning a live zone means.
+        // spawn likewise stays null until a delta-driven spawn has a home for its controller.
+    }
+
     // ---- REST admin API + health probe (#233) ----
     // Started before RCON only so the two log lines read in config order; they are independent.
     if (cfg.httpAdmin.enabled) {
@@ -2607,8 +2677,18 @@ int main(int argc, char** argv) {
             nextMetricsWrite = std::chrono::steady_clock::now() + metricsInterval;
         }
 
+        // Drain AI completions on THIS thread (#163). Unconditional: NullAiProvider's service() is
+        // empty, and branching here to save an empty call would put a condition in the main loop for
+        // nothing.
+        aiProvider->service();
+
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
+
+    // Cancel in-flight model calls and join before anything they might touch goes away. Before the
+    // lobby deregistration below for the same reason ordering matters at all here: a callback firing
+    // into a half-torn-down server is a crash in shutdown, which is the hardest kind to reproduce.
+    aiProvider->shutdown();
 
     // #143: drop the lobby entry on shutdown (best-effort DELETE + one service pass to send it).
     if (lobbyReg)

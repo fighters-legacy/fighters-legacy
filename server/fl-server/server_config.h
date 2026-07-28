@@ -226,6 +226,25 @@ struct ServerConfig {
     };
     McpConfig mcp;
 
+    // [ai.provider] — the generative-AI provider seam (#163). OPT-IN: an operator must set
+    // `enabled = true` before the server will talk to any model at all.
+    //
+    // Every AI feature degrades to its scripted path when this is off, and that fallback is the
+    // CI-tested one (docs/ai-architecture.md §7).
+    struct AiProviderConfig {
+        bool enabled = false;
+        std::string plugin;   // path to an IWorldAiProvider shared library; empty = NullAiProvider
+        std::string endpoint; // backend-specific; interpreted by the plugin, not by fl-server
+        std::string model;
+        // The API key is NEVER a config value. `apiKeyEnv` names the ENVIRONMENT VARIABLE holding
+        // it, defaulting to FL_AI_API_KEY — the same rule the ai_eval harness follows and the same
+        // reason: a key in server.toml gets committed, and a key on a command line shows up in `ps`.
+        std::string apiKeyEnv = "FL_AI_API_KEY";
+        int maxCallsPerMinute = 10;
+        int worldEvolutionIntervalMin = 60; // in-game minutes between evolution calls
+    };
+    AiProviderConfig aiProvider;
+
     // [metrics]
     struct MetricsConfig {
         std::string tickJsonPath;           // empty = disabled; atomic per-interval tick-budget JSON export

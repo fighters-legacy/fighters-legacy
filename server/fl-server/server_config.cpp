@@ -221,6 +221,22 @@ static const char* kDefaultToml =
     "rate_limit_per_min = 120\n"
     "max_sessions = 32\n"
     "\n"
+    "[ai.provider]\n"
+    "# Generative-AI provider seam (#163): missions, campaign events, narrative, faction decisions,\n"
+    "# and the free-text wingman intent tier. OPT-IN -- with this off (the default) every AI feature\n"
+    "# degrades to its scripted path, which is the CI-tested one.\n"
+    "enabled = false\n"
+    "# Path to an IWorldAiProvider shared library. Empty = the built-in NullAiProvider (supports\n"
+    "# nothing, and says so, so callers degrade by asking rather than by discovering).\n"
+    "plugin = \"\"\n"
+    "endpoint = \"\"\n"
+    "model = \"\"\n"
+    "# The NAME of the environment variable holding the API key -- never the key itself. A key in\n"
+    "# this file gets committed; a key on a command line shows up in `ps`.\n"
+    "api_key_env = \"FL_AI_API_KEY\"\n"
+    "max_calls_per_minute = 10\n"
+    "world_evolution_interval_min = 60\n"
+    "\n"
     "[rcon]\n"
     "# Source Engine RCON (TCP) remote admin channel. Disabled by default.\n"
     "# Set a strong password before enabling. Password travels over plain TCP;\n"
@@ -1110,6 +1126,45 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         if (cfg.mcp.enabled && cfg.mcp.allowlist.empty() && cfg.mcp.autonomy == "act")
             log->log(LogLevel::Warn, __FILE__, __LINE__,
                      "ai.mcp.autonomy is 'act' but ai.mcp.allowlist is empty; no command can be run");
+
+        // [ai.provider] (#163) — namespaced under [ai] beside [ai.mcp], per docs/ai-architecture.md §2.
+        // (#163's body predates that namespacing and says [ai_provider]; the design doc and the
+        // already-shipped [ai.mcp] win, so the two AI sections read as siblings.)
+        if (auto v = tbl["ai"]["provider"]["enabled"].value<bool>())
+            cfg.aiProvider.enabled = *v;
+        if (auto v = tbl["ai"]["provider"]["plugin"].value<std::string>())
+            cfg.aiProvider.plugin = std::move(*v);
+        if (auto v = tbl["ai"]["provider"]["endpoint"].value<std::string>())
+            cfg.aiProvider.endpoint = std::move(*v);
+        if (auto v = tbl["ai"]["provider"]["model"].value<std::string>())
+            cfg.aiProvider.model = std::move(*v);
+        if (auto v = tbl["ai"]["provider"]["api_key_env"].value<std::string>()) {
+            if (v->empty())
+                log->log(LogLevel::Warn, __FILE__, __LINE__, "ai.provider.api_key_env is empty; using default");
+            else
+                cfg.aiProvider.apiKeyEnv = std::move(*v);
+        }
+        // A literal key in the config file is a mistake worth naming, not one to accept quietly:
+        // server.toml gets committed and shared, and the operator almost certainly meant the env var.
+        if (tbl["ai"]["provider"]["api_key"]) {
+            log->log(LogLevel::Error, __FILE__, __LINE__,
+                     "ai.provider.api_key is not a supported key -- put the secret in the environment "
+                     "variable named by ai.provider.api_key_env (default FL_AI_API_KEY) instead");
+        }
+        if (auto v = tomlInt(tbl["ai"]["provider"]["max_calls_per_minute"])) {
+            if (*v < 0 || *v > 100000)
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "ai.provider.max_calls_per_minute out of range [0,100000]; using default");
+            else
+                cfg.aiProvider.maxCallsPerMinute = static_cast<int>(*v);
+        }
+        if (auto v = tomlInt(tbl["ai"]["provider"]["world_evolution_interval_min"])) {
+            if (*v < 1 || *v > 100000)
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "ai.provider.world_evolution_interval_min out of range [1,100000]; using default");
+            else
+                cfg.aiProvider.worldEvolutionIntervalMin = static_cast<int>(*v);
+        }
 
         // [metrics]
         if (auto v = tbl["metrics"]["tick_json_path"].value<std::string>())

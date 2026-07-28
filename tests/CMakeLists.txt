@@ -553,6 +553,14 @@ if(TARGET platform-enet)
     endif()
     catch_discover_tests(test_http_admin)
 
+    # AI provider seam (#163): the NullAiProvider contract and the WorldEvolutionDelta application
+    # path, which is the one that has to be hostile to model output. No plugin on disk is needed —
+    # the load-failure case uses a path that does not exist.
+    add_executable(test_world_ai_provider test_world_ai_provider.cpp)
+    target_link_libraries(test_world_ai_provider PRIVATE Catch2::Catch2WithMain engine-worldai)
+    target_include_directories(test_world_ai_provider PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    catch_discover_tests(test_world_ai_provider)
+
     # MCP surface (#601). McpEndpoint is transport-free by design, so this drives every method, tier
     # refusal and session path without binding a port — and it links no httplib at all. engine-mission
     # arrives for submit_mission's in-process validateMission. SDL/ENet-free, so it joins the TSan set.
