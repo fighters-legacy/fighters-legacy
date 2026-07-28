@@ -149,6 +149,18 @@ std::optional<MsgWingmanCommand> WingmanMenu::update(IInput& input) {
     return msg;
 }
 
+void WingmanMenu::setVoiceStatus(std::string status) {
+    // Routed through the brevity line rather than a second overlay: it is the same kind of message
+    // in the same place a pilot already looks for the wingman's answer, and an empty status clears
+    // it exactly as a timed-out brevity line does.
+    if (status.empty()) {
+        m_brevityActive = false;
+        m_brevity[0] = '\0';
+        return;
+    }
+    setBrevity(status);
+}
+
 void WingmanMenu::onAck(const MsgWingmanAck& ack) {
     const auto result = static_cast<WingmanResult>(ack.result);
 

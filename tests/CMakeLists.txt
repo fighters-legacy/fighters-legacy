@@ -553,6 +553,11 @@ if(TARGET platform-enet)
     endif()
     catch_discover_tests(test_http_admin)
 
+    # Deterministic voice phrase matching (#935). No model, no audio device — the matcher is pure.
+    add_executable(test_wingman_phrase_match test_wingman_phrase_match.cpp)
+    target_link_libraries(test_wingman_phrase_match PRIVATE Catch2::Catch2WithMain engine-ai)
+    catch_discover_tests(test_wingman_phrase_match)
+
     # Chat-to-intent bridge (#611). Pure logic, canned responses, no model — the rejection and
     # injection paths are the point.
     add_executable(test_chat_intent_bridge test_chat_intent_bridge.cpp)
@@ -1370,6 +1375,9 @@ add_executable(test_screen_manager test_screen_manager.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientEffectRouter.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/WingmanMenu.cpp"
+    # FlightScreen drives the voice tier's per-frame update (#935); it comes along like every other
+    # overlay this target compiles directly.
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/VoiceCommandCapture.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/CommsMenu.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ManualOverlay.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientPrediction.cpp"

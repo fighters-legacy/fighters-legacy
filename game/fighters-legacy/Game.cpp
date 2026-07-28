@@ -18,6 +18,7 @@
 #include "GmMapOverlay.h"
 #include "HapticController.h"
 #include "HeadlessHal.h"
+#include "ISpeechToText.h" // #935: speech-to-text HAL
 #include "IWindowEventHandler.h"
 #include "KillFeed.h"
 #include "LoadingScreen.h"
@@ -41,7 +42,8 @@
 #include "SubtitleOverlay.h"
 #include "Version.h"
 #include "VideoEncoderPipe.h"
-#include "VoiceOverlay.h" // the radio-net HUD indicator (#925)
+#include "VoiceCommandCapture.h" // #935: the voice wingman-command tier
+#include "VoiceOverlay.h"        // the radio-net HUD indicator (#925)
 #include "WingmanMenu.h"
 #include "audio/MusicBuiltinTracks.h"
 #include "audio/MusicManager.h"
@@ -497,8 +499,10 @@ struct GameServices {
     fl::IHud* activeHud{nullptr};
     fl::WindshieldRain windshieldRain;
     ServerNotice serverNotice;
-    WingmanMenu wingmanMenu;             // the radio menu for ordering your flight (#610)
-    CommsMenu commsMenu;                 // the ATC comms menu (#704)
+    WingmanMenu wingmanMenu;                                // the radio menu for ordering your flight (#610)
+    std::unique_ptr<fl::ISpeechToText> stt;                 // #935: null backend unless FL_ENABLE_WHISPER
+    std::unique_ptr<fl::VoiceCommandCapture> voiceCommands; // #935: PTT -> STT -> phrase match
+    CommsMenu commsMenu;                                    // the ATC comms menu (#704)
     VoiceCalloutManager voiceCallouts;   // resolved-text radio callouts -> subtitle + optional voice (#704)
     SubtitleOverlay subtitleOverlay;     // renders the subtitle queue as a HUD overlay layer (#704)
     KillFeed killFeed;                   // multiplayer kill feed, fed from the CombatEvent Kill branch (#647)
@@ -1334,6 +1338,13 @@ void Game::initGameSystems() {
     // with no microphone (or a player who never enables voice) never touches the recording API and
     // never sees a permission prompt.
     d.services.audioCapture = fl::createSDL3AudioCapture();
+
+    // Voice wingman commands (#935). A null backend unless FL_ENABLE_WHISPER built one AND the model
+    // path loads, in which case available() is false and the tier is simply absent — the radio menu
+    // is the path either way, which is the #769 decision rather than a failure to report.
+    d.services.stt = fl::createSpeechToText(d.services.userConfig->voice().sttModelPath, *d.services.rawLogger);
+    d.services.voiceCommands = std::make_unique<fl::VoiceCommandCapture>(d.services.audioCapture.get(),
+                                                                         d.services.stt.get(), d.services.rawLogger);
     d.services.voiceChat.init(d.services.audioCapture.get(), d.services.p.audio.get(), d.services.rawLogger);
     d.services.voiceChat.applySettings(d.services.userConfig->voice(), d.services.audioSettings);
 }
@@ -1602,6 +1613,24 @@ void Game::startGame(const std::string& mission) {
         d.session.clientHandler->chat = &d.services.chatOverlay;    // in-match chat (#646)
         d.services.chatOverlay.clear();                             // no stale lines across sessions
         d.session.clientHandler->wingman = &d.services.wingmanMenu; // check-ins, order acks, relayed calls
+
+        // Voice wingman commands (#935): a matched phrase becomes the SAME MsgWingmanCommand the
+        // radio menu builds, sent on the same channel. The two input tiers converge before the wire,
+        // so the server sees one order path and the ack comes back through WingmanMenu's own handler.
+        if (d.services.voiceCommands) {
+            d.services.voiceCommands->setCommandSink([&d](fl::ai::WingmanCommand cmd) {
+                if (!d.session.clientNet)
+                    return;
+                fl::MsgWingmanCommand msg{};
+                msg.command = static_cast<uint8_t>(cmd);
+                msg.memberIdx = fl::kFlightAll; // a spoken order addresses the flight, as the menu does
+                msg.flightId = fl::kOwnFlight;
+                msg.seqNum = d.services.wingmanMenu.nextSeq();
+                d.session.clientNet->send(fl::kNetChReliable, &msg, sizeof(msg), /*reliable=*/true);
+            });
+            d.services.voiceCommands->setStatusSink(
+                [&d](std::string status) { d.services.wingmanMenu.setVoiceStatus(std::move(status)); });
+        }
         d.session.clientHandler->console = &*d.services.gameConsole;
         d.session.clientHandler->effects = &d.services.effectRouter; // weapon cosmetics (#625)
         d.services.effectRouter.reset();                             // no stale effects across sessions
@@ -1816,6 +1845,7 @@ void Game::startGame(const std::string& mission) {
         fsd.nvgIntensity = &d.services.nvgIntensity;           // night-vision goggles (#210)
         fsd.headTracker = &d.services.headTracker;             // opentrack head tracking (#927)
         fsd.wingmanMenu = &d.services.wingmanMenu;
+        fsd.voiceCommands = d.services.voiceCommands.get(); // voice wingman commands (#935)
         fsd.commsMenu = &d.services.commsMenu;
         fsd.manual = &d.services.manual;
         fsd.chat = &d.services.chatOverlay;   // in-match chat (#646)
@@ -2214,6 +2244,11 @@ void Game::run() {
         // in-session). Null when built without libcurl (#490).
         if (d.services.p.httpClient)
             d.services.p.httpClient->service();
+        // Drain finished transcriptions on the main thread (#935); the command sink fires from here.
+        // Unconditional: the null backend's service() is empty, and branching to save an empty call
+        // would put a condition in the frame loop for nothing.
+        if (d.services.stt)
+            d.services.stt->service();
 
         if (inSession) {
             d.services.p.asyncFilesystem->service();

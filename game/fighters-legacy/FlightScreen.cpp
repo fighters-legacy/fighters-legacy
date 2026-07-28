@@ -15,7 +15,8 @@
 #include "IWindow.h"
 #include "InsetViewMath.h" // target-slaved inset camera math (#698)
 #include "ManualOverlay.h"
-#include "TargetDesignation.h" // designated-target cycling (#696)
+#include "TargetDesignation.h"   // designated-target cycling (#696)
+#include "VoiceCommandCapture.h" // voice wingman commands (#935)
 #include "config/ControlsSettings.h"
 #include "config/UserConfig.h"
 #include "console/GameConsole.h"
@@ -363,6 +364,16 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     const ControlsSettings cs = d.userConfig->controls();
     const bool uiFocused =
         (d.wingmanMenu && d.wingmanMenu->isOpen()) || (d.commsMenu && d.commsMenu->isOpen()) || chatOpen || gmMapOpen;
+
+    // Voice wingman commands (#935). Hold the key, speak, release: captured locally, transcribed
+    // locally, matched locally, and what leaves the machine is the SAME MsgWingmanCommand the radio
+    // menu sends — the pilot's voice never does. `uiFocused` closes the gate for the same reason
+    // VoiceChat's does: typing "engage" into chat must not also say it.
+    if (d.voiceCommands && d.inputBindings) {
+        const bool held =
+            bindingDown(input, d.inputBindings->get(fl::InputAction::WingmanVoiceCommand)) && !d.gameConsole->isOpen();
+        d.voiceCommands->update(held, uiFocused);
+    }
 
     // Planet radius (m) from the server's MsgConnectAck; drives the autopilot's local-level altitude/
     // heading as well as the HUD attitude/horizon below. Earth default until the ack arrives.

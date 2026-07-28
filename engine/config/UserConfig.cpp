@@ -922,6 +922,9 @@ bool UserConfig::load() {
     m_voice.enabled = tbl["voice"]["enabled"].value_or(true);
     m_voice.transmitEnabled = tbl["voice"]["transmit"].value_or(true);
     m_voice.inputDevice = tbl["voice"]["input_device"].value_or(std::string{});
+    // #935: path to a whisper.cpp model for voice wingman commands. Empty = the tier is off and the
+    // radio menu is the path; no model ships with the game.
+    m_voice.sttModelPath = tbl["voice"]["stt_model_path"].value_or(std::string{});
     if (auto v = tbl["voice"]["key_mode"].value<std::string>()) {
         if (*v == "vox")
             m_voice.keyMode = VoiceKeyMode::Voice;
@@ -1057,6 +1060,7 @@ bool UserConfig::save() {
     voice.insert_or_assign("enabled", m_voice.enabled);
     voice.insert_or_assign("transmit", m_voice.transmitEnabled);
     voice.insert_or_assign("input_device", m_voice.inputDevice);
+    voice.insert_or_assign("stt_model_path", m_voice.sttModelPath);
     voice.insert_or_assign("key_mode", m_voice.keyMode == VoiceKeyMode::Voice  ? "vox"
                                        : m_voice.keyMode == VoiceKeyMode::Open ? "open"
                                                                                : "ptt");
