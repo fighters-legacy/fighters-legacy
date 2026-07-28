@@ -569,3 +569,29 @@ TEST_CASE("mcp: the pinned revision is the one that supports what we advertise",
     // this string, and the endpoint reports it to every client.
     CHECK(mcp::kProtocolRevision == "2025-06-18");
 }
+
+TEST_CASE("mcp: a session is bound to the token that opened it", "[mcp]") {
+    // Found while chasing an Apple-Clang -Wunused-private-field error: Session::token was stored,
+    // never read, and carried a comment claiming a binding the code did not enforce. Authority is
+    // re-derived from the presented grant on every request, so a borrowed session id could not
+    // escalate anything — but one token driving another's subscription state is a confusion worth
+    // refusing outright rather than reasoning about later.
+    Fixture f;
+    McpEndpoint ep(f.registry(), cfgWith({}), testLogger(), {});
+
+    auto alice = grantAt(mcp::Autonomy::Observe);
+    alice.token = "alice";
+    auto bob = grantAt(mcp::Autonomy::Observe);
+    bob.token = "bob";
+
+    const std::string sid = openSession(ep, alice);
+    REQUIRE_FALSE(sid.empty());
+
+    // Alice's own session works.
+    CHECK(ep.handle(R"({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})", alice, sid).httpStatus == 200);
+
+    // Bob presenting Alice's session id is refused, even though Bob authenticated fine.
+    const auto stolen = ep.handle(R"({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})", bob, sid);
+    CHECK(stolen.httpStatus == 404);
+    CHECK(stolen.body.find("no MCP session for this token") != std::string::npos);
+}

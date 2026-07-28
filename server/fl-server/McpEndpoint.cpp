@@ -60,12 +60,23 @@ std::string McpEndpoint::newSessionId() {
 void McpEndpoint::evictIfNeeded() {
     // Caller holds m_sessionMutex.
     const auto cap = static_cast<std::size_t>(m_cfg.maxSessions > 0 ? m_cfg.maxSessions : 1);
+    bool evicted = false;
     while (m_sessions.size() > cap) {
         auto oldest = m_sessions.begin();
         for (auto it = m_sessions.begin(); it != m_sessions.end(); ++it)
             if (it->second.lastSeen < oldest->second.lastSeen)
                 oldest = it;
         m_sessions.erase(oldest);
+        evicted = true;
+    }
+    // Worth saying out loud: an evicted session's notification stream stops, and from the client's
+    // side that is indistinguishable from the server having gone away. An operator seeing this
+    // either has max_sessions set too low or has something opening sessions and abandoning them,
+    // and neither is visible anywhere else.
+    if (evicted) {
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "mcp: session cap (%d) reached; evicted the idlest session", m_cfg.maxSessions);
+        m_log.log(LogLevel::Warn, __FILE__, __LINE__, buf);
     }
 }
 
@@ -306,18 +317,27 @@ McpEndpoint::RpcOutcome McpEndpoint::handle(std::string_view body, const httpadm
 
     // Everything past initialize needs a live session, so a caller cannot skip the handshake and
     // start calling tools with nothing but a bearer token.
+    //
+    // The session is also BOUND to the token that opened it. Authority is re-derived from the
+    // presented grant on every request, so a borrowed session id cannot escalate anything — but a
+    // session is a handle to a subscription state, and one token quietly driving another's stream is
+    // a confusion worth refusing outright rather than reasoning about later.
+    bool sessionOk = false;
     if (!sessionId.empty()) {
         std::lock_guard<std::mutex> lk(m_sessionMutex);
-        if (auto it = m_sessions.find(std::string(sessionId)); it != m_sessions.end())
-            it->second.lastSeen = m_clock->now();
+        if (auto it = m_sessions.find(std::string(sessionId)); it != m_sessions.end()) {
+            sessionOk = it->second.token == grant.token;
+            if (sessionOk)
+                it->second.lastSeen = m_clock->now();
+        }
     }
-    if (req.method != "ping" && !sessionExists(sessionId)) {
+    if (req.method != "ping" && !sessionOk) {
         if (req.isNotification) {
             out.httpStatus = 404;
             return out;
         }
         out.body = mcp::errorResponse(req.id, mcp::RpcError::InvalidRequest,
-                                      "no MCP session; call initialize first (Mcp-Session-Id header)");
+                                      "no MCP session for this token; call initialize first (Mcp-Session-Id header)");
         out.httpStatus = 404;
         return out;
     }

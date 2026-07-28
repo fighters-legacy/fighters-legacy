@@ -95,7 +95,6 @@ class McpEndpoint {
 
     mutable std::mutex m_sessionMutex;
     std::unordered_map<std::string, Session> m_sessions;
-    uint64_t m_sessionCounter{0};
 };
 
 } // namespace fl
