@@ -206,6 +206,7 @@ int main(int argc, char** argv) {
     std::string flagAssets;        // non-empty if --assets <dir> was given (content root; single-player forwards it)
     long flagSimWorkers = -1;      // >=0 if --sim-worker-threads was given (overrides [world])
     long flagFlightSize = -1;      // >=0 if --flight-size was given (overrides [flight] size)
+    bool flagNoDiscovery = false;  // true if --no-discovery was given: force both LAN sockets off (#1054)
     std::string flagMission;       // non-empty if --mission <name> was given (overrides [rotation])
     std::string flagMissionReport; // non-empty: run the mission headless to completion, write JSON here (#856)
     std::string flagCampaign;      // non-empty if --campaign <file> was given: run the campaign's next sortie (#584)
@@ -228,6 +229,8 @@ int main(int argc, char** argv) {
                 "  --test-spawn-ai-count <n>  Pre-spawn n loiter-AI entities (overrides [world])\n"
                 "  --sim-worker-threads <n>  Sim-tick CPU parallelism; 0=auto, 1=serial (overrides [world])\n"
                 "  --flight-size <n>         AI wingmen per player; 0=none (overrides [flight])\n"
+                "  --no-discovery            Bind no LAN sockets: no discovery beacon, no query\n"
+                "                            responder (overrides [discovery]; used by single-player)\n"
                 "  --mission <name>          Load a mission at startup (overrides [rotation])\n"
                 "  --mission-report <path>   Run the mission headless to completion, write a JSON outcome, exit\n"
                 "  --time-rate <name>        Sim wall-clock rate: paused|eighth|quarter|half|normal|double|quad|octa\n"
@@ -295,6 +298,12 @@ int main(int argc, char** argv) {
             if (end != argv[i] && n >= 0 && n <= 8)
                 flagFlightSize = n;
         }
+        // #1054: suppress BOTH LAN-facing sockets — the discovery beacon and the query responder.
+        // The client's embedded single-player server passes this: it serves one loopback peer, so
+        // advertising it on the LAN is wrong, and its query responder would bind game port + 1 and
+        // squat a port belonging to a dedicated server.
+        if (std::strcmp(argv[i], "--no-discovery") == 0)
+            flagNoDiscovery = true;
     }
 
     // ---- Set up platform ----
@@ -444,7 +453,7 @@ int main(int argc, char** argv) {
     const uint16_t queryPort = cfg.discoveryQueryPort != 0 ? static_cast<uint16_t>(cfg.discoveryQueryPort)
                                                            : static_cast<uint16_t>(cfg.port + 1);
     std::unique_ptr<fl::ServerQueryResponder> queryResponder;
-    if (cfg.discoveryQueryEnabled) {
+    if (cfg.discoveryQueryEnabled && !flagNoDiscovery) {
         queryResponder = std::make_unique<fl::ServerQueryResponder>(queryPort, *log);
         if (!queryResponder->start()) {
             log->log(LogLevel::Warn, __FILE__, __LINE__, "server query responder: bind failed; queries disabled");
@@ -461,7 +470,7 @@ int main(int argc, char** argv) {
     }
 
     std::unique_ptr<DiscoveryBeacon> beacon;
-    if (cfg.discoveryEnabled) {
+    if (cfg.discoveryEnabled && !flagNoDiscovery) {
         DiscoveryBeacon::Config dcfg;
         dcfg.name = cfg.name;
         dcfg.port = cfg.port;

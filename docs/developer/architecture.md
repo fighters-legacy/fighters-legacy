@@ -899,7 +899,7 @@ Every screen implements `IScreen`:
 | Phase | Server | ENet client |
 |---|---|---|
 | Main menu | Not running | Not connected |
-| "Fly" selected → Loading | Starts in background thread | Connecting to 127.0.0.1:4778 |
+| "Fly" selected → Loading | Starts in background thread | Connecting to 127.0.0.1:4776 |
 | Flight / Pause / Debrief | Running | Connected |
 | "Quit to Menu" | Stopped | Disconnected |
 

@@ -1404,6 +1404,16 @@ target_include_directories(test_connect_args PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy")
 catch_discover_tests(test_connect_args)
 
+# #1054: the embedded single-player server must not contend for the standard game port. Header-only
+# use of LocalServer.h (a constexpr port) plus DiscoveryBeacon's default port -- engine-console and
+# platform-hal are here for LocalServer.h's includes, not for any linked code.
+add_executable(test_local_server_port test_local_server_port.cpp)
+target_link_libraries(test_local_server_port PRIVATE
+    Catch2::Catch2WithMain engine-net engine-console platform-hal)
+target_include_directories(test_local_server_port PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy")
+catch_discover_tests(test_local_server_port)
+
 # Observer entity picker (#860): pure logic over EntityRenderEntry; engine-render supplies the header +
 # GLM include dirs (no SDL/rendering).
 add_executable(test_entity_selector test_entity_selector.cpp)

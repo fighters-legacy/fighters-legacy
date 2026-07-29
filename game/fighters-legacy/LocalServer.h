@@ -49,10 +49,27 @@ class LocalServer {
         Timeout,     // did not log "listening on" within 3 seconds
     };
 
+    // The port the CLIENT-PROVISIONED single-player server binds (#1054). Deliberately NOT the 4778
+    // standard game port: a dedicated fl-server, a LAN-discovery listener and the server browser all
+    // want 4778, and enet6 sets no SO_REUSEADDR, so whoever binds it second fails outright.
+    //
+    // The two ports adjacent to 4778 are both wrong, for the same reason in opposite directions —
+    // fl-server derives an unconfigured server-query port as GAME PORT + 1:
+    //   4779 = a dedicated server's query port, so the embedded server would collide with it.
+    //   4777 would derive its OWN query port as 4778, taking back the very port being avoided.
+    // 4776 is the nearest port that collides with neither, and whose derived query port (4777) is
+    // itself unclaimed. test_local_server_port locks all three properties.
+    //
+    // start() additionally passes --no-discovery, so no query responder or LAN beacon is created at
+    // all: a server with one loopback player should not advertise itself or answer queries. That is
+    // defence in depth rather than the thing holding this together — dropping the flag would cost a
+    // stray socket on 4777, not a re-collision on 4778.
+    static constexpr uint16_t kLocalServerPort = 4776;
+
     // Find fl-server binary and spawn it on bindAddr:port.
     // Blocks until fl-server logs "listening on" (up to 3 s) or fails.
     // Returns Ok on success; SpawnFailed, BindFailed, or Timeout on failure.
-    StartResult start(const char* bindAddr = "127.0.0.1", uint16_t port = 4778);
+    StartResult start(const char* bindAddr = "127.0.0.1", uint16_t port = kLocalServerPort);
 
     // Graceful shutdown: send "quit" to admin console, wait 2 s, then kill.
     void stop();

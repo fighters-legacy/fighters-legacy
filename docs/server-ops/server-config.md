@@ -985,6 +985,11 @@ Client-side parsing and the server browser UI are tracked in issue #143.
 Set to `false` to suppress LAN broadcasting entirely. Recommended for internet-only servers or
 servers where LAN presence is undesirable (e.g. tournament setups, cloud deployments).
 
+The CLI flag `--no-discovery` forces both this and `query_enabled` (below) off regardless of the
+config file, so a server can be started with no LAN-facing sockets at all. The game client passes it
+when spawning the embedded single-player server, which serves one loopback player and has no
+business either advertising itself on the LAN or binding a query port.
+
 ### `interval_ms`
 
 | Type | Default | Valid range |
@@ -1011,6 +1016,8 @@ where to query it without configuration.
 
 If the socket cannot bind, the server logs a warning and continues with queries disabled — a
 port conflict never stops the game server from starting.
+
+Forced off by the `--no-discovery` CLI flag — see `enabled` at the top of this section.
 
 ### `query_port`
 
