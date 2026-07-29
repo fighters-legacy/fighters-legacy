@@ -91,8 +91,8 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     // below are the only raw reads left in this file. Anything NON-modal — the aircraft manual, the
     // replay transport, photo mode — is a real binding with its own default.
     const fl::InputBindings* binds = d.inputBindings;
-    auto pressed = [&](fl::InputAction a) { return binds && fl::actionJustPressed(input, *binds, a); };
-    auto held = [&](fl::InputAction a) { return binds && fl::actionDown(input, *binds, a); };
+    auto actionPressed = [&](fl::InputAction a) { return binds && fl::actionJustPressed(input, *binds, a); };
+    auto actionHeld = [&](fl::InputAction a) { return binds && fl::actionDown(input, *binds, a); };
 
     uint32_t idx = d.assignedEntityIdx ? *d.assignedEntityIdx : 0;
     uint32_t gen = d.assignedEntityGen ? *d.assignedEntityGen : 0;
@@ -126,8 +126,8 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
                                           : std::span<const fl::EntityRenderEntry>{};
         if (!d.gameConsole->isOpen() && !(d.wingmanMenu && d.wingmanMenu->isOpen()) &&
             !(d.commsMenu && d.commsMenu->isOpen())) {
-            const bool next = pressed(fl::InputAction::SpectateNext);
-            const bool prev = pressed(fl::InputAction::SpectatePrev);
+            const bool next = actionPressed(fl::InputAction::SpectateNext);
+            const bool prev = actionPressed(fl::InputAction::SpectatePrev);
             if (next || prev) {
                 if (next)
                     m_selector.cycleNext(entries);
@@ -151,22 +151,22 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
         !(d.commsMenu && d.commsMenu->isOpen())) {
         fl::ReplayPlayer& rp = *d.replay;
 
-        if (pressed(fl::InputAction::ReplayPauseToggle))
+        if (actionPressed(fl::InputAction::ReplayPauseToggle))
             rp.togglePause();
         // Scrub in whole seconds. These share their defaults with the flight controls on purpose:
         // a recording has no ownship, so the Replay context never overlaps the Flight one and the
         // conflict checker treats the reuse as legitimate rather than flagging it (#1050).
-        if (pressed(fl::InputAction::ReplaySeekBack))
+        if (actionPressed(fl::InputAction::ReplaySeekBack))
             rp.seekBySeconds(-5.0);
-        if (pressed(fl::InputAction::ReplaySeekForward))
+        if (actionPressed(fl::InputAction::ReplaySeekForward))
             rp.seekBySeconds(5.0);
-        if (pressed(fl::InputAction::ReplaySeekBackFar))
+        if (actionPressed(fl::InputAction::ReplaySeekBackFar))
             rp.seekBySeconds(-30.0);
-        if (pressed(fl::InputAction::ReplaySeekForwardFar))
+        if (actionPressed(fl::InputAction::ReplaySeekForwardFar))
             rp.seekBySeconds(30.0);
-        if (pressed(fl::InputAction::ReplaySeekStart))
+        if (actionPressed(fl::InputAction::ReplaySeekStart))
             rp.seekToFraction(0.0);
-        if (pressed(fl::InputAction::ReplaySeekEnd))
+        if (actionPressed(fl::InputAction::ReplaySeekEnd))
             rp.seekToFraction(1.0);
 
         // Speed: the #41 set (0.25x / 0.5x / 1x / 2x), stepped through the shared TimeRate ladder.
@@ -185,14 +185,14 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
         // ReplaySpeed* actions are scoped to the Replay context while the PhotoEv* ones are scoped
         // to Photo.
         const bool inPhoto = d.photo && d.photo->active;
-        if (!inPhoto && pressed(fl::InputAction::ReplaySpeedDown))
+        if (!inPhoto && actionPressed(fl::InputAction::ReplaySpeedDown))
             rp.setRate(stepRate(rp.rate(), -1));
-        if (!inPhoto && pressed(fl::InputAction::ReplaySpeedUp))
+        if (!inPhoto && actionPressed(fl::InputAction::ReplaySpeedUp))
             rp.setRate(stepRate(rp.rate(), +1));
 
         if (d.photo) {
             // Photo mode pauses on entry: a still of a moving world is a screenshot, not a photograph.
-            if (pressed(fl::InputAction::PhotoModeToggle)) {
+            if (actionPressed(fl::InputAction::PhotoModeToggle)) {
                 d.photo->active = !d.photo->active;
                 if (d.photo->active) {
                     if (!rp.paused())
@@ -201,25 +201,25 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
                 }
             }
             if (d.photo->active) {
-                const float fovStep = held(fl::InputAction::PhotoFovFine) ? 1.f : 5.f;
-                if (held(fl::InputAction::PhotoFovIn))
+                const float fovStep = actionHeld(fl::InputAction::PhotoFovFine) ? 1.f : 5.f;
+                if (actionHeld(fl::InputAction::PhotoFovIn))
                     d.photo->fovDeg =
                         std::clamp(d.photo->fovDeg - fovStep, fl::ReplayHud::kMinFovDeg, fl::ReplayHud::kMaxFovDeg);
-                if (held(fl::InputAction::PhotoFovOut))
+                if (actionHeld(fl::InputAction::PhotoFovOut))
                     d.photo->fovDeg =
                         std::clamp(d.photo->fovDeg + fovStep, fl::ReplayHud::kMinFovDeg, fl::ReplayHud::kMaxFovDeg);
                 // Roll is NOT on Q/E: those move the free camera, which is what frames the shot.
-                if (held(fl::InputAction::PhotoRollLeft))
+                if (actionHeld(fl::InputAction::PhotoRollLeft))
                     d.photo->rollDeg = std::clamp(d.photo->rollDeg - 1.f, -180.f, 180.f);
-                if (held(fl::InputAction::PhotoRollRight))
+                if (actionHeld(fl::InputAction::PhotoRollRight))
                     d.photo->rollDeg = std::clamp(d.photo->rollDeg + 1.f, -180.f, 180.f);
-                if (pressed(fl::InputAction::PhotoEvDown))
+                if (actionPressed(fl::InputAction::PhotoEvDown))
                     d.photo->evOffset =
                         std::clamp(d.photo->evOffset - 0.25f, -fl::ReplayHud::kMaxEv, fl::ReplayHud::kMaxEv);
-                if (pressed(fl::InputAction::PhotoEvUp))
+                if (actionPressed(fl::InputAction::PhotoEvUp))
                     d.photo->evOffset =
                         std::clamp(d.photo->evOffset + 0.25f, -fl::ReplayHud::kMaxEv, fl::ReplayHud::kMaxEv);
-                if (pressed(fl::InputAction::PhotoCapture) && d.photoCaptureRequest)
+                if (actionPressed(fl::InputAction::PhotoCapture) && d.photoCaptureRequest)
                     *d.photoCaptureRequest = true; // Game.cpp owns the renderer; the screen just asks
             }
         }
@@ -240,7 +240,7 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     const bool menuWasOpen = d.wingmanMenu && d.wingmanMenu->isOpen();
     const bool commsMenuWasOpen = d.commsMenu && d.commsMenu->isOpen();
     if (d.wingmanMenu && !d.gameConsole->isOpen() && !commsMenuWasOpen) {
-        if (!menuWasOpen && pressed(fl::InputAction::WingmanMenu)) {
+        if (!menuWasOpen && actionPressed(fl::InputAction::WingmanMenu)) {
             d.wingmanMenu->toggle();
         } else if (menuWasOpen) {
             if (auto order = d.wingmanMenu->update(input); order && d.clientNet) {
@@ -253,7 +253,7 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     // only the discrete keys it consumes are suppressed via uiFocused. T toggles it. Mutually exclusive
     // with the wingman menu so their digit keys never collide.
     if (d.commsMenu && !d.gameConsole->isOpen() && !menuWasOpen) {
-        if (!commsMenuWasOpen && pressed(fl::InputAction::CommsMenu)) {
+        if (!commsMenuWasOpen && actionPressed(fl::InputAction::CommsMenu)) {
             d.commsMenu->toggle();
         } else if (commsMenuWasOpen) {
             if (auto cmd = d.commsMenu->update(input); cmd && d.clientNet) {
@@ -269,9 +269,9 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     const bool chatWasOpen = d.chat && d.chat->isInputOpen();
     if (d.chat && !d.gameConsole->isOpen() && !menuWasOpen && !commsMenuWasOpen) {
         if (!chatWasOpen) {
-            if (pressed(fl::InputAction::ChatAll))
+            if (actionPressed(fl::InputAction::ChatAll))
                 d.chat->open(fl::ChatChannel::All);
-            else if (pressed(fl::InputAction::ChatTeam))
+            else if (actionPressed(fl::InputAction::ChatTeam))
                 d.chat->open(fl::ChatChannel::Team);
         } else {
             const bool sendBtn = d.chat->renderInput(d.gui);
@@ -293,7 +293,7 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     // `spectate` so the server re-centres interest on the target.
     const bool gmCapable = d.clientNetHandler && d.clientNetHandler->hasCapability(fl::Capability::GmMap);
     if (d.gmMap && gmCapable && !d.gameConsole->isOpen() && !menuWasOpen && !commsMenuWasOpen && !chatOpen) {
-        if (pressed(fl::InputAction::GmMap))
+        if (actionPressed(fl::InputAction::GmMap))
             d.gmMap->toggle();
         if (d.gmMap->isOpen()) {
             d.gmMap->update(input, window);
@@ -313,9 +313,9 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     // Suppressed only while the console/radio menu is up (they own the keyboard then).
     if (d.clientNetHandler && !d.gameConsole->isOpen() && !(d.wingmanMenu && d.wingmanMenu->isOpen()) &&
         !(d.commsMenu && d.commsMenu->isOpen()) && !chatOpen) {
-        const bool cycleEdge = pressed(fl::InputAction::CrewSeatCycle);
-        const bool joinEdge = pressed(fl::InputAction::CrewSeatJoin);
-        const bool leaveEdge = pressed(fl::InputAction::CrewSeatLeave);
+        const bool cycleEdge = actionPressed(fl::InputAction::CrewSeatCycle);
+        const bool joinEdge = actionPressed(fl::InputAction::CrewSeatJoin);
+        const bool leaveEdge = actionPressed(fl::InputAction::CrewSeatLeave);
         if (cycleEdge) {
             m_seatPicker.rebuild(d.clientNetHandler->crewRosters());
             if (!m_seatPickerActive)
@@ -396,11 +396,11 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     // focus) and disengage everything when there is no predicted ownship state (observer / dead peer).
     const fl::FlightState* fs = d.prediction ? d.prediction->predictedState() : nullptr;
     if (fs && d.inputBindings && !uiFocused && !d.gameConsole->isOpen()) {
-        if (pressed(fl::InputAction::AutopilotAltHold))
+        if (actionPressed(fl::InputAction::AutopilotAltHold))
             m_autopilot.toggleAltHold(*fs, radiusM);
-        if (pressed(fl::InputAction::AutopilotHdgHold))
+        if (actionPressed(fl::InputAction::AutopilotHdgHold))
             m_autopilot.toggleHdgHold(*fs, radiusM);
-        if (pressed(fl::InputAction::AutopilotSpdHold))
+        if (actionPressed(fl::InputAction::AutopilotSpdHold))
             m_autopilot.toggleSpdHold(*fs);
     } else if (!fs) {
         m_autopilot.disengageAll();
@@ -434,15 +434,15 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
             return dctx;
         };
 
-        const bool next = pressed(fl::InputAction::NextTarget);
-        const bool prev = pressed(fl::InputAction::PrevTarget);
+        const bool next = actionPressed(fl::InputAction::NextTarget);
+        const bool prev = actionPressed(fl::InputAction::PrevTarget);
         if (next || prev)
             d.targetDesignation->cycle(next ? +1 : -1, makeCtx());
 
         // Padlock toggle (#697): F5 enters padlock (auto-designating best-in-cone when nothing is
         // designated) and exits back to Cockpit; the tracker is seeded from the current view so it
         // never pops. All the slew/lock math lives in CameraInput's Padlock case.
-        if (pressed(fl::InputAction::PadlockToggle)) {
+        if (actionPressed(fl::InputAction::PadlockToggle)) {
             if (d.cameraController->mode() == fl::CameraMode::Padlock) {
                 d.cameraController->setMode(fl::CameraMode::Cockpit);
             } else {
@@ -457,17 +457,17 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
         }
 
         // Target-slaved inset toggle (#698).
-        if (pressed(fl::InputAction::TargetInsetToggle))
+        if (actionPressed(fl::InputAction::TargetInsetToggle))
             m_insetOn = !m_insetOn;
 
         // Radar MFD page / range cycling (#642).
-        if (pressed(fl::InputAction::MfdPage))
+        if (actionPressed(fl::InputAction::MfdPage))
             m_mfd.cyclePage();
-        if (pressed(fl::InputAction::MfdRange))
+        if (actionPressed(fl::InputAction::MfdRange))
             m_mfd.cycleRange();
 
         // Night-vision goggles toggle (#210).
-        if (pressed(fl::InputAction::NvgToggle))
+        if (actionPressed(fl::InputAction::NvgToggle))
             m_nvgOn = !m_nvgOn;
     }
 
@@ -664,18 +664,18 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     // while you read it, because a reference you must stop flying to consult is one you never open.
     const bool manualWasOpen = d.manual && d.manual->isOpen();
     if (d.manual && !d.gameConsole->isOpen() && !menuWasOpen) {
-        if (pressed(fl::InputAction::AircraftManual))
+        if (actionPressed(fl::InputAction::AircraftManual))
             d.manual->toggle();
         if (d.manual->isOpen()) {
             // Its OWN scroll bindings, not PageUp/PageDown: the manual is non-modal, so those keys
             // are still the throttle while it is open (#1050).
-            if (pressed(fl::InputAction::ManualScrollDown))
+            if (actionPressed(fl::InputAction::ManualScrollDown))
                 d.manual->scroll(+10);
-            if (pressed(fl::InputAction::ManualScrollUp))
+            if (actionPressed(fl::InputAction::ManualScrollUp))
                 d.manual->scroll(-10);
             // Back out with the same action that would otherwise pause: the guard below stops it
             // doing both in one frame.
-            if (pressed(fl::InputAction::Pause))
+            if (actionPressed(fl::InputAction::Pause))
                 d.manual->close();
         }
         d.manual->update();
@@ -685,7 +685,7 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     // pause screen.
     const bool manualClosedThisFrame = manualWasOpen && d.manual && !d.manual->isOpen();
     if (!menuWasOpen && !commsMenuWasOpen && !manualClosedThisFrame && !chatWasOpen && !consoleWasOpen &&
-        !d.gameConsole->isOpen() && pressed(fl::InputAction::Pause))
+        !d.gameConsole->isOpen() && actionPressed(fl::InputAction::Pause))
         return Screen::Pause;
 
     return Screen::Flight;
