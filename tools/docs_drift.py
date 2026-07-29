@@ -469,6 +469,54 @@ def check_tools_list() -> CheckResult:
 
 
 # --------------------------------------------------------------------------------------
+# check: input-actions
+# --------------------------------------------------------------------------------------
+
+
+def _input_action_names(src: str) -> set[str]:
+    """Pull the InputAction enumerator names out of the enum body.
+
+    Comments inside the enum name actions in prose (`InputAction::MasterArm`, `FireMissile`), so
+    they are stripped first -- matching them would inflate the count with names that are not
+    enumerators and hide a real one going missing.
+    """
+    match = re.search(r"enum class InputAction\s*:\s*\w+\s*\{(.*?)^\};", src, re.S | re.M)
+    if not match:
+        return set()
+    body = re.sub(r"//[^\n]*", "", match.group(1))
+    return {name for name in re.findall(r"^\s*(\w+)\s*,", body, re.M) if name != "Count"}
+
+
+def check_input_actions() -> CheckResult:
+    """Every InputAction must appear in the player-facing key map, and vice versa.
+
+    The V-on-two-live-actions defect (#1050) was found by diffing docs/sandbox.md against
+    InputBindings::applyDefaults() BY HAND. The binding table is now the authority for every
+    gameplay control, so the key map is the one document that goes stale the moment an action is
+    added -- which is exactly the drift this gate exists to catch.
+    """
+    result = CheckResult("input-actions: InputAction.h vs docs/user-guide/controls.md")
+    src = read("engine/input/InputAction.h")
+    doc = read("docs/user-guide/controls.md")
+
+    code = _input_action_names(src)
+    if not code:
+        result.errors.append("could not find `enum class InputAction` in engine/input/InputAction.h")
+        return result
+
+    # The doc names an action in a `Binding` column cell, e.g. | ... | `MasterArm` |
+    documented = {name for name in code if f"`{name}`" in doc}
+
+    result.code_count = len(code)
+    result.doc_count = len(documented)
+    if not floor_check(result, "InputAction.h enum entries", len(code), 60):
+        return result
+
+    result.code_only = code - documented
+    return result
+
+
+# --------------------------------------------------------------------------------------
 # Driver
 # --------------------------------------------------------------------------------------
 
@@ -478,6 +526,7 @@ CHECKS = {
     "lua-names": check_lua_names,
     "commands": check_commands,
     "tools-list": check_tools_list,
+    "input-actions": check_input_actions,
 }
 
 

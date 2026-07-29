@@ -18,7 +18,7 @@ struct Binding {
     uint32_t id{0};           // Key / MouseButton / GamepadButton / GamepadAxis cast to uint32_t
     bool axisNegative{false}; // true = negative axis direction triggers a digital action
 
-    bool isNone() const {
+    [[nodiscard]] constexpr bool isNone() const {
         return source == BindingSource::None;
     }
 };

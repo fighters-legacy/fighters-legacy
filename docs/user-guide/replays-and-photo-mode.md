@@ -37,8 +37,8 @@ the free camera, and adds manual control of the shot:
 
 | Action | Key |
 |---|---|
-| Zoom in / out (FOV 20°–120°) | Page Up / Page Down (hold Shift for 1° steps) |
-| Roll the camera | Q / E |
+| Zoom in / out (FOV 20°–120°) | Page Up / Page Down (hold Left Shift for 1° steps) |
+| Roll the camera | `;` / `'` — not Q / E, which move the free camera you frame the shot with |
 | Exposure −/+ (¼-stop, ±4 stops) | `-` / `=` |
 | Export a PNG | Enter |
 

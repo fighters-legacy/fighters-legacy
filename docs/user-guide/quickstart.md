@@ -48,14 +48,13 @@ Your aircraft starts armed.
 | `N` / `P` | Cycle to the next / previous target |
 | `Num 1` / `Num 2` | Select the next / previous weapon station |
 | `Space` | Fire the gun |
-| `Left Ctrl` | Release the selected store |
+| `Enter` | Release the selected store |
 
 The HUD's right column reads `ARM <weapon> x<rounds>`. In cockpit view you get a gun pipper with
 ballistic lead, and a designator box around the target with range and closure.
 
-If your weapons stop working after you have used the radio, press `V` — it toggles master arm
-between ARM and SAFE, and it shares a key with push-to-talk
-([#1050](https://github.com/fighters-legacy/fighters-legacy/issues/1050)).
+If nothing fires at all, check master arm: `4` toggles ARM / SAFE, and SAFE really does suppress the
+triggers.
 
 ## Order your wingman
 

@@ -6,6 +6,7 @@
 #include "IJoystick.h"
 #include "config/ControlsSettings.h"
 #include "console/GameConsole.h"
+#include "input/BindingQuery.h"
 #include "render/SimRenderBridge.h"
 
 #include <algorithm>
@@ -33,133 +34,132 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
 
     constexpr float kThrottleStep = 1.0f / 60.0f;
     if (!console.isOpen()) {
-        // The keyboard control block is suppressed while a text field owns the keyboard (chat, #646) —
-        // the gamepad + HOTAS blocks below stay live so a partner keeps flying. Throttle holds.
-        if (textEntry)
-            inp.throttle = camInput.throttle();
-        if (!textEntry) {
-            if (input.isKeyDown(Key::PageUp))
-                camInput.adjustThrottle(kThrottleStep);
-            if (input.isKeyDown(Key::PageDown))
-                camInput.adjustThrottle(-kThrottleStep);
-            inp.throttle = input.isKeyDown(Key::LeftShift) ? 1.f : camInput.throttle();
-            inp.elevator = (input.isKeyDown(Key::ArrowUp) ? -1.f : 0.f) + (input.isKeyDown(Key::ArrowDown) ? 1.f : 0.f);
-            inp.aileron =
-                (input.isKeyDown(Key::ArrowRight) ? 1.f : 0.f) + (input.isKeyDown(Key::ArrowLeft) ? -1.f : 0.f);
-            inp.rudder = (input.isKeyDown(Key::X) ? 1.f : 0.f) + (input.isKeyDown(Key::Z) ? -1.f : 0.f);
-            inp.buttons = input.isKeyDown(Key::Space) ? 1u : 0u;
-            if (input.isKeyDown(Key::Tab))
-                inp.buttons |= 0x02u;
-            // Wheel brakes (#700): B holds the brakes. A flight control like throttle/AB, so it is not
-            // gated on uiFocused — the server ignores it unless the aircraft is on the ground anyway.
-            if (input.isKeyDown(Key::B))
-                inp.buttons |= fl::kInputButtonWheelBrake;
-            // Fire the selected store (#625): mouse-right or the Enter key. Level on the wire — the
-            // server's FireControl edge-detects, so holding it is one shot. Gated while an overlay owns
-            // the discrete keys (the radio menu's picks are the digit keys the cycle uses, #610).
-            if (!uiFocused && (input.isMouseButtonDown(MouseButton::Right) || input.isKeyDown(Key::Enter)))
-                inp.buttons |= 0x04u;
-            // Weapon-station cycling (#625): local edge detection, ABSOLUTE selection on the wire (an
-            // absolute value converges on a lossy channel; a lost cycle-edge would not). Wraps within
-            // the station count Game.cpp provides from the entity def; 0 = unknown (selection off).
-            const bool nextDown = !uiFocused && input.isKeyDown(Key::Num1); // NextWeapon primary binding
-            const bool prevDown = !uiFocused && input.isKeyDown(Key::Num2); // PrevWeapon primary binding
-            if (m_stationCount > 0) {
-                const bool nextEdge = nextDown && !m_prevNextKey;
-                const bool prevEdge = prevDown && !m_prevPrevKey;
-                // 255 = "keep the server's default selection". Only a deliberate cycle replaces it —
-                // an untouched selector must never override what the server chose at spawn.
-                if ((nextEdge || prevEdge) && m_selectedStation == 255)
-                    m_selectedStation = 0;
-                else if (nextEdge)
-                    m_selectedStation = static_cast<uint8_t>((m_selectedStation + 1) % m_stationCount);
-                else if (prevEdge)
-                    m_selectedStation = static_cast<uint8_t>((m_selectedStation + m_stationCount - 1) % m_stationCount);
-            }
-            m_prevNextKey = nextDown;
-            m_prevPrevKey = prevDown;
+        // EVERY control below resolves through the binding table (#1050). There is no raw
+        // `isKeyDown(Key::…)` left in this file: a control the table does not own is a control the
+        // player cannot rebind and the conflict checker cannot see, which is exactly how master arm
+        // ended up hardcoded to V while the radio push-to-talk default was also V.
+        //
+        // A text field (the chat box, #646) owns the KEYBOARD and the pointer that clicks its Send
+        // button, but not the stick — so `suppressDesktop` drops the keyboard and mouse slots and
+        // leaves the gamepad and HOTAS axes live, and a partner keeps flying while you type. The
+        // throttle holds because ThrottleUp/Down/Max simply read as not-pressed.
+        auto down = [&](fl::InputAction a) {
+            return fl::actionDown(input, m_bindings, a, /*gamepadId=*/0, /*suppressDesktop=*/textEntry);
+        };
+        // Discrete controls an in-flight overlay consumes while it is up (the radio menu, #610).
+        // The flight axes, throttle, afterburner, wheel brakes and the gun trigger deliberately stay
+        // live — a combat radio menu that idles the engine or safes the guns is worse than no menu.
+        auto downUi = [&](fl::InputAction a) { return !uiFocused && down(a); };
+        // Rising edge derived from the level state THIS poll observed: poll() runs at 60 Hz and can
+        // miss IInput's own one-frame just-pressed flag entirely.
+        auto pressed = [&](fl::InputAction a, bool nowDown) { return m_edges.update(a, nowDown); };
 
-            // Radar mode cycle (#526/#528): R steps Silent -> Search -> TWS -> STT -> Silent. Absolute on
-            // the wire (converges on the unreliable channel); 255 = keep the server default until the
-            // player first presses it, so a fresh spawn stays in its TWS mode.
-            const bool radarKey = !uiFocused && input.isKeyDown(Key::R);
-            if (radarKey && !m_prevRadarKey) {
-                m_radarMode = static_cast<uint8_t>((m_radarMode + 1) % 4);
-                m_radarModeTouched = true;
-            }
-            m_prevRadarKey = radarKey;
-            inp.radarMode = m_radarModeTouched ? m_radarMode : 255u;
+        // ── Flight axes ──────────────────────────────────────────────────────
+        if (down(fl::InputAction::ThrottleUp))
+            camInput.adjustThrottle(kThrottleStep);
+        if (down(fl::InputAction::ThrottleDown))
+            camInput.adjustThrottle(-kThrottleStep);
+        inp.throttle = down(fl::InputAction::ThrottleMax) ? 1.f : camInput.throttle();
+        inp.elevator = (down(fl::InputAction::PitchUp) ? 1.f : 0.f) + (down(fl::InputAction::PitchDown) ? -1.f : 0.f);
+        inp.aileron = (down(fl::InputAction::RollRight) ? 1.f : 0.f) + (down(fl::InputAction::RollLeft) ? -1.f : 0.f);
+        inp.rudder = (down(fl::InputAction::YawRight) ? 1.f : 0.f) + (down(fl::InputAction::YawLeft) ? -1.f : 0.f);
 
-            // Electronic warfare (#529). E dispenses chaff+flare (bit 3, level on the wire — the server
-            // edge-detects, so holding E is one pop); J toggles the ECM jammer (bit 4, level).
-            if (!uiFocused && input.isKeyDown(Key::E))
-                inp.buttons |= 0x08u;
-            const bool ecmKey = !uiFocused && input.isKeyDown(Key::J);
-            if (ecmKey && !m_prevEcmKey)
-                m_ecmOn = !m_ecmOn;
-            m_prevEcmKey = ecmKey;
-            if (m_ecmOn)
-                inp.buttons |= 0x10u;
+        // ── Level flight controls ────────────────────────────────────────────
+        if (down(fl::InputAction::FireWeapon))
+            inp.buttons |= fl::kInputButtonGun;
+        if (down(fl::InputAction::Afterburner))
+            inp.buttons |= fl::kInputButtonAfterburner;
+        // Wheel brakes (#700). The server ignores them unless the aircraft is on the ground.
+        if (down(fl::InputAction::WheelBrake))
+            inp.buttons |= fl::kInputButtonWheelBrake;
+        // Fire the selected store (#625). Level on the wire — the server's FireControl edge-detects,
+        // so holding it is one shot. Gated while an overlay owns the discretes.
+        if (downUi(fl::InputAction::FireStore))
+            inp.buttons |= fl::kInputButtonFireStore;
 
-            // Master arm (#641): V toggles ARM/SAFE. Edge-detected; the gate below is applied after the
-            // gamepad block too, so SAFE really suppresses the fire triggers on every input path.
-            const bool armKey = !uiFocused && input.isKeyDown(Key::V);
-            if (armKey && !m_prevArmKey)
-                m_masterArm = !m_masterArm;
-            m_prevArmKey = armKey;
+        // ── Weapon-station cycling (#625) ────────────────────────────────────
+        // Local edge detection, ABSOLUTE selection on the wire (an absolute value converges on a
+        // lossy channel; a lost cycle-edge would not). Wraps within the station count Game.cpp
+        // provides from the entity def; 0 = unknown (selection off).
+        const bool nextEdge = pressed(fl::InputAction::NextWeapon, downUi(fl::InputAction::NextWeapon));
+        const bool prevEdge = pressed(fl::InputAction::PrevWeapon, downUi(fl::InputAction::PrevWeapon));
+        if (m_stationCount > 0) {
+            // 255 = "keep the server's default selection". Only a deliberate cycle replaces it — an
+            // untouched selector must never override what the server chose at spawn.
+            if ((nextEdge || prevEdge) && m_selectedStation == 255)
+                m_selectedStation = 0;
+            else if (nextEdge)
+                m_selectedStation = static_cast<uint8_t>((m_selectedStation + 1) % m_stationCount);
+            else if (prevEdge)
+                m_selectedStation = static_cast<uint8_t>((m_selectedStation + m_stationCount - 1) % m_stationCount);
+        }
 
-            // ── Articulation switches (#639) ────────────────────────────────
-            // G toggles the gear, F steps the flap detent (clean / manoeuvre / full — the three
-            // positions a real lever has; a continuous axis would be a worse keyboard control and
-            // matches no cockpit), H the hook, C the canopy. All LATCHED and sent as absolute state,
-            // so a dropped packet costs a tick of lag, not a sortie in the wrong configuration.
-            const bool gearKey = !uiFocused && input.isKeyDown(Key::G);
-            if (gearKey && !m_prevGearKey)
-                m_gearDown = !m_gearDown;
-            m_prevGearKey = gearKey;
+        // ── Radar mode cycle (#526/#528) ─────────────────────────────────────
+        // Silent -> Search -> TWS -> STT. Absolute on the wire (converges on the unreliable
+        // channel); 255 = keep the server default until the player first presses it, so a fresh
+        // spawn stays in its TWS mode.
+        if (pressed(fl::InputAction::RadarModeCycle, downUi(fl::InputAction::RadarModeCycle))) {
+            m_radarMode = static_cast<uint8_t>((m_radarMode + 1) % 4);
+            m_radarModeTouched = true;
+        }
+        inp.radarMode = m_radarModeTouched ? m_radarMode : 255u;
 
-            const bool flapKey = !uiFocused && input.isKeyDown(Key::F);
-            if (flapKey && !m_prevFlapKey)
-                m_flapDetent = static_cast<uint8_t>((m_flapDetent + 1u) % 3u);
-            m_prevFlapKey = flapKey;
+        // ── Electronic warfare (#529) ────────────────────────────────────────
+        // Dispense is a level bit (the server edge-detects, so holding it is one pop); the jammer is
+        // a client-side latch sent as level.
+        if (downUi(fl::InputAction::CountermeasureDispense))
+            inp.buttons |= fl::kInputButtonChaffFlare;
+        if (pressed(fl::InputAction::EcmToggle, downUi(fl::InputAction::EcmToggle)))
+            m_ecmOn = !m_ecmOn;
+        if (m_ecmOn)
+            inp.buttons |= fl::kInputButtonEcm;
 
-            const bool hookKey = !uiFocused && input.isKeyDown(Key::H);
-            if (hookKey && !m_prevHookKey)
-                m_hookDown = !m_hookDown;
-            m_prevHookKey = hookKey;
+        // ── Master arm (#641) ────────────────────────────────────────────────
+        // Resolved through InputAction::MasterArm like every other control. It used to read
+        // `Key::V` directly, so rebinding it did nothing AND it shared a live key with the radio
+        // push-to-talk: keying the mic silently safed the guns (#1050). The gate below is applied
+        // after every input path, so SAFE really suppresses the fire triggers.
+        if (pressed(fl::InputAction::MasterArm, downUi(fl::InputAction::MasterArm)))
+            m_masterArm = !m_masterArm;
 
-            // The canopy is not bound to C: that is the wingman radio menu (#610). Shift+C, so the
-            // one discrete key a pilot uses in anger keeps its short binding.
-            const bool canopyKey = !uiFocused && input.isKeyDown(Key::C) && input.isKeyDown(Key::LeftShift);
-            if (canopyKey && !m_prevCanopyKey)
-                m_canopyOpen = !m_canopyOpen;
-            m_prevCanopyKey = canopyKey;
+        // ── Articulation switches (#639) ─────────────────────────────────────
+        // Gear toggles, flaps step the detent (clean / manoeuvre / full — the three positions a real
+        // lever has; a continuous axis would be a worse keyboard control and matches no cockpit),
+        // hook and canopy toggle. All LATCHED and sent as absolute state, so a dropped packet costs
+        // a tick of lag, not a sortie in the wrong configuration.
+        if (pressed(fl::InputAction::LandingGear, downUi(fl::InputAction::LandingGear)))
+            m_gearDown = !m_gearDown;
+        if (pressed(fl::InputAction::Flaps, downUi(fl::InputAction::Flaps)))
+            m_flapDetent = static_cast<uint8_t>((m_flapDetent + 1u) % 3u);
+        if (pressed(fl::InputAction::ArrestorHook, downUi(fl::InputAction::ArrestorHook)))
+            m_hookDown = !m_hookDown;
+        // The canopy has its own key rather than the old Shift+C chord: the binding table cannot
+        // express a chord, and a chord whose modifier is itself a bound action (LeftShift = max
+        // throttle) cannot be made to behave.
+        if (pressed(fl::InputAction::CanopyToggle, downUi(fl::InputAction::CanopyToggle)))
+            m_canopyOpen = !m_canopyOpen;
 
-            // The airbrake is MOMENTARY, held rather than latched — the one control here that is not
-            // a switch, and the one place holding it is the natural gesture. K, not Space: Space is
-            // the gun trigger, and the InputBindings default said otherwise, which was a latent
-            // conflict waiting for the first person to read the bindings table and believe it.
-            m_speedbrake = (!uiFocused && input.isKeyDown(Key::K)) ? 1.f : 0.f;
+        // The airbrake is MOMENTARY, held rather than latched — the one control here that is not a
+        // switch, and the one place holding it is the natural gesture.
+        m_speedbrake = downUi(fl::InputAction::Airbrake) ? 1.f : 0.f;
 
-            // Ejection (#672): End commands the seat, level on the wire — the server edge-detects, so
-            // holding it is one ejection. Gated while an overlay owns the keys, like the other discretes.
-            if (!uiFocused && input.isKeyDown(Key::End))
-                inp.buttons |= fl::kInputButtonEject;
+        // Ejection (#672) and respawn (#648): level on the wire, the server edge-detects, so a held
+        // key is one ejection / one request. Gated while an overlay owns the keys.
+        if (downUi(fl::InputAction::Eject))
+            inp.buttons |= fl::kInputButtonEject;
+        if (downUi(fl::InputAction::Respawn))
+            inp.buttons |= fl::kInputButtonRespawn;
 
-            // Respawn (#648): Backspace requests a respawn after death. Level on the wire; the server
-            // edge-detects and only acts while the player is dead in a match with respawn enabled.
-            if (!uiFocused && input.isKeyDown(Key::Backspace))
-                inp.buttons |= fl::kInputButtonRespawn;
+        m_weaponFired = (inp.buttons & fl::kInputButtonGun) != 0u;
 
-            m_weaponFired = (inp.buttons & 1u) != 0u;
-        } // end keyboard block (suppressed during text entry)
-
+        // ── Gamepad analog axes ──────────────────────────────────────────────
+        // The digital paths above already covered the pad's BUTTONS through the shared binding
+        // resolution; only the analog axes need the per-axis deadzone/curve/invert/scale pipeline.
         if (input.getGamepadCount() > 0) {
             auto readAxis = [&](fl::InputAction action) -> float {
-                const fl::Binding b = m_bindings.get(action, /*alt=*/true);
-                if (b.source != fl::BindingSource::GamepadAxis)
+                const GamepadAxis ax = fl::actionAxisId(m_bindings, action);
+                if (ax == GamepadAxis::Count)
                     return 0.0f;
-                const auto ax = static_cast<GamepadAxis>(b.id);
                 return m_axisConfig.get(ax).apply(input.getGamepadAxis(0, ax));
             };
 
@@ -180,57 +180,6 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
             const float rud = readAxis(fl::InputAction::YawAxis);
             if (rud != 0.0f)
                 inp.rudder = rud;
-
-            auto readButton = [&](fl::InputAction action) -> bool {
-                const fl::Binding b = m_bindings.get(action, /*alt=*/true);
-                if (b.source == fl::BindingSource::GamepadButton)
-                    return input.isGamepadButtonDown(0, static_cast<GamepadButton>(b.id));
-                if (b.source == fl::BindingSource::GamepadAxis) {
-                    const float v = input.getGamepadAxis(0, static_cast<GamepadAxis>(b.id));
-                    return b.axisNegative ? (v < -0.5f) : (v > 0.5f);
-                }
-                return false;
-            };
-
-            // While an overlay owns the discrete inputs, its confirm button must not also pull the
-            // trigger. The axes above are deliberately still live.
-            if (!uiFocused) {
-                if (readButton(fl::InputAction::FireWeapon)) {
-                    inp.buttons |= 1u;
-                    m_weaponFired = true;
-                }
-                if (readButton(fl::InputAction::Afterburner))
-                    inp.buttons |= 0x02u;
-                if (readButton(fl::InputAction::FireMissile))
-                    inp.buttons |= 0x04u; // fire selected store (#625)
-                // Gear and flaps on the pad, same latch/step semantics as the keys (#639).
-                const bool padGear = readButton(fl::InputAction::LandingGear);
-                if (padGear && !m_prevPadGear)
-                    m_gearDown = !m_gearDown;
-                m_prevPadGear = padGear;
-                const bool padFlap = readButton(fl::InputAction::Flaps);
-                if (padFlap && !m_prevPadFlap)
-                    m_flapDetent = static_cast<uint8_t>((m_flapDetent + 1u) % 3u);
-                m_prevPadFlap = padFlap;
-                if (readButton(fl::InputAction::Airbrake))
-                    m_speedbrake = 1.f;
-                // Station cycling on the gamepad (D-pad by default), same edge/wrap logic as keys.
-                const bool padNext = readButton(fl::InputAction::NextWeapon);
-                const bool padPrev = readButton(fl::InputAction::PrevWeapon);
-                if (m_stationCount > 0) {
-                    const bool nextEdge = padNext && !m_prevPadNext;
-                    const bool prevEdge = padPrev && !m_prevPadPrev;
-                    if ((nextEdge || prevEdge) && m_selectedStation == 255)
-                        m_selectedStation = 0;
-                    else if (nextEdge)
-                        m_selectedStation = static_cast<uint8_t>((m_selectedStation + 1) % m_stationCount);
-                    else if (prevEdge)
-                        m_selectedStation =
-                            static_cast<uint8_t>((m_selectedStation + m_stationCount - 1) % m_stationCount);
-                }
-                m_prevPadNext = padNext;
-                m_prevPadPrev = padPrev;
-            }
         }
 
         // HOTAS / raw joystick blend — throttle always sets absolute position;
@@ -272,10 +221,10 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
         inp.throttle = camInput.throttle();
     }
 
-    // Master-arm gate (#641): SAFE suppresses the gun trigger (bit 0) and fire-store (bit 2) on every
-    // input path (keyboard + gamepad), and clears the wasWeaponFired signal. A real safety.
+    // Master-arm gate (#641): SAFE suppresses the gun trigger and fire-store bits on every input
+    // path (keyboard, mouse, gamepad, HOTAS), and clears the wasWeaponFired signal. A real safety.
     if (!m_masterArm) {
-        inp.buttons &= static_cast<uint8_t>(~(0x01u | 0x04u));
+        inp.buttons &= static_cast<uint8_t>(~(fl::kInputButtonGun | fl::kInputButtonFireStore));
         m_weaponFired = false;
     }
 
@@ -310,6 +259,9 @@ void FlightInputCollector::setClock(const fl::IClock& clock) {
 
 void FlightInputCollector::setBindings(fl::InputBindings bindings) {
     m_bindings = std::move(bindings);
+    // A rebind mid-session must not leave a stale edge behind: the old key may have been held when
+    // it stopped being this action's binding, which would swallow the next press.
+    m_edges.reset();
 }
 
 void FlightInputCollector::setAxisConfig(fl::AxisConfigTable cfg) {

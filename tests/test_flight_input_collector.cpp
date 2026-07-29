@@ -92,8 +92,9 @@ TEST_CASE("FlightInputCollector master arm gates the fire triggers (#641)", "[fl
     CHECK((r1->buttons & 1u) != 0u);
     CHECK(fic.wasWeaponFired());
 
-    // Press V to go SAFE (edge-detected).
-    inp.held.insert(Key::V);
+    // Press the master-arm key to go SAFE (edge-detected). It is Num4, NOT V: V is the radio
+    // push-to-talk, and while master arm shared it, keying the mic silently safed the guns (#1050).
+    inp.held.insert(Key::Num4);
     t.advance(std::chrono::milliseconds(17));
     auto r2 = fic.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r2.has_value());
@@ -103,16 +104,28 @@ TEST_CASE("FlightInputCollector master arm gates the fire triggers (#641)", "[fl
     CHECK((r2->buttons & 0x04u) == 0u);
     CHECK_FALSE(fic.wasWeaponFired());
 
-    // Release V, press it again -> back to ARM.
-    inp.held.erase(Key::V);
+    // Release it, press it again -> back to ARM.
+    inp.held.erase(Key::Num4);
     t.advance(std::chrono::milliseconds(17));
     fic.poll(bridge, cam, console, inp, nullptr, {});
-    inp.held.insert(Key::V);
+    inp.held.insert(Key::Num4);
     t.advance(std::chrono::milliseconds(17));
     auto r4 = fic.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r4.has_value());
     CHECK(fic.masterArm());
     CHECK((r4->buttons & 1u) != 0u);
+
+    // The regression this issue was filed for: holding the radio push-to-talk key must leave the
+    // master arm exactly where it was.
+    inp.held.erase(Key::Num4);
+    t.advance(std::chrono::milliseconds(17));
+    fic.poll(bridge, cam, console, inp, nullptr, {});
+    inp.held.insert(Key::V);
+    t.advance(std::chrono::milliseconds(17));
+    auto r5 = fic.poll(bridge, cam, console, inp, nullptr, {});
+    REQUIRE(r5.has_value());
+    CHECK(fic.masterArm());
+    CHECK((r5->buttons & 1u) != 0u);
 }
 
 TEST_CASE("FlightInputCollector advancing clock past gate returns value", "[flight_input]") {
@@ -919,8 +932,7 @@ TEST_CASE("FlightInputCollector setBindings remaps PitchAxis to LeftY", "[flight
 
     fl::InputBindings b;
     b.set(fl::InputAction::PitchAxis,
-          {fl::BindingSource::GamepadAxis, static_cast<uint32_t>(GamepadAxis::LeftY), false},
-          /*alt=*/true);
+          {fl::BindingSource::GamepadAxis, static_cast<uint32_t>(GamepadAxis::LeftY), false}, fl::BindingSlot::Gamepad);
     fic.setBindings(b);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
@@ -953,7 +965,7 @@ TEST_CASE("FlightInputCollector setBindings PitchAxis None leaves keyboard eleva
     fic.setClock(t);
 
     fl::InputBindings b;
-    b.clear(fl::InputAction::PitchAxis, /*alt=*/true); // source = None
+    b.clear(fl::InputAction::PitchAxis, fl::BindingSlot::Gamepad); // source = None
     fic.setBindings(b);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
@@ -1004,7 +1016,7 @@ TEST_CASE("FlightInputCollector readButton GamepadAxis positive threshold sets f
     fl::InputBindings b;
     b.set(fl::InputAction::FireWeapon,
           {fl::BindingSource::GamepadAxis, static_cast<uint32_t>(GamepadAxis::TriggerRight), false},
-          /*alt=*/true);
+          fl::BindingSlot::Gamepad);
     fic.setBindings(b);
 
     inp.axisValues[{0, GamepadAxis::TriggerRight}] = 0.6f;
@@ -1037,8 +1049,7 @@ TEST_CASE("FlightInputCollector readButton GamepadAxis negative threshold sets a
 
     fl::InputBindings b;
     b.set(fl::InputAction::Afterburner,
-          {fl::BindingSource::GamepadAxis, static_cast<uint32_t>(GamepadAxis::LeftY), true},
-          /*alt=*/true);
+          {fl::BindingSource::GamepadAxis, static_cast<uint32_t>(GamepadAxis::LeftY), true}, fl::BindingSlot::Gamepad);
     fic.setBindings(b);
 
     inp.axisValues[{0, GamepadAxis::LeftY}] = -0.6f;
@@ -1069,7 +1080,7 @@ TEST_CASE("FlightInputCollector readButton None alt binding does not set fire bi
     fic.setClock(t);
 
     fl::InputBindings b;
-    b.clear(fl::InputAction::FireWeapon, /*alt=*/true);
+    b.clear(fl::InputAction::FireWeapon, fl::BindingSlot::Gamepad);
     fic.setBindings(b);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
@@ -1193,7 +1204,7 @@ TEST_CASE("FlightInputCollector uiFocused gates the discrete weapon keys but lea
     CHECK(r->elevator == -1.f);
 }
 
-TEST_CASE("FlightInputCollector gamepad FireMissile and D-pad cycling reach the wire", "[flight_input]") {
+TEST_CASE("FlightInputCollector gamepad FireStore and D-pad cycling reach the wire", "[flight_input]") {
     MockLogger log;
     CommandRegistry reg;
     GameConsole console(log, reg);
@@ -1206,10 +1217,10 @@ TEST_CASE("FlightInputCollector gamepad FireMissile and D-pad cycling reach the 
     fic.setClock(t);
     fic.setStationCount(2);
 
-    // Alt defaults (#625 fixed the collision): FireMissile, NextWeapon=DpadRight, PrevWeapon=DpadLeft.
+    // Gamepad defaults (#625 fixed the collision): FireStore, NextWeapon=DpadRight, PrevWeapon=DpadLeft.
     fl::InputBindings b;
-    const fl::Binding fireB = b.get(fl::InputAction::FireMissile, /*alt=*/true);
-    const fl::Binding nextB = b.get(fl::InputAction::NextWeapon, /*alt=*/true);
+    const fl::Binding fireB = b.get(fl::InputAction::FireStore, fl::BindingSlot::Gamepad);
+    const fl::Binding nextB = b.get(fl::InputAction::NextWeapon, fl::BindingSlot::Gamepad);
     REQUIRE(fireB.source == fl::BindingSource::GamepadButton);
     REQUIRE(nextB.source == fl::BindingSource::GamepadButton);
     CHECK(static_cast<GamepadButton>(nextB.id) == GamepadButton::DpadRight);
@@ -1323,13 +1334,16 @@ TEST_CASE("FlightInputCollector: hook and canopy latch; the airbrake is momentar
     CHECK((pollNext(fic, t, bridge, cam, console, inp).artButtons & fl::kArtButtonHookDown) != 0);
     CHECK(fic.hookDown());
 
-    // The canopy is Shift+C — plain C is the wingman radio menu (#610), so C alone must do nothing.
+    // The canopy has a key of its OWN. It used to be the Shift+C chord, which the binding table
+    // cannot express and whose modifier is itself a bound action (LeftShift = max throttle), so
+    // neither half was rebindable and neither was visible to the conflict check (#1050). C alone is
+    // still the wingman radio menu and must do nothing here.
     inp.held.insert(Key::C);
     CHECK((pollNext(fic, t, bridge, cam, console, inp).artButtons & fl::kArtButtonCanopyOpen) == 0);
-    inp.held.insert(Key::LeftShift);
-    CHECK((pollNext(fic, t, bridge, cam, console, inp).artButtons & fl::kArtButtonCanopyOpen) != 0);
     inp.held.erase(Key::C);
-    inp.held.erase(Key::LeftShift);
+    inp.held.insert(Key::LeftBracket);
+    CHECK((pollNext(fic, t, bridge, cam, console, inp).artButtons & fl::kArtButtonCanopyOpen) != 0);
+    inp.held.erase(Key::LeftBracket);
 
     // K is MOMENTARY: the airbrake retracts the moment it is released, unlike every switch above.
     inp.held.insert(Key::K);
@@ -1360,4 +1374,150 @@ TEST_CASE("FlightInputCollector: articulation state rides EVERY packet (#639)", 
         const auto msg = pollNext(fic, t, bridge, cam, console, inp);
         CHECK((msg.artButtons & fl::kArtButtonGearDown) == 0); // repeated, unchanged, every packet
     }
+}
+
+// ---------------------------------------------------------------------------
+// #1050 — the binding table is the authority
+// ---------------------------------------------------------------------------
+
+TEST_CASE("FlightInputCollector: master arm honours its own binding (#1050)", "[flight_input][bindings]") {
+    // The second half of #1050: FlightInputCollector read `Key::V` directly instead of resolving
+    // InputAction::MasterArm, so rebinding master arm did nothing AND rebinding push-to-talk off V
+    // did not clear the collision either — the one workaround a player would reach for.
+    MockLogger log;
+    CommandRegistry reg;
+    GameConsole console(log, reg);
+    MockInput inp;
+    CameraInput cam;
+    fl::SimRenderBridge bridge;
+    FlightInputCollector fic;
+    fl::ManualClock t;
+    fic.setClock(t);
+
+    fl::InputBindings b;
+    b.set(fl::InputAction::MasterArm, {fl::BindingSource::Keyboard, static_cast<uint32_t>(Key::Num8), false});
+    fic.setBindings(b);
+    REQUIRE(fic.masterArm());
+
+    // The DEFAULT key no longer does anything once the action has been rebound.
+    inp.held.insert(Key::Num4);
+    t.advance(std::chrono::milliseconds(17));
+    REQUIRE(fic.poll(bridge, cam, console, inp, nullptr, {}).has_value());
+    CHECK(fic.masterArm());
+    inp.held.erase(Key::Num4);
+
+    // The rebound key does.
+    inp.held.insert(Key::Num8);
+    t.advance(std::chrono::milliseconds(17));
+    REQUIRE(fic.poll(bridge, cam, console, inp, nullptr, {}).has_value());
+    CHECK_FALSE(fic.masterArm());
+}
+
+TEST_CASE("FlightInputCollector: a secondary slot drives the same action (#1050)", "[flight_input][bindings]") {
+    // The gun is Space AND the left mouse button. With two slots one of the two had to be
+    // hardcoded in this file, outside both the rebind path and the conflict check.
+    MockLogger log;
+    CommandRegistry reg;
+    GameConsole console(log, reg);
+    MockInput inp;
+    CameraInput cam;
+    fl::SimRenderBridge bridge;
+    FlightInputCollector fic;
+    fl::ManualClock t;
+    fic.setClock(t);
+
+    inp.held.insert(Key::Space);
+    auto r1 = fic.poll(bridge, cam, console, inp, nullptr, {});
+    REQUIRE(r1.has_value());
+    CHECK((r1->buttons & fl::kInputButtonGun) != 0u);
+
+    inp.held.erase(Key::Space);
+    inp.mouseDown.insert(MouseButton::Left);
+    t.advance(std::chrono::milliseconds(17));
+    auto r2 = fic.poll(bridge, cam, console, inp, nullptr, {});
+    REQUIRE(r2.has_value());
+    CHECK((r2->buttons & fl::kInputButtonGun) != 0u);
+}
+
+TEST_CASE("FlightInputCollector: every rebound flight control follows its action (#1050)", "[flight_input][bindings]") {
+    // A sweep rather than one case per control: the defect class was "this control does not go
+    // through the table", and the only way to be sure none is left is to move them all and check.
+    MockLogger log;
+    CommandRegistry reg;
+    GameConsole console(log, reg);
+    MockInput inp;
+    CameraInput cam;
+    fl::SimRenderBridge bridge;
+    FlightInputCollector fic;
+    fl::ManualClock t;
+    fic.setClock(t);
+    fic.setStationCount(3);
+
+    fl::InputBindings b;
+    struct Remap {
+        fl::InputAction action;
+        Key key;
+    };
+    // Deliberately onto keys no default uses, so a control still reading its old hardcoded key
+    // simply would not fire.
+    const Remap remaps[] = {
+        {fl::InputAction::LandingGear, Key::Numpad0},      {fl::InputAction::Flaps, Key::Numpad1},
+        {fl::InputAction::ArrestorHook, Key::Numpad5},     {fl::InputAction::CanopyToggle, Key::Numpad7},
+        {fl::InputAction::Airbrake, Key::NumpadDivide},    {fl::InputAction::WheelBrake, Key::RightShift},
+        {fl::InputAction::Eject, Key::RightCtrl},          {fl::InputAction::Respawn, Key::RightAlt},
+        {fl::InputAction::CountermeasureDispense, Key::L}, {fl::InputAction::EcmToggle, Key::RightBracket},
+    };
+    for (const auto& r : remaps)
+        b.set(r.action, {fl::BindingSource::Keyboard, static_cast<uint32_t>(r.key), false});
+    fic.setBindings(b);
+
+    auto pump = [&]() {
+        t.advance(std::chrono::milliseconds(17));
+        auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+        REQUIRE(r.has_value());
+        return *r;
+    };
+
+    pump(); // settle: gear starts DOWN
+
+    inp.held.insert(Key::Numpad0);
+    CHECK((pump().artButtons & fl::kArtButtonGearDown) == 0); // gear up
+    inp.held.erase(Key::Numpad0);
+
+    inp.held.insert(Key::Numpad1);
+    CHECK(pump().flaps > 0); // first detent
+    inp.held.erase(Key::Numpad1);
+
+    inp.held.insert(Key::Numpad5);
+    CHECK((pump().artButtons & fl::kArtButtonHookDown) != 0);
+    inp.held.erase(Key::Numpad5);
+
+    inp.held.insert(Key::Numpad7);
+    CHECK((pump().artButtons & fl::kArtButtonCanopyOpen) != 0);
+    inp.held.erase(Key::Numpad7);
+
+    inp.held.insert(Key::NumpadDivide);
+    CHECK(pump().speedbrake == 255);
+    inp.held.erase(Key::NumpadDivide);
+
+    inp.held.insert(Key::RightShift);
+    CHECK((pump().buttons & fl::kInputButtonWheelBrake) != 0u);
+    inp.held.erase(Key::RightShift);
+
+    inp.held.insert(Key::RightCtrl);
+    CHECK((pump().buttons & fl::kInputButtonEject) != 0u);
+    inp.held.erase(Key::RightCtrl);
+
+    inp.held.insert(Key::RightAlt);
+    CHECK((pump().buttons & fl::kInputButtonRespawn) != 0u);
+    inp.held.erase(Key::RightAlt);
+
+    inp.held.insert(Key::L);
+    CHECK((pump().buttons & fl::kInputButtonChaffFlare) != 0u);
+    inp.held.erase(Key::L);
+
+    inp.held.insert(Key::RightBracket);
+    CHECK((pump().buttons & fl::kInputButtonEcm) != 0u);
+    inp.held.erase(Key::RightBracket);
+    CHECK((pump().buttons & fl::kInputButtonEcm) != 0u); // the jammer is a latch, not a hold
 }
