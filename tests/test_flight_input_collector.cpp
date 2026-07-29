@@ -1521,3 +1521,74 @@ TEST_CASE("FlightInputCollector: every rebound flight control follows its action
     inp.held.erase(Key::RightBracket);
     CHECK((pump().buttons & fl::kInputButtonEcm) != 0u); // the jammer is a latch, not a hold
 }
+
+TEST_CASE("FlightInputCollector: uiFocused leaves the gun and the flight controls live (#610)",
+          "[flight_input][bindings]") {
+    // The radio menu is non-modal on purpose. It gates the discretes it consumes; it must not safe
+    // the guns or idle the engine. Previously the keyboard gun was live under uiFocused but the
+    // GAMEPAD gun was gated — an asymmetry the docs did not promise and #1050's unified resolution
+    // removes.
+    MockLogger log;
+    CommandRegistry reg;
+    GameConsole console(log, reg);
+    MockInput inp;
+    inp.gamepadCount = 1;
+    inp.held.insert(Key::Space);                          // gun, keyboard
+    inp.gpDown.insert({0, GamepadButton::RightShoulder}); // gun, gamepad
+    inp.held.insert(Key::Tab);                            // afterburner
+    inp.held.insert(Key::B);                              // wheel brakes
+    CameraInput cam;
+    fl::SimRenderBridge bridge;
+    FlightInputCollector fic;
+    fl::ManualClock t;
+    fic.setClock(t);
+
+    auto r = fic.poll(bridge, cam, console, inp, nullptr, {}, /*uiFocused=*/true);
+    REQUIRE(r.has_value());
+    CHECK((r->buttons & fl::kInputButtonGun) != 0u);
+    CHECK(fic.wasWeaponFired());
+    CHECK((r->buttons & fl::kInputButtonAfterburner) != 0u);
+    CHECK((r->buttons & fl::kInputButtonWheelBrake) != 0u);
+}
+
+TEST_CASE("FlightInputCollector: textEntry suppresses keyboard and mouse, never the stick (#646)",
+          "[flight_input][bindings]") {
+    // The chat box owns the keyboard AND the pointer that clicks its Send button; it does not own the
+    // stick, so a partner keeps flying while you type. The suppression is per binding SOURCE (#1050),
+    // not per input block, so an action bound to both a key and a pad button keeps working from the pad.
+    MockLogger log;
+    CommandRegistry reg;
+    GameConsole console(log, reg);
+    MockInput inp;
+    inp.gamepadCount = 1;
+    CameraInput cam;
+    fl::SimRenderBridge bridge;
+    FlightInputCollector fic;
+    fl::ManualClock t;
+    fic.setClock(t);
+    cam.setThrottle(0.6f);
+
+    // Space and the left mouse button are both FireWeapon; the pad shoulder is too.
+    inp.held.insert(Key::Space);
+    inp.mouseDown.insert(MouseButton::Left);
+    inp.held.insert(Key::ArrowUp);                   // elevator
+    inp.held.insert(Key::PageUp);                    // throttle up
+    inp.axisValues[{0, GamepadAxis::RightY}] = 0.8f; // pad elevator
+
+    auto r = fic.poll(bridge, cam, console, inp, nullptr, {}, /*uiFocused=*/false, /*textEntry=*/true);
+    REQUIRE(r.has_value());
+    // Typing must not fire the gun, and clicking Send must not either.
+    CHECK((r->buttons & fl::kInputButtonGun) == 0u);
+    CHECK_FALSE(fic.wasWeaponFired());
+    // The throttle HOLDS at its last value rather than being driven or zeroed.
+    CHECK(r->throttle == Catch::Approx(0.6f));
+    // The pad axis is still flying the aircraft (0.8 raw through the default 0.1 deadzone rescale).
+    CHECK(r->elevator == Catch::Approx((0.8f - 0.1f) / (1.0f - 0.1f)));
+
+    // The pad's own gun button is likewise unaffected.
+    inp.gpDown.insert({0, GamepadButton::RightShoulder});
+    t.advance(std::chrono::milliseconds(17));
+    auto r2 = fic.poll(bridge, cam, console, inp, nullptr, {}, /*uiFocused=*/false, /*textEntry=*/true);
+    REQUIRE(r2.has_value());
+    CHECK((r2->buttons & fl::kInputButtonGun) != 0u);
+}
