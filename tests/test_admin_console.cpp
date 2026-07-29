@@ -17,11 +17,15 @@
 #include "net/WorldBroadcaster.h"
 #include "world/AirportRegistry.h"
 #include "world/BuiltinAirport.h"
+#include <IClock.h>
 #include <ILogger.h>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <csignal>
+#include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <weather/WeatherController.h>
 
@@ -41,7 +45,7 @@ struct NoopSim2 : public ISimUpdate {
 // Build a registry with an all-null context (except the fields being exercised).
 static CommandRegistry makeRegistry(ServerCommandContext ctx = {}) {
     CommandRegistry reg;
-    registerServerCommands(reg, ctx);
+    registerServerCommands(reg, std::make_shared<const ServerCommandContext>(std::move(ctx)));
     return reg;
 }
 
@@ -566,7 +570,7 @@ TEST_CASE("AdminConsole shell output: sync ack appears in outputLines", "[admin_
 
     ServerCommandContext ctx{};
     ctx.rcon.shell = &shell;
-    registerServerCommands(reg, ctx);
+    registerServerCommands(reg, std::make_shared<const ServerCommandContext>(ctx));
 
     // status returns a synchronous ack string; verify it also lands in the ring
     (void)shell.execute("status");
@@ -588,7 +592,7 @@ TEST_CASE("AdminConsole shell drain: drainSince captures post-dispatch shell out
 
     ServerCommandContext ctx{};
     ctx.rcon.shell = &shell;
-    registerServerCommands(reg, ctx);
+    registerServerCommands(reg, std::make_shared<const ServerCommandContext>(ctx));
 
     // Simulate RCON thread: dispatch then snapshot mark (after dispatch to skip sync writes)
     (void)reg.dispatch("kick 42");
@@ -835,6 +839,38 @@ TEST_CASE("AdminConsole wb: status shows the real tick Hz line", "[admin_console
     CHECK(out.find("mean/p99") != std::string::npos);
     CHECK(out.find("load:") != std::string::npos);     // overrun governor load % (#514)
     CHECK(out.find("interest:") != std::string::npos); // overrun governor interest-radius % (#726)
+}
+
+// Read the integer out of "uptime: NNNs ..." — the tests below assert on the VALUE, because the
+// defect being guarded against produced a perfectly well-formed line carrying the wrong number.
+static long long parseUptimeSecs(const std::string& statusLine) {
+    const auto at = statusLine.find("uptime: ");
+    REQUIRE(at != std::string::npos);
+    return std::strtoll(statusLine.c_str() + at + 8, nullptr, 10);
+}
+
+TEST_CASE("AdminConsole wb: status reports the SERVER's uptime, not the machine's (#1048)",
+          "[admin_console][wb][uptime]") {
+    WbFixture f;
+    fl::ManualClock clock;
+    f.ctx.env.uptime = fl::ServerUptime{clock};
+    clock.advance(std::chrono::seconds(137));
+
+    auto reg = makeRegistry(f.ctx);
+    CHECK(parseUptimeSecs(reg.dispatch("status")) == 137);
+}
+
+TEST_CASE("AdminConsole wb: a context nobody handed a start instant still cannot report boot time (#1048)",
+          "[admin_console][wb][uptime]") {
+    // The exact shape of the bug: the context is built and the uptime field is simply never assigned.
+    // It used to leave a value-initialised steady_clock::time_point, i.e. the clock epoch — which on
+    // Linux is boot, so `status` reported the machine's uptime in seconds and looked plausible. A
+    // ServerUptime starts itself, so the worst case is now "a few milliseconds", not "eleven days".
+    WbFixture f; // f.ctx.env.uptime left exactly as constructed
+    auto reg = makeRegistry(f.ctx);
+    const long long secs = parseUptimeSecs(reg.dispatch("status"));
+    CHECK(secs >= 0);
+    CHECK(secs < 60);
 }
 
 // ---------------------------------------------------------------------------

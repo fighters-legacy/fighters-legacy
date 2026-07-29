@@ -44,10 +44,15 @@ struct HttpAdminServer::Impl {
     std::mutex authMutex;
     AuthTracker auth;
     const IClock* clock{&SystemClock::instance()};
-    std::chrono::steady_clock::time_point startedAt{};
+    // The server's start instant, shared with every other frontend rather than captured here (#1048).
+    // Deliberately NOT re-pointed by setClock(): it carries the clock it was started on, so a test
+    // that injects a manual clock for lockout expiry cannot accidentally make /health subtract two
+    // instants from different clocks.
+    ServerUptime uptime;
 
-    Impl(const CommandRegistry& reg, const ServerConfig::HttpAdminConfig& c, ILogger& l, CommandShell* sh)
-        : registry(reg), cfg(c), log(l), shell(sh), auth(c.maxAuthFailures, c.lockoutSeconds) {}
+    Impl(const CommandRegistry& reg, const ServerConfig::HttpAdminConfig& c, ILogger& l, const ServerUptime& up,
+         CommandShell* sh)
+        : registry(reg), cfg(c), log(l), shell(sh), auth(c.maxAuthFailures, c.lockoutSeconds), uptime(up) {}
 
     // Resolve a request to the GRANT behind it, applying the per-IP lockout. Returns nullptr and
     // fills `status`/`body` when the request must be refused.
@@ -148,9 +153,8 @@ void HttpAdminServer::Impl::installRoutes() {
     // report unhealthy exactly when an orchestrator most needs a truthful answer, and a probe that
     // needed a credential could not be configured in a bare k8s httpGet check.
     server.Get("/health", [this](const httplib::Request&, httplib::Response& res) {
-        const auto up = std::chrono::duration_cast<std::chrono::seconds>(clock->now() - startedAt).count();
         char buf[96];
-        std::snprintf(buf, sizeof(buf), "{\"status\": \"ok\", \"uptime\": %lld}", static_cast<long long>(up));
+        std::snprintf(buf, sizeof(buf), "{\"status\": \"ok\", \"uptime\": %lld}", uptime.seconds());
         res.status = 200;
         res.set_content(buf, "application/json");
     });
@@ -339,8 +343,8 @@ void HttpAdminServer::Impl::installMcpRoutes() {
 }
 
 HttpAdminServer::HttpAdminServer(const CommandRegistry& registry, const ServerConfig::HttpAdminConfig& cfg,
-                                 ILogger& log, CommandShell* shell)
-    : m_impl(std::make_unique<Impl>(registry, cfg, log, shell)) {}
+                                 ILogger& log, const ServerUptime& uptime, CommandShell* shell)
+    : m_impl(std::make_unique<Impl>(registry, cfg, log, uptime, shell)) {}
 
 HttpAdminServer::~HttpAdminServer() {
     stop();
@@ -366,7 +370,6 @@ bool HttpAdminServer::start() {
         return false;
     }
 
-    m_impl->startedAt = m_impl->clock->now();
     m_impl->installRoutes();
 
     // Port 0 means "let the OS choose", which needs cpp-httplib's other entry point: bind_to_port

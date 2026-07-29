@@ -194,6 +194,12 @@ static void applyCliAndEnvOverrides(fl::ServerConfig& cfg, int argc, char** argv
 // ---------------------------------------------------------------------------
 
 int main(int argc, char** argv) {
+    // The server's start instant, captured before anything else so "uptime" means what an operator
+    // assumes it means. ONE instance: it is copied into the admin command context (for `status`) and
+    // into HttpAdminServer (for /health), so those two cannot report different numbers -- which is
+    // precisely what they did while each derived its own (#1048).
+    const fl::ServerUptime serverUptime;
+
     // Pre-pass: --help / --version / --persistent / --bind
     bool flagPersistent = false;
     std::string flagBind;          // non-empty if --bind addr was given
@@ -2203,60 +2209,68 @@ int main(int argc, char** argv) {
         log->log(LogLevel::Warn, __FILE__, __LINE__, cbuf);
     }
 
-    fl::ServerCommandContext adminCtx;
-    adminCtx.sim.broadcaster = &broadcaster;
-    adminCtx.sim.entityManager = &entityManager;
-    adminCtx.sim.typeRegistry = &entityRegistry;
-    adminCtx.sim.weatherController = &weatherController;
-    adminCtx.sim.worldApi = &worldApi;   // world.* seam for admin-spawned Lua controllers (#413)
-    adminCtx.sim.atc = atcService.get(); // atc_status/atc_scramble/atc_hold (#706); null if disabled
-    adminCtx.env.beacon = beacon.get();
-    adminCtx.sim.gameLoop = &gameLoop;
-    adminCtx.env.logger = log;
-    adminCtx.env.configPath = &configPath;
-    adminCtx.env.quitFlag = &g_quit;
-    adminCtx.env.traceDir = cfg.trace.inputTraceDir;
-    adminCtx.env.resolveAiScaling = resolveAiScaling;
-    adminCtx.env.loadAIScript = [&aiScriptCache](std::string_view name) -> std::pair<std::string, std::string> {
-        auto it = aiScriptCache.find(std::string(name));
-        return (it != aiScriptCache.end()) ? it->second : std::pair<std::string, std::string>{};
-    };
-    // reload_content (#152): evict the byte cache + the flight-model resolver cache, then re-resolve
-    // every live entity's flight model in place (mass/handling update mid-flight). Runs on the sim
-    // thread (the reload_content command enqueues this), where the resolver + m_controlledEntities are
-    // owned. Lua-controller live rebuild is a follow-on; flight models are the "feel new handling" case.
-    adminCtx.env.reloadContent = [&assets, fmCache, &broadcaster]() {
-        assets.evictAll();
-        fmCache->clear();
-        broadcaster.reloadFlightModels();
-    };
-    adminCtx.bans.banlistPath = cfg.banlistPath.empty() ? nullptr : &cfg.banlistPath;
-    adminCtx.bans.allowlistPath = cfg.allowlistPath.empty() ? nullptr : &cfg.allowlistPath;
-    adminCtx.bans.saveBanlist = [&](const std::unordered_set<std::string>& b) {
-        fl::saveIpListFile(cfg.banlistPath, b, log);
-    };
-    adminCtx.bans.loadBanlist = [&]() { return fl::loadIpListFile(cfg.banlistPath, log); };
-    adminCtx.bans.loadAllowlist = [&]() { return fl::loadIpListFile(cfg.allowlistPath, log); };
-    adminCtx.shutdown.warningIntervalS = static_cast<uint32_t>(cfg.shutdownWarningIntervalS);
-    adminCtx.shutdown.minDelayS = static_cast<uint32_t>(cfg.minShutdownDelayS);
-    adminCtx.shutdown.requireConfirm = cfg.shutdownRequireConfirm;
-    adminCtx.rcon.shell = &adminShell;
-    adminCtx.rcon.clearRconLockout = [&rconServer](const std::string& ip) -> bool {
-        return rconServer ? rconServer->clearLockout(ip) : false;
-    };
-    adminCtx.rcon.getRconAuthSummary = [&rconServer]() -> fl::AuthLockoutSummary {
-        return rconServer ? rconServer->getRconAuthSummary() : fl::AuthLockoutSummary{};
-    };
-    // The REST channel's lockout, so admin_unlock / admin_auth_status cover all three (#233). Left
-    // unset when the API is disabled, which is what makes those commands omit its section entirely.
-    if (cfg.httpAdmin.enabled) {
-        adminCtx.httpAdmin.clearLockout = [&httpAdminServer](const std::string& ip) -> bool {
-            return httpAdminServer ? httpAdminServer->clearLockout(ip) : false;
+    // Build the admin command context and FREEZE it: the mutable object never escapes this
+    // expression, so there is no "populate, register, then set one more field" shape available
+    // afterwards -- that shape is what left `status` reporting the machine's uptime (#1048). Every
+    // handler shares this one const instance instead of deep-copying the whole struct.
+    const auto adminCtx = std::make_shared<const fl::ServerCommandContext>([&] {
+        fl::ServerCommandContext c;
+        c.sim.broadcaster = &broadcaster;
+        c.sim.entityManager = &entityManager;
+        c.sim.typeRegistry = &entityRegistry;
+        c.sim.weatherController = &weatherController;
+        c.sim.worldApi = &worldApi;   // world.* seam for admin-spawned Lua controllers (#413)
+        c.sim.atc = atcService.get(); // atc_status/atc_scramble/atc_hold (#706); null if disabled
+        c.env.beacon = beacon.get();
+        c.sim.gameLoop = &gameLoop;
+        c.env.logger = log;
+        c.env.configPath = &configPath;
+        c.env.quitFlag = &g_quit;
+        c.env.uptime = serverUptime; // the process-wide instant, not a fresh one
+        c.env.traceDir = cfg.trace.inputTraceDir;
+        c.env.resolveAiScaling = resolveAiScaling;
+        c.env.loadAIScript = [&aiScriptCache](std::string_view name) -> std::pair<std::string, std::string> {
+            auto it = aiScriptCache.find(std::string(name));
+            return (it != aiScriptCache.end()) ? it->second : std::pair<std::string, std::string>{};
         };
-        adminCtx.httpAdmin.getAuthSummary = [&httpAdminServer]() -> fl::AuthLockoutSummary {
-            return httpAdminServer ? httpAdminServer->getAuthSummary() : fl::AuthLockoutSummary{};
+        // reload_content (#152): evict the byte cache + the flight-model resolver cache, then re-resolve
+        // every live entity's flight model in place (mass/handling update mid-flight). Runs on the sim
+        // thread (the reload_content command enqueues this), where the resolver + m_controlledEntities are
+        // owned. Lua-controller live rebuild is a follow-on; flight models are the "feel new handling" case.
+        c.env.reloadContent = [&assets, fmCache, &broadcaster]() {
+            assets.evictAll();
+            fmCache->clear();
+            broadcaster.reloadFlightModels();
         };
-    }
+        c.bans.banlistPath = cfg.banlistPath.empty() ? nullptr : &cfg.banlistPath;
+        c.bans.allowlistPath = cfg.allowlistPath.empty() ? nullptr : &cfg.allowlistPath;
+        c.bans.saveBanlist = [&](const std::unordered_set<std::string>& b) {
+            fl::saveIpListFile(cfg.banlistPath, b, log);
+        };
+        c.bans.loadBanlist = [&]() { return fl::loadIpListFile(cfg.banlistPath, log); };
+        c.bans.loadAllowlist = [&]() { return fl::loadIpListFile(cfg.allowlistPath, log); };
+        c.shutdown.warningIntervalS = static_cast<uint32_t>(cfg.shutdownWarningIntervalS);
+        c.shutdown.minDelayS = static_cast<uint32_t>(cfg.minShutdownDelayS);
+        c.shutdown.requireConfirm = cfg.shutdownRequireConfirm;
+        c.rcon.shell = &adminShell;
+        c.rcon.clearRconLockout = [&rconServer](const std::string& ip) -> bool {
+            return rconServer ? rconServer->clearLockout(ip) : false;
+        };
+        c.rcon.getRconAuthSummary = [&rconServer]() -> fl::AuthLockoutSummary {
+            return rconServer ? rconServer->getRconAuthSummary() : fl::AuthLockoutSummary{};
+        };
+        // The REST channel's lockout, so admin_unlock / admin_auth_status cover all three (#233). Left
+        // unset when the API is disabled, which is what makes those commands omit its section entirely.
+        if (cfg.httpAdmin.enabled) {
+            c.httpAdmin.clearLockout = [&httpAdminServer](const std::string& ip) -> bool {
+                return httpAdminServer ? httpAdminServer->clearLockout(ip) : false;
+            };
+            c.httpAdmin.getAuthSummary = [&httpAdminServer]() -> fl::AuthLockoutSummary {
+                return httpAdminServer ? httpAdminServer->getAuthSummary() : fl::AuthLockoutSummary{};
+            };
+        }
+        return c;
+    }());
 
     broadcaster.setShutdownCallback([&]() { g_quit = 1; });
     fl::registerServerCommands(adminRegistry, adminCtx);
@@ -2292,8 +2306,6 @@ int main(int argc, char** argv) {
     // ---- Signal handling ----
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
-
-    adminCtx.env.startTime = std::chrono::steady_clock::now();
 
     // ---- Headless mission run-to-completion (#856) ----
     // With --mission-report, step the sim in a deterministic fixed-step loop (no wall-clock, no sim
@@ -2608,7 +2620,8 @@ int main(int argc, char** argv) {
     // ---- REST admin API + health probe (#233) ----
     // Started before RCON only so the two log lines read in config order; they are independent.
     if (cfg.httpAdmin.enabled) {
-        httpAdminServer = std::make_unique<fl::HttpAdminServer>(adminRegistry, cfg.httpAdmin, *log, &adminShell);
+        httpAdminServer =
+            std::make_unique<fl::HttpAdminServer>(adminRegistry, cfg.httpAdmin, *log, serverUptime, &adminShell);
 
         // ---- MCP surface (#601) ----
         // A second frontend on the listener above, so it is enabled before start() rather than
@@ -2734,8 +2747,8 @@ int main(int argc, char** argv) {
                 const bool fmChanged = std::any_of(changed.begin(), changed.end(), [](const fl::ChangedAsset& c) {
                     return c.type == fl::AssetType::FlightModel;
                 });
-                if (fmChanged && adminCtx.env.reloadContent)
-                    gameLoop.enqueueSimCallback([&adminCtx]() { adminCtx.env.reloadContent(); });
+                if (fmChanged && adminCtx->env.reloadContent)
+                    gameLoop.enqueueSimCallback([adminCtx]() { adminCtx->env.reloadContent(); });
             }
         }
 

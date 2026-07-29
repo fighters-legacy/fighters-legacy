@@ -66,6 +66,10 @@ distinguish "wedged" from "unreachable", and an orchestrator needs to tell those
 {"status": "ok", "uptime": 18}
 ```
 
+`uptime` is seconds since the **server process** started — the same number `/status` and the
+`status` console command report, because all three read one start instant rather than deriving
+their own.
+
 Use it for a container liveness probe. Do not use it for readiness in a way that assumes the sim is
 healthy — check `/status`'s tick rate for that.
 
@@ -75,14 +79,9 @@ healthy — check `/status`'s tick rate for that.
 {"result": "uptime: 137s  peers: 3  entities: 41  tick: 59.9 Hz (0.31/0.88 ms mean/p99)  load: 100%  interest: 100%"}
 ```
 
-`load` is the tick-overrun governor's load factor and `interest` its interest-radius scale; both at
-100 % mean the server is not shedding work. A `[DEGRADED]` marker appears when it is.
-
-!!! warning "Uptime is wrong here"
-    `/status` currently reports the **host's** uptime rather than the server's, while `/health`
-    reports the server's correctly. Tracked as
-    [#1048](https://github.com/fighters-legacy/fighters-legacy/issues/1048); trust `/health` until
-    it is fixed.
+`uptime` is the server's own, and matches `/health` exactly. `load` is the tick-overrun governor's
+load factor and `interest` its interest-radius scale; both at 100 % mean the server is not shedding
+work. A `[DEGRADED]` marker appears when it is.
 
 ### `GET /peers`
 

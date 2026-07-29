@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "ServerUptime.h"
+
 #include <config/DifficultySettings.h> // AiScaling — server-side difficulty (#682)
 #include <net/AuthTracker.h>
 
-#include <chrono>
 #include <csignal>
 #include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -47,7 +49,11 @@ struct ServerCommandContext {
     struct ServerEnv {
         ILogger* logger{nullptr};         // for reload_config parse logging
         std::string* configPath{nullptr}; // path to server.toml, for reload_config
-        std::chrono::steady_clock::time_point startTime{};
+        // How long the server has been up, for `status`. A ServerUptime and not a bare time_point so
+        // that it cannot be the clock epoch, and so that every frontend reports the same number --
+        // see ServerUptime.h (#1048). Default-constructed = "started when this context was built",
+        // which is a small overstatement of nothing rather than the machine's boot time.
+        ServerUptime uptime{};
         volatile sig_atomic_t* quitFlag{nullptr}; // quit command sets this to 1
         DiscoveryBeacon* beacon{nullptr};         // for reload_config name update
         std::string traceDir; // configured [trace] input_trace_dir; trace_start default when no arg (#560)
@@ -108,6 +114,13 @@ struct ServerCommandContext {
 };
 
 // Register all fl-server admin commands into registry using the given context.
-void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx);
+//
+// The context is SHARED, const, and frozen at registration: every handler holds this same pointer,
+// so assigning a context field after this call is a compile error rather than a silent no-op. It
+// used to be passed by value and deep-copied into each of the ~50 handlers (and again into every
+// enqueueSimCallback lambda they build), which made "populate the context, register, then fill in
+// one more field" read as working code. #1048 was exactly that, and the field left behind was the
+// server's start time, so `status` reported the machine's uptime through all five admin frontends.
+void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const ServerCommandContext> ctx);
 
 } // namespace fl

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "McpProtocol.h"
+#include "ServerUptime.h"
 #include "server_config.h"
 
 #include <ILogger.h>
@@ -115,8 +116,11 @@ struct McpHooks {
 // still answers while the sim is stalled — which is the entire point of a liveness probe.
 class HttpAdminServer {
   public:
+    // `uptime` is the server's single start-instant authority (#1048), passed in rather than captured
+    // here so `/health` and the `status` command cannot report two different numbers. It is required,
+    // not defaulted, because a default would be a second start instant -- which is the bug.
     HttpAdminServer(const CommandRegistry& registry, const ServerConfig::HttpAdminConfig& cfg, ILogger& log,
-                    CommandShell* shell = nullptr);
+                    const ServerUptime& uptime, CommandShell* shell = nullptr);
     ~HttpAdminServer();
 
     // Turn on the MCP frontend (#601) over this same listener. Call before start(); calling it is
@@ -142,7 +146,9 @@ class HttpAdminServer {
     // the OS to choose one, which is what a test needs in order not to fight over a fixed port.
     [[nodiscard]] uint16_t boundPort() const noexcept;
 
-    // Inject a clock for deterministic lockout expiry in tests. Call before start().
+    // Inject a clock for deterministic lockout expiry in tests. Call before start(). Deliberately
+    // does NOT re-point the uptime: that one carries the clock it was constructed with, so /health
+    // can never subtract two instants taken from different clocks.
     void setClock(const IClock& clock);
 
   private:
