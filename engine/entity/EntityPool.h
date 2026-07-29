@@ -9,14 +9,33 @@
 
 namespace fl {
 
+// What a spawn is FOR, as far as the soft cap is concerned (#1049).
+//
+// The cap is a resource control, and a flat first-come-first-served ceiling gives the wrong answer
+// under exactly the conditions it exists for: the things that fill a world fastest (projectiles,
+// AI, respawning bots, a runaway mission script) are the things the cap is meant to bound, and once
+// they have taken the last slot the next casualty is a HUMAN who cannot join or respawn. So a slice
+// of the cap is held back for player airframes and only they may draw on it.
+enum class SpawnClass : uint8_t {
+    World = 0,  // AI, projectiles, mission objects, effects, parachutes — refused first
+    Player = 1, // a pilot's airframe — may draw on the reserved headroom
+};
+
 // O(1) alloc/free object pool with generation-counted handles.
 //
 // Pointer stability: raw pointers returned by get() are invalidated by any alloc() call that
 // causes the backing vector to reallocate. Callers must NOT cache raw pointers across spawn()
 // calls or tick boundaries. Store EntityId and call get() per use.
 //
-// Soft cap: if softCap > 0, alloc() returns null() when liveCount() == softCap instead of
-// growing. 0 means unlimited.
+// Soft cap: if softCap > 0, alloc() returns null() instead of growing once the live count reaches
+// the ceiling for that spawn's SpawnClass. 0 means unlimited (the default).
+//
+//   SpawnClass::Player -> refused at liveCount() == softCap
+//   SpawnClass::World  -> refused at liveCount() == softCap - playerReserve  (= worldCap())
+//
+// playerReserve is clamped to half the cap, so a large max_peers configured against a small cap
+// cannot starve the world of every non-player entity. A reserve of 0 (the default) makes both
+// tiers the same number, i.e. the flat cap.
 //
 // Iteration: forEach() walks a dense list of live slot indices, so it is O(liveCount), NOT
 // O(capacity) — dead slots left behind by high spawn/reap churn (e.g. projectiles) cost nothing.
@@ -31,8 +50,8 @@ class EntityPool {
   public:
     explicit EntityPool(uint32_t initialCapacity = 256);
 
-    // Returns a valid EntityId on success, null() when the soft cap is reached.
-    EntityId alloc();
+    // Returns a valid EntityId on success, null() when the soft cap for `cls` is reached.
+    EntityId alloc(SpawnClass cls = SpawnClass::World);
 
     // Marks the slot as free and increments its generation counter.
     // Silently ignores invalid or already-free ids.
@@ -64,9 +83,16 @@ class EntityPool {
     [[nodiscard]] uint32_t softCap() const noexcept {
         return m_softCap;
     }
-    void setSoftCap(uint32_t cap) noexcept {
-        m_softCap = cap;
+    // Headroom inside softCap that only SpawnClass::Player may allocate from (0 when uncapped).
+    [[nodiscard]] uint32_t playerReserve() const noexcept {
+        return m_playerReserve;
     }
+    // The ceiling a SpawnClass::World spawn is refused at (== softCap when there is no reserve).
+    [[nodiscard]] uint32_t worldCap() const noexcept {
+        return m_worldCap;
+    }
+    // `playerReserve` is clamped to cap/2; a cap of 0 clears both tiers (unlimited).
+    void setSoftCap(uint32_t cap, uint32_t playerReserve = 0) noexcept;
 
     // Visits every live entity. Fn signature: void(EntityState&) or void(const EntityState&).
     // O(liveCount): iterates the dense live-index list, not the (possibly sparse) slot vector.
@@ -96,7 +122,9 @@ class EntityPool {
     std::vector<uint32_t> m_liveIndices; // dense list of live slot indices (drives O(liveCount) forEach)
     uint32_t m_freeHead{kNull};
     uint32_t m_count{0};
-    uint32_t m_softCap{0};
+    uint32_t m_softCap{0};       // 0 = unlimited
+    uint32_t m_playerReserve{0}; // clamped slice of m_softCap only SpawnClass::Player may use
+    uint32_t m_worldCap{0};      // m_softCap - m_playerReserve; meaningless when m_softCap == 0
 };
 
 } // namespace fl

@@ -278,6 +278,62 @@ TEST_CASE("EntityPool: soft cap enforced, alloc returns null when full", "[entit
     CHECK(pool.liveCount() == 3);
 }
 
+TEST_CASE("EntityPool: the player reserve is held back from world spawns (#1049)", "[entity_pool]") {
+    fl::EntityPool pool;
+    pool.setSoftCap(10, /*playerReserve=*/4);
+    CHECK(pool.softCap() == 10u);
+    CHECK(pool.playerReserve() == 4u);
+    CHECK(pool.worldCap() == 6u);
+
+    // World spawns stop at cap - reserve, leaving the reserve untouched.
+    for (int i = 0; i < 6; ++i)
+        CHECK(pool.alloc(fl::SpawnClass::World).valid());
+    CHECK_FALSE(pool.alloc(fl::SpawnClass::World).valid());
+    CHECK(pool.liveCount() == 6u);
+
+    // A player may draw on the reserve the world could not touch — the whole point of it.
+    fl::EntityId lastPlayer;
+    for (int i = 0; i < 4; ++i) {
+        lastPlayer = pool.alloc(fl::SpawnClass::Player);
+        CHECK(lastPlayer.valid());
+    }
+    CHECK(pool.liveCount() == 10u);
+    // ...but not past the cap itself.
+    CHECK_FALSE(pool.alloc(fl::SpawnClass::Player).valid());
+
+    // Freeing a player slot hands it back to the reserve, not to the world.
+    pool.free(lastPlayer);
+    CHECK(pool.liveCount() == 9u);
+    CHECK_FALSE(pool.alloc(fl::SpawnClass::World).valid());
+    CHECK(pool.alloc(fl::SpawnClass::Player).valid());
+}
+
+TEST_CASE("EntityPool: the reserve never takes more than half the cap", "[entity_pool]") {
+    fl::EntityPool pool;
+    // A server configured for 32 players against a cap of 8 must still be able to spawn something
+    // that is not an airframe; an unclamped reserve would leave worldCap() == 0.
+    pool.setSoftCap(8, /*playerReserve=*/32);
+    CHECK(pool.playerReserve() == 4u);
+    CHECK(pool.worldCap() == 4u);
+
+    // A cap of 0 (unlimited) clears both tiers rather than leaving a stale reserve behind.
+    pool.setSoftCap(0, /*playerReserve=*/32);
+    CHECK(pool.softCap() == 0u);
+    CHECK(pool.playerReserve() == 0u);
+    for (int i = 0; i < 50; ++i)
+        CHECK(pool.alloc(fl::SpawnClass::World).valid());
+}
+
+TEST_CASE("EntityPool: no reserve is the flat cap, identical for both classes", "[entity_pool]") {
+    fl::EntityPool pool;
+    pool.setSoftCap(2); // default reserve 0
+    CHECK(pool.worldCap() == 2u);
+    CHECK(pool.alloc(fl::SpawnClass::World).valid());
+    CHECK(pool.alloc(fl::SpawnClass::Player).valid());
+    CHECK_FALSE(pool.alloc(fl::SpawnClass::Player).valid());
+    CHECK_FALSE(pool.alloc(fl::SpawnClass::World).valid());
+}
+
 TEST_CASE("EntityPool: getByIndex returns the live slot or nullptr", "[entity_pool]") {
     fl::EntityPool pool;
     fl::EntityId a = pool.alloc();
@@ -1067,6 +1123,64 @@ TEST_CASE("EntityManager: setSoftCap prevents spawn beyond cap", "[manager]") {
     CHECK(a.valid());
     CHECK(b.valid());
     CHECK_FALSE(c.valid());
+}
+
+// #1049: the cap is only useful if its refusals are countable and reportable — a spawn that returns
+// null with no trace is undiagnosable from an operator's seat, which is how the unwired key survived.
+TEST_CASE("EntityManager: soft-cap refusals are counted and reported", "[manager]") {
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeAirVehicleDef("mgr:cap"));
+    fl::EntityManager mgr(logger, registry);
+    mgr.setSoftCap(1);
+    CHECK(mgr.softCap() == 1u);
+    CHECK(mgr.softCapRefusals() == 0u);
+
+    fl::EntityTransform t{};
+    REQUIRE(mgr.spawn("mgr:cap", t).valid());
+    CHECK_FALSE(mgr.spawn("mgr:cap", t).valid());
+    CHECK_FALSE(mgr.spawn("mgr:cap", t).valid());
+    CHECK(mgr.softCapRefusals() == 2u);
+
+    // An unknown type is NOT a cap refusal — it has its own Warn and must not inflate the counter,
+    // or the metric stops meaning "the cap is binding".
+    CHECK_FALSE(mgr.spawn("mgr:nope", t).valid());
+    CHECK(mgr.softCapRefusals() == 2u);
+
+    // Refusals are reported in aggregate on the next tick, not per spawn (a projectile generator
+    // would otherwise emit a log line 60 times a second at the worst possible moment).
+    CHECK_FALSE(logger.hasMessage(LogLevel::Warn, "entity soft cap reached"));
+    mgr.onTick(1.0 / 60.0, 1);
+    CHECK(logger.hasMessage(LogLevel::Warn, "entity soft cap reached"));
+
+    // Having reported, it stays quiet until the aggregation window elapses.
+    const std::size_t afterFirst = logger.entries.size();
+    CHECK_FALSE(mgr.spawn("mgr:cap", t).valid());
+    mgr.onTick(1.0 / 60.0, 2);
+    CHECK(logger.entries.size() == afterFirst);
+    mgr.onTick(1.0 / 60.0, 601 + 1); // past the 600-tick window
+    CHECK(logger.entries.size() > afterFirst);
+    CHECK(mgr.softCapRefusals() == 3u);
+}
+
+TEST_CASE("EntityManager: a player spawn draws on the reserve a world spawn cannot", "[manager]") {
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeAirVehicleDef("mgr:reserve"));
+    fl::EntityManager mgr(logger, registry);
+    mgr.setSoftCap(4, /*playerReserve=*/2);
+    CHECK(mgr.playerReserve() == 2u);
+
+    fl::EntityTransform t{};
+    // Fill the world tier: projectiles/AI/mission objects stop two short of the cap.
+    CHECK(mgr.spawn("mgr:reserve", t).valid());
+    CHECK(mgr.spawn("mgr:reserve", t).valid());
+    CHECK_FALSE(mgr.spawn("mgr:reserve", t).valid());
+
+    // The pilot still gets an airframe — the property the whole reserve exists for.
+    CHECK(mgr.spawn("mgr:reserve", t, 0, fl::SpawnClass::Player).valid());
+    CHECK(mgr.spawn("mgr:reserve", t, 0, fl::SpawnClass::Player).valid());
+    CHECK_FALSE(mgr.spawn("mgr:reserve", t, 0, fl::SpawnClass::Player).valid());
 }
 
 TEST_CASE("EntityManager: removeEventHandler stops delivery", "[manager]") {

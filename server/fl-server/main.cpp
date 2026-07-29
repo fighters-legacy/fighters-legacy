@@ -319,7 +319,14 @@ int main(int argc, char** argv) {
 
     ILogger* log = p.logger.get();
 
-    log->log(LogLevel::Info, __FILE__, __LINE__, "fl-server 0.0.1 starting");
+    // The real build version, not a literal (#1049): this is the first line of every server log and
+    // the one an operator reads to confirm which build is deployed. It said 0.0.1 while --version and
+    // the MCP serverInfo both reported the truth.
+    {
+        char startMsg[96];
+        std::snprintf(startMsg, sizeof(startMsg), "fl-server %s starting", FL_VERSION_STRING);
+        log->log(LogLevel::Info, __FILE__, __LINE__, startMsg);
+    }
 
     // ---- Tier 1: server.toml ----
     const char* configEnv = std::getenv("FL_CONFIG");
@@ -628,6 +635,34 @@ int main(int argc, char** argv) {
     // ---- Entity system ----
     fl::EntityTypeRegistry entityRegistry;
     fl::EntityManager entityManager(*log, entityRegistry);
+
+    // World object ceiling (#1049). Applied HERE, before anything spawns, so the mission load, the
+    // load-test pre-spawn and every runtime spawn are bounded by it. The key was parsed and
+    // range-checked since Phase 2 but never reached the pool — a resource control that quietly did
+    // nothing, which is worse than an absent one because operators rely on it.
+    //
+    // The player reserve is max_peers. The server never admits more pilots than that, so holding back
+    // one airframe each is exactly enough to guarantee a joining or respawning human is never locked
+    // out by a world full of projectiles and AI — the failure mode a flat cap has by construction.
+    // It is derived rather than configured because there is only one correct value for it; EntityPool
+    // clamps it to half the cap so a big max_peers against a small cap cannot starve the world.
+    if (cfg.entitySoftCap > 0) {
+        const auto cap = static_cast<uint32_t>(cfg.entitySoftCap);
+        const auto wanted = static_cast<uint32_t>(cfg.maxPeers < 0 ? 0 : cfg.maxPeers);
+        entityManager.setSoftCap(cap, wanted);
+        const uint32_t reserve = entityManager.playerReserve();
+        char buf[224];
+        std::snprintf(buf, sizeof(buf), "world: entity soft cap %u (player reserve %u, world spawns capped at %u)", cap,
+                      reserve, cap - reserve);
+        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+        if (reserve < wanted) {
+            std::snprintf(buf, sizeof(buf),
+                          "world.entity_soft_cap (%u) is small relative to max_peers (%d): the player reserve was "
+                          "clamped from %u to %u, so a full lobby may not find airframes",
+                          cap, cfg.maxPeers, wanted, reserve);
+            log->log(LogLevel::Warn, __FILE__, __LINE__, buf);
+        }
+    }
 
     // The debug entity ships ARMED (#440) — the shared builder keeps server and client identical.
     entityRegistry.registerType(fl::builtinDebugEntityDef());
@@ -2343,6 +2378,7 @@ int main(int argc, char** argv) {
         rep.triggersFired = oc.triggersFired;
         rep.liveEntities = entityManager.liveCount();
         rep.spawnedObjects = loadedMissionSpawned;
+        rep.entityCapRefusals = entityManager.softCapRefusals();
         fl::writeConfigFile(flagMissionReport, fl::toJson(rep) + "\n", *log);
         char rbuf[256];
         std::snprintf(rbuf, sizeof(rbuf), "mission report: %s after %.1f s / %llu tick(s) -> %s", rep.outcome.c_str(),
@@ -2788,7 +2824,8 @@ int main(int argc, char** argv) {
             fl::ServerTickReport rep = fl::makeServerTickReport(
                 broadcaster.getTickBudget(), broadcaster.getPeerCount(), entityManager.liveCount(), ov.loadFactor,
                 droppedTicks, fl::currentRssKb(), rssStartupKb, ov.interestScale, ct.minSendHz, ct.recoveredSendHz,
-                ct.maxPacketLoss, wt.outKbs, wt.inKbs, wt.outPacketsPerSec, wt.peersAtSample);
+                ct.maxPacketLoss, wt.outKbs, wt.inKbs, wt.outPacketsPerSec, wt.peersAtSample, entityManager.softCap(),
+                entityManager.softCapRefusals());
             rep.peerThrottle = std::move(throttles);
             fl::writeConfigFile(metricsPath, fl::toJson(rep) + "\n", *log);
             nextMetricsWrite = std::chrono::steady_clock::now() + metricsInterval;

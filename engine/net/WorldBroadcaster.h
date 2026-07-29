@@ -1365,7 +1365,12 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // target role. Sim-thread only (call via GameLoop::enqueueSimCallback from admin/gameplay code);
     // shares the spawn/teardown mechanism with connect/disconnect — the same seam #648 (death ->
     // spectator -> respawn) reuses.
-    void setPeerRole(uint32_t peerId, PeerRole role);
+    //
+    // Returns false when the change did not happen: an unknown/unadmitted peer, an already-current
+    // role, or (observer->pilot) no airframe available because the entity soft cap is binding (#1049).
+    // In that last case the peer STAYS an observer rather than becoming a pilot with nothing to fly,
+    // and is told so over the notice channel.
+    bool setPeerRole(uint32_t peerId, PeerRole role);
 
     // Set / clear a peer's granted authority (#946/#947). The grant channel (empty-token
     // MsgAdminCommand) authenticates a peer by these caps; the operator-password path is unaffected.
@@ -1654,7 +1659,8 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         uint64_t dueTick{0};      // earliest tick this participant may respawn
         uint16_t factionIndex{0}; // team to respawn on
         bool isBot{false};
-        bool requested{false}; // a human pressed respawn (queued if before dueTick); bots auto-respawn
+        bool requested{false};   // a human pressed respawn (queued if before dueTick); bots auto-respawn
+        bool capNotified{false}; // told once that the world is full (#1049); cleared when it succeeds
     };
     std::unordered_map<uint32_t, RespawnRec> m_respawn; // participantId -> pending respawn
     std::vector<uint32_t> m_pendingDeathCleanup;        // peers whose entity died this tick (deferred despawn)

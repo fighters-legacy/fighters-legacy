@@ -40,6 +40,15 @@ def evaluate_report(report, expect_outcome=None, min_triggers=None, min_survivor
         failures.append(f"live_entities: expected >= {min_survivors}, got {report.get('live_entities')}")
     if min_spawned is not None and int(report.get("spawned_objects", 0)) < min_spawned:
         failures.append(f"spawned_objects: expected >= {min_spawned}, got {report.get('spawned_objects')}")
+    # Entity soft cap (#1049). ALWAYS checked, with no opt-out: a run whose spawns were refused by the
+    # cap is not a mission result at all, it is a truncated world, and every count above it is then
+    # measuring the cap rather than the mission. Failing here names the real cause; leaving it out
+    # would surface as a mystified "min_survivors: expected >= 2, got 1" on a mission that is fine.
+    refusals = int(report.get("entity_cap_refusals", 0))
+    if refusals > 0:
+        failures.append(
+            f"entity_cap_refusals: {refusals} spawn(s) refused by world.entity_soft_cap -- "
+            "the run is truncated; raise or clear the cap before trusting any count above")
     return failures
 
 

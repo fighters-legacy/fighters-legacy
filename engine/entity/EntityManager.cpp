@@ -9,12 +9,16 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
 #include <limits>
 
 static_assert(std::atomic<uint32_t>::is_always_lock_free,
               "EntityManager requires lock-free uint32_t atomics on this platform");
 
 namespace fl {
+
+// Aggregation window for the soft-cap refusal Warn: 10 s at the 60 Hz sim tick.
+static constexpr uint64_t kSoftCapLogIntervalTicks = 600;
 
 EntityManager::EntityManager(ILogger& logger, EntityTypeRegistry& registry) : m_logger(logger), m_registry(registry) {}
 
@@ -24,6 +28,23 @@ void EntityManager::onTick(double /*simDt*/, uint64_t tickIndex) {
     // Phase 2.2: housekeeping only. Per-entity physics / AI advance added in later workstreams.
     reapDeadEntities();
     m_liveCount.store(m_pool.liveCount(), std::memory_order_release);
+
+    // Soft-cap refusals, reported in aggregate (#1049). Per-spawn logging would be a log flood at the
+    // exact moment the server is already under pressure (a projectile generator refuses 60 times a
+    // second), so the count is drained on a fixed tick interval instead. The first refusal after a
+    // quiet period reports immediately: `m_nextCapLogTick` starts at 0 and is only pushed forward
+    // when a report actually fires.
+    if (m_refusalsSinceLog > 0 && tickIndex >= m_nextCapLogTick) {
+        char buf[192];
+        std::snprintf(buf, sizeof(buf),
+                      "entity soft cap reached: refused %u spawn(s) in the last %llu ticks "
+                      "(live %u, cap %u, player reserve %u)",
+                      m_refusalsSinceLog, static_cast<unsigned long long>(kSoftCapLogIntervalTicks), m_pool.liveCount(),
+                      m_pool.softCap(), m_pool.playerReserve());
+        m_logger.log(LogLevel::Warn, __FILE__, __LINE__, buf);
+        m_refusalsSinceLog = 0;
+        m_nextCapLogTick = tickIndex + kSoftCapLogIntervalTicks;
+    }
 
     if (m_renderBridge) {
         RenderSnapshot snap;
@@ -51,7 +72,7 @@ void EntityManager::onTick(double /*simDt*/, uint64_t tickIndex) {
 
 // ── entity lifecycle ──────────────────────────────────────────────────────────
 
-EntityId EntityManager::spawn(const char* typeId, const EntityTransform& transform, uint32_t ownerId) {
+EntityId EntityManager::spawn(const char* typeId, const EntityTransform& transform, uint32_t ownerId, SpawnClass cls) {
     uint32_t typeIndex = m_registry.indexById(typeId);
     if (typeIndex == std::numeric_limits<uint32_t>::max()) {
         m_logger.log(LogLevel::Warn, __FILE__, __LINE__,
@@ -59,9 +80,14 @@ EntityId EntityManager::spawn(const char* typeId, const EntityTransform& transfo
         return EntityId::null();
     }
 
-    EntityId id = m_pool.alloc();
-    if (!id.valid())
+    EntityId id = m_pool.alloc(cls);
+    if (!id.valid()) {
+        // The only way alloc() fails is the soft cap, so no reason code is needed to tell the
+        // refusal apart from anything else.
+        m_softCapRefusals.fetch_add(1, std::memory_order_relaxed);
+        ++m_refusalsSinceLog;
         return EntityId::null();
+    }
 
     const EntityDef& def = *m_registry.byIndex(typeIndex);
     EntityState* s = m_pool.get(id);
@@ -163,8 +189,20 @@ void EntityManager::removeEventHandler(IEntityEventHandler* handler) {
     m_handlers.erase(std::remove(m_handlers.begin(), m_handlers.end(), handler), m_handlers.end());
 }
 
-void EntityManager::setSoftCap(uint32_t cap) noexcept {
-    m_pool.setSoftCap(cap);
+void EntityManager::setSoftCap(uint32_t cap, uint32_t playerReserve) noexcept {
+    m_pool.setSoftCap(cap, playerReserve);
+}
+
+uint32_t EntityManager::softCap() const noexcept {
+    return m_pool.softCap();
+}
+
+uint32_t EntityManager::playerReserve() const noexcept {
+    return m_pool.playerReserve();
+}
+
+uint64_t EntityManager::softCapRefusals() const noexcept {
+    return m_softCapRefusals.load(std::memory_order_relaxed);
 }
 
 void EntityManager::setRenderBridge(SimRenderBridge* bridge) noexcept {

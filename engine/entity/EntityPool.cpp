@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "entity/EntityPool.h"
 
+#include <algorithm>
 #include <limits>
 
 namespace fl {
@@ -9,9 +10,21 @@ EntityPool::EntityPool(uint32_t initialCapacity) {
     m_slots.reserve(initialCapacity);
 }
 
-EntityId EntityPool::alloc() {
-    if (m_softCap > 0 && m_count >= m_softCap)
-        return EntityId::null();
+void EntityPool::setSoftCap(uint32_t cap, uint32_t playerReserve) noexcept {
+    m_softCap = cap;
+    // Clamp to half the cap: a server configured for 32 players against a cap of 8 must still be
+    // able to spawn *something* that is not an airframe, and silently reserving the whole world
+    // would be a resource control that disables the world.
+    m_playerReserve = (cap == 0) ? 0u : std::min(playerReserve, cap / 2u);
+    m_worldCap = (cap == 0) ? 0u : cap - m_playerReserve;
+}
+
+EntityId EntityPool::alloc(SpawnClass cls) {
+    if (m_softCap > 0) {
+        const uint32_t limit = (cls == SpawnClass::Player) ? m_softCap : m_worldCap;
+        if (m_count >= limit)
+            return EntityId::null();
+    }
 
     uint32_t index;
     if (m_freeHead != kNull) {

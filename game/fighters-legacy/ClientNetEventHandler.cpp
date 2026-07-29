@@ -648,6 +648,12 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         case fl::ConnectRefusalCode::BadPassword:
             f = SessionFailure::BadPassword;
             break;
+        case fl::ConnectRefusalCode::ServerFull:
+            f = SessionFailure::ServerFull;
+            break;
+        case fl::ConnectRefusalCode::NoAirframe:
+            f = SessionFailure::NoAirframe;
+            break;
         case fl::ConnectRefusalCode::Generic:
             break; // ConnectionRefused
         }

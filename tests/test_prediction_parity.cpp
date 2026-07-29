@@ -212,6 +212,10 @@ void connectPilot(WorldBroadcaster& b, uint32_t peerId) {
     b.onConnect(peerId);
     MsgConnectRequest req{};
     req.requestedRole = static_cast<uint8_t>(PeerRole::Pilot);
+    // Ask for the type these fixtures actually register. The server default is builtin:debug-entity,
+    // which is absent here, and since #1049 a pilot the server cannot give an aircraft is REFUSED
+    // rather than acked with a null entity — so without this there is no MsgConnectAck to read.
+    std::snprintf(req.requestedEntityType, sizeof(req.requestedEntityType), "fl-base:testjet");
     b.onReceive(peerId, &req, sizeof(req));
 }
 

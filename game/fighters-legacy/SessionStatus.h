@@ -31,6 +31,8 @@ enum class SessionFailure : uint8_t {
     EntitlementRequired, // premium content requires an entitlement token (RFC #871)
     MatchFull,           // every team in the current game mode is at capacity (#522)
     BadPassword,         // the server requires a join password and the client's was missing/wrong (#998)
+    ServerFull,          // the server world is at its entity cap and could not spawn an airframe (#1049)
+    NoAirframe,          // the server has no spawnable player aircraft type configured (#1049)
 };
 
 // English display text for a failure (empty for None). Single mapping point: wrap these in the
@@ -71,6 +73,10 @@ inline const char* sessionFailureMessage(SessionFailure f) {
         return "All teams are full.";
     case SessionFailure::BadPassword:
         return "Incorrect server password.";
+    case SessionFailure::ServerFull:
+        return "The server world is full. Try again shortly.";
+    case SessionFailure::NoAirframe:
+        return "This server has no aircraft available.";
     }
     return "";
 }
@@ -115,6 +121,10 @@ inline const char* sessionFailureKey(SessionFailure f) {
         return "ui.session.match_full";
     case SessionFailure::BadPassword:
         return "ui.session.bad_password";
+    case SessionFailure::ServerFull:
+        return "ui.session.server_full";
+    case SessionFailure::NoAirframe:
+        return "ui.session.no_airframe";
     }
     return "";
 }

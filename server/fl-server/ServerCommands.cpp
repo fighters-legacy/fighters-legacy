@@ -201,11 +201,26 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
             int peers = ctx->sim.broadcaster->getPeerCount();
             uint32_t entities = ctx->sim.entityManager->liveCount();
             const fl::TickBudget tb = ctx->sim.broadcaster->getTickBudget();
+            // Entity count reads as "N" uncapped and "N/cap" when world.entity_soft_cap is set (#1049):
+            // a cap that is doing something must be visible in the one command an operator always runs.
+            const uint32_t cap = ctx->sim.entityManager->softCap();
+            char entBuf[48];
+            if (cap > 0)
+                std::snprintf(entBuf, sizeof(entBuf), "%u/%u", entities, cap);
+            else
+                std::snprintf(entBuf, sizeof(entBuf), "%u", entities);
             char buf[256];
             std::snprintf(buf, sizeof(buf),
-                          "uptime: %llds  peers: %d  entities: %u  tick: %.1f Hz (%.2f/%.2f ms mean/p99)", uptimeSec,
-                          peers, entities, tb.tickHz, tb.total.mean, tb.total.p99);
+                          "uptime: %llds  peers: %d  entities: %s  tick: %.1f Hz (%.2f/%.2f ms mean/p99)", uptimeSec,
+                          peers, entBuf, tb.tickHz, tb.total.mean, tb.total.p99);
             std::string out(buf);
+            // Refusals are reported only once there are any — a permanent "refused: 0" trains the eye
+            // to skip the field that matters.
+            if (const uint64_t refusals = ctx->sim.entityManager->softCapRefusals(); refusals > 0) {
+                char rbuf[80];
+                std::snprintf(rbuf, sizeof(rbuf), "  cap refusals: %llu", static_cast<unsigned long long>(refusals));
+                out += rbuf;
+            }
             const fl::OverrunStatus ov = ctx->sim.broadcaster->getOverrunStatus();
             char ovbuf[96];
             std::snprintf(ovbuf, sizeof(ovbuf), "  load: %.0f%%  interest: %.0f%%%s", ov.loadFactor * 100.0,
@@ -550,10 +565,19 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
             else
                 return "set_role: role must be 'pilot' or 'observer'";
             ctx->sim.gameLoop->enqueueSimCallback([ctx, peerId, role]() {
-                ctx->sim.broadcaster->setPeerRole(peerId, role);
-                char m[80];
-                std::snprintf(m, sizeof(m), "[admin] set peer %u role to %s", peerId,
-                              role == fl::PeerRole::Observer ? "observer" : "pilot");
+                // The sync ack below can only say "queued"; the outcome is known here, one tick later.
+                // A false return is a real refusal (no airframe — entity soft cap, #1049 — or an
+                // unknown peer), so report it rather than claiming a role change that did not happen.
+                const bool ok = ctx->sim.broadcaster->setPeerRole(peerId, role);
+                char m[112];
+                if (!ok)
+                    std::snprintf(m, sizeof(m),
+                                  "[admin] set_role peer %u -> %s FAILED (peer gone, already in role, "
+                                  "or no airframe available)",
+                                  peerId, role == fl::PeerRole::Observer ? "observer" : "pilot");
+                else
+                    std::snprintf(m, sizeof(m), "[admin] set peer %u role to %s", peerId,
+                                  role == fl::PeerRole::Observer ? "observer" : "pilot");
                 std::printf("%s\n", m);
                 if (ctx->rcon.shell)
                     ctx->rcon.shell->print(m);
@@ -1377,7 +1401,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
     registry.registerCommand(
         "reload_config",
         "reload_config  -- re-read server.toml and apply: name (beacon), motd, motd_display_s,"
-        " draw_distance_km, snapshot_budget_bytes, jitter_buffer_depth,"
+        " entity_soft_cap, draw_distance_km, snapshot_budget_bytes, jitter_buffer_depth,"
         " jitter_buffer_adapt_window, jitter_buffer_hysteresis, jitter_buffer_jitter_multiplier,"
         " congestion_enabled, congestion_min_send_hz, congestion_loss_threshold,"
         " congestion_budget_floor_bytes, overrun_governor_enabled, overrun_high_watermark,"
@@ -1399,6 +1423,12 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
             if (ctx->sim.broadcaster && ctx->sim.gameLoop) {
                 auto newMotd = newCfg.motd;
                 auto newMotdDisplayS = newCfg.motdDisplayS;
+                // Entity soft cap (#1049). Hot-reloadable like the other [world] levers: raising it is
+                // how an operator relieves a world that is refusing spawns, and waiting for a restart
+                // to do that is waiting through the outage. LOWERING it never kills anything — it only
+                // refuses new spawns until the live count falls back under the new ceiling.
+                const auto newCap = static_cast<uint32_t>(newCfg.entitySoftCap < 0 ? 0 : newCfg.entitySoftCap);
+                const auto newReserve = static_cast<uint32_t>(newCfg.maxPeers < 0 ? 0 : newCfg.maxPeers);
                 auto newDraw = static_cast<float>(newCfg.drawDistanceKm);
                 auto newSnapshotBudget = newCfg.snapshotBudgetBytes;
                 auto newJitterDepth = newCfg.jitterBufferDepth;
@@ -1421,10 +1451,12 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                 std::optional<fl::AiScaling> newAiScaling;
                 if (ctx->env.resolveAiScaling)
                     newAiScaling = ctx->env.resolveAiScaling(newCfg.aiDifficulty);
-                ctx->sim.gameLoop->enqueueSimCallback([ctx, newMotd, newMotdDisplayS, newDraw, newSnapshotBudget,
-                                                       newJitterDepth, newAdaptWindow, newHysteresis, newMultiplier,
-                                                       newCongestion, newGovernor, newCompress, newSensorHz, newRules,
-                                                       newAiScaling]() mutable {
+                ctx->sim.gameLoop->enqueueSimCallback([ctx, newMotd, newMotdDisplayS, newCap, newReserve, newDraw,
+                                                       newSnapshotBudget, newJitterDepth, newAdaptWindow, newHysteresis,
+                                                       newMultiplier, newCongestion, newGovernor, newCompress,
+                                                       newSensorHz, newRules, newAiScaling]() mutable {
+                    if (ctx->sim.entityManager)
+                        ctx->sim.entityManager->setSoftCap(newCap, newReserve);
                     ctx->sim.broadcaster->setMotd(std::move(newMotd));
                     ctx->sim.broadcaster->setMotdDisplaySeconds(newMotdDisplayS);
                     ctx->sim.broadcaster->setDrawDistance(newDraw);
@@ -1444,6 +1476,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
             }
             return "reload_config: name=\"" + newCfg.name + "\"  motd=\"" + newCfg.motd +
                    "\"  motd_display_s=" + std::to_string(newCfg.motdDisplayS) +
+                   "  entity_soft_cap=" + std::to_string(newCfg.entitySoftCap) +
                    "  draw_distance_km=" + std::to_string(newCfg.drawDistanceKm) +
                    "  snapshot_budget_bytes=" + std::to_string(newCfg.snapshotBudgetBytes) +
                    "  jitter_buffer_depth=" + std::to_string(newCfg.jitterBufferDepth) +

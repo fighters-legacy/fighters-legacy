@@ -181,6 +181,14 @@ enum class ConnectRefusalCode : uint8_t {
     EntitlementRequired = 8, // premium content requires an entitlement token (RFC #871; reserved)
     MatchFull = 9,           // every team in the current game mode is at capacity (#522)
     BadPassword = 10,        // the server requires a join password and the client's was missing/wrong (#998)
+    ServerFull = 11,         // the world is at [world] entity_soft_cap and no airframe can be spawned (#1049).
+                             // Distinct from MatchFull (team capacity) and TooManyConnections (per-IP):
+                             // this one is about world OBJECTS, and it is RETRYABLE as the world drains.
+    NoAirframe = 12,         // the server could not spawn a player aircraft for a reason that is not
+                             // capacity: [world] player_entity_type names a type no loaded pack
+                             // registers. A configuration fault, NOT retryable — kept separate from
+                             // ServerFull so "come back in a minute" is never said about a broken
+                             // server, and so the log names the actual fix (#1049).
 };
 
 // All structs below are deliberately UNPACKED and laid out for natural alignment (see compatibility

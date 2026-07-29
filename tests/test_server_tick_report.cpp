@@ -30,6 +30,8 @@ ServerTickReport sample() {
     r.congestionMinSendHz = 12.5;       // controller engaged during the run (#714)
     r.congestionRecoveredSendHz = 60.0; // and recovered after the link cleared (#714)
     r.congestionMaxLoss = 0.11;         // peak sampled ENet loss (#714)
+    r.entitySoftCap = 4096;             // world.entity_soft_cap in force (#1049)
+    r.entityCapRefusals = 17;           // and it has actually refused spawns
     return r;
 }
 } // namespace
@@ -64,6 +66,8 @@ TEST_CASE("ServerTickReport JSON round-trips", "[servertick]") {
     CHECK(out.congestionMinSendHz == Approx(in.congestionMinSendHz).margin(1e-3));
     CHECK(out.congestionRecoveredSendHz == Approx(in.congestionRecoveredSendHz).margin(1e-3));
     CHECK(out.congestionMaxLoss == Approx(in.congestionMaxLoss).margin(1e-3));
+    CHECK(out.entitySoftCap == in.entitySoftCap);
+    CHECK(out.entityCapRefusals == in.entityCapRefusals);
 }
 
 TEST_CASE("ServerTickReport toJson nesting indent is valid", "[servertick]") {
@@ -100,6 +104,12 @@ TEST_CASE("makeServerTickReport maps a TickBudget plus counts", "[servertick]") 
     CHECK(r.congestionRecoveredSendHz == Approx(58.0));
     CHECK(r.congestionMaxLoss == Approx(0.07));
 
+    // Entity soft cap + refusals (#1049): trailing additive args, no schema bump.
+    const ServerTickReport rCap =
+        makeServerTickReport(b, 1, 1, 1.0, 0, 0, 0, 1.0, 60.0, 60.0, 0.0, 0.0, 0.0, 0.0, 0, 4096, 17);
+    CHECK(rCap.entitySoftCap == 4096u);
+    CHECK(rCap.entityCapRefusals == 17u);
+
     // Default overrun/rss/congestion args = healthy (loadFactor 1, full interest radius, no drops,
     // rss 0, controller never engaged) — back-compat for callers that omit them.
     const ServerTickReport rDefault = makeServerTickReport(b, 1, 1);
@@ -111,6 +121,8 @@ TEST_CASE("makeServerTickReport maps a TickBudget plus counts", "[servertick]") 
     CHECK(rDefault.congestionMinSendHz == Approx(60.0));
     CHECK(rDefault.congestionRecoveredSendHz == Approx(60.0));
     CHECK(rDefault.congestionMaxLoss == Approx(0.0));
+    CHECK(rDefault.entitySoftCap == 0u); // 0 = uncapped, the default
+    CHECK(rDefault.entityCapRefusals == 0u);
 }
 
 TEST_CASE("fromJson is tolerant of malformed and partial input", "[servertick]") {

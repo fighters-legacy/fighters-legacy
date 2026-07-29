@@ -26,13 +26,13 @@ struct NullLog : ILogger {
 };
 
 // Every failure worth displaying (None is never shown).
-constexpr std::array<SessionFailure, 16> kAll{
+constexpr std::array<SessionFailure, 18> kAll{
     SessionFailure::ServerSpawnFailed,   SessionFailure::ServerBindFailed,    SessionFailure::ServerStartTimeout,
     SessionFailure::ServerStartHang,     SessionFailure::VersionMismatch,     SessionFailure::Banned,
     SessionFailure::AccessDenied,        SessionFailure::RateLimited,         SessionFailure::TooManyConnections,
     SessionFailure::ConnectionRefused,   SessionFailure::ConnectTimeout,      SessionFailure::RoleDenied,
     SessionFailure::MissingRequiredPack, SessionFailure::EntitlementRequired, SessionFailure::MatchFull,
-    SessionFailure::BadPassword,
+    SessionFailure::BadPassword,         SessionFailure::ServerFull,          SessionFailure::NoAirframe,
 };
 } // namespace
 

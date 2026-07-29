@@ -45,3 +45,14 @@ def test_multiple_failures_accumulate():
 
 def test_no_expectations_always_passes():
     assert evaluate_report({"outcome": "incomplete"}) == []
+
+
+def test_entity_cap_refusals_fail_even_with_no_expectations():
+    """A truncated world is never a valid mission result, whatever was asserted (#1049)."""
+    failures = evaluate_report({"outcome": "success", "entity_cap_refusals": 3})
+    assert len(failures) == 1 and "entity_cap_refusals" in failures[0]
+
+
+def test_absent_entity_cap_refusals_is_treated_as_zero():
+    """Reports written before the field existed must not start failing."""
+    assert evaluate_report(_OK, expect_outcome="success", min_spawned=2) == []

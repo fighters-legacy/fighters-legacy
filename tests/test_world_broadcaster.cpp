@@ -1776,6 +1776,77 @@ TEST_CASE("WorldBroadcaster: team assigner stamps faction, refuses when full (#5
     }
 }
 
+TEST_CASE("WorldBroadcaster: a world at the entity soft cap refuses pilots (#1049)", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    SECTION("the player reserve keeps a pilot flyable in a world full of AI") {
+        em.setSoftCap(3, /*playerReserve=*/1);
+        // Fill the world tier with non-player entities, as a runaway script or a projectile storm would.
+        fl::EntityTransform t{};
+        REQUIRE(em.spawn("builtin:debug-entity", t).valid());
+        REQUIRE(em.spawn("builtin:debug-entity", t).valid());
+        REQUIRE_FALSE(em.spawn("builtin:debug-entity", t).valid()); // world tier exhausted
+
+        connectPilotPeer(broadcaster, net, 0u);
+        broadcaster.onTick(1.0 / 60.0, 1u);
+        // The pilot got the reserved slot: an ack with a real entity, not a refusal.
+        CHECK(net.disconnectedPeers.empty());
+        CHECK(parseSendAck(net).assignedEntityGen != 0u);
+    }
+
+    SECTION("a genuinely full world refuses with ServerFull instead of acking a pilot with no aircraft") {
+        em.setSoftCap(2, /*playerReserve=*/0); // flat cap, no headroom for anyone
+        fl::EntityTransform t{};
+        REQUIRE(em.spawn("builtin:debug-entity", t).valid());
+        REQUIRE(em.spawn("builtin:debug-entity", t).valid());
+
+        connectPilotPeer(broadcaster, net, 0u);
+        bool refused = false;
+        for (const auto& pkt : net.sends) {
+            if (!pkt.empty() && pkt[0] == static_cast<uint8_t>(fl::MsgId::ConnectRefusal) &&
+                pkt.size() >= sizeof(fl::MsgConnectRefusal)) {
+                fl::MsgConnectRefusal r{};
+                std::memcpy(&r, pkt.data(), sizeof(r));
+                if (r.code == static_cast<uint8_t>(fl::ConnectRefusalCode::ServerFull))
+                    refused = true;
+            }
+        }
+        CHECK(refused);
+        CHECK(net.disconnectedPeers.size() == 1u);
+        // No ConnectAck at all: the alternative — admitting a "pilot" with no entity — is a client
+        // stuck on a loading screen with nothing to fly and no reason given.
+        for (const auto& pkt : net.sends)
+            CHECK(pkt[0] != static_cast<uint8_t>(fl::MsgId::ConnectAck));
+        CHECK(em.softCapRefusals() >= 1u);
+    }
+
+    SECTION("observer -> pilot at the cap leaves the peer an observer") {
+        broadcaster.onConnect(0u); // observers are allowed by default (#857)
+        fl::MsgConnectRequest req{};
+        req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Observer);
+        broadcaster.onReceive(0u, &req, sizeof(req));
+
+        // Now fill the world completely, then try to promote the observer.
+        em.setSoftCap(1, /*playerReserve=*/0);
+        fl::EntityTransform t{};
+        REQUIRE(em.spawn("builtin:debug-entity", t).valid());
+        net.sends.clear();
+        CHECK_FALSE(broadcaster.setPeerRole(0u, fl::PeerRole::Pilot));
+        // Still an observer, still connected, and told why over the notice channel.
+        CHECK(net.disconnectedPeers.empty());
+        bool notice = false;
+        for (const auto& pkt : net.sends)
+            if (!pkt.empty() && pkt[0] == static_cast<uint8_t>(fl::MsgId::ServerNotice))
+                notice = true;
+        CHECK(notice);
+    }
+}
+
 TEST_CASE("WorldBroadcaster: MsgTeamRequest honors the switch guard (#522)", "[world_broadcaster]") {
     MockLogger logger;
     MockNetwork net;
@@ -2216,12 +2287,24 @@ TEST_CASE("WorldBroadcaster: onConnect with empty registry sends typeCount=0 and
 
     connectPilotPeer(broadcaster, net, 0u);
 
-    REQUIRE(net.sends.size() == 4u); // +1 PlayerRoster (#996), +1 VoiceNetDef (#532)
-    fl::MsgConnectAck ack = parseSendAck(net);
-    CHECK(ack.typeCount == 0u);
-    CHECK(ack.assignedEntityIdx == 0u); // spawn failed — type not registered
-    CHECK(ack.assignedEntityGen == 0u);
+    // #1049: a pilot whose aircraft cannot be spawned is REFUSED, not acked with a null entity. The
+    // cause here is configuration (no registered type), not capacity, so the code is NoAirframe.
+    bool refused = false;
+    for (const auto& pkt : net.sends) {
+        if (!pkt.empty() && pkt[0] == static_cast<uint8_t>(fl::MsgId::ConnectRefusal) &&
+            pkt.size() >= sizeof(fl::MsgConnectRefusal)) {
+            fl::MsgConnectRefusal r{};
+            std::memcpy(&r, pkt.data(), sizeof(r));
+            if (r.code == static_cast<uint8_t>(fl::ConnectRefusalCode::NoAirframe))
+                refused = true;
+        }
+    }
+    CHECK(refused);
+    CHECK(net.disconnectedPeers.size() == 1u);
+    for (const auto& pkt : net.sends)
+        CHECK(pkt[0] != static_cast<uint8_t>(fl::MsgId::ConnectAck));
     CHECK(em.liveCount() == 0u);
+    CHECK(em.softCapRefusals() == 0u); // not a cap refusal — the counter must stay honest
 }
 
 TEST_CASE("WorldBroadcaster: onConnect without builtin type registered assigns no entity", "[world_broadcaster]") {
@@ -2236,9 +2319,19 @@ TEST_CASE("WorldBroadcaster: onConnect without builtin type registered assigns n
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     connectPilotPeer(broadcaster, net, 0u);
 
-    fl::MsgConnectAck ack = parseSendAck(net);
-    CHECK(ack.assignedEntityIdx == 0u); // "builtin:debug-entity" not found
-    CHECK(ack.assignedEntityGen == 0u);
+    // "builtin:debug-entity" is not registered, so no aircraft can be spawned — refuse with
+    // NoAirframe rather than admitting a pilot with nothing to fly (#1049).
+    bool refused = false;
+    for (const auto& pkt : net.sends) {
+        if (!pkt.empty() && pkt[0] == static_cast<uint8_t>(fl::MsgId::ConnectRefusal) &&
+            pkt.size() >= sizeof(fl::MsgConnectRefusal)) {
+            fl::MsgConnectRefusal r{};
+            std::memcpy(&r, pkt.data(), sizeof(r));
+            if (r.code == static_cast<uint8_t>(fl::ConnectRefusalCode::NoAirframe))
+                refused = true;
+        }
+    }
+    CHECK(refused);
     CHECK(em.liveCount() == 0u);
 }
 

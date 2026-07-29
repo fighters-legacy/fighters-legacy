@@ -207,6 +207,17 @@ RejectInfo rejectInfoFor(fl::ConnectRefusalCode code) {
         return {"All teams are full.", "all teams full", LogLevel::Info};
     case C::BadPassword:
         return {"Incorrect server password.", "wrong join password", LogLevel::Info};
+    case C::ServerFull:
+        // Warn, not Info: unlike the other refusals this one is not about the client at all — it says
+        // the operator's entity cap is binding, and it is the line they need to see in the log.
+        return {"The server world is full. Try again shortly.", "world at entity soft cap", LogLevel::Warn};
+    case C::NoAirframe:
+        // Error: nobody can fly on this server until the operator fixes the config, so this is not a
+        // condition that clears on its own the way ServerFull does.
+        return {"This server has no aircraft available.",
+                "no spawnable player entity type (check [world] "
+                "player_entity_type and the loaded packs)",
+                LogLevel::Error};
     case C::Generic:
         break;
     }
@@ -2307,7 +2318,9 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
 
 EntityId WorldBroadcaster::spawnPilotEntity(uint32_t peerId, const std::string& entityType, const EntityTransform& t,
                                             uint16_t faction, float initialAirspeed) {
-    EntityId id = m_entityManager.spawn(entityType.c_str(), t, peerId);
+    // SpawnClass::Player (#1049): a pilot's airframe draws on the reserve the entity soft cap holds
+    // back, so a world filled by projectiles or a runaway script cannot lock humans out of it.
+    EntityId id = m_entityManager.spawn(entityType.c_str(), t, peerId, SpawnClass::Player);
     if (id.valid()) {
         m_peerEntities[peerId] = id;
 
@@ -2638,6 +2651,10 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
     }
 
     EntityId assigned{}; // invalid for an observer — it has no entity
+    // Watermark for telling the two admission failures apart below (#1049): a spawn refused by the
+    // soft cap bumps this counter, an unregistered entity type does not. Cheaper and more exact than
+    // re-deriving "is the cap binding" from a live count that is only republished at end of tick.
+    const uint64_t capRefusalsBefore = m_entityManager.softCapRefusals();
     if (grantedRole == PeerRole::Pilot) {
         // Seat claim first (#974): occupy the requested seat of an existing crewed aircraft, viewing it
         // as our "own" entity. Only when the seat is actually joinable; else fall through to a spawn.
@@ -2671,6 +2688,19 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
             } else {
                 assigned = admitPilot(peerId, resolvePlayerEntityType(req.requestedEntityType), assignedFaction);
             }
+        }
+
+        // No airframe (#1049). Every fallback above has been tried, so this is the world itself
+        // refusing. Acking anyway would admit a "pilot" with nothing to fly — no camera anchor, no
+        // controller, no own-record in the snapshot — i.e. a client stuck on a loading screen with no
+        // reason given, which is what the server did before this. Refuse, and name the wall that was
+        // hit: a full world clears on its own, a missing entity type needs the operator.
+        if (!assigned.valid()) {
+            releaseMissionSlot(peerId);
+            const bool capBound = m_entityManager.softCapRefusals() > capRefusalsBefore;
+            rejectConnection(peerId, extractIp(m_net.getPeerAddress(peerId)),
+                             capBound ? ConnectRefusalCode::ServerFull : ConnectRefusalCode::NoAirframe);
+            return;
         }
     } else {
         // Observer (#857): no entity, no controller. Seed the interest center from the first spawn point
@@ -2771,13 +2801,13 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
     sendScoreboardTo(peerId);
 }
 
-void WorldBroadcaster::setPeerRole(uint32_t peerId, PeerRole role) {
+bool WorldBroadcaster::setPeerRole(uint32_t peerId, PeerRole role) {
     auto pit = m_peerInputs.find(peerId);
     if (pit == m_peerInputs.end() || !pit->second.handshakeComplete)
-        return; // unknown or not-yet-admitted peer
+        return false; // unknown or not-yet-admitted peer
     PeerInputState& pin = pit->second;
     if (pin.role == role)
-        return; // already in the target role
+        return false; // already in the target role
 
     EntityId assigned{};
     if (role == PeerRole::Observer) {
@@ -2791,6 +2821,19 @@ void WorldBroadcaster::setPeerRole(uint32_t peerId, PeerRole role) {
         // observer -> pilot: spawn an aircraft (server default type; a lone pilot — no flight formed
         // on a mid-session transition, which #648 owns).
         assigned = admitPilot(peerId, resolvePlayerEntityType(""));
+        if (!assigned.valid()) {
+            // No airframe (#1049) — the world is at the entity soft cap, or the default type is
+            // unregistered. Leave the peer an observer: a "pilot" with no entity has no camera
+            // anchor, no controller and no snapshot own-record, which is strictly worse than the
+            // spectate they already had. Say why over the banner channel they can actually see.
+            MsgServerNotice notice;
+            std::snprintf(notice.text, sizeof(notice.text), "%s", "Cannot fly: the world is full.");
+            m_net.send(peerId, &notice, sizeof(notice), /*reliable=*/true);
+            char msg[96];
+            std::snprintf(msg, sizeof(msg), "peer %u observer->pilot refused: no airframe (entity soft cap?)", peerId);
+            m_logger.log(LogLevel::Warn, __FILE__, __LINE__, msg);
+            return false;
+        }
     }
     pin.role = role;
 
@@ -2810,6 +2853,7 @@ void WorldBroadcaster::setPeerRole(uint32_t peerId, PeerRole role) {
         }
         upsertRoster(peerId, rec);
     }
+    return true;
 }
 
 bool WorldBroadcaster::setPeerAuthority(uint32_t peerId, const PeerAuthority& authority) {
@@ -6565,6 +6609,15 @@ void WorldBroadcaster::readmitPilots() {
             fac = *t;
         }
         const EntityId assigned = admitPilot(peerId, resolvePlayerEntityType(""), fac);
+        if (!assigned.valid()) {
+            // World at the entity soft cap (#1049) — same handling as "no room on any team" above:
+            // leave the pilot entity-less and say so, rather than acking an aircraft that does not
+            // exist. The next round start or a freed slot picks them up.
+            char msg[112];
+            std::snprintf(msg, sizeof(msg), "peer %u not readmitted: no airframe (entity soft cap?)", peerId);
+            m_logger.log(LogLevel::Warn, __FILE__, __LINE__, msg);
+            continue;
+        }
         sendConnectAck(peerId, assigned, PeerRole::Pilot);
         // Keep the roster + match participant state consistent with the new team.
         uint16_t myFaction = 0;
@@ -6629,6 +6682,22 @@ void WorldBroadcaster::respawnParticipant(uint32_t participantId) {
     if (m_peerEntities.count(participantId) != 0u)
         despawnPeerEntity(participantId);
     const EntityId assigned = admitPilot(participantId, resolvePlayerEntityType(""), faction);
+    if (!assigned.valid()) {
+        // The world is at the entity soft cap (#1049). KEEP the pending respawn so it fires as soon as
+        // the world drains — erasing it would leave a live player permanently dead with no way back in,
+        // and the request they made would have vanished with no acknowledgement anywhere. Notify once
+        // per death so a full world does not become a per-tick banner.
+        if (auto rit = m_respawn.find(participantId); rit != m_respawn.end() && !rit->second.capNotified) {
+            rit->second.capNotified = true;
+            MsgServerNotice notice;
+            std::snprintf(notice.text, sizeof(notice.text), "%s", "World full -- respawning when a slot frees.");
+            m_net.send(participantId, &notice, sizeof(notice), /*reliable=*/true);
+            char msg[112];
+            std::snprintf(msg, sizeof(msg), "participant %u respawn deferred: world at entity soft cap", participantId);
+            m_logger.log(LogLevel::Warn, __FILE__, __LINE__, msg);
+        }
+        return;
+    }
     sendConnectAck(participantId, assigned, PeerRole::Pilot);
 
     uint16_t myFaction = 0;

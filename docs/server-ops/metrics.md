@@ -89,10 +89,17 @@ worth reporting.
 |---|---|
 | `peers` | Connected peers |
 | `entities` | Live world entities |
+| `entity_soft_cap` | The `[world] entity_soft_cap` ceiling in force; `0` = unlimited |
+| `entity_cap_refusals` | Spawns the cap has refused since startup (monotonic) |
 | `rss_kb` / `rss_startup_kb` | Resident memory now, and at startup |
 
 `rss_kb` against `rss_startup_kb` is the leak signal over a soak run. A working set that grows and
 plateaus is normal; one that grows without plateauing is not.
+
+`entity_cap_refusals` rising means the world is at its ceiling and spawns are being dropped —
+projectiles that never appear, AI that never launches, players held out. Read it alongside
+`entities`/`entity_soft_cap` before believing any other count on a capped server: a low entity
+count next to a rising refusal counter is a truncated world, not a quiet one.
 
 ### Per-peer throttle attribution
 
