@@ -8,6 +8,8 @@
 
 #include <httplib.h>
 
+#include <IClock.h>
+#include <chrono>
 #include <span>
 #include <string>
 #include <vector>
@@ -165,7 +167,7 @@ TEST_CASE("http_admin: an unauthenticated API refuses to start", "[http_admin]")
     CommandRegistry reg;
     ServerConfig::HttpAdminConfig cfg;
     cfg.enabled = true; // but no tokens
-    HttpAdminServer srv(reg, cfg, log);
+    HttpAdminServer srv(reg, cfg, log, ServerUptime{});
     CHECK_FALSE(srv.start()); // an open admin API is refused, not warned about
     CHECK(srv.boundPort() == 0);
 }
@@ -173,7 +175,7 @@ TEST_CASE("http_admin: an unauthenticated API refuses to start", "[http_admin]")
 TEST_CASE("http_admin: a bad role preset stops the server starting", "[http_admin]") {
     MockLogger log;
     CommandRegistry reg;
-    HttpAdminServer srv(reg, cfgWith({{"tok", "sysadmin", -1, ""}}), log);
+    HttpAdminServer srv(reg, cfgWith({{"tok", "sysadmin", -1, ""}}), log, ServerUptime{});
     CHECK_FALSE(srv.start());
 }
 
@@ -181,7 +183,7 @@ TEST_CASE("http_admin: lockout accessors work with no listener open", "[http_adm
     MockLogger log;
     CommandRegistry reg;
     // start() is never called, so no socket exists; this exercises the pimpl + mutex paths only.
-    HttpAdminServer srv(reg, cfgWith({{"tok", "admin", -1, ""}}), log);
+    HttpAdminServer srv(reg, cfgWith({{"tok", "admin", -1, ""}}), log, ServerUptime{});
     CHECK_FALSE(srv.clearLockout("1.2.3.4"));
     const AuthLockoutSummary s = srv.getAuthSummary();
     CHECK(s.activeCount == 0);
@@ -276,6 +278,46 @@ TEST_CASE("the default server.toml documents the section it writes", "[http_admi
     CHECK_FALSE(cfg.httpAdmin.enabled);
 }
 
+// ── uptime ──────────────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("ServerUptime cannot report the clock epoch (#1048)", "[http_admin][uptime]") {
+    SECTION("a default-constructed one has just started") {
+        // The property the bug needed and did not have: there is no state in which this reads as
+        // "the machine booted N seconds ago". A brand new ServerUptime is at zero, not at boot.
+        const ServerUptime up;
+        CHECK(up.seconds() >= 0);
+        CHECK(up.seconds() < 60);
+    }
+
+    SECTION("elapsed follows the clock it was started on") {
+        ManualClock clock;
+        const ServerUptime up{clock};
+        CHECK(up.seconds() == 0);
+        clock.advance(std::chrono::seconds(137));
+        CHECK(up.seconds() == 137);
+    }
+
+    SECTION("a copy carries the same start instant") {
+        // This is what makes "one instance, handed to every frontend" hold: passing a ServerUptime
+        // by value cannot fork the answer, which is exactly how the two uptimes diverged before.
+        ManualClock clock;
+        const ServerUptime original{clock};
+        clock.advance(std::chrono::seconds(90));
+        const ServerUptime copy = original;
+        CHECK(copy.startedAt() == original.startedAt());
+        CHECK(copy.seconds() == original.seconds());
+        clock.advance(std::chrono::seconds(10));
+        CHECK(copy.seconds() == 100);
+        CHECK(copy.seconds() == original.seconds());
+    }
+
+    SECTION("an explicit start instant reports the time already elapsed") {
+        ManualClock clock;
+        const ServerUptime up{clock.now() - std::chrono::hours(3), clock};
+        CHECK(up.seconds() == 3 * 3600);
+    }
+}
+
 // ── live listener (the wiring, not just the helpers) ────────────────────────────────────────────
 
 TEST_CASE("http_admin: a live server enforces auth and routes to the command registry", "[http_admin][live]") {
@@ -284,10 +326,17 @@ TEST_CASE("http_admin: a live server enforces auth and routes to the command reg
 
     // Two commands with different capability requirements, so the test can prove the REST frontend
     // really carries the token's caps into the permission check rather than dispatching as Admin.
+    // One uptime, two frontends — the production wiring (#1048). The stand-in `status` reports from
+    // the same instance /health does, so the sections below can assert they agree rather than
+    // asserting each in isolation, which is how the two drifted apart in the first place.
+    ManualClock clock;
+    const ServerUptime uptime{clock};
+    clock.advance(std::chrono::seconds(137));
+
     int statusCalls = 0;
-    reg.registerCommand("status", "status", 0, [&statusCalls](std::span<std::string_view>) -> std::string {
+    reg.registerCommand("status", "status", 0, [&statusCalls, &uptime](std::span<std::string_view>) -> std::string {
         ++statusCalls;
-        return "peers 0";
+        return "uptime: " + std::to_string(uptime.seconds()) + "s  peers: 0";
     });
     reg.registerCommand("kick", "kick", capBit(Capability::KickBan),
                         [](std::span<std::string_view> args) -> std::string {
@@ -300,7 +349,7 @@ TEST_CASE("http_admin: a live server enforces auth and routes to the command reg
     cfg.bindAddress = "127.0.0.1";
     cfg.port = 0; // let the OS pick, so the test never fights over a fixed port
 
-    HttpAdminServer srv(reg, cfg, log);
+    HttpAdminServer srv(reg, cfg, log, uptime);
     REQUIRE(srv.start());
     const uint16_t port = srv.boundPort();
     REQUIRE(port != 0);
@@ -309,12 +358,23 @@ TEST_CASE("http_admin: a live server enforces auth and routes to the command reg
     cli.set_connection_timeout(5, 0);
     cli.set_read_timeout(5, 0);
 
-    SECTION("/health needs no credential and reports uptime") {
+    SECTION("/health needs no credential and reports the server's own uptime") {
         auto res = cli.Get("/health");
         REQUIRE(res);
         CHECK(res->status == 200);
         CHECK(res->body.find("\"status\": \"ok\"") != std::string::npos);
-        CHECK(res->body.find("\"uptime\"") != std::string::npos);
+        // The VALUE, not just the key: the number is the whole point of the route.
+        CHECK(res->body.find("\"uptime\": 137") != std::string::npos);
+    }
+
+    SECTION("/health and /status report the same uptime (#1048)") {
+        auto health = cli.Get("/health");
+        REQUIRE(health);
+        httplib::Headers h{{"Authorization", "Bearer admin-tok"}};
+        auto status = cli.Get("/status", h);
+        REQUIRE(status);
+        CHECK(health->body.find("\"uptime\": 137") != std::string::npos);
+        CHECK(status->body.find("uptime: 137s") != std::string::npos);
     }
 
     SECTION("an unauthenticated request to a real route is refused") {
@@ -338,7 +398,7 @@ TEST_CASE("http_admin: a live server enforces auth and routes to the command reg
         auto res = cli.Get("/status", h);
         REQUIRE(res);
         CHECK(res->status == 200);
-        CHECK(res->body.find("peers 0") != std::string::npos);
+        CHECK(res->body.find("peers: 0") != std::string::npos);
         CHECK(statusCalls == 1);
     }
 
@@ -387,7 +447,7 @@ TEST_CASE("http_admin: repeated bad tokens lock the source IP out", "[http_admin
     cfg.maxAuthFailures = 3;
     cfg.lockoutSeconds = 300;
 
-    HttpAdminServer srv(reg, cfg, log);
+    HttpAdminServer srv(reg, cfg, log, ServerUptime{});
     REQUIRE(srv.start());
 
     httplib::Client cli("127.0.0.1", srv.boundPort());
