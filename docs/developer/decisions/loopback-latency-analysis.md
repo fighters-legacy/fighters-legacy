@@ -14,7 +14,7 @@ Related issue: [#179](https://github.com/fighters-legacy/fighters-legacy/issues/
 
 ## Why this analysis exists
 
-Single-player uses an embedded `fl-server` on `127.0.0.1:4778` connected to the game
+Single-player uses an embedded `fl-server` on `127.0.0.1:4776` connected to the game
 client via standard ENet. This is intentional — it keeps single-player and multiplayer
 on identical code paths with no special-casing. The cost is that every world-state
 packet travels a full loopback network round-trip, even in solo play.

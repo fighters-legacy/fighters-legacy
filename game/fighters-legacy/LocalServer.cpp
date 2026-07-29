@@ -102,6 +102,10 @@ LocalServer::StartResult LocalServer::start(const char* bindAddr, uint16_t port)
     // path ("wingman follows player and responds to all six commands"). The DEDICATED-server default
     // stays 0 — N extra AI entities per peer would move every scale-gate and load-test number — so
     // this is set here rather than in the shipped server.toml.
+    // --no-discovery: this server exists to serve ONE loopback client. Left on, it would broadcast the
+    // player's single-player session onto the LAN as a joinable server, and bind a query responder at
+    // game port + 1 (#1054) — a second socket nothing will ever query, on a port that belongs to a
+    // dedicated server. Neither is wanted for an embedded single-player server.
     std::vector<std::string> args{portStr,
                                   maxPeersStr,
                                   "--bind",
@@ -113,7 +117,8 @@ LocalServer::StartResult LocalServer::start(const char* bindAddr, uint16_t port)
                                   "--transport",
                                   "enet",
                                   "--flight-size",
-                                  "1"};
+                                  "1",
+                                  "--no-discovery"};
 
     // Recordings go to the client's user-data directory (#41), not the process working directory,
     // so the replay browser and the embedded server agree on where a replay lives.

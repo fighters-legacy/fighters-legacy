@@ -550,7 +550,6 @@ struct SessionContext {
     std::unique_ptr<INetwork> clientNet;
     std::unique_ptr<ClientNetEventHandler> clientHandler;
     std::optional<HapticController> hapticController;
-    std::optional<DiscoveryListener> discoveryListener;
     std::optional<SandboxInspector> inspector;
     std::optional<ReplayPlayer> replayPlayer; // #41: set only for a replay session (no server, no socket)
     uint32_t replayNoOwnEntityIdx{0};         // a replay has no ownship; FlightScreen reads these
@@ -600,6 +599,13 @@ Game::~Game() {
     d.services.sfxManager.shutdown();
     d.services.warningTones.shutdown();
     d.services.engineAudio.shutdown();
+    // Voice capture must close HERE, with its four siblings above, and not be left to ~VoiceChat.
+    // Everything below tears the platform down explicitly, and SDL3Window::shutdown() ends in
+    // SDL_Quit() -- which destroys every SDL audio stream, including the capture stream this object
+    // still holds a pointer to. Member destructors run after this body, so ~VoiceChat would then call
+    // SDL_DestroyAudioStream on an already-freed stream and abort the process with "double free or
+    // corruption" on exit. Closing it first leaves that destructor a no-op (#1054).
+    d.services.voiceChat.shutdown();
     d.services.p.cursor.reset();
     // #156: tear the IGui backend down while the renderer + window are still alive (its shutdown calls
     // back into both). Clear the event forwarder first so the dangling capture is never invoked.
@@ -1392,8 +1398,13 @@ void Game::initScreenManager() {
 
     // Server browser (#143): LAN discovery + a query client + (when an HTTP backend exists) a lobby-list
     // client feed a ServerBrowserModel. Selecting a row prefills the join form; Refresh re-sweeps.
+    //
+    // The LAN DiscoveryListener is deliberately NOT created here (#1054). It binds the GAME port 4778
+    // (discovery aliases it by design — the beacon broadcasts *to* 4778), and an application-lifetime
+    // wildcard bind means the embedded fl-server can never bind 127.0.0.1:4778 for single-player: enet6
+    // sets no SO_REUSEADDR, so its bind fails and Instant Action / Free Flight die with "Port already in
+    // use." The listener is owned by the ServerBrowser screen instead — see handleTransition().
     {
-        d.services.browserDiscovery.emplace(static_cast<uint16_t>(4778), *d.services.rawLogger);
         d.services.browserQuery.emplace(*d.services.rawLogger);
         if (d.services.p.httpClient) {
             d.services.lobbyList =
@@ -1767,10 +1778,11 @@ void Game::startGame(const std::string& mission) {
                                              d.services.p.gui.get(), adminSender}); // #861 (SP: needs a GM grant)
             d.services.screenMgr->setServerCmd(std::move(adminSender));
 
-            d.session.discoveryListener.emplace(static_cast<uint16_t>(4778), *d.services.rawLogger);
-            if (!d.session.discoveryListener->isOpen())
-                d.services.rawLogger->log(LogLevel::Warn, __FILE__, __LINE__,
-                                          "LAN discovery listener: no sockets opened");
+            // No LAN discovery listener here (#1054). A single-player session has nothing to do with
+            // LAN servers, and this bind never actually succeeded: it asked for the wildcard game port
+            // that the embedded fl-server had already taken moments earlier, so it failed every time
+            // and logged a warning nobody acted on. Discovery belongs to the ServerBrowser screen,
+            // which owns the listener for exactly as long as it is on screen.
         } else {
             // Multiplayer: wire admin commands if an operator password is available.
             CommandContext ctx{};
@@ -1862,7 +1874,8 @@ void Game::startGame(const std::string& mission) {
         d.services.screenMgr->reinitFlight(std::move(fsd));
 
         const char* host = isMultiplayer ? d.services.connectHost.c_str() : "127.0.0.1";
-        const uint16_t port = isMultiplayer ? d.services.connectPort : uint16_t{4778};
+        // Single-player targets the embedded server's own port (#1054), not the 4778 standard.
+        const uint16_t port = isMultiplayer ? d.services.connectPort : LocalServer::kLocalServerPort;
         d.session.clientNet->connect(host, port);
     };
 
@@ -1943,7 +1956,6 @@ void Game::stopGame() {
     d.services.photoCaptureRequest = false;
 
     d.session.clientHandler.reset();
-    d.session.discoveryListener.reset();
     d.session.inspector.reset();
     d.session.hapticController.reset();
     d.session.connectAckApplied = false;
@@ -1995,6 +2007,20 @@ void Game::handleTransition(Screen next) {
     // Entering a session from the replay browser plays that file; every other path flies.
     if (entersReplaySession(prev, next))
         d.services.pendingReplayPath = d.services.screenMgr->replaySelect().selectedReplay();
+
+    // LAN discovery socket lifetime (#1054): the listener binds the game port, so it may only be open
+    // while the browser is the active screen. Holding it for the process lifetime blocked the embedded
+    // single-player server from binding that same port. Open on entry, close on exit — the browser is
+    // also the only screen that polls it.
+    if (next == Screen::ServerBrowser && prev != Screen::ServerBrowser) {
+        d.services.browserDiscovery.emplace(static_cast<uint16_t>(4778), *d.services.rawLogger);
+        if (!d.services.browserDiscovery->isOpen())
+            d.services.rawLogger->log(LogLevel::Warn, __FILE__, __LINE__,
+                                      "LAN discovery listener: no sockets opened; LAN servers will not be listed");
+    } else if (prev == Screen::ServerBrowser && next != Screen::ServerBrowser) {
+        d.services.browserDiscovery.reset();
+        d.services.browserModel.rebuild({}, {}, {});
+    }
 
     if (entersSession(prev, next)) {
         const std::string mission = (prev == Screen::MissionBrief)
@@ -2196,9 +2222,6 @@ void Game::run() {
             if (d.services.terrainStreamer)
                 d.services.terrainStreamer->update(d.services.camInput.eyeWorld());
         }
-        if (inSession && d.session.discoveryListener)
-            d.session.discoveryListener->poll();
-
         // If a snapshot is available, advance the bridge and prime CameraInput's render
         // alpha BEFORE the screen update so that CameraInput::update() (called from
         // FlightScreen::update below) extrapolates the camera target by the same

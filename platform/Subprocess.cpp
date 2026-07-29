@@ -166,12 +166,21 @@ void Subprocess::stop() {
     while (isRunning() && std::chrono::steady_clock::now() < deadline)
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-    // Forceful kill if still running.
+    // Forceful kill if still running. Signalling is asynchronous: the kernel has not torn the process
+    // down -- and so has not released its sockets -- by the time kill() returns. stop() used to return
+    // right here, so a quit-to-menu followed by a new session could race the dead server for its own
+    // port and fail to bind (#1054). Wait for the process to actually be gone before returning.
     if (isRunning()) {
 #if defined(_WIN32)
         TerminateProcess(m_impl->hProcess, 1);
+        WaitForSingleObject(m_impl->hProcess, 2000);
 #else
         kill(m_impl->pid, SIGKILL);
+        // SIGKILL cannot be caught or ignored, so this reap is bounded in practice; the deadline is a
+        // backstop against an unkillable state (uninterruptible I/O) rather than an expected path.
+        auto killDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (isRunning() && std::chrono::steady_clock::now() < killDeadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
 #endif
     }
 
