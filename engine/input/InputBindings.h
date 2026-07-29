@@ -3,6 +3,7 @@
 #include "Binding.h"
 #include "InputAction.h"
 #include <array>
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <vector>
@@ -93,7 +94,10 @@ class InputBindings {
     bool deserialize(const std::string& toml);
 
   private:
-    std::array<std::array<Binding, kActionCount>, kSlotCount> m_slots{};
+    // Explicit size_t: MSVC diagnoses a signed non-type template argument for std::array's extent
+    // under /W4 /WX (the same trap JitterBuffer hit), and this header is in the client build.
+    std::array<std::array<Binding, static_cast<std::size_t>(kActionCount)>, static_cast<std::size_t>(kSlotCount)>
+        m_slots{};
 
     static std::string serializeBinding(const Binding& b);
     static bool parseBinding(const std::string& source, const std::string& id, bool axisNegative, Binding& out);
