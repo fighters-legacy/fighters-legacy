@@ -21,6 +21,10 @@ struct MissionReport {
     uint32_t triggersFired{0};  // triggers that fired over the run
     uint32_t liveEntities{0};   // survivors at the end (EntityManager::liveCount)
     uint64_t spawnedObjects{0}; // mission objects successfully spawned at setup
+    // Spawns the entity soft cap refused during the run (#1049). A headless run that quietly lost
+    // half its objects to a cap otherwise reports an under-populated world as a legitimate result —
+    // the class of silently-wrong number a measurement harness has to guard against in the harness.
+    uint64_t entityCapRefusals{0};
 };
 
 // Minimal, deterministic JSON encoder. Numbers are printed plainly; strings are assumed to contain no
@@ -39,7 +43,8 @@ inline std::string toJson(const MissionReport& r) {
     s += "  \"ticks\": " + std::to_string(r.ticks) + ",\n";
     s += "  \"triggers_fired\": " + std::to_string(r.triggersFired) + ",\n";
     s += "  \"live_entities\": " + std::to_string(r.liveEntities) + ",\n";
-    s += "  \"spawned_objects\": " + std::to_string(r.spawnedObjects) + "\n";
+    s += "  \"spawned_objects\": " + std::to_string(r.spawnedObjects) + ",\n";
+    s += "  \"entity_cap_refusals\": " + std::to_string(r.entityCapRefusals) + "\n";
     s += "}";
     return s;
 }

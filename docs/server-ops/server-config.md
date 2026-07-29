@@ -800,14 +800,45 @@ without this measures a code path the real workload does not have. **Requires re
 |---|---|---|
 | integer | `0` (unlimited) | `>= 0` |
 
-Intended as a ceiling on live world objects, refusing further spawns rather than letting a runaway
-mission script or a stuck respawn loop exhaust memory.
+A ceiling on live world objects. Once the world is at the cap, further spawns are refused rather
+than letting a runaway mission script, a projectile storm or a stuck respawn loop exhaust memory.
+`0` (the default) is unlimited.
 
-> **Not currently enforced.** The value is parsed and range-checked, but as of v0.3.13 it is never
-> applied to the entity pool, so setting it has no effect and produces no warning. The pool's
-> soft-cap mechanism itself works — only the wiring from this key is missing. **Do not rely on this
-> as a resource control**; bound entity count through mission and pack content instead. Tracked as
-> a code defect by the v0.4.0 documentation audit (#1047).
+**The cap has two tiers, and players get the upper one.** A flat first-come-first-served ceiling
+fails in exactly the situation it exists for: the things that fill a world fastest are the things
+the cap is meant to bound, and once they hold the last slot the next casualty is a human who cannot
+join or respawn. So `max_peers` entities are held back as a **player reserve** that only a pilot's
+airframe may allocate from:
+
+| Spawn | Refused at |
+|---|---|
+| AI, projectiles, mission objects, effects, parachutes | `entity_soft_cap - player_reserve` |
+| A pilot's aircraft (join, respawn, observer→pilot) | `entity_soft_cap` |
+
+The reserve is derived from `max_peers`, not configured — there is only one correct value for it —
+and is clamped to half the cap, so a large `max_peers` against a small cap cannot leave the world
+with no room for anything but airframes. A clamp is logged as a Warn at startup.
+
+**What a refusal looks like.** Nothing is killed to make room. Refusals are counted and reported:
+
+- an aggregated `entity soft cap reached: refused N spawn(s)…` **Warn** at most once per 10 s
+  (per-spawn logging would be a flood at the exact moment the server is already under pressure);
+- `status` reports `entities: N/cap` plus `cap refusals: N` once there are any;
+- `--metrics-json` carries `entity_soft_cap` and `entity_cap_refusals`;
+- a headless `--mission-report` run carries `entity_cap_refusals`, and `tools/mission_test`
+  **fails** on a non-zero value — a run whose spawns were truncated is not a mission result;
+- a pilot who cannot be given an aircraft is **refused with `ConnectRefusalCode::ServerFull`**
+  ("The server world is full. Try again shortly.") rather than admitted with nothing to fly. A
+  respawn in a full world stays queued and fires when a slot frees; an `observer→pilot` role change
+  is declined and the peer stays an observer.
+
+**Hot-reloadable** via `reload_config`. Raising the cap is how an operator relieves a world that is
+refusing spawns, and waiting for a restart to do that is waiting through the outage. Lowering it
+below the current live count kills nothing — it refuses new spawns until the count falls back under
+the new ceiling.
+
+> Enforced since v0.4.0. In v0.3.13 and earlier this key was parsed and range-checked but never
+> reached the entity pool, so setting it had no effect and produced no warning (#1049).
 
 ### `test_spawn_ai_mix` / `test_projectile_rate` / `test_projectile_ttl_s`
 
@@ -1864,7 +1895,7 @@ for any authenticated caller.
 | `grant` | `<peerId> <admin\|moderator\|gm\|faction_leader> [factionIndex]` | Grant a peer a role preset's capabilities (#947; requires `grant_roles`). Ephemeral (lost on disconnect); re-sends `MsgConnectAck` so the client's GM/moderator UI appears. A `gm` grant unlocks the #861 overview map for that peer. |
 | `revoke` | `<peerId>` | Clear a peer's granted authority (requires `grant_roles`). |
 | `help` | `[command]` | List all commands, or show usage for a specific one |
-| `status` | — | Show uptime (seconds since **this server process** started, the same figure `GET /health` reports), peer count, entity count, the real tick rate (Hz + mean/p99 ms), and the overrun-governor load (`load: NN%`, `[DEGRADED]` when shedding) |
+| `status` | — | Show uptime (seconds since **this server process** started, the same figure `GET /health` reports), peer count, entity count (`N`, or `N/cap` when `entity_soft_cap` is set, plus `cap refusals: N` once the cap has refused anything), the real tick rate (Hz + mean/p99 ms), and the overrun-governor load (`load: NN%`, `[DEGRADED]` when shedding) |
 | `tickstats` | — | Per-phase sim tick budget (integrate/ai/collision/serialize/total; ms mean/p95/p99/max), actual tick Hz, and the overrun-governor state (`load`, effective snapshot Hz, AI stride) |
 | `worldstate` | — | The ~1 Hz aggregated world state as JSON: entities, the faction table with alert levels and the relationship matrix, peers, mission/objective state, weather and wind (#600). Reads the published off-thread snapshot, so it is safe from RCON. Empty for the first second of a server's life |
 | `events` | `[after_seq] [max]` | The match event stream as JSON — kills (with attribution and weapon class), spawns, damage transitions, joins/leaves, chat, admin commands and alert-level changes (#600). With no `after_seq` it returns the recent tail; with one it returns everything newer, plus `next_seq` to pass next time and `gap: true` if records you had not read were already dropped |
@@ -1885,7 +1916,7 @@ for any authenticated caller.
 | `spectate` | `<peerId> <entityIdx\|off>` | Lock a dead or observer peer's view onto a specific entity (#403), or `off` to release it back to free camera (requires `spectate_any`). Moves that peer's interest centre too, so the entity is actually in their snapshot rather than merely aimed at. Queued to the sim tick |
 | `seats` | `<entityIdx>` | Show a crewed aircraft's seat roster and occupancy (#974): per seat the role, occupancy (`human peer=N` / `bot` / `empty`), and the Fly-seat marker. Reports an error for a single-seat / unknown entity |
 | `set_seat` | `<entityIdx> <seat> <peerId\|bot\|empty>` | Force a **non-fly** seat's occupancy (#974): bind a human peer, resume the authored bot, or silence the seat. The Fly seat is not settable (use `set_role` / respawn). Queued to the sim tick |
-| `reload_config` | — | Re-read `server.toml` and apply: `name` (beacon), `motd`, `motd_display_s`, `draw_distance_km`, `snapshot_budget_bytes`, `jitter_buffer_depth`, `jitter_buffer_adapt_window`, `jitter_buffer_hysteresis`, `jitter_buffer_jitter_multiplier`, `congestion_*`, `overrun_governor_enabled`, `overrun_high_watermark`, `overrun_low_watermark`, `overrun_min_snapshot_hz`, `overrun_max_ai_stride`, `overrun_budget_floor_bytes` (all take effect on the next sim tick; `max_catchup_ticks`, `sim_worker_threads`, `spatial_cell_size_km`, and the `test_spawn_*` keys require restart) |
+| `reload_config` | — | Re-read `server.toml` and apply: `name` (beacon), `motd`, `motd_display_s`, `entity_soft_cap`, `draw_distance_km`, `snapshot_budget_bytes`, `jitter_buffer_depth`, `jitter_buffer_adapt_window`, `jitter_buffer_hysteresis`, `jitter_buffer_jitter_multiplier`, `congestion_*`, `overrun_governor_enabled`, `overrun_high_watermark`, `overrun_low_watermark`, `overrun_min_snapshot_hz`, `overrun_max_ai_stride`, `overrun_budget_floor_bytes` (all take effect on the next sim tick; `max_catchup_ticks`, `sim_worker_threads`, `spatial_cell_size_km`, and the `test_spawn_*` keys require restart) |
 | `reload_banlist` | — | Re-read `security.banlist_path` from disk and apply immediately |
 | `reload_allowlist` | — | Re-read `security.allowlist_path` from disk and apply immediately |
 | `trace_start` | `[dir]` | Start recording each peer's accepted `MsgClientInput` to per-peer FLIT traces (`[trace] input_trace_dir` if `dir` omitted, else `traces/`); replay with `bot_swarm --pattern trace:<file>` |
@@ -1907,9 +1938,11 @@ for any authenticated caller.
 | `security.banlist_path` | On next `reload_banlist` command |
 | `security.allowlist_path` | On next `reload_allowlist` command |
 
-Most `[world]` fields are also hot-reloaded on the next sim tick — `draw_distance_km`,
-`snapshot_budget_bytes`, the `jitter_buffer_*` set, the `congestion_*` set, and the `overrun_*` set
-(see the `reload_config` command row above).
+Most `[world]` fields are also hot-reloaded on the next sim tick — `entity_soft_cap`,
+`draw_distance_km`, `snapshot_budget_bytes`, the `jitter_buffer_*` set, the `congestion_*` set, and
+the `overrun_*` set (see the `reload_config` command row above). `entity_soft_cap` re-derives its
+player reserve from the **running** `max_peers`, which is restart-only, so a reload cannot widen the
+reserve beyond what the server was started with.
 
 Fields that **require a restart** to take effect: `port`, `bind_address`, `max_peers`,
 `game_modes`, `password`, `discovery.*`, `mods.stack`, `rotation.*`, `world.sim_worker_threads`,

@@ -21,6 +21,8 @@
 "session.entitlement_required" = "This server requires premium content you do not own."
 "session.match_full" = "All teams are full."
 "session.bad_password" = "Incorrect server password."
+"session.server_full" = "The server world is full. Try again shortly."
+"session.no_airframe" = "This server has no aircraft available."
 
 # In-match text chat (#646).
 "chat.all_prompt" = "All message:"

@@ -68,6 +68,12 @@ struct ServerTickReport {
     double windowSeconds{0.0};
     int peers{0};
     uint32_t entities{0};
+    // World object ceiling + what it has refused (#1049). ADDITIVE, no schema bump (see the freeze
+    // note above): entity_soft_cap is 0 when uncapped, and a non-zero entity_cap_refusals is the
+    // machine-readable evidence that the cap is actually binding — the thing an operator could not
+    // see at all while the key was parsed but unwired.
+    uint32_t entitySoftCap{0};
+    uint64_t entityCapRefusals{0};
     std::array<Stats, kTickPhaseCount> phases{}; // indexed by TickPhase
     Stats total{};
     Stats other{};
@@ -121,7 +127,8 @@ inline ServerTickReport makeServerTickReport(const TickBudget& b, int peers, uin
                                              double interestScale = 1.0, double congestionMinSendHz = 60.0,
                                              double congestionRecoveredSendHz = 60.0, double congestionMaxLoss = 0.0,
                                              double wireOutKbs = 0.0, double wireInKbs = 0.0,
-                                             double wireOutPacketsPerSec = 0.0, int wirePeers = 0) {
+                                             double wireOutPacketsPerSec = 0.0, int wirePeers = 0,
+                                             uint32_t entitySoftCap = 0, uint64_t entityCapRefusals = 0) {
     ServerTickReport r;
     r.tickHz = b.tickHz;
     r.ticksSampled = b.ticksSampled;
@@ -144,6 +151,8 @@ inline ServerTickReport makeServerTickReport(const TickBudget& b, int peers, uin
     r.wireInKbs = wireInKbs;
     r.wireOutPacketsPerSec = wireOutPacketsPerSec;
     r.wirePeers = wirePeers;
+    r.entitySoftCap = entitySoftCap;
+    r.entityCapRefusals = entityCapRefusals;
     return r;
 }
 
@@ -164,14 +173,14 @@ inline std::string statJson(const char* name, const Stats& s, const std::string&
 inline std::string toJson(const ServerTickReport& r, int indentSpaces = 0) {
     const std::string pad(static_cast<std::size_t>(indentSpaces < 0 ? 0 : indentSpaces), ' ');
     const std::string in = pad + "  ";
-    char head[1024];
+    char head[1280];
     std::snprintf(head, sizeof(head),
                   "%s{\n"
                   "%s\"schema_version\": %d,\n"
                   "%s\"tick_hz\": %.4f,\n"
                   "%s\"ticks_sampled\": %llu, \"ticks_total\": %llu,\n"
                   "%s\"window_s\": %.4f,\n"
-                  "%s\"peers\": %d, \"entities\": %u,\n"
+                  "%s\"peers\": %d, \"entities\": %u, \"entity_soft_cap\": %u, \"entity_cap_refusals\": %llu,\n"
                   "%s\"load_factor\": %.4f, \"interest_scale\": %.4f, \"dropped_ticks\": %llu,\n"
                   "%s\"rss_kb\": %llu, \"rss_startup_kb\": %llu,\n"
                   "%s\"congestion_min_send_hz\": %.4f, \"congestion_recovered_send_hz\": %.4f, "
@@ -180,11 +189,12 @@ inline std::string toJson(const ServerTickReport& r, int indentSpaces = 0) {
                   "\"wire_peers\": %d, \"wire_out_kbs_per_client\": %.4f,\n",
                   pad.c_str(), in.c_str(), r.schemaVersion, in.c_str(), r.tickHz, in.c_str(),
                   static_cast<unsigned long long>(r.ticksSampled), static_cast<unsigned long long>(r.ticksTotal),
-                  in.c_str(), r.windowSeconds, in.c_str(), r.peers, r.entities, in.c_str(), r.loadFactor,
-                  r.interestScale, static_cast<unsigned long long>(r.droppedTicks), in.c_str(),
-                  static_cast<unsigned long long>(r.rssKb), static_cast<unsigned long long>(r.rssStartupKb), in.c_str(),
-                  r.congestionMinSendHz, r.congestionRecoveredSendHz, r.congestionMaxLoss, in.c_str(), r.wireOutKbs,
-                  r.wireInKbs, r.wireOutPacketsPerSec, r.wirePeers, r.wireOutKbsPerClient());
+                  in.c_str(), r.windowSeconds, in.c_str(), r.peers, r.entities, r.entitySoftCap,
+                  static_cast<unsigned long long>(r.entityCapRefusals), in.c_str(), r.loadFactor, r.interestScale,
+                  static_cast<unsigned long long>(r.droppedTicks), in.c_str(), static_cast<unsigned long long>(r.rssKb),
+                  static_cast<unsigned long long>(r.rssStartupKb), in.c_str(), r.congestionMinSendHz,
+                  r.congestionRecoveredSendHz, r.congestionMaxLoss, in.c_str(), r.wireOutKbs, r.wireInKbs,
+                  r.wireOutPacketsPerSec, r.wirePeers, r.wireOutKbsPerClient());
     std::string out = head;
     out += detail::statJson("tick_ms", r.total, in) + ",\n";
     for (int i = 0; i < kTickPhaseCount; ++i) {
@@ -244,6 +254,14 @@ inline bool fromJson(std::string_view json, ServerTickReport& out) {
     }
     if (auto v = detail::findNumber(json, "entities")) {
         out.entities = static_cast<uint32_t>(*v);
+        any = true;
+    }
+    if (auto v = detail::findNumber(json, "entity_soft_cap")) {
+        out.entitySoftCap = static_cast<uint32_t>(*v);
+        any = true;
+    }
+    if (auto v = detail::findNumber(json, "entity_cap_refusals")) {
+        out.entityCapRefusals = static_cast<uint64_t>(*v);
         any = true;
     }
     if (auto v = detail::findNumber(json, "load_factor")) {
