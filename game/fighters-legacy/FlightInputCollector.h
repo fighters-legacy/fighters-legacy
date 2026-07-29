@@ -3,6 +3,7 @@
 
 #include "IClock.h"
 #include "input/AxisConfig.h"    // fl::AxisConfigTable, fl::AxisConfig — also pulls in IInput.h
+#include "input/BindingQuery.h"  // fl::actionDown / fl::ActionEdgeTracker
 #include "input/InputBindings.h" // fl::InputBindings, fl::Binding, fl::BindingSource, fl::InputAction
 #include "net/GameProtocol.h"
 
@@ -33,9 +34,11 @@ class FlightInputCollector {
     // frame. The AXES keep working — the menu is non-modal on purpose, because suppressing flight
     // input would leave throttle at 0, which is what opening the console already does and is exactly
     // what a combat radio menu must not do. Only the buttons the overlay consumes are gated.
-    // textEntry: a text field owns the keyboard this frame (the chat input box, #646). The whole
-    // KEYBOARD control block is suppressed (Space would otherwise fire the gun while you type), but the
-    // gamepad and HOTAS axes stay live and the throttle holds — a partner can keep flying while chatting.
+    // textEntry: a text field owns the keyboard this frame (the chat input box, #646). Every
+    // KEYBOARD-source binding is suppressed (Space would otherwise fire the gun while you type), but
+    // the gamepad and HOTAS axes stay live and the throttle holds — a partner keeps flying while
+    // chatting. The suppression is per binding SOURCE, not per input block, so a control bound to
+    // both a key and a pad button keeps working from the pad.
     std::optional<MsgClientInput> poll(const SimRenderBridge& bridge, CameraInput& camInput, const GameConsole& console,
                                        IInput& input, IJoystick* joystick, const ControlsSettings& cs,
                                        bool uiFocused = false, bool textEntry = false);
@@ -68,8 +71,9 @@ class FlightInputCollector {
         return m_hookDown;
     }
 
-    // Master arm (#641): ARM/SAFE, toggled by V. When SAFE, poll() suppresses the gun and fire-store
-    // trigger bits — the safety is real, not a cosmetic HUD flag. Defaults to ARM.
+    // Master arm (#641): ARM/SAFE, toggled by InputAction::MasterArm. When SAFE, poll() suppresses
+    // the gun and fire-store trigger bits — the safety is real, not a cosmetic HUD flag.
+    // Defaults to ARM.
     [[nodiscard]] bool masterArm() const noexcept {
         return m_masterArm;
     }
@@ -81,8 +85,9 @@ class FlightInputCollector {
 
     void setClock(const IClock& clock);
 
-    // Apply a loaded InputBindings table so gamepad axis mapping is user-configurable.
-    // Default-constructed InputBindings uses the built-in alt axis defaults.
+    // Apply a loaded InputBindings table. EVERY control this collector reads resolves through it
+    // (#1050) — keyboard, mouse, gamepad — so this is what makes the whole flight surface
+    // rebindable, not just the gamepad axis mapping it used to cover.
     void setBindings(InputBindings bindings);
 
     // Apply a loaded AxisConfigTable for per-axis deadzone/curve/invert/scale.
@@ -93,43 +98,34 @@ class FlightInputCollector {
     uint32_t m_inputSeq{0};
     uint8_t m_stationCount{0};      // stations on the player's aircraft; 0 = unknown
     uint8_t m_selectedStation{255}; // 255 = none
-    bool m_prevNextKey{false};      // edge detectors for the cycle keys
-    bool m_prevPrevKey{false};
-    // Radar mode (#526/#528), cycled with R: Silent/Search/TWS/STT. Starts at TWS (the server spawn
-    // default) and sends 255 (keep) until the player first touches it, so the spawn mode is respected.
+    // ONE edge tracker for every latched control (#1050). Each control used to carry its own
+    // `m_prevXKey` bool, and the gamepad path carried a SECOND copy of the same edge for the same
+    // action (m_prevPadGear/m_prevPadFlap/m_prevPadNext/m_prevPadPrev) — two edge detectors for one
+    // switch. Resolving an action across all its slots collapses both into a single state.
+    ActionEdgeTracker m_edges{};
+    // Radar mode (#526/#528): Silent/Search/TWS/STT. Starts at TWS (the server spawn default) and
+    // sends 255 (keep) until the player first touches it, so the spawn mode is respected.
     uint8_t m_radarMode{2}; // fl::sensor::RadarMode::Tws ordinal
     bool m_radarModeTouched{false};
-    bool m_prevRadarKey{false};
-    // Electronic warfare (#529): E dispenses (level bit, server edge-detects), J toggles the jammer.
-    bool m_ecmOn{false};
-    bool m_prevEcmKey{false};
-    bool m_masterArm{true}; // #641: ARM by default; V toggles to SAFE (gates the fire bits)
-    bool m_prevArmKey{false};
+    bool m_ecmOn{false};    // #529: the jammer latch
+    bool m_masterArm{true}; // #641: ARM by default; MasterArm toggles to SAFE (gates the fire bits)
 
     // ── articulation switches (#639) ─────────────────────────────────────────
     // Latched client-side and sent as ABSOLUTE STATE every packet, so a dropped packet costs one tick
     // of lag rather than leaving the aircraft in the wrong configuration for the rest of the sortie.
     // Gear starts DOWN because that is the configuration an aircraft is parked in.
     bool m_gearDown{true};
-    bool m_prevGearKey{false};
     bool m_hookDown{false};
-    bool m_prevHookKey{false};
     bool m_canopyOpen{false};
-    bool m_prevCanopyKey{false};
     // Flap detents: clean / manoeuvre / full, the three positions a real flap lever has. A continuous
     // axis would be a worse control on a keyboard and matches no cockpit.
     uint8_t m_flapDetent{0};
-    bool m_prevFlapKey{false};
-    bool m_prevPadGear{false};
-    bool m_prevPadFlap{false};
-    float m_speedbrake{0.f};   // held, not latched: the airbrake is a momentary control
-    bool m_prevPadNext{false}; // and for the gamepad D-pad
-    bool m_prevPadPrev{false};
+    float m_speedbrake{0.f}; // held, not latched: the airbrake is a momentary control
     const IClock* m_clock{&SystemClock::instance()};
     std::chrono::steady_clock::time_point m_lastInputTime{};
     bool m_weaponFired{false};
 
-    InputBindings m_bindings{};     // default: built-in alt axis defaults
+    InputBindings m_bindings{};     // default: the shipped key map
     AxisConfigTable m_axisConfig{}; // default: deadzone=0.1, Linear, no invert, scale=1
 };
 

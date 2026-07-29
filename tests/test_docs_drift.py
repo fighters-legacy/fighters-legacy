@@ -281,3 +281,47 @@ def test_checks_run_against_the_real_tree_without_crashing(check_name):
     # Whatever the verdict, the extractor floors must have been met: an errored check
     # means the pattern broke against the current tree, which is a bug in this script.
     assert result.errors == [], result.errors
+
+
+# ---- input actions -----------------------------------------------------------------------------
+
+INPUT_ACTION_SRC = """\
+enum class InputAction : uint32_t {
+    // Continuous axes
+    PitchAxis,
+    RollAxis,
+
+    // Master arm (#641). The old `FireMissile` name and `InputAction::MasterArm` appear in this
+    // comment on purpose: prose inside the enum must not be mistaken for enumerators.
+    MasterArm,
+    FireStore,
+
+    Count
+};
+"""
+
+
+def test_input_action_names_reads_the_enum_and_ignores_its_comments():
+    names = dd._input_action_names(INPUT_ACTION_SRC)
+    assert names == {"PitchAxis", "RollAxis", "MasterArm", "FireStore"}
+    assert "Count" not in names
+    assert "FireMissile" not in names  # named only in a comment
+
+
+def test_input_action_names_returns_empty_when_the_enum_is_absent():
+    assert dd._input_action_names("enum class Other : uint8_t { A, B };\n") == set()
+
+
+def test_input_actions_check_flags_an_undocumented_action(tmp_path, monkeypatch):
+    """An action added to the enum but never written into the key map is the drift to catch."""
+
+    def fake_read(rel_path: str) -> str:
+        if rel_path.endswith("InputAction.h"):
+            return INPUT_ACTION_SRC
+        return "| Fire the gun | `FireStore` |\n| Pitch | `PitchAxis` |\n"
+
+    monkeypatch.setattr(dd, "read", fake_read)
+    monkeypatch.setattr(dd, "floor_check", lambda *a, **k: True)
+    result = dd.check_input_actions()
+    assert result.code_only == {"RollAxis", "MasterArm"}
+    assert not result.ok

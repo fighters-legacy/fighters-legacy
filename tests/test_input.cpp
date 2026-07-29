@@ -120,15 +120,128 @@ TEST_CASE("AxisConfigTable TOML roundtrip", "[axis_config]") {
 
 TEST_CASE("InputBindings default constructor applies defaults", "[bindings]") {
     InputBindings b;
-    // Keyboard primary: PitchUp bound to S
+    // Keyboard primary: the arrows fly the aircraft (#1050 — the table used to claim S/W/A/D while
+    // the game read the arrows, and claim the arrows for the cockpit view pan at the same time).
     Binding pitch = b.get(InputAction::PitchUp);
     CHECK(pitch.source == BindingSource::Keyboard);
-    CHECK(pitch.id == static_cast<uint32_t>(Key::S));
+    CHECK(pitch.id == static_cast<uint32_t>(Key::ArrowDown));
+    CHECK(b.get(InputAction::PitchDown).id == static_cast<uint32_t>(Key::ArrowUp));
+    CHECK(b.get(InputAction::RollLeft).id == static_cast<uint32_t>(Key::ArrowLeft));
+    CHECK(b.get(InputAction::RollRight).id == static_cast<uint32_t>(Key::ArrowRight));
 
-    // Gamepad alt: PitchAxis bound to RightY
-    Binding pitchAxis = b.get(InputAction::PitchAxis, true);
+    // Secondary slot: the gun is Space AND the left mouse button. Two slots could not hold both
+    // plus the pad, which is how Space ended up hardcoded in FlightInputCollector.
+    CHECK(b.get(InputAction::FireWeapon).id == static_cast<uint32_t>(Key::Space));
+    CHECK(b.get(InputAction::FireWeapon, BindingSlot::Secondary).source == BindingSource::MouseButton);
+    CHECK(b.get(InputAction::FireWeapon, BindingSlot::Secondary).id == static_cast<uint32_t>(MouseButton::Left));
+
+    // Gamepad slot: PitchAxis bound to RightY
+    Binding pitchAxis = b.get(InputAction::PitchAxis, BindingSlot::Gamepad);
     CHECK(pitchAxis.source == BindingSource::GamepadAxis);
     CHECK(pitchAxis.id == static_cast<uint32_t>(GamepadAxis::RightY));
+}
+
+// ---------------------------------------------------------------------------
+// THE GATE #1050 EXISTS FOR: the shipped defaults are held to the same conflict rule as a user
+// rebind. Nothing applied conflictsWith() to applyDefaults(), so V shipped bound to BOTH the radio
+// push-to-talk and master arm — keying the mic safed the guns, and rebinding either did not help.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("InputBindings: the shipped defaults contain no conflicts", "[bindings]") {
+    const InputBindings b;
+    const auto conflicts = b.findConflicts();
+    for (const auto& c : conflicts) {
+        UNSCOPED_INFO("default conflict: " << InputBindings::actionName(c.a) << " (" << InputBindings::slotName(c.slotA)
+                                           << ") vs " << InputBindings::actionName(c.b) << " ("
+                                           << InputBindings::slotName(c.slotB) << ")");
+    }
+    CHECK(conflicts.empty());
+}
+
+TEST_CASE("InputBindings: every action a default binds resolves back through its own name", "[bindings]") {
+    // A default on a key with no name would serialize as "Unknown" and be silently dropped on the
+    // next load — the defaults would then differ between a fresh install and a second launch.
+    const InputBindings b;
+    const std::string toml = b.serialize();
+    CHECK(toml.find("\"Unknown\"") == std::string::npos);
+}
+
+TEST_CASE("InputBindings: V is push-to-talk and nothing else live at the same time (#1050)", "[bindings]") {
+    const InputBindings b;
+    CHECK(b.get(InputAction::PushToTalkPrimary).id == static_cast<uint32_t>(Key::V));
+    // Master arm moved off V and now has a binding of its own.
+    CHECK(b.get(InputAction::MasterArm).id != static_cast<uint32_t>(Key::V));
+    CHECK_FALSE(b.get(InputAction::MasterArm).isNone());
+    CHECK_FALSE(b.conflictsWith(InputAction::MasterArm, b.get(InputAction::MasterArm)).has_value());
+    CHECK_FALSE(b.conflictsWith(InputAction::PushToTalkPrimary, b.get(InputAction::PushToTalkPrimary)).has_value());
+}
+
+TEST_CASE("InputBindings: sharing a key across disjoint contexts is not a conflict", "[bindings]") {
+    const InputBindings b;
+    // Space is the gun while flying and the replay pause key while watching a recording. There is
+    // no session in which both are read, so the checker must NOT flag it — a checker that flagged
+    // every reuse would have been turned off, which is the failure mode after "check nothing".
+    CHECK(b.get(InputAction::FireWeapon).id == b.get(InputAction::ReplayPauseToggle).id);
+    CHECK_FALSE(contextsOverlap(InputBindings::contexts(InputAction::FireWeapon),
+                                InputBindings::contexts(InputAction::ReplayPauseToggle)));
+    CHECK_FALSE(b.conflictsWith(InputAction::ReplayPauseToggle, b.get(InputAction::FireWeapon)).has_value());
+
+    // ...but sharing a key inside ONE context still is. This is the V case.
+    InputBindings clash;
+    clash.set(InputAction::MasterArm, clash.get(InputAction::PushToTalkPrimary));
+    auto c = clash.conflictsWith(InputAction::MasterArm, clash.get(InputAction::MasterArm));
+    REQUIRE(c.has_value());
+    CHECK(*c == InputAction::PushToTalkPrimary);
+    CHECK_FALSE(clash.findConflicts().empty());
+}
+
+TEST_CASE("InputBindings: no live control shares a key with the free camera", "[bindings]") {
+    // The free camera is reachable in every session mode, including while flying, so its movement
+    // keys overlap everything. Before #1050 they were raw SDL scancodes and the checker could not
+    // see that E both panned the camera up and dispensed countermeasures.
+    const InputBindings b;
+    const InputAction cam[] = {InputAction::FreeCamForward, InputAction::FreeCamBack,   InputAction::FreeCamLeft,
+                               InputAction::FreeCamRight,   InputAction::FreeCamUp,     InputAction::FreeCamDown,
+                               InputAction::FreeCamFaster,  InputAction::FreeCamSlower, InputAction::FreeCamReset};
+    for (InputAction a : cam) {
+        INFO("free-camera action " << InputBindings::actionName(a));
+        CHECK_FALSE(b.get(a).isNone());
+        CHECK_FALSE(b.conflictsWith(a, b.get(a)).has_value());
+    }
+}
+
+TEST_CASE("InputBindings: three slots round-trip independently", "[bindings]") {
+    InputBindings b;
+    b.set(InputAction::Airbrake, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Backslash), false});
+    b.set(InputAction::Airbrake, {BindingSource::MouseButton, static_cast<uint32_t>(MouseButton::Middle), false},
+          BindingSlot::Secondary);
+    b.set(InputAction::Airbrake, {BindingSource::GamepadButton, static_cast<uint32_t>(GamepadButton::Y), false},
+          BindingSlot::Gamepad);
+
+    InputBindings b2;
+    REQUIRE(b2.deserialize(b.serialize()));
+    CHECK(b2.get(InputAction::Airbrake).id == static_cast<uint32_t>(Key::Backslash));
+    CHECK(b2.get(InputAction::Airbrake, BindingSlot::Secondary).source == BindingSource::MouseButton);
+    CHECK(b2.get(InputAction::Airbrake, BindingSlot::Gamepad).id == static_cast<uint32_t>(GamepadButton::Y));
+}
+
+TEST_CASE("InputBindings: the serialized table carries its format version", "[bindings]") {
+    // A stored bindings.toml is a full table, not a patch, so an unversioned file from an older
+    // build would load the OLD defaults back over the new ones — silently restoring the very
+    // collisions #1050 removed, for every player who never customised anything.
+    const InputBindings b;
+    CHECK(InputBindings::fileFormatVersion(b.serialize()) == InputBindings::kFormatVersion);
+    CHECK(InputBindings::fileFormatVersion("[primary]\nPitchUp = { source = \"Keyboard\", id = \"S\" }\n") == 0);
+    CHECK(InputBindings::fileFormatVersion("not valid toml }{") == 0);
+}
+
+TEST_CASE("InputBindings: a legacy [alt] section still loads as the gamepad slot", "[bindings]") {
+    // [alt] was the gamepad section before the third slot existed. A bindings.toml written by an
+    // older build must not silently lose its pad bindings.
+    InputBindings b;
+    REQUIRE(b.deserialize("[alt]\nAirbrake = { source = \"GamepadButton\", id = \"X\" }\n"));
+    CHECK(b.get(InputAction::Airbrake, BindingSlot::Gamepad).source == BindingSource::GamepadButton);
+    CHECK(b.get(InputAction::Airbrake, BindingSlot::Gamepad).id == static_cast<uint32_t>(GamepadButton::X));
 }
 
 // ---------------------------------------------------------------------------
@@ -158,8 +271,8 @@ TEST_CASE("InputBindings detects conflict on duplicate binding", "[bindings]") {
     InputBindings b;
     b.applyDefaults();
 
-    // Assign the same key that PitchUp already has (S) to RollLeft
-    Binding s{BindingSource::Keyboard, static_cast<uint32_t>(Key::S), false};
+    // Assign the key PitchUp already has (ArrowDown) to RollLeft — both are Flight-context.
+    Binding s{BindingSource::Keyboard, static_cast<uint32_t>(Key::ArrowDown), false};
     auto conflict = b.conflictsWith(InputAction::RollLeft, s);
     REQUIRE(conflict.has_value());
     CHECK(*conflict == InputAction::PitchUp);
@@ -170,7 +283,7 @@ TEST_CASE("InputBindings no conflict after clearing the conflicting action", "[b
     b.applyDefaults();
     b.clear(InputAction::PitchUp);
 
-    Binding s{BindingSource::Keyboard, static_cast<uint32_t>(Key::S), false};
+    Binding s{BindingSource::Keyboard, static_cast<uint32_t>(Key::ArrowDown), false};
     CHECK_FALSE(b.conflictsWith(InputAction::RollLeft, s).has_value());
 }
 
@@ -181,8 +294,8 @@ TEST_CASE("InputBindings no conflict for None binding", "[bindings]") {
 
 TEST_CASE("InputBindings does not conflict with its own action", "[bindings]") {
     InputBindings b;
-    // PitchUp is bound to S; asking conflictsWith(PitchUp, S) should return nullopt
-    Binding s{BindingSource::Keyboard, static_cast<uint32_t>(Key::S), false};
+    // PitchUp is bound to ArrowDown; asking conflictsWith(PitchUp, ArrowDown) returns nullopt
+    Binding s{BindingSource::Keyboard, static_cast<uint32_t>(Key::ArrowDown), false};
     CHECK_FALSE(b.conflictsWith(InputAction::PitchUp, s).has_value());
 }
 
@@ -200,7 +313,7 @@ TEST_CASE("InputBindings TOML serialize then deserialize reproduces all bindings
     // Clear loaded first so we can confirm deserialize fills it in
     for (int i = 0; i < InputBindings::kActionCount; ++i) {
         loaded.clear(static_cast<InputAction>(i));
-        loaded.clear(static_cast<InputAction>(i), true);
+        loaded.clear(static_cast<InputAction>(i), BindingSlot::Gamepad);
     }
     REQUIRE(loaded.deserialize(toml));
 
@@ -213,8 +326,8 @@ TEST_CASE("InputBindings TOML serialize then deserialize reproduces all bindings
         CHECK(a.id == b.id);
         CHECK(a.axisNegative == b.axisNegative);
 
-        Binding aAlt = original.get(action, true);
-        Binding bAlt = loaded.get(action, true);
+        Binding aAlt = original.get(action, BindingSlot::Gamepad);
+        Binding bAlt = loaded.get(action, BindingSlot::Gamepad);
         INFO("Alt binding mismatch for action " << i);
         CHECK(aAlt.source == bAlt.source);
         CHECK(aAlt.id == bAlt.id);
@@ -245,7 +358,7 @@ TEST_CASE("InputBindings roundtrips GamepadButton values not in defaults", "[bin
     InputBindings b;
     for (int i = 0; i < InputBindings::kActionCount; ++i) {
         b.clear(static_cast<InputAction>(i));
-        b.clear(static_cast<InputAction>(i), true);
+        b.clear(static_cast<InputAction>(i), BindingSlot::Gamepad);
     }
     b.set(InputAction::RollLeft, {BindingSource::GamepadButton, static_cast<uint32_t>(GamepadButton::X), false});
     b.set(InputAction::RollRight, {BindingSource::GamepadButton, static_cast<uint32_t>(GamepadButton::Y), false});
@@ -260,7 +373,7 @@ TEST_CASE("InputBindings roundtrips GamepadButton values not in defaults", "[bin
     InputBindings b2;
     for (int i = 0; i < InputBindings::kActionCount; ++i) {
         b2.clear(static_cast<InputAction>(i));
-        b2.clear(static_cast<InputAction>(i), true);
+        b2.clear(static_cast<InputAction>(i), BindingSlot::Gamepad);
     }
     REQUIRE(b2.deserialize(b.serialize()));
     CHECK(b2.get(InputAction::RollLeft).id == static_cast<uint32_t>(GamepadButton::X));
@@ -286,19 +399,19 @@ TEST_CASE("InputBindings roundtrips GamepadAxis RightY and TriggerRight with axi
 
 TEST_CASE("InputBindings roundtrips MouseButton Middle", "[bindings]") {
     InputBindings b;
-    b.set(InputAction::FireMissile, {BindingSource::MouseButton, static_cast<uint32_t>(MouseButton::Middle), false});
+    b.set(InputAction::FireStore, {BindingSource::MouseButton, static_cast<uint32_t>(MouseButton::Middle), false});
 
     InputBindings b2;
     REQUIRE(b2.deserialize(b.serialize()));
-    CHECK(b2.get(InputAction::FireMissile).source == BindingSource::MouseButton);
-    CHECK(b2.get(InputAction::FireMissile).id == static_cast<uint32_t>(MouseButton::Middle));
+    CHECK(b2.get(InputAction::FireStore).source == BindingSource::MouseButton);
+    CHECK(b2.get(InputAction::FireStore).id == static_cast<uint32_t>(MouseButton::Middle));
 }
 
 TEST_CASE("InputBindings roundtrips keyboard keys not in default bindings", "[bindings]") {
     InputBindings b;
     for (int i = 0; i < InputBindings::kActionCount; ++i) {
         b.clear(static_cast<InputAction>(i));
-        b.clear(static_cast<InputAction>(i), true);
+        b.clear(static_cast<InputAction>(i), BindingSlot::Gamepad);
     }
     b.set(InputAction::ViewUp, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F1), false});
     b.set(InputAction::ViewDown, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F12), false});
@@ -307,12 +420,12 @@ TEST_CASE("InputBindings roundtrips keyboard keys not in default bindings", "[bi
     b.set(InputAction::LandingGear, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Enter), false});
     b.set(InputAction::Flaps, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Backspace), false});
     b.set(InputAction::Pause, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Insert), false});
-    b.set(InputAction::Menu, {BindingSource::Keyboard, static_cast<uint32_t>(Key::PageUp), false});
+    b.set(InputAction::CommsMenu, {BindingSource::Keyboard, static_cast<uint32_t>(Key::PageUp), false});
 
     InputBindings b2;
     for (int i = 0; i < InputBindings::kActionCount; ++i) {
         b2.clear(static_cast<InputAction>(i));
-        b2.clear(static_cast<InputAction>(i), true);
+        b2.clear(static_cast<InputAction>(i), BindingSlot::Gamepad);
     }
     REQUIRE(b2.deserialize(b.serialize()));
     CHECK(b2.get(InputAction::ViewUp).id == static_cast<uint32_t>(Key::F1));
@@ -322,7 +435,7 @@ TEST_CASE("InputBindings roundtrips keyboard keys not in default bindings", "[bi
     CHECK(b2.get(InputAction::LandingGear).id == static_cast<uint32_t>(Key::Enter));
     CHECK(b2.get(InputAction::Flaps).id == static_cast<uint32_t>(Key::Backspace));
     CHECK(b2.get(InputAction::Pause).id == static_cast<uint32_t>(Key::Insert));
-    CHECK(b2.get(InputAction::Menu).id == static_cast<uint32_t>(Key::PageUp));
+    CHECK(b2.get(InputAction::CommsMenu).id == static_cast<uint32_t>(Key::PageUp));
 }
 
 // ---------------------------------------------------------------------------
@@ -358,7 +471,7 @@ TEST_CASE("InputBindings roundtrips all uncovered keyboard letter and digit keys
     InputBindings b;
     for (int i = 0; i < InputBindings::kActionCount; ++i) {
         b.clear(static_cast<InputAction>(i));
-        b.clear(static_cast<InputAction>(i), true);
+        b.clear(static_cast<InputAction>(i), BindingSlot::Gamepad);
     }
 
     // Primary: uncovered letter keys B C H I J K L M N O P R T U V X Y Z
@@ -377,7 +490,7 @@ TEST_CASE("InputBindings roundtrips all uncovered keyboard letter and digit keys
     b.set(InputAction::Airbrake, {BindingSource::Keyboard, static_cast<uint32_t>(Key::T), false});
     b.set(InputAction::Afterburner, {BindingSource::Keyboard, static_cast<uint32_t>(Key::U), false});
     b.set(InputAction::FireWeapon, {BindingSource::Keyboard, static_cast<uint32_t>(Key::V), false});
-    b.set(InputAction::FireMissile, {BindingSource::Keyboard, static_cast<uint32_t>(Key::X), false});
+    b.set(InputAction::FireStore, {BindingSource::Keyboard, static_cast<uint32_t>(Key::X), false});
     b.set(InputAction::NextWeapon, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Y), false});
     b.set(InputAction::PrevWeapon, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Z), false});
     // Digit keys 0, 3-9 (1 and 2 are in defaults)
@@ -388,55 +501,75 @@ TEST_CASE("InputBindings roundtrips all uncovered keyboard letter and digit keys
     b.set(InputAction::LandingGear, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Num6), false});
     b.set(InputAction::Flaps, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Num7), false});
     b.set(InputAction::Pause, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Num8), false});
-    b.set(InputAction::Menu, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Num9), false});
+    b.set(InputAction::CommsMenu, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Num9), false});
 
     // Alt: uncovered navigation / F-key / modifier keys
-    b.set(InputAction::PitchAxis, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Delete), false}, true);
-    b.set(InputAction::RollAxis, {BindingSource::Keyboard, static_cast<uint32_t>(Key::ArrowLeft), false}, true);
-    b.set(InputAction::YawAxis, {BindingSource::Keyboard, static_cast<uint32_t>(Key::ArrowRight), false}, true);
-    b.set(InputAction::ThrottleAxis, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Home), false}, true);
-    b.set(InputAction::PitchUp, {BindingSource::Keyboard, static_cast<uint32_t>(Key::End), false}, true);
-    b.set(InputAction::PitchDown, {BindingSource::Keyboard, static_cast<uint32_t>(Key::PageDown), false}, true);
-    b.set(InputAction::RollLeft, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F2), false}, true);
-    b.set(InputAction::RollRight, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F3), false}, true);
-    b.set(InputAction::YawLeft, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F4), false}, true);
-    b.set(InputAction::YawRight, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F5), false}, true);
-    b.set(InputAction::ThrottleUp, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F6), false}, true);
-    b.set(InputAction::ThrottleDown, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F7), false}, true);
-    b.set(InputAction::Airbrake, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F8), false}, true);
-    b.set(InputAction::Afterburner, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F9), false}, true);
-    b.set(InputAction::FireWeapon, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F10), false}, true);
-    b.set(InputAction::FireMissile, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F11), false}, true);
-    b.set(InputAction::NextWeapon, {BindingSource::Keyboard, static_cast<uint32_t>(Key::RightShift), false}, true);
-    b.set(InputAction::PrevWeapon, {BindingSource::Keyboard, static_cast<uint32_t>(Key::RightCtrl), false}, true);
-    b.set(InputAction::ViewUp, {BindingSource::Keyboard, static_cast<uint32_t>(Key::LeftAlt), false}, true);
+    b.set(InputAction::PitchAxis, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Delete), false},
+          BindingSlot::Gamepad);
+    b.set(InputAction::RollAxis, {BindingSource::Keyboard, static_cast<uint32_t>(Key::ArrowLeft), false},
+          BindingSlot::Gamepad);
+    b.set(InputAction::YawAxis, {BindingSource::Keyboard, static_cast<uint32_t>(Key::ArrowRight), false},
+          BindingSlot::Gamepad);
+    b.set(InputAction::ThrottleAxis, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Home), false},
+          BindingSlot::Gamepad);
+    b.set(InputAction::PitchUp, {BindingSource::Keyboard, static_cast<uint32_t>(Key::End), false},
+          BindingSlot::Gamepad);
+    b.set(InputAction::PitchDown, {BindingSource::Keyboard, static_cast<uint32_t>(Key::PageDown), false},
+          BindingSlot::Gamepad);
+    b.set(InputAction::RollLeft, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F2), false},
+          BindingSlot::Gamepad);
+    b.set(InputAction::RollRight, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F3), false},
+          BindingSlot::Gamepad);
+    b.set(InputAction::YawLeft, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F4), false}, BindingSlot::Gamepad);
+    b.set(InputAction::YawRight, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F5), false},
+          BindingSlot::Gamepad);
+    b.set(InputAction::ThrottleUp, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F6), false},
+          BindingSlot::Gamepad);
+    b.set(InputAction::ThrottleDown, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F7), false},
+          BindingSlot::Gamepad);
+    b.set(InputAction::Airbrake, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F8), false},
+          BindingSlot::Gamepad);
+    b.set(InputAction::Afterburner, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F9), false},
+          BindingSlot::Gamepad);
+    b.set(InputAction::FireWeapon, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F10), false},
+          BindingSlot::Gamepad);
+    b.set(InputAction::FireStore, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F11), false},
+          BindingSlot::Gamepad);
+    b.set(InputAction::NextWeapon, {BindingSource::Keyboard, static_cast<uint32_t>(Key::RightShift), false},
+          BindingSlot::Gamepad);
+    b.set(InputAction::PrevWeapon, {BindingSource::Keyboard, static_cast<uint32_t>(Key::RightCtrl), false},
+          BindingSlot::Gamepad);
+    b.set(InputAction::ViewUp, {BindingSource::Keyboard, static_cast<uint32_t>(Key::LeftAlt), false},
+          BindingSlot::Gamepad);
     // MouseButton Left and Right (also exercises mousButtonName / mousButtonFromName)
-    b.set(InputAction::ViewLeft, {BindingSource::MouseButton, static_cast<uint32_t>(MouseButton::Left), false}, true);
-    b.set(InputAction::ViewRight, {BindingSource::MouseButton, static_cast<uint32_t>(MouseButton::Right), false}, true);
+    b.set(InputAction::ViewLeft, {BindingSource::MouseButton, static_cast<uint32_t>(MouseButton::Left), false},
+          BindingSlot::Gamepad);
+    b.set(InputAction::ViewRight, {BindingSource::MouseButton, static_cast<uint32_t>(MouseButton::Right), false},
+          BindingSlot::Gamepad);
 
     InputBindings b2;
     for (int i = 0; i < InputBindings::kActionCount; ++i) {
         b2.clear(static_cast<InputAction>(i));
-        b2.clear(static_cast<InputAction>(i), true);
+        b2.clear(static_cast<InputAction>(i), BindingSlot::Gamepad);
     }
     REQUIRE(b2.deserialize(b.serialize()));
 
     // Spot-check a sample of the round-tripped bindings
     CHECK(b2.get(InputAction::PitchAxis).id == static_cast<uint32_t>(Key::B));
     CHECK(b2.get(InputAction::ThrottleUp).id == static_cast<uint32_t>(Key::P));
-    CHECK(b2.get(InputAction::Menu).id == static_cast<uint32_t>(Key::Num9));
-    CHECK(b2.get(InputAction::PitchAxis, true).id == static_cast<uint32_t>(Key::Delete));
-    CHECK(b2.get(InputAction::FireMissile, true).id == static_cast<uint32_t>(Key::F11));
-    CHECK(b2.get(InputAction::ViewLeft, true).source == BindingSource::MouseButton);
-    CHECK(b2.get(InputAction::ViewLeft, true).id == static_cast<uint32_t>(MouseButton::Left));
-    CHECK(b2.get(InputAction::ViewRight, true).id == static_cast<uint32_t>(MouseButton::Right));
+    CHECK(b2.get(InputAction::CommsMenu).id == static_cast<uint32_t>(Key::Num9));
+    CHECK(b2.get(InputAction::PitchAxis, BindingSlot::Gamepad).id == static_cast<uint32_t>(Key::Delete));
+    CHECK(b2.get(InputAction::FireStore, BindingSlot::Gamepad).id == static_cast<uint32_t>(Key::F11));
+    CHECK(b2.get(InputAction::ViewLeft, BindingSlot::Gamepad).source == BindingSource::MouseButton);
+    CHECK(b2.get(InputAction::ViewLeft, BindingSlot::Gamepad).id == static_cast<uint32_t>(MouseButton::Left));
+    CHECK(b2.get(InputAction::ViewRight, BindingSlot::Gamepad).id == static_cast<uint32_t>(MouseButton::Right));
 }
 
 TEST_CASE("InputBindings conflictsWith detects alt-slot conflict", "[bindings]") {
     InputBindings b;
     b.applyDefaults();
     // PitchAxis alt is RightY gamepad axis — try to put same binding in RollAxis alt
-    Binding altPitch = b.get(InputAction::PitchAxis, true);
+    Binding altPitch = b.get(InputAction::PitchAxis, BindingSlot::Gamepad);
     auto conflict = b.conflictsWith(InputAction::RollAxis, altPitch);
     REQUIRE(conflict.has_value());
     CHECK(*conflict == InputAction::PitchAxis);
@@ -511,20 +644,22 @@ TEST_CASE("InputBindings: camera + view-family actions have their #689 defaults"
     CHECK(b.get(InputAction::NextTarget).id == static_cast<uint32_t>(Key::N));
     CHECK(b.get(InputAction::PrevTarget).id == static_cast<uint32_t>(Key::P));
     // Later epic-587 actions keep their reserved defaults.
-    CHECK(b.get(InputAction::MasterArm).id == static_cast<uint32_t>(Key::V));
+    CHECK(b.get(InputAction::MasterArm).id == static_cast<uint32_t>(Key::Num4));
     CHECK(b.get(InputAction::MfdPage).id == static_cast<uint32_t>(Key::O));
     CHECK(b.get(InputAction::MfdRange).id == static_cast<uint32_t>(Key::Num3));
     CHECK(b.get(InputAction::NvgToggle).id == static_cast<uint32_t>(Key::F7));
     CHECK(b.get(InputAction::AutopilotAltHold).id == static_cast<uint32_t>(Key::F9));
-    // View* now have cockpit-pan defaults instead of being unbound.
-    CHECK(b.get(InputAction::ViewLeft).id == static_cast<uint32_t>(Key::ArrowLeft));
-    CHECK(b.get(InputAction::ViewRight).id == static_cast<uint32_t>(Key::ArrowRight));
-    CHECK(b.get(InputAction::ViewUp).id == static_cast<uint32_t>(Key::PageUp));
-    CHECK(b.get(InputAction::ViewDown).id == static_cast<uint32_t>(Key::PageDown));
+    // The cockpit pan is the keypad cross (#1050): the arrows fly the aircraft, and a key that both
+    // rolled and panned was two actions on one input, not a feature.
+    CHECK(b.get(InputAction::ViewLeft).id == static_cast<uint32_t>(Key::Numpad4));
+    CHECK(b.get(InputAction::ViewRight).id == static_cast<uint32_t>(Key::Numpad6));
+    CHECK(b.get(InputAction::ViewUp).id == static_cast<uint32_t>(Key::Numpad8));
+    CHECK(b.get(InputAction::ViewDown).id == static_cast<uint32_t>(Key::Numpad2));
     // Gamepad alt: padlock on the right stick click, next-target on the d-pad up.
-    CHECK(b.get(InputAction::PadlockToggle, /*alt=*/true).source == BindingSource::GamepadButton);
-    CHECK(b.get(InputAction::PadlockToggle, true).id == static_cast<uint32_t>(GamepadButton::RightStick));
-    CHECK(b.get(InputAction::NextTarget, true).id == static_cast<uint32_t>(GamepadButton::DpadUp));
+    CHECK(b.get(InputAction::PadlockToggle, BindingSlot::Gamepad).source == BindingSource::GamepadButton);
+    CHECK(b.get(InputAction::PadlockToggle, BindingSlot::Gamepad).id ==
+          static_cast<uint32_t>(GamepadButton::RightStick));
+    CHECK(b.get(InputAction::NextTarget, BindingSlot::Gamepad).id == static_cast<uint32_t>(GamepadButton::DpadUp));
     // The target-cycle defaults deliberately avoid T (comms) and Y (ChatAll).
     CHECK(b.get(InputAction::NextTarget).id != static_cast<uint32_t>(Key::T));
     CHECK(b.get(InputAction::PrevTarget).id != static_cast<uint32_t>(Key::Y));

@@ -50,7 +50,7 @@ TEST_CASE("SandboxInspector update logs frame stats every 300 frames", "[sandbox
     REQUIRE(logger.hasMessage(LogLevel::Info, "sandbox: frame 300"));
 }
 
-TEST_CASE("SandboxInspector T key toggles audio tone on then off", "[sandbox]") {
+TEST_CASE("SandboxInspector NumpadMultiply toggles audio tone on then off", "[sandbox]") {
     MockAudio audio;
     MockInput input;
     MockLogger logger;
@@ -58,13 +58,13 @@ TEST_CASE("SandboxInspector T key toggles audio tone on then off", "[sandbox]") 
     SandboxInspector inspector(audio, input, logger);
 
     // First T press — should play.
-    input.justPressed = {Key::T};
+    input.justPressed = {Key::NumpadMultiply};
     inspector.update();
     REQUIRE(audio.playCount == 1);
     REQUIRE(audio.stopCount == 0);
 
     // Second T press — should stop.
-    input.justPressed = {Key::T};
+    input.justPressed = {Key::NumpadMultiply};
     inspector.update();
     REQUIRE(audio.playCount == 1);
     REQUIRE(audio.stopCount == 1);
@@ -91,19 +91,6 @@ TEST_CASE("SandboxInspector returns true on normal frame", "[sandbox]") {
     REQUIRE(inspector.update() == true);
 }
 
-TEST_CASE("SandboxInspector G key logs game master stub", "[sandbox]") {
-    MockAudio audio;
-    MockInput input;
-    MockLogger logger;
-
-    SandboxInspector inspector(audio, input, logger);
-
-    input.justPressed = {Key::G};
-    inspector.update();
-
-    REQUIRE(logger.hasMessage(LogLevel::Info, "game master"));
-}
-
 TEST_CASE("SandboxInspector logs gamepad axis above threshold", "[sandbox]") {
     MockAudio audio;
     MockInput input;
@@ -126,7 +113,7 @@ TEST_CASE("SandboxInspector destructor stops and frees audio resources", "[sandb
     {
         SandboxInspector inspector(audio, input, logger);
         // Play the tone so we can verify stop is called on destroy.
-        input.justPressed = {Key::T};
+        input.justPressed = {Key::NumpadMultiply};
         inspector.update();
         REQUIRE(audio.playCount == 1);
     }

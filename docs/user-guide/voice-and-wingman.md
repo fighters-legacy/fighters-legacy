@@ -45,11 +45,6 @@ to order your flight. If you do build it, no model ships with the game — point
 stt_model_path` in `user.toml` at a downloaded `ggml-*.bin`. See
 [development.md](../developer/development.md#optional-voice-wingman-commands-fl_enable_whisper).
 
-> **Known conflict:** `V` is bound to both radio push-to-talk and the master arm toggle, and the
-> master-arm handler ignores rebinding — so keying the radio flips your armament between ARM and
-> SAFE. If your weapons stop firing after you talk, press `V` once more. Tracked as
-> [#1050](https://github.com/fighters-legacy/fighters-legacy/issues/1050).
-
 
 ## Voice comms
 

@@ -187,12 +187,13 @@ bool SandboxInspector::update() {
         }
     }
 
-    // Game-master stub — satisfies #43 reachability requirement for Phase 1.
-    if (m_input.isKeyJustPressed(Key::G))
-        m_logger.log(LogLevel::Info, __FILE__, __LINE__, "game master: not yet available (Phase 2)");
-
-    // Audio tone toggle.
-    if (m_input.isKeyJustPressed(Key::T)) {
+    // The Phase-1 game-master stub that lived on G is GONE (#1050): the real game-master surface is
+    // the #861 overview map, and G is the landing gear — this inspector runs inside a live flight
+    // session, so its keys collided with real controls.
+    //
+    // Audio tone toggle. On the keypad's multiply key, which nothing else binds: this is a hardware
+    // validation aid and it must not double as a flight control (it was T, the comms menu).
+    if (m_input.isKeyJustPressed(Key::NumpadMultiply)) {
         if (m_tonePlaying) {
             m_audio.stop(m_toneSource);
             m_tonePlaying = false;

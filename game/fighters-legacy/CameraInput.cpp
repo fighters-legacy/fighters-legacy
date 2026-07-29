@@ -47,29 +47,30 @@ glm::dvec3 behindHorizontal(const glm::vec3& forward) {
 
 void CameraInput::pollModeKeys(fl::CameraController& ctrl, GameConsole& console, IInput& input,
                                const fl::EntityRenderEntry* player) {
-    const bool* keys = SDL_GetKeyboardState(nullptr);
+    if (!m_bindings)
+        return;
 
-    const bool graveNow = keys[SDL_SCANCODE_GRAVE] != 0;
-    if (graveNow && !m_gravePrev) {
+    // The console toggle is a bound action too (#1050) — it was the last raw scancode read in this
+    // file, and a control the binding table does not own is one the conflict checker cannot see.
+    if (fl::actionJustPressed(input, *m_bindings, fl::InputAction::ConsoleToggle)) {
         if (console.isOpen())
             console.close(input);
         else
             console.open(input);
     }
-    m_gravePrev = graveNow;
 
-    if (!console.isOpen() && m_bindings) {
+    if (!console.isOpen()) {
         // Camera-mode switches route through InputBindings (#689): rebindable and gamepad-capable, with
         // the edge detection provided by IInput::isKeyJustPressed via bindingJustPressed.
-        if (bindingJustPressed(input, m_bindings->get(fl::InputAction::CameraCockpit))) {
+        if (fl::actionJustPressed(input, *m_bindings, fl::InputAction::CameraCockpit)) {
             ctrl.setMode(fl::CameraMode::Cockpit);
             onModeSwitch(fl::CameraMode::Cockpit, player);
         }
-        if (bindingJustPressed(input, m_bindings->get(fl::InputAction::CameraChase))) {
+        if (fl::actionJustPressed(input, *m_bindings, fl::InputAction::CameraChase)) {
             ctrl.setMode(fl::CameraMode::Chase);
             onModeSwitch(fl::CameraMode::Chase, player);
         }
-        if (bindingJustPressed(input, m_bindings->get(fl::InputAction::CameraFree))) {
+        if (fl::actionJustPressed(input, *m_bindings, fl::InputAction::CameraFree)) {
             ctrl.setMode(fl::CameraMode::Free);
             onModeSwitch(fl::CameraMode::Free, player);
         }
@@ -124,7 +125,6 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
                          fl::TerrainStreamer& terrain, IInput& input) {
     float mx = 0.f, my = 0.f;
     const SDL_MouseButtonFlags mb = SDL_GetMouseState(&mx, &my);
-    const bool* keys = SDL_GetKeyboardState(nullptr);
     const bool consoleOpen = console.isOpen();
 
     // Frame time for frame-rate-independent fly movement. Movement was previously applied per
@@ -147,29 +147,33 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
             m_flyPitch -= (my - m_lastMy) * 0.25f; // mouse up -> look up
             m_flyPitch = std::clamp(m_flyPitch, -89.0f, 89.0f);
         }
-        if (!consoleOpen) {
-            if (keys[SDL_SCANCODE_EQUALS] || keys[SDL_SCANCODE_KP_PLUS])
+        // Free-camera movement is bound, not raw scancodes (#1050). It is reachable in EVERY
+        // session mode — including while flying — so its keys have to be distinct from the flight
+        // controls, and the only way the conflict checker can enforce that is if it can see them.
+        if (!consoleOpen && m_bindings) {
+            auto camDown = [&](fl::InputAction a) { return fl::actionDown(input, *m_bindings, a); };
+            if (camDown(fl::InputAction::FreeCamFaster))
                 m_flySpeed = std::min(1000.0f, m_flySpeed * 1.08f);
-            if (keys[SDL_SCANCODE_MINUS] || keys[SDL_SCANCODE_KP_MINUS])
+            if (camDown(fl::InputAction::FreeCamSlower))
                 m_flySpeed = std::max(2.0f, m_flySpeed * 0.92f);
 
             const float yr = toRad(m_flyYaw);
             const glm::dvec3 fwdH{-std::sin(yr), 0.0, -std::cos(yr)};
             const glm::dvec3 rgtH{std::cos(yr), 0.0, -std::sin(yr)};
             const double step = static_cast<double>(m_flySpeed) * dt; // m_flySpeed is m/s
-            if (keys[SDL_SCANCODE_W])
+            if (camDown(fl::InputAction::FreeCamForward))
                 m_flyEye += fwdH * step;
-            if (keys[SDL_SCANCODE_S])
+            if (camDown(fl::InputAction::FreeCamBack))
                 m_flyEye -= fwdH * step;
-            if (keys[SDL_SCANCODE_D])
+            if (camDown(fl::InputAction::FreeCamRight))
                 m_flyEye += rgtH * step;
-            if (keys[SDL_SCANCODE_A])
+            if (camDown(fl::InputAction::FreeCamLeft))
                 m_flyEye -= rgtH * step;
-            if (keys[SDL_SCANCODE_E])
+            if (camDown(fl::InputAction::FreeCamUp))
                 m_flyEye.y += step;
-            if (keys[SDL_SCANCODE_Q])
+            if (camDown(fl::InputAction::FreeCamDown))
                 m_flyEye.y -= step;
-            if (keys[SDL_SCANCODE_R] && player)
+            if (camDown(fl::InputAction::FreeCamReset) && player)
                 initFlyFromPlayer(*player);
         }
 
@@ -243,13 +247,13 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
             if (!consoleOpen && m_bindings) {
                 constexpr float kPanDegPerS = 90.f;
                 const float panStep = kPanDegPerS * dt;
-                if (bindingDown(input, m_bindings->get(fl::InputAction::ViewLeft)))
+                if (fl::actionDown(input, *m_bindings, fl::InputAction::ViewLeft))
                     m_cockpitYaw += panStep;
-                if (bindingDown(input, m_bindings->get(fl::InputAction::ViewRight)))
+                if (fl::actionDown(input, *m_bindings, fl::InputAction::ViewRight))
                     m_cockpitYaw -= panStep;
-                if (bindingDown(input, m_bindings->get(fl::InputAction::ViewUp)))
+                if (fl::actionDown(input, *m_bindings, fl::InputAction::ViewUp))
                     m_cockpitPitch += panStep;
-                if (bindingDown(input, m_bindings->get(fl::InputAction::ViewDown)))
+                if (fl::actionDown(input, *m_bindings, fl::InputAction::ViewDown))
                     m_cockpitPitch -= panStep;
                 m_cockpitPitch = std::clamp(m_cockpitPitch, -80.0f, 80.0f);
             }

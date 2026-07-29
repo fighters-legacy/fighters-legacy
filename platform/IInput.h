@@ -81,8 +81,36 @@ enum class Key : uint32_t {
     F12,
 
     // Punctuation / symbol keys
-    Minus,  // - / _
-    Equals, // = / +
+    Minus,        // - / _
+    Equals,       // = / +
+    Comma,        // , / <
+    Period,       // . / >
+    Slash,        // / / ?
+    Semicolon,    // ; / :
+    Apostrophe,   // ' / "
+    LeftBracket,  // [ / {
+    RightBracket, // ] / }
+    Backslash,    // \ / |
+    Grave,        // ` / ~
+
+    // Keypad. Present so the binding table has headroom beyond the main block — the shipped
+    // defaults ran out of letters, which is how two actions ended up on one key (#1050).
+    Numpad0,
+    Numpad1,
+    Numpad2,
+    Numpad3,
+    Numpad4,
+    Numpad5,
+    Numpad6,
+    Numpad7,
+    Numpad8,
+    Numpad9,
+    NumpadPlus,
+    NumpadMinus,
+    NumpadMultiply,
+    NumpadDivide,
+    NumpadPeriod,
+    NumpadEnter,
 
     // Modifiers
     LeftShift,

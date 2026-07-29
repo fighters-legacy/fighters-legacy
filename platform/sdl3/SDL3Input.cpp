@@ -158,6 +158,56 @@ static Key fromSDLScancode(SDL_Scancode sc) {
         return Key::Minus;
     case SDL_SCANCODE_EQUALS:
         return Key::Equals;
+    case SDL_SCANCODE_COMMA:
+        return Key::Comma;
+    case SDL_SCANCODE_PERIOD:
+        return Key::Period;
+    case SDL_SCANCODE_SLASH:
+        return Key::Slash;
+    case SDL_SCANCODE_SEMICOLON:
+        return Key::Semicolon;
+    case SDL_SCANCODE_APOSTROPHE:
+        return Key::Apostrophe;
+    case SDL_SCANCODE_LEFTBRACKET:
+        return Key::LeftBracket;
+    case SDL_SCANCODE_RIGHTBRACKET:
+        return Key::RightBracket;
+    case SDL_SCANCODE_BACKSLASH:
+        return Key::Backslash;
+    case SDL_SCANCODE_GRAVE:
+        return Key::Grave;
+    case SDL_SCANCODE_KP_0:
+        return Key::Numpad0;
+    case SDL_SCANCODE_KP_1:
+        return Key::Numpad1;
+    case SDL_SCANCODE_KP_2:
+        return Key::Numpad2;
+    case SDL_SCANCODE_KP_3:
+        return Key::Numpad3;
+    case SDL_SCANCODE_KP_4:
+        return Key::Numpad4;
+    case SDL_SCANCODE_KP_5:
+        return Key::Numpad5;
+    case SDL_SCANCODE_KP_6:
+        return Key::Numpad6;
+    case SDL_SCANCODE_KP_7:
+        return Key::Numpad7;
+    case SDL_SCANCODE_KP_8:
+        return Key::Numpad8;
+    case SDL_SCANCODE_KP_9:
+        return Key::Numpad9;
+    case SDL_SCANCODE_KP_PLUS:
+        return Key::NumpadPlus;
+    case SDL_SCANCODE_KP_MINUS:
+        return Key::NumpadMinus;
+    case SDL_SCANCODE_KP_MULTIPLY:
+        return Key::NumpadMultiply;
+    case SDL_SCANCODE_KP_DIVIDE:
+        return Key::NumpadDivide;
+    case SDL_SCANCODE_KP_PERIOD:
+        return Key::NumpadPeriod;
+    case SDL_SCANCODE_KP_ENTER:
+        return Key::NumpadEnter;
     default:
         return Key::Unknown;
     }
@@ -307,6 +357,56 @@ static SDL_Scancode toSDLScancode(Key k) {
         return SDL_SCANCODE_MINUS;
     case Key::Equals:
         return SDL_SCANCODE_EQUALS;
+    case Key::Comma:
+        return SDL_SCANCODE_COMMA;
+    case Key::Period:
+        return SDL_SCANCODE_PERIOD;
+    case Key::Slash:
+        return SDL_SCANCODE_SLASH;
+    case Key::Semicolon:
+        return SDL_SCANCODE_SEMICOLON;
+    case Key::Apostrophe:
+        return SDL_SCANCODE_APOSTROPHE;
+    case Key::LeftBracket:
+        return SDL_SCANCODE_LEFTBRACKET;
+    case Key::RightBracket:
+        return SDL_SCANCODE_RIGHTBRACKET;
+    case Key::Backslash:
+        return SDL_SCANCODE_BACKSLASH;
+    case Key::Grave:
+        return SDL_SCANCODE_GRAVE;
+    case Key::Numpad0:
+        return SDL_SCANCODE_KP_0;
+    case Key::Numpad1:
+        return SDL_SCANCODE_KP_1;
+    case Key::Numpad2:
+        return SDL_SCANCODE_KP_2;
+    case Key::Numpad3:
+        return SDL_SCANCODE_KP_3;
+    case Key::Numpad4:
+        return SDL_SCANCODE_KP_4;
+    case Key::Numpad5:
+        return SDL_SCANCODE_KP_5;
+    case Key::Numpad6:
+        return SDL_SCANCODE_KP_6;
+    case Key::Numpad7:
+        return SDL_SCANCODE_KP_7;
+    case Key::Numpad8:
+        return SDL_SCANCODE_KP_8;
+    case Key::Numpad9:
+        return SDL_SCANCODE_KP_9;
+    case Key::NumpadPlus:
+        return SDL_SCANCODE_KP_PLUS;
+    case Key::NumpadMinus:
+        return SDL_SCANCODE_KP_MINUS;
+    case Key::NumpadMultiply:
+        return SDL_SCANCODE_KP_MULTIPLY;
+    case Key::NumpadDivide:
+        return SDL_SCANCODE_KP_DIVIDE;
+    case Key::NumpadPeriod:
+        return SDL_SCANCODE_KP_PERIOD;
+    case Key::NumpadEnter:
+        return SDL_SCANCODE_KP_ENTER;
     default:
         return SDL_SCANCODE_UNKNOWN;
     }

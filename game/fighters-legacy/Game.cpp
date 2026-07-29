@@ -71,6 +71,7 @@
 #include "http/CurlHttpClientFactory.h" // createHttpClient (#490)
 #include "i18n/Localization.h"
 #include "input/AxisConfig.h"
+#include "input/BindingQuery.h"
 #include "input/InputBindings.h"
 #include "mission/MissionParser.h"
 #include "mission/ShotDirector.h"
@@ -310,23 +311,22 @@ static void writeFrameStats(const fl::FrameStatsRecorder& rec, const std::string
 static void updatePerfOverlay(GameConsole& console, IRenderer& renderer, PerformanceOverlay& overlay,
                               const fl::SimRenderBridge& bridge, UserConfig& userConfig, bool inFlight,
                               fl::CameraMode camMode, const CameraView& cam, const fl::EntityRenderEntry* playerEntry,
-                              fl::TerrainStreamer* terrain) {
+                              fl::TerrainStreamer* terrain, IInput& input, const fl::InputBindings& bindings) {
     if (!inFlight) {
         overlay.setMode(OverlayMode::Off);
         renderer.setOverlayLines({});
         return;
     }
 
-    const bool* keys = SDL_GetKeyboardState(nullptr);
-    static bool f3Prev = false;
-    if (!console.isOpen() && keys[SDL_SCANCODE_F3] && !f3Prev) {
+    // A bound action, not a raw F3 scancode (#1050): the conflict checker can only hold the key map
+    // together if every control in it is actually in it.
+    if (!console.isOpen() && fl::actionJustPressed(input, bindings, fl::InputAction::PerfOverlayCycle)) {
         overlay.cycleMode();
         DebugSettings ds = userConfig.debug();
         ds.overlayMode = overlay.mode();
         userConfig.setDebug(ds);
         userConfig.save();
     }
-    f3Prev = keys[SDL_SCANCODE_F3];
 
     const uint32_t entityCount = bridge.hasSnapshot() ? static_cast<uint32_t>(bridge.current().entries.size()) : 0u;
     overlay.update(renderer.getFrameStats(), entityCount, 1000.0f / 60.0f);
@@ -821,18 +821,44 @@ bool Game::initPlatform(int argc, char** argv) {
     d.services.userConfig->load();
 
     // Load config/bindings.toml — writes defaults on first run.
-    // InputBindings provides [primary]/[alt]; AxisConfigTable provides [axis_config].
+    // InputBindings provides [primary]/[secondary]/[gamepad]; AxisConfigTable provides [axis_config].
     // Both deserializers accept the full file content (non-overlapping TOML sections).
     // Pass fs::path directly to avoid Windows locale-encoding issues from std::string conversion.
     {
         const fs::path bindingsPath = d.services.userDataDir / "config" / "bindings.toml";
         const std::string defaults = fl::InputBindings{}.serialize() + "\n" + fl::AxisConfigTable{}.serialize();
-        const std::string content = fl::ensureAndReadConfig(bindingsPath, defaults, *d.services.rawLogger);
+        std::string content = fl::ensureAndReadConfig(bindingsPath, defaults, *d.services.rawLogger);
+        // A stored bindings.toml is a FULL table, not a patch. An install carrying a file written
+        // before #1050 would therefore load the old key map straight back over the new one and
+        // silently restore the collisions this release removed — for every player who never
+        // customised anything. Regenerate when the file predates the current map, keeping the
+        // player's axis tuning (which did not change) and leaving the old file beside it.
+        if (fl::InputBindings::fileFormatVersion(content) < fl::InputBindings::kFormatVersion) {
+            d.services.axisConfigTable.deserialize(content);
+            fl::writeConfigFile(fs::path(bindingsPath.string() + ".bak"), content, *d.services.rawLogger);
+            content = fl::InputBindings{}.serialize() + "\n" + d.services.axisConfigTable.serialize();
+            fl::writeConfigFile(bindingsPath, content, *d.services.rawLogger);
+            d.services.rawLogger->log(fl::LogLevel::Warn, __FILE__, __LINE__,
+                                      "bindings.toml predated the current key map and was regenerated; "
+                                      "your previous file is beside it as bindings.toml.bak (#1050)");
+        }
         d.services.inputBindings.deserialize(content);
         d.services.axisConfigTable.deserialize(content);
+        // A hand-edited bindings.toml is the one binding set the defaults test cannot cover, so say
+        // so at startup rather than letting the player discover it as an intermittent misbehaviour
+        // in the air — which is exactly how the shipped V collision presented (#1050). A warning,
+        // not a refusal: the file is the player's, and the game still flies.
+        for (const auto& c : d.services.inputBindings.findConflicts()) {
+            const std::string msg = std::string("bindings.toml: ") + fl::InputBindings::actionName(c.a) + " (" +
+                                    fl::InputBindings::slotName(c.slotA) + ") and " +
+                                    fl::InputBindings::actionName(c.b) + " (" + fl::InputBindings::slotName(c.slotB) +
+                                    ") share an input and are both live at the same time";
+            d.services.rawLogger->log(fl::LogLevel::Warn, __FILE__, __LINE__, msg.c_str());
+        }
         d.services.flightInput.setBindings(d.services.inputBindings);
         d.services.flightInput.setAxisConfig(d.services.axisConfigTable);
-        // Camera-mode + cockpit-pan actions resolve through the same table (#689).
+        // Camera modes, the cockpit pan, the free camera and the console toggle resolve through the
+        // same table (#689/#1050).
         d.services.camInput.setBindings(&d.services.inputBindings);
     }
 
@@ -2441,18 +2467,15 @@ void Game::run() {
             const bool inFlight = cur == Screen::Flight && d.session.clientHandler != nullptr;
             const bool uiFocused = !inFlight || d.services.gameConsole->isOpen() ||
                                    d.services.chatOverlay.isInputOpen() || d.services.gmMapOverlay.isOpen();
+            // Resolved through the shared query (#1050): every slot, every source. The hand-rolled
+            // switch this replaced looked at the primary slot only and understood two of the four
+            // binding sources, so a PTT on the mouse or a secondary slot was simply dead.
             auto held = [&d](fl::InputAction action) {
-                const fl::Binding b = d.services.inputBindings.get(action);
-                if (b.source == fl::BindingSource::Keyboard)
-                    return d.services.p.input->isKeyDown(static_cast<fl::Key>(b.id));
-                if (b.source == fl::BindingSource::GamepadButton)
-                    return d.services.p.input->isGamepadButtonDown(0, static_cast<fl::GamepadButton>(b.id));
-                return false;
+                return fl::actionDown(*d.services.p.input, d.services.inputBindings, action);
             };
             if (inFlight && !uiFocused) {
-                const fl::Binding cyc = d.services.inputBindings.get(fl::InputAction::VoiceNetCycle);
-                if (cyc.source == fl::BindingSource::Keyboard &&
-                    d.services.p.input->isKeyJustPressed(static_cast<fl::Key>(cyc.id))) {
+                if (fl::actionJustPressed(*d.services.p.input, d.services.inputBindings,
+                                          fl::InputAction::VoiceNetCycle)) {
                     d.services.voiceChat.cyclePrimaryNet();
                     d.services.gameConsole->print(
                         "[voice] net: " + std::string(d.services.voiceChat.netName(d.services.voiceChat.primaryNet())));
@@ -2772,9 +2795,8 @@ void Game::run() {
         // in the match end phase. Emitted between the GUI newFrame/render bracket.
         if (cur == Screen::Flight && d.session.clientHandler && d.services.p.gui) {
             const auto& ms = d.session.clientHandler->matchState();
-            const fl::Binding sbBind = d.services.inputBindings.get(fl::InputAction::Scoreboard);
-            const bool keyHeld = sbBind.source == fl::BindingSource::Keyboard &&
-                                 d.services.p.input->isKeyDown(static_cast<fl::Key>(sbBind.id));
+            const bool keyHeld =
+                fl::actionDown(*d.services.p.input, d.services.inputBindings, fl::InputAction::Scoreboard);
             if (keyHeld || (ms.valid && fl::scoreboardAutoShows(ms.phase)))
                 d.services.scoreboardOverlay.render(d.services.p.gui.get(),
                                                     buildScoreboardData(*d.session.clientHandler));
@@ -2786,7 +2808,8 @@ void Game::run() {
         }
         updatePerfOverlay(*d.services.gameConsole, *d.services.p.renderer, d.services.perfOverlay,
                           d.services.renderBridge, *d.services.userConfig, cur == Screen::Flight,
-                          d.services.cameraController.mode(), cam, playerEntry, d.services.terrainStreamer.get());
+                          d.services.cameraController.mode(), cam, playerEntry, d.services.terrainStreamer.get(),
+                          *d.services.p.input, d.services.inputBindings);
 
         // Frame-stats export (#782) + the unattended run clock. Flight frames only: menu and loading
         // frames render a different (trivial) scene, and mixing them into the sample set would drag

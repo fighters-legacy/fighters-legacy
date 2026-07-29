@@ -131,6 +131,9 @@ def test_surface_agrees_with_the_drift_checker():
     assert surf["lua_bindings"] == len(
         dd._lua_binding_names((REPO_ROOT / "engine/script/LuaController.cpp").read_text())
     )
+    assert surf["input_actions"] == len(
+        dd._input_action_names((REPO_ROOT / "engine/input/InputAction.h").read_text())
+    )
 
 
 def test_surface_metrics_are_all_non_zero():

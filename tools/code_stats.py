@@ -271,6 +271,7 @@ def surface() -> dict[str, int]:
     protocol = read("engine/net/GameProtocol.h")
     commands = read("server/fl-server/ServerCommands.cpp")
     lua = read("engine/script/LuaController.cpp")
+    input_actions = read("engine/input/InputAction.h")
     tools_cmake = read("tools/CMakeLists.txt")
 
     test_cpp = [p for p in tracked_files() if p.startswith("tests/") and p.endswith(".cpp")]
@@ -284,6 +285,7 @@ def surface() -> dict[str, int]:
         "server_config_keys": config_result.code_count,
         "admin_commands": len(dd._registered_command_names(commands)),
         "lua_bindings": len(dd._lua_binding_names(lua)),
+        "input_actions": len(dd._input_action_names(input_actions)),
         "cli_tools": len(re.findall(r"add_executable\(\s*[A-Za-z0-9_-]+", tools_cmake)),
         "test_cases": grep_count(r"\bTEST_CASE\(", test_cpp),
         "test_assertions": grep_count(
@@ -300,6 +302,7 @@ SURFACE_LABEL = {
     "server_config_keys": "Server configuration keys",
     "admin_commands": "Admin commands",
     "lua_bindings": "Lua API bindings",
+    "input_actions": "Bindable input actions",
     "cli_tools": "CLI tools",
     "test_cases": "Test cases",
     "test_assertions": "Test assertions",

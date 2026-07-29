@@ -30,9 +30,9 @@ enum class CameraMode : uint8_t;
 // Every mode resolves to a single CameraController::setPose() call.
 class CameraInput {
   public:
-    // Detect camera mode switches (CameraCockpit/Chase/Free actions, #689) and the backtick console
-    // toggle. Call once per frame before update(). Mode keys resolve through InputBindings (rebindable,
-    // gamepad-capable) via setBindings(); the console toggle stays a raw scancode (not a bound action).
+    // Detect camera mode switches (CameraCockpit/Chase/Free, #689) and the console toggle. Call once
+    // per frame before update(). Every one of them resolves through InputBindings via setBindings()
+    // (#1050) — rebindable, gamepad-capable, and visible to the conflict checker.
     void pollModeKeys(CameraController& ctrl, GameConsole& console, IInput& input, const EntityRenderEntry* player);
 
     // Compute and apply the camera pose for the current mode from SDL keyboard/mouse state.
@@ -43,8 +43,9 @@ class CameraInput {
                 const EntityRenderEntry* player, // nullptr = no snapshot yet
                 const GameConsole& console, TerrainStreamer& terrain, IInput& input);
 
-    // Provide the binding table used to resolve camera-mode + cockpit-pan actions (#689). Not owned;
-    // set once on entering Flight. Null = mode switching / pan disabled (defensive).
+    // Provide the binding table used to resolve the camera-mode, cockpit-pan, free-camera and
+    // console-toggle actions (#689/#1050). Not owned; set once on entering Flight. Null = every one
+    // of them is inert (defensive).
     void setBindings(const InputBindings* bindings) noexcept {
         m_bindings = bindings;
     }
@@ -176,9 +177,6 @@ class CameraInput {
     glm::vec3 m_lastUp{0.f, 1.f, 0.f};
     float m_losAccumS{0.f};
     LosResult m_latchedLos{LosResult::Clear};
-
-    // Console-toggle edge detection (the grave key is not a bound action, so it stays raw).
-    bool m_gravePrev{false};
 };
 
 } // namespace fl
