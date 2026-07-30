@@ -403,40 +403,85 @@ struct MockDisplay : public IDisplay {
 };
 
 struct MockJoystick : public IJoystick {
+    // Per-device state (#1061): a test that needs two distinguishable sticks, buttons or a POV hat
+    // pushes `devices`. When it is empty the older convenience surface below applies, so tests written
+    // against the single-device model keep working unchanged.
+    struct Device {
+        std::string guid{"00000000000000000000000000000000"};
+        std::string name{"MockJoystick"};
+        std::vector<float> axes;
+        std::vector<bool> buttons;
+        std::vector<bool> justPressed;
+        std::vector<HatPosition> hats;
+    };
+    std::vector<Device> devices;
+
+    // Convenience surface: `count` identical devices with `axisCount` axes each, values read from
+    // axisValues[{device, axis}].
     int count = 0;
     int axisCount = 0;
     std::map<std::pair<int, int>, float> axisValues;
 
+    Device& addDevice(std::string guid, std::string name = "MockJoystick") {
+        Device d;
+        d.guid = std::move(guid);
+        d.name = std::move(name);
+        devices.push_back(std::move(d));
+        return devices.back();
+    }
+
+    const Device* at(int j) const {
+        if (j < 0 || j >= static_cast<int>(devices.size()))
+            return nullptr;
+        return &devices[static_cast<size_t>(j)];
+    }
+
     int getJoystickCount() const override {
-        return count;
+        return devices.empty() ? count : static_cast<int>(devices.size());
     }
-    const char* getJoystickName(int) const override {
-        return "MockJoystick";
+    const char* getJoystickName(int j) const override {
+        const Device* d = at(j);
+        return d ? d->name.c_str() : "MockJoystick";
     }
-    const char* getJoystickGuid(int) const override {
-        return "00000000000000000000000000000000";
+    const char* getJoystickGuid(int j) const override {
+        const Device* d = at(j);
+        return d ? d->guid.c_str() : "00000000000000000000000000000000";
     }
-    int getAxisCount(int) const override {
-        return axisCount;
+    int getAxisCount(int j) const override {
+        const Device* d = at(j);
+        return d ? static_cast<int>(d->axes.size()) : axisCount;
     }
     float getAxisValue(int j, int a) const override {
+        if (const Device* d = at(j))
+            return (a >= 0 && a < static_cast<int>(d->axes.size())) ? d->axes[static_cast<size_t>(a)] : 0.0f;
         auto it = axisValues.find({j, a});
         return it != axisValues.end() ? it->second : 0.0f;
     }
-    int getHatCount(int) const override {
-        return 0;
+    int getHatCount(int j) const override {
+        const Device* d = at(j);
+        return d ? static_cast<int>(d->hats.size()) : 0;
     }
-    HatPosition getHatPosition(int, int) const override {
-        return HatPosition::Centered;
+    HatPosition getHatPosition(int j, int h) const override {
+        const Device* d = at(j);
+        if (!d || h < 0 || h >= static_cast<int>(d->hats.size()))
+            return HatPosition::Centered;
+        return d->hats[static_cast<size_t>(h)];
     }
-    int getButtonCount(int) const override {
-        return 0;
+    int getButtonCount(int j) const override {
+        const Device* d = at(j);
+        return d ? static_cast<int>(d->buttons.size()) : 0;
     }
-    bool isButtonDown(int, int) const override {
-        return false;
+    bool isButtonDown(int j, int btn) const override {
+        const Device* d = at(j);
+        if (!d || btn < 0 || btn >= static_cast<int>(d->buttons.size()))
+            return false;
+        return d->buttons[static_cast<size_t>(btn)];
     }
-    bool isButtonJustPressed(int, int) const override {
-        return false;
+    bool isButtonJustPressed(int j, int btn) const override {
+        const Device* d = at(j);
+        if (!d || btn < 0 || btn >= static_cast<int>(d->justPressed.size()))
+            return false;
+        return d->justPressed[static_cast<size_t>(btn)];
     }
     void setEventHandler(IJoystickEventHandler*) override {}
     void flush() override {}

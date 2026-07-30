@@ -147,83 +147,107 @@ TEST_CASE("UserConfig: [debug] Compact round-trip via save+load", "[userconfig]"
 // [controls] tests
 // ---------------------------------------------------------------------------
 
-TEST_CASE("UserConfig: [controls] HOTAS defaults when section absent", "[userconfig]") {
+TEST_CASE("UserConfig: [controls] legacy HOTAS is absent when the section names none of it", "[userconfig]") {
     MockFilesystem fs;
     MockLogger logger;
     UserConfig config(fs, logger);
     config.load();
-    CHECK(config.controls().hotasAileronAxis == 0);
-    CHECK(config.controls().hotasElevatorAxis == 1);
-    CHECK(config.controls().hotasThrottleAxis == 2);
-    CHECK(config.controls().hotasRudderAxis == 3);
-    CHECK(config.controls().hotasDeadzone == Catch::Approx(0.05f));
-    CHECK_FALSE(config.controls().hotasInvertPitch);
-    CHECK_FALSE(config.controls().hotasInvertRoll);
-    CHECK_FALSE(config.controls().hotasInvertRudder);
-    CHECK_FALSE(config.controls().hotasInvertThrottle);
+    // `present` false is the signal that there is nothing to migrate (#1061): the shipped bindings.toml
+    // defaults already describe the same standard HOTAS layout, so the migration has no work to do.
+    CHECK_FALSE(config.controls().legacyHotas.present);
+    CHECK(config.controls().legacyHotas.aileronAxis == 0);
+    CHECK(config.controls().legacyHotas.elevatorAxis == 1);
+    CHECK(config.controls().legacyHotas.throttleAxis == 2);
+    CHECK(config.controls().legacyHotas.rudderAxis == 3);
+    CHECK(config.controls().legacyHotas.deadzone == Catch::Approx(0.05f));
 }
 
-TEST_CASE("UserConfig: [controls] HOTAS deadzone clamped to 0.99", "[userconfig]") {
+TEST_CASE("UserConfig: [controls] legacy HOTAS deadzone clamped below 1.0", "[userconfig]") {
     MockFilesystem fs;
     MockLogger logger;
     fs.addFile("config/user.toml", "[controls]\nhotas_deadzone = 5.0\n");
     UserConfig config(fs, logger);
     config.load();
-    CHECK(config.controls().hotasDeadzone <= 0.99f);
+    CHECK(config.controls().legacyHotas.present);
+    CHECK(config.controls().legacyHotas.deadzone <= 0.99f);
 }
 
-TEST_CASE("UserConfig: [controls] HOTAS axis index out of range clamped", "[userconfig]") {
+TEST_CASE("UserConfig: [controls] legacy HOTAS axis index out of range clamped", "[userconfig]") {
     MockFilesystem fs;
     MockLogger logger;
     fs.addFile("config/user.toml", "[controls]\nhotas_aileron_axis = 200\nhotas_elevator_axis = -99\n");
     UserConfig config(fs, logger);
     config.load();
-    CHECK(config.controls().hotasAileronAxis == 127);
-    CHECK(config.controls().hotasElevatorAxis == -1);
+    CHECK(config.controls().legacyHotas.present);
+    CHECK(config.controls().legacyHotas.aileronAxis == 127);
+    CHECK(config.controls().legacyHotas.elevatorAxis == -1);
 }
 
-TEST_CASE("UserConfig: [controls] HOTAS axis index -1 preserved", "[userconfig]") {
+TEST_CASE("UserConfig: [controls] legacy HOTAS axis index -1 preserved", "[userconfig]") {
     MockFilesystem fs;
     MockLogger logger;
     fs.addFile("config/user.toml", "[controls]\nhotas_aileron_axis = -1\nhotas_elevator_axis = -1\n"
                                    "hotas_throttle_axis = -1\nhotas_rudder_axis = -1\n");
     UserConfig config(fs, logger);
     config.load();
-    CHECK(config.controls().hotasAileronAxis == -1);
-    CHECK(config.controls().hotasElevatorAxis == -1);
-    CHECK(config.controls().hotasThrottleAxis == -1);
-    CHECK(config.controls().hotasRudderAxis == -1);
+    CHECK(config.controls().legacyHotas.present);
+    // -1 meant "this axis is switched off", and the migration has to honour that rather than helpfully
+    // binding an axis the player deliberately disabled.
+    CHECK(config.controls().legacyHotas.aileronAxis == -1);
+    CHECK(config.controls().legacyHotas.elevatorAxis == -1);
+    CHECK(config.controls().legacyHotas.throttleAxis == -1);
+    CHECK(config.controls().legacyHotas.rudderAxis == -1);
 }
 
-TEST_CASE("UserConfig: [controls] HOTAS roundtrip save+load", "[userconfig]") {
+TEST_CASE("UserConfig: [controls] inverts and a custom axis read for migration", "[userconfig]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addFile("config/user.toml", "[controls]\nhotas_throttle_axis = 6\nhotas_invert_pitch = true\n"
+                                   "hotas_invert_rudder = true\nhotas_invert_throttle = true\n");
+    UserConfig config(fs, logger);
+    config.load();
+    const auto& l = config.controls().legacyHotas;
+    CHECK(l.present);
+    CHECK(l.throttleAxis == 6);
+    CHECK(l.invertPitch);
+    CHECK_FALSE(l.invertRoll);
+    CHECK(l.invertRudder);
+    CHECK(l.invertThrottle);
+}
+
+TEST_CASE("UserConfig: save writes no hotas_* keys (#1061)", "[userconfig]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    // An existing install's keys are read, then dropped on the next save: leaving them written would
+    // keep two files claiming to own the same mapping, which is the defect the migration removes.
+    fs.addFile("config/user.toml", "[controls]\nhotas_aileron_axis = 4\nhotas_deadzone = 0.2\n");
+    UserConfig config(fs, logger);
+    config.load();
+    CHECK(config.controls().legacyHotas.present);
+    config.save();
+
+    const auto written = fs.files.find("config/user.toml");
+    REQUIRE(written != fs.files.end());
+    const std::string text(written->second.begin(), written->second.end());
+    CHECK(text.find("hotas_") == std::string::npos);
+    CHECK(text.find("ffb_enabled") != std::string::npos);
+}
+
+TEST_CASE("UserConfig: [controls] FFB roundtrip save+load", "[userconfig]") {
     MockFilesystem fs;
     MockLogger logger;
     UserConfig config(fs, logger);
     ControlsSettings cs;
-    cs.hotasAileronAxis = 4;
-    cs.hotasElevatorAxis = 5;
-    cs.hotasThrottleAxis = 6;
-    cs.hotasRudderAxis = 7;
-    cs.hotasDeadzone = 0.12f;
-    cs.hotasInvertPitch = true;
-    cs.hotasInvertRoll = false;
-    cs.hotasInvertRudder = true;
-    cs.hotasInvertThrottle = true;
+    cs.ffbEnabled = false;
+    cs.ffbStrength = 0.4f;
     config.setControls(cs);
     config.save();
 
     MockLogger logger2;
     UserConfig config2(fs, logger2);
     config2.load();
-    CHECK(config2.controls().hotasAileronAxis == 4);
-    CHECK(config2.controls().hotasElevatorAxis == 5);
-    CHECK(config2.controls().hotasThrottleAxis == 6);
-    CHECK(config2.controls().hotasRudderAxis == 7);
-    CHECK(config2.controls().hotasDeadzone == Catch::Approx(0.12f));
-    CHECK(config2.controls().hotasInvertPitch);
-    CHECK_FALSE(config2.controls().hotasInvertRoll);
-    CHECK(config2.controls().hotasInvertRudder);
-    CHECK(config2.controls().hotasInvertThrottle);
+    CHECK_FALSE(config2.controls().ffbEnabled);
+    CHECK(config2.controls().ffbStrength == Catch::Approx(0.4f));
 }
 
 // ---------------------------------------------------------------------------

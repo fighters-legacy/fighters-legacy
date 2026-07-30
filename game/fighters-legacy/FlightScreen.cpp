@@ -17,7 +17,6 @@
 #include "ManualOverlay.h"
 #include "TargetDesignation.h"   // designated-target cycling (#696)
 #include "VoiceCommandCapture.h" // voice wingman commands (#935)
-#include "config/ControlsSettings.h"
 #include "config/UserConfig.h"
 #include "console/GameConsole.h"
 #include "entity/EntityDef.h"          // EntityDef::name/id for the observer picker label (#860)
@@ -91,8 +90,13 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     // below are the only raw reads left in this file. Anything NON-modal — the aircraft manual, the
     // replay transport, photo mode — is a real binding with its own default.
     const fl::InputBindings* binds = d.inputBindings;
-    auto actionPressed = [&](fl::InputAction a) { return binds && fl::actionJustPressed(input, *binds, a); };
-    auto actionHeld = [&](fl::InputAction a) { return binds && fl::actionDown(input, *binds, a); };
+    // The live hardware every binding resolves against (#1061). A null `inputSources` would leave every
+    // bound control dead, so fall back to a sources view carrying just the IInput this update() was
+    // handed — keyboard, mouse and gamepad keep working even if the caller never wired a device table.
+    const fl::InputSources fallbackSources{&input, nullptr, nullptr, 0};
+    const fl::InputSources& sources = d.inputSources ? *d.inputSources : fallbackSources;
+    auto actionPressed = [&](fl::InputAction a) { return binds && fl::actionJustPressed(sources, *binds, a); };
+    auto actionHeld = [&](fl::InputAction a) { return binds && fl::actionDown(sources, *binds, a); };
 
     uint32_t idx = d.assignedEntityIdx ? *d.assignedEntityIdx : 0;
     uint32_t gen = d.assignedEntityGen ? *d.assignedEntityGen : 0;
@@ -232,8 +236,8 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
         d.camInput->setHeadPose(&d.headTracker->pose());
     }
 
-    d.camInput->pollModeKeys(*d.cameraController, *d.gameConsole, input, viewEntry);
-    d.camInput->update(*d.cameraController, viewEntry, *d.gameConsole, *d.terrainStreamer, input);
+    d.camInput->pollModeKeys(*d.cameraController, *d.gameConsole, sources, viewEntry);
+    d.camInput->update(*d.cameraController, viewEntry, *d.gameConsole, *d.terrainStreamer, sources);
 
     // Radio menu (#610). Non-modal: the aircraft keeps flying while it is open (see WingmanMenu.h),
     // so only the discrete keys it consumes are suppressed, via FlightInputCollector's uiFocused.
@@ -373,7 +377,6 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     if (d.inspector && !d.inspector->update() && !consoleWasOpen)
         return Screen::MainMenu;
 
-    const ControlsSettings cs = d.userConfig->controls();
     const bool uiFocused =
         (d.wingmanMenu && d.wingmanMenu->isOpen()) || (d.commsMenu && d.commsMenu->isOpen()) || chatOpen || gmMapOpen;
 
@@ -383,7 +386,7 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     // VoiceChat's does: typing "engage" into chat must not also say it.
     if (d.voiceCommands && d.inputBindings) {
         const bool held =
-            fl::actionDown(input, *d.inputBindings, fl::InputAction::WingmanVoiceCommand) && !d.gameConsole->isOpen();
+            fl::actionDown(sources, *d.inputBindings, fl::InputAction::WingmanVoiceCommand) && !d.gameConsole->isOpen();
         d.voiceCommands->update(held, uiFocused);
     }
 
@@ -479,7 +482,7 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     if (d.camInput)
         d.camInput->setPadlockTarget(m_designatedTarget);
 
-    if (auto msg = d.flightInput->poll(*d.renderBridge, *d.camInput, *d.gameConsole, input, d.joystick, cs, uiFocused,
+    if (auto msg = d.flightInput->poll(*d.renderBridge, *d.camInput, *d.gameConsole, sources, uiFocused,
                                        /*textEntry=*/chatOpen)) {
         // Shape the input with the autopilot BEFORE prediction+send, so the client predicts exactly what
         // the server receives. A player stick/throttle input past threshold disengages the relevant holds.

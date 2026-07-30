@@ -4,8 +4,9 @@
 #include "IInput.h"
 #include "console/GameConsole.h"
 #include "flight/LocalFrame.h"   // radialUp: camera "up" = radial direction on a spherical planet
-#include "input/BindingQuery.h"  // bindingJustPressed / bindingDown (#689)
+#include "input/BindingQuery.h"  // actionDown / actionJustPressed (#689/#1050)
 #include "input/InputBindings.h" // camera-mode + View* pan bindings (#689)
+#include "input/InputSources.h"  // the live input hardware, one struct (#1061)
 #include "render/CameraController.h"
 #include "render/RenderSnapshot.h"
 #include "render/TerrainStreamer.h"
@@ -45,32 +46,33 @@ glm::dvec3 behindHorizontal(const glm::vec3& forward) {
 }
 } // namespace
 
-void CameraInput::pollModeKeys(fl::CameraController& ctrl, GameConsole& console, IInput& input,
+void CameraInput::pollModeKeys(fl::CameraController& ctrl, GameConsole& console, const fl::InputSources& sources,
                                const fl::EntityRenderEntry* player) {
-    if (!m_bindings)
+    if (!m_bindings || !sources.input)
         return;
 
     // The console toggle is a bound action too (#1050) — it was the last raw scancode read in this
     // file, and a control the binding table does not own is one the conflict checker cannot see.
-    if (fl::actionJustPressed(input, *m_bindings, fl::InputAction::ConsoleToggle)) {
+    if (fl::actionJustPressed(sources, *m_bindings, fl::InputAction::ConsoleToggle)) {
         if (console.isOpen())
-            console.close(input);
+            console.close(*sources.input);
         else
-            console.open(input);
+            console.open(*sources.input);
     }
 
     if (!console.isOpen()) {
-        // Camera-mode switches route through InputBindings (#689): rebindable and gamepad-capable, with
-        // the edge detection provided by IInput::isKeyJustPressed via bindingJustPressed.
-        if (fl::actionJustPressed(input, *m_bindings, fl::InputAction::CameraCockpit)) {
+        // Camera-mode switches route through InputBindings (#689): rebindable, and since #1061
+        // reachable from any bound device — the rising edge comes from the HAL for a key or a button,
+        // and from the device table's previous sample for a POV hat.
+        if (fl::actionJustPressed(sources, *m_bindings, fl::InputAction::CameraCockpit)) {
             ctrl.setMode(fl::CameraMode::Cockpit);
             onModeSwitch(fl::CameraMode::Cockpit, player);
         }
-        if (fl::actionJustPressed(input, *m_bindings, fl::InputAction::CameraChase)) {
+        if (fl::actionJustPressed(sources, *m_bindings, fl::InputAction::CameraChase)) {
             ctrl.setMode(fl::CameraMode::Chase);
             onModeSwitch(fl::CameraMode::Chase, player);
         }
-        if (fl::actionJustPressed(input, *m_bindings, fl::InputAction::CameraFree)) {
+        if (fl::actionJustPressed(sources, *m_bindings, fl::InputAction::CameraFree)) {
             ctrl.setMode(fl::CameraMode::Free);
             onModeSwitch(fl::CameraMode::Free, player);
         }
@@ -122,7 +124,7 @@ void CameraInput::onModeSwitch(fl::CameraMode newMode, const fl::EntityRenderEnt
 }
 
 void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry* player, const GameConsole& console,
-                         fl::TerrainStreamer& terrain, IInput& input) {
+                         fl::TerrainStreamer& terrain, const fl::InputSources& sources) {
     float mx = 0.f, my = 0.f;
     const SDL_MouseButtonFlags mb = SDL_GetMouseState(&mx, &my);
     const bool consoleOpen = console.isOpen();
@@ -151,7 +153,7 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
         // session mode — including while flying — so its keys have to be distinct from the flight
         // controls, and the only way the conflict checker can enforce that is if it can see them.
         if (!consoleOpen && m_bindings) {
-            auto camDown = [&](fl::InputAction a) { return fl::actionDown(input, *m_bindings, a); };
+            auto camDown = [&](fl::InputAction a) { return fl::actionDown(sources, *m_bindings, a); };
             if (camDown(fl::InputAction::FreeCamFaster))
                 m_flySpeed = std::min(1000.0f, m_flySpeed * 1.08f);
             if (camDown(fl::InputAction::FreeCamSlower))
@@ -247,13 +249,13 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
             if (!consoleOpen && m_bindings) {
                 constexpr float kPanDegPerS = 90.f;
                 const float panStep = kPanDegPerS * dt;
-                if (fl::actionDown(input, *m_bindings, fl::InputAction::ViewLeft))
+                if (fl::actionDown(sources, *m_bindings, fl::InputAction::ViewLeft))
                     m_cockpitYaw += panStep;
-                if (fl::actionDown(input, *m_bindings, fl::InputAction::ViewRight))
+                if (fl::actionDown(sources, *m_bindings, fl::InputAction::ViewRight))
                     m_cockpitYaw -= panStep;
-                if (fl::actionDown(input, *m_bindings, fl::InputAction::ViewUp))
+                if (fl::actionDown(sources, *m_bindings, fl::InputAction::ViewUp))
                     m_cockpitPitch += panStep;
-                if (fl::actionDown(input, *m_bindings, fl::InputAction::ViewDown))
+                if (fl::actionDown(sources, *m_bindings, fl::InputAction::ViewDown))
                     m_cockpitPitch -= panStep;
                 m_cockpitPitch = std::clamp(m_cockpitPitch, -80.0f, 80.0f);
             }

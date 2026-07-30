@@ -86,8 +86,10 @@ All buttons, axes, and rumble should respond correctly.
 
 ## HOTAS and joystick devices
 
-HOTAS throttle quadrants, rudder pedals, and raw flight sticks are supported via the `IJoystick`
-API. Axis assignments and deadzone/invert settings are configurable in `config/user.toml`.
+HOTAS throttle quadrants, rudder pedals, POV hats and raw flight sticks are supported via the
+`IJoystick` API. Every axis, button and hat direction is an ordinary binding in
+`config/bindings.toml`, tuned per device — see [Controls](controls.md#hotas-controls). Two sticks are
+addressed independently, by GUID rather than by device order, so their bindings survive a replug.
 
 HOTAS throttle quadrants, rudder pedals, and flight sticks appear as evdev nodes
 (`/dev/input/eventX`) on Linux. Adding your user to the `input` group (see above) covers
@@ -111,16 +113,24 @@ your brand using the same pattern.
 
 Reconnect the device after applying the rules (or run `sudo udevadm trigger`).
 
-### Axis config keys (`config/user.toml [controls]`)
+### Axis config
 
-| Key | Default | Description |
+Axis assignments, deadzone, response curve, inversion and mode are all in
+`config/bindings.toml` — `[bindings]` for the assignment and `[[axis_config]]` for the tuning. The
+`[controls] hotas_*` keys this section used to document were retired in
+[#1061](https://github.com/fighters-legacy/fighters-legacy/issues/1061); they are read once on upgrade
+and folded into `bindings.toml` automatically. See
+[Controls → `config/bindings.toml`](controls.md#configbindingstoml) for the schema.
+
+Default axis layout, applied to whichever stick is connected:
+
+| Axis index | Mapping | Action |
 |---|---|---|
-| `hotas_aileron_axis` | `0` | Axis index → aileron; -1 to disable |
-| `hotas_elevator_axis` | `1` | Axis index → elevator; -1 to disable |
-| `hotas_throttle_axis` | `2` | Axis index → throttle; -1 to disable |
-| `hotas_rudder_axis` | `3` | Axis index → rudder; -1 to disable |
-| `hotas_deadzone` | `0.05` | Center deadzone for stick and pedal axes |
-| `hotas_invert_pitch` | `false` | Flip elevator axis |
-| `hotas_invert_roll` | `false` | Flip aileron axis |
-| `hotas_invert_rudder` | `false` | Flip rudder axis |
-| `hotas_invert_throttle` | `false` | Flip throttle direction |
+| 0 | Aileron (roll) | `RollAxis` |
+| 1 | Elevator (pitch) | `PitchAxis` |
+| 2 | Throttle (absolute lever) | `ThrottleAxis` |
+| 3 | Rudder (yaw) | `YawAxis` |
+
+To pin a binding to one specific device, copy its GUID out of the `[[devices]]` table that
+`bindings.toml` records the first time the device is connected (the game also logs the GUID and name of
+every device as it arrives).

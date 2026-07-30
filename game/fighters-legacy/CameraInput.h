@@ -11,8 +11,8 @@
 namespace fl {
 
 class GameConsole;
-class IInput;
 class InputBindings;
+struct InputSources;
 
 class CameraController;
 class TerrainStreamer;
@@ -32,16 +32,18 @@ class CameraInput {
   public:
     // Detect camera mode switches (CameraCockpit/Chase/Free, #689) and the console toggle. Call once
     // per frame before update(). Every one of them resolves through InputBindings via setBindings()
-    // (#1050) — rebindable, gamepad-capable, and visible to the conflict checker.
-    void pollModeKeys(CameraController& ctrl, GameConsole& console, IInput& input, const EntityRenderEntry* player);
+    // (#1050) — rebindable, and reachable from any device the sources carry (#1061), including a
+    // joystick button or a POV hat.
+    void pollModeKeys(CameraController& ctrl, GameConsole& console, const InputSources& sources,
+                      const EntityRenderEntry* player);
 
-    // Compute and apply the camera pose for the current mode from SDL keyboard/mouse state.
+    // Compute and apply the camera pose for the current mode from the live input state.
     // console is queried to suppress camera movement when the console is open.
     // terrain is used to keep the free-fly camera above the ground.
-    // input drives the View* cockpit-look pan (#689) — a keyboard/d-pad alternative to RMB drag.
+    // sources drives the View* cockpit-look pan (#689) — a keyboard/hat alternative to RMB drag.
     void update(CameraController& ctrl,
                 const EntityRenderEntry* player, // nullptr = no snapshot yet
-                const GameConsole& console, TerrainStreamer& terrain, IInput& input);
+                const GameConsole& console, TerrainStreamer& terrain, const InputSources& sources);
 
     // Provide the binding table used to resolve the camera-mode, cockpit-pan, free-camera and
     // console-toggle actions (#689/#1050). Not owned; set once on entering Flight. Null = every one

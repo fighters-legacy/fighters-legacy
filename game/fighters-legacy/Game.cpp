@@ -73,6 +73,9 @@
 #include "input/AxisConfig.h"
 #include "input/BindingQuery.h"
 #include "input/InputBindings.h"
+#include "input/InputSources.h"
+#include "input/JoystickDevices.h"
+#include "input/LegacyHotas.h"
 #include "mission/MissionParser.h"
 #include "mission/ShotDirector.h"
 #include "net/DiscoveryListener.h"
@@ -311,7 +314,8 @@ static void writeFrameStats(const fl::FrameStatsRecorder& rec, const std::string
 static void updatePerfOverlay(GameConsole& console, IRenderer& renderer, PerformanceOverlay& overlay,
                               const fl::SimRenderBridge& bridge, UserConfig& userConfig, bool inFlight,
                               fl::CameraMode camMode, const CameraView& cam, const fl::EntityRenderEntry* playerEntry,
-                              fl::TerrainStreamer* terrain, IInput& input, const fl::InputBindings& bindings) {
+                              fl::TerrainStreamer* terrain, const fl::InputSources& sources,
+                              const fl::InputBindings& bindings) {
     if (!inFlight) {
         overlay.setMode(OverlayMode::Off);
         renderer.setOverlayLines({});
@@ -320,7 +324,7 @@ static void updatePerfOverlay(GameConsole& console, IRenderer& renderer, Perform
 
     // A bound action, not a raw F3 scancode (#1050): the conflict checker can only hold the key map
     // together if every control in it is actually in it.
-    if (!console.isOpen() && fl::actionJustPressed(input, bindings, fl::InputAction::PerfOverlayCycle)) {
+    if (!console.isOpen() && fl::actionJustPressed(sources, bindings, fl::InputAction::PerfOverlayCycle)) {
         overlay.cycleMode();
         DebugSettings ds = userConfig.debug();
         ds.overlayMode = overlay.mode();
@@ -384,7 +388,16 @@ struct GameServices {
     std::optional<UserConfig> userConfig;
     std::unique_ptr<fl::Localization> localization; // UI locale (#358); null before initContent
     fl::InputBindings inputBindings;                // loaded from config/bindings.toml; stored for Phase 4
-    fl::AxisConfigTable axisConfigTable;            // loaded from config/bindings.toml [axis_config]
+    fl::AxisConfigTable axisConfigTable;            // loaded from config/bindings.toml [[axis_config]]
+    // GUID -> live joystick index, plus the hat edges the HAL does not provide (#1061). Reconciled once
+    // per frame; every joystick binding resolves through it.
+    fl::JoystickDevices joystickDevices;
+    // The live input hardware, in one struct (#1061). Filled once IInput/IJoystick exist; every
+    // actionDown / actionAxis call in the game takes this rather than a growing argument list.
+    fl::InputSources inputSources{};
+    fs::path bindingsPath;         // <user data>/config/bindings.toml; rewritten when a new device is learned
+    bool bindingsWritable{false};  // false in a session that never managed to load the file
+    bool devicesReconciled{false}; // false until the first reconcileInputDevices(), which always reports
     RendererSettings rendererSettings;
     ResizeHandler resizeHandler;
 
@@ -791,6 +804,71 @@ void Game::recorderFinish() {
         d.services.exitCode = 1; // bad video is loud: non-zero exit fails the record_demo.py run
 }
 
+// Joystick device reconcile (#1061). Runs every frame; the cost is a handful of string compares.
+void Game::reconcileInputDevices() {
+    auto& d = *m_impl;
+    d.services.joystickDevices.update(*d.services.p.joystick);
+
+    const auto changes = d.services.joystickDevices.changes();
+    // The FIRST reconcile always reports, even with nothing connected: a player who launches without
+    // their HOTAS plugged in is exactly who the absent-device warning below is for, and on that machine
+    // there is no device change to notice.
+    const bool firstReconcile = !d.services.devicesReconciled;
+    d.services.devicesReconciled = true;
+    if (changes.empty() && !firstReconcile)
+        return;
+
+    // A stick arriving or leaving is worth a line either way. A HOTAS that silently stopped working is
+    // the same "intermittent and impossible to attribute" experience that made #1050 expensive.
+    bool learnedName = false;
+    for (const auto& c : changes) {
+        char msg[256];
+        std::snprintf(msg, sizeof(msg), "input device %s: '%s' (guid %s)", c.added ? "connected" : "disconnected",
+                      c.name.c_str(), c.guid.empty() ? "unknown" : c.guid.c_str());
+        d.services.rawLogger->log(LogLevel::Info, __FILE__, __LINE__, msg);
+        if (!c.added || c.guid.empty())
+            continue;
+        const fl::DeviceRef ref = fl::makeDeviceRef(c.guid.c_str());
+        if (std::string(d.services.inputBindings.deviceName(ref)) != c.name) {
+            d.services.inputBindings.noteDevice(ref, c.name);
+            learnedName = true;
+        }
+    }
+
+    // Persist a newly learned GUID + name into the file's [[devices]] table. This is what lets the
+    // absent-device warning below NAME a stick that is not plugged in on some later launch — the name
+    // can only come from the file, because the device is not there to ask. It is also the only way a
+    // player can hand-edit a binding onto one specific stick until the rebind UI lands: a GUID is 32 hex
+    // characters and has to be in front of them.
+    //
+    // At most one write per device ever connected, and it re-serializes the table we loaded, so the
+    // player's BINDINGS are preserved verbatim — but any comments they added to the file are not, which
+    // is why it says so rather than doing it silently.
+    if (learnedName && d.services.bindingsWritable) {
+        const std::string content =
+            d.services.inputBindings.serialize() + "\n" + d.services.axisConfigTable.serialize();
+        fl::writeConfigFile(d.services.bindingsPath, content, *d.services.rawLogger);
+        d.services.rawLogger->log(LogLevel::Info, __FILE__, __LINE__,
+                                  "recorded the new input device in bindings.toml's [[devices]] table so its "
+                                  "GUID can be used in a binding (the file was rewritten)");
+    }
+
+    // A binding whose device is absent is PRESERVED and INERT, never pruned: destroying a player's
+    // HOTAS map the first time they launch without the stick plugged in is the worse failure. It is
+    // reported ONCE PER DEVICE rather than once per binding, so a fully mapped stick does not produce
+    // forty lines.
+    for (const auto& use : d.services.inputBindings.deviceUsage()) {
+        if (d.services.joystickDevices.isPresent(use.ref))
+            continue;
+        char msg[320];
+        std::snprintf(msg, sizeof(msg),
+                      "bindings.toml: input device '%s' (guid %s) is not connected; its %d binding(s) are "
+                      "inactive until you plug it back in",
+                      use.name.empty() ? "unknown device" : use.name.c_str(), use.ref.guid, use.bindingCount);
+        d.services.rawLogger->log(LogLevel::Warn, __FILE__, __LINE__, msg);
+    }
+}
+
 // Steps 1–7: logger, filesystem, user config, audio, input.
 bool Game::initPlatform(int argc, char** argv) {
     auto& d = *m_impl;
@@ -821,26 +899,46 @@ bool Game::initPlatform(int argc, char** argv) {
     d.services.userConfig->load();
 
     // Load config/bindings.toml — writes defaults on first run.
-    // InputBindings provides [primary]/[secondary]/[gamepad]; AxisConfigTable provides [axis_config].
-    // Both deserializers accept the full file content (non-overlapping TOML sections).
+    // InputBindings owns `version`, `[[devices]]` and `[bindings]`; AxisConfigTable owns
+    // `[[axis_config]]`. Both deserializers accept the full file content (disjoint TOML sections).
     // Pass fs::path directly to avoid Windows locale-encoding issues from std::string conversion.
     {
         const fs::path bindingsPath = d.services.userDataDir / "config" / "bindings.toml";
+        d.services.bindingsPath = bindingsPath;
         const std::string defaults = fl::InputBindings{}.serialize() + "\n" + fl::AxisConfigTable{}.serialize();
         std::string content = fl::ensureAndReadConfig(bindingsPath, defaults, *d.services.rawLogger);
-        // A stored bindings.toml is a FULL table, not a patch. An install carrying a file written
-        // before #1050 would therefore load the old key map straight back over the new one and
-        // silently restore the collisions this release removed — for every player who never
-        // customised anything. Regenerate when the file predates the current map, keeping the
-        // player's axis tuning (which did not change) and leaving the old file beside it.
-        if (fl::InputBindings::fileFormatVersion(content) < fl::InputBindings::kFormatVersion) {
-            d.services.axisConfigTable.deserialize(content);
+        d.services.bindingsWritable = true;
+        const int storedVersion = fl::InputBindings::fileFormatVersion(content);
+
+        // A stored bindings.toml is a FULL table, not a patch, so a file from an older build has to be
+        // dealt with explicitly or it quietly wins over the shipped map. There are two cases and they
+        // are NOT the same:
+        //
+        //  * version < 2 (pre-#1050): the DEFAULTS THEMSELVES were wrong — that map had V on both the
+        //    radio and master arm. Reloading it would restore the collisions, so it is discarded and the
+        //    current defaults are written, exactly as #1050 did.
+        //
+        //  * version 2: only the SCHEMA changed (#1061). The bindings in it are still valid, so they are
+        //    read through the legacy-section reader and re-emitted in the new form — a player's rebinds
+        //    survive the format move. What a version-2 file cannot contain is any joystick axis (those
+        //    lived in `[controls]` in user.toml), so migrateLegacyHotas puts them back; without that
+        //    step a working HOTAS would go dead on upgrade.
+        if (storedVersion < fl::InputBindings::kFormatVersion) {
+            d.services.axisConfigTable.deserialize(content); // keeps a v2 [axis_config]'s gamepad tuning
+            if (storedVersion >= 2)
+                d.services.inputBindings.deserialize(content); // keeps the player's key map
+            fl::migrateLegacyHotas(d.services.userConfig->controls().legacyHotas, d.services.inputBindings,
+                                   d.services.axisConfigTable);
             fl::writeConfigFile(fs::path(bindingsPath.string() + ".bak"), content, *d.services.rawLogger);
-            content = fl::InputBindings{}.serialize() + "\n" + d.services.axisConfigTable.serialize();
+            content = d.services.inputBindings.serialize() + "\n" + d.services.axisConfigTable.serialize();
             fl::writeConfigFile(bindingsPath, content, *d.services.rawLogger);
-            d.services.rawLogger->log(fl::LogLevel::Warn, __FILE__, __LINE__,
-                                      "bindings.toml predated the current key map and was regenerated; "
-                                      "your previous file is beside it as bindings.toml.bak (#1050)");
+            const char* why = storedVersion >= 2
+                                  ? "bindings.toml was upgraded to the per-action binding list format and your "
+                                    "HOTAS axes moved in from user.toml's [controls]; your previous file is beside "
+                                    "it as bindings.toml.bak (#1061)"
+                                  : "bindings.toml predated the current key map and was regenerated; "
+                                    "your previous file is beside it as bindings.toml.bak (#1050)";
+            d.services.rawLogger->log(fl::LogLevel::Warn, __FILE__, __LINE__, why);
         }
         d.services.inputBindings.deserialize(content);
         d.services.axisConfigTable.deserialize(content);
@@ -849,9 +947,9 @@ bool Game::initPlatform(int argc, char** argv) {
         // in the air — which is exactly how the shipped V collision presented (#1050). A warning,
         // not a refusal: the file is the player's, and the game still flies.
         for (const auto& c : d.services.inputBindings.findConflicts()) {
-            const std::string msg = std::string("bindings.toml: ") + fl::InputBindings::actionName(c.a) + " (" +
-                                    fl::InputBindings::slotName(c.slotA) + ") and " +
-                                    fl::InputBindings::actionName(c.b) + " (" + fl::InputBindings::slotName(c.slotB) +
+            const std::string msg = std::string("bindings.toml: ") + fl::InputBindings::actionName(c.a) + " (binding " +
+                                    std::to_string(c.indexA + 1) + ") and " + fl::InputBindings::actionName(c.b) +
+                                    " (binding " + std::to_string(c.indexB + 1) +
                                     ") share an input and are both live at the same time";
             d.services.rawLogger->log(fl::LogLevel::Warn, __FILE__, __LINE__, msg.c_str());
         }
@@ -970,6 +1068,11 @@ bool Game::initPlatform(int argc, char** argv) {
 
     d.services.p.input = std::make_unique<SDL3Input>();
     d.services.p.joystick = std::make_unique<SDL3Joystick>();
+    // Every binding read in the game resolves against this (#1061). It is filled here, once, rather
+    // than assembled at each call site — which is what kept adding a parameter to every consumer as
+    // the input surface grew.
+    d.services.inputSources = fl::InputSources{d.services.p.input.get(), d.services.p.joystick.get(),
+                                               &d.services.joystickDevices, /*gamepadId=*/0};
 
     return true;
 }
@@ -1604,7 +1707,7 @@ void Game::startGame(const std::string& mission) {
             fsd.terrainStreamer = d.services.terrainStreamer.get();
             fsd.env = &d.services.env;
             fsd.entityRegistry = &d.services.entityRegistry;
-            fsd.joystick = d.services.p.joystick.get();
+            fsd.inputSources = &d.services.inputSources;
             fsd.userConfig = &*d.services.userConfig;
             fsd.inputBindings = &d.services.inputBindings;
             fsd.sceneRenderer = d.services.sceneRenderer.get();
@@ -1873,7 +1976,7 @@ void Game::startGame(const std::string& mission) {
         fsd.clientNet = d.session.clientNet.get();
         fsd.clientNetHandler = d.session.clientHandler.get();
         fsd.entityRegistry = &d.services.entityRegistry;
-        fsd.joystick = d.services.p.joystick.get();
+        fsd.inputSources = &d.services.inputSources;
         fsd.userConfig = &*d.services.userConfig;
         fsd.inspector = d.session.inspector ? &*d.session.inspector : nullptr;
         fsd.prediction = &d.services.prediction;
@@ -2163,6 +2266,12 @@ void Game::run() {
 
     while (running && !d.services.p.window->shouldClose()) {
         d.services.p.window->pollEvents();
+
+        // Reconcile the joystick device table (#1061) — GUID -> live index, and this frame's hat
+        // positions. It runs BEFORE any binding is read, because pollEvents() may just have removed a
+        // device and SDL3Joystick renumbers every index above it.
+        if (d.services.p.joystick)
+            reconcileInputDevices();
 
         // Asset hot-reload (#152): poll the watcher and route changed assets to the GPU/prediction
         // caches. No-op (and cheap) when the watcher is absent (FL_HOT_RELOAD not set).
@@ -2471,10 +2580,10 @@ void Game::run() {
             // switch this replaced looked at the primary slot only and understood two of the four
             // binding sources, so a PTT on the mouse or a secondary slot was simply dead.
             auto held = [&d](fl::InputAction action) {
-                return fl::actionDown(*d.services.p.input, d.services.inputBindings, action);
+                return fl::actionDown(d.services.inputSources, d.services.inputBindings, action);
             };
             if (inFlight && !uiFocused) {
-                if (fl::actionJustPressed(*d.services.p.input, d.services.inputBindings,
+                if (fl::actionJustPressed(d.services.inputSources, d.services.inputBindings,
                                           fl::InputAction::VoiceNetCycle)) {
                     d.services.voiceChat.cyclePrimaryNet();
                     d.services.gameConsole->print(
@@ -2796,7 +2905,7 @@ void Game::run() {
         if (cur == Screen::Flight && d.session.clientHandler && d.services.p.gui) {
             const auto& ms = d.session.clientHandler->matchState();
             const bool keyHeld =
-                fl::actionDown(*d.services.p.input, d.services.inputBindings, fl::InputAction::Scoreboard);
+                fl::actionDown(d.services.inputSources, d.services.inputBindings, fl::InputAction::Scoreboard);
             if (keyHeld || (ms.valid && fl::scoreboardAutoShows(ms.phase)))
                 d.services.scoreboardOverlay.render(d.services.p.gui.get(),
                                                     buildScoreboardData(*d.session.clientHandler));
@@ -2809,7 +2918,7 @@ void Game::run() {
         updatePerfOverlay(*d.services.gameConsole, *d.services.p.renderer, d.services.perfOverlay,
                           d.services.renderBridge, *d.services.userConfig, cur == Screen::Flight,
                           d.services.cameraController.mode(), cam, playerEntry, d.services.terrainStreamer.get(),
-                          *d.services.p.input, d.services.inputBindings);
+                          d.services.inputSources, d.services.inputBindings);
 
         // Frame-stats export (#782) + the unattended run clock. Flight frames only: menu and loading
         // frames render a different (trivial) scene, and mixing them into the sample set would drag
