@@ -7,16 +7,29 @@ New to the game? [Quick start](quickstart.md) covers just enough to fly.
 
 ## How bindings work
 
-Every gameplay control is an **action** with a name (`FireWeapon`, `MasterArm`, …) and up to three
-bindings: `[primary]` and `[secondary]` for keyboard/mouse, `[gamepad]` for a pad or stick. The game
-never reads a physical key directly — it asks the table for the action — so anything listed on this
-page can be rebound in `config/bindings.toml`, and rebinding it moves the control for real.
+Every gameplay control is an **action** with a name (`FireWeapon`, `MasterArm`, …) and **any number of
+bindings, all live at once**. The gun can be `Space`, the left mouse button, a gamepad shoulder, button
+5 on your stick and button 7 on your throttle quadrant simultaneously; press any of them and it fires.
+The game never reads a physical key directly — it asks the table for the action — so anything listed on
+this page can be rebound in `config/bindings.toml`, and rebinding it moves the control for real.
+
+A binding names the **device** it belongs to, by its GUID rather than by its position in the device
+list. That is what lets two joysticks be bound independently, and what makes those bindings survive
+unplugging something: device *indices* are renumbered every time hardware comes or goes, so an
+index-keyed binding would silently start driving a different piece of hardware. The shipped defaults
+name no device at all, which means "whichever stick is plugged in".
+
+**A binding whose device is not connected is kept, and simply does nothing.** Plug the device back in
+and the control returns, with no re-binding — nothing is ever pruned from your file for being
+temporarily absent. The game logs one warning per missing device at startup, naming it, so a control
+that has gone quiet is never a mystery.
 
 Two actions may share an input when the game never reads both at once. `Space` is the gun trigger
 while you are flying and the pause key while you are watching a replay; those are different
 **contexts** (flying / spectating / replay / photo mode) and never overlap. Two actions that *are*
-live together may not share an input, and the build fails if the shipped defaults ever do. If you
-hand-edit `bindings.toml` into a clash, the game logs a warning naming both actions at startup.
+live together may not share an input, and the build fails if the shipped defaults ever do. Bindings on
+two *different* devices are never a clash, even at the same button number. If you hand-edit
+`bindings.toml` into a real clash, the game logs a warning naming both actions at startup.
 
 ## Flight controls
 
@@ -243,99 +256,174 @@ deadzone. Deadzone, response curve, inversion, and axis mapping are configured i
 | Aileron (roll) | Right stick X | `RollAxis` |
 | Rudder (yaw) | Left stick X | `YawAxis` |
 
-Button bindings are configured in the `[gamepad]` section of `config/bindings.toml` (see below).
+Button bindings are ordinary entries in `[bindings]` with `source = "GamepadButton"` (see below).
 Defaults: `FireWeapon` = right shoulder, `FireStore` = left trigger, `NextWeapon` / `PrevWeapon` =
 D-pad right / left, `Afterburner` = left shoulder, `Airbrake` = B, `LandingGear` = D-pad down,
 `PadlockToggle` = right stick click, `NextTarget` = D-pad up, `WingmanMenu` = Back, `Pause` = Start.
 
 ## HOTAS controls
 
-HOTAS sticks, throttle quadrants, and rudder pedals are supported via the raw joystick API on
-all platforms. Windows and macOS work without additional device setup; Linux users may need udev
-rules for device permissions (see [docs/user-guide/gamepad-linux.md](../user-guide/gamepad-linux.md)).
+HOTAS sticks, throttle quadrants, rudder pedals and POV hats are supported through the raw joystick
+API on all platforms. Windows and macOS work without additional device setup; Linux users may need
+udev rules for device permissions (see
+[docs/user-guide/gamepad-linux.md](../user-guide/gamepad-linux.md)).
 
-Axis assignments default to a standard HOTAS layout and are configurable per device. A HOTAS
-axis overrides the corresponding keyboard or gamepad control when active; inactive HOTAS axes
-leave keyboard/gamepad values untouched.
+**Everything on a HOTAS is an ordinary binding.** Axes, buttons and hat directions all live in
+`[bindings]` alongside the keyboard, so a HOTAS trigger can fire the gun, a hat can drop the gear, and
+every one of them is visible to the conflict checker. Up to and including v0.3.13 the four flight axes
+lived in a separate `[controls]` section of `user.toml`, read by index on whichever stick happened to be
+first, and *no* HOTAS button could be bound to anything at all.
 
-**Throttle axis mapping:** the throttle axis reports full travel as `[-1, 1]`; this is remapped
-to `[0, 1]` automatically. Keyboard Page Up / Page Down and the gamepad trigger remain active
-when the HOTAS throttle axis is disabled (`hotas_throttle_axis = -1`).
-
-| Default axis index | Mapping |
-|---|---|
-| 0 | Aileron (roll) |
-| 1 | Elevator (pitch) |
-| 2 | Throttle |
-| 3 | Rudder (yaw) |
-
-Configure in the `[controls]` section of `config/user.toml`:
-
-| Key | Default | Description |
+| Source | Field | Meaning |
 |---|---|---|
-| `hotas_aileron_axis` | `0` | Axis index → aileron; -1 to disable |
-| `hotas_elevator_axis` | `1` | Axis index → elevator; -1 to disable |
-| `hotas_throttle_axis` | `2` | Axis index → throttle; -1 to disable |
-| `hotas_rudder_axis` | `3` | Axis index → rudder; -1 to disable |
-| `hotas_deadzone` | `0.05` | Center deadzone for stick and pedal axes (not applied to throttle) |
-| `hotas_invert_pitch` | `false` | Flip elevator axis |
-| `hotas_invert_roll` | `false` | Flip aileron axis |
-| `hotas_invert_rudder` | `false` | Flip rudder axis |
-| `hotas_invert_throttle` | `false` | Flip throttle direction |
+| `JoystickAxis` | `index` | Raw axis number on the device |
+| `JoystickButton` | `index` | Raw button number on the device |
+| `JoystickHat` | `index` + `direction` | Hat number, plus which of the eight directions triggers |
+
+A binding on a cardinal hat direction (`Up`/`Down`/`Left`/`Right`) also fires on the two diagonals
+either side of it, so a four-way POV view control does not go dead when your thumb rolls slightly off.
+A binding on a diagonal (`UpRight`, …) matches only that corner.
+
+Default axis layout, applied to whichever stick is connected:
+
+| Default axis index | Mapping | Action |
+|---|---|---|
+| 0 | Aileron (roll) | `RollAxis` |
+| 1 | Elevator (pitch) | `PitchAxis` |
+| 2 | Throttle | `ThrottleAxis` |
+| 3 | Rudder (yaw) | `YawAxis` |
+
+For each of the four flight axes the joystick binding is listed **first**, ahead of the gamepad axis:
+for an analog control the first binding past its deadzone wins, so if you have a HOTAS the HOTAS is in
+command. Reorder the list to change that.
+
+Deadzone, response curve, inversion and scale for a HOTAS axis are set in `[[axis_config]]` with
+`source = "JoystickAxis"` — the same table the gamepad axes use. The stick axes default to a `0.05`
+deadzone (a HOTAS potentiometer has far less slop than a thumbstick) and the throttle axis defaults to
+`mode = "Absolute"`; see below.
+
+**Upgrading from v0.3.13 or earlier.** The `hotas_*` keys in `[controls]` are read once, folded into
+`config/bindings.toml`, and then ignored — your axis assignments, deadzone and inversions carry over
+automatically, including an axis you had disabled with `-1`. Your previous `bindings.toml` is kept
+beside the new one as `bindings.toml.bak`. The `[controls]` keys are no longer written and can be
+deleted by hand.
 
 ## `config/bindings.toml`
 
-Generated at `<user data>/config/bindings.toml` on first run. Contains one section per binding slot
-— `[primary]`, `[secondary]`, `[gamepad]` — plus `[axis_config]`. A restart applies changes.
+Generated at `<user data>/config/bindings.toml` on first run. A restart applies changes. It has four
+parts: `version`, an optional `[[devices]]` list, `[bindings]`, and `[[axis_config]]`.
 
-### `[axis_config]`
+### `version`
 
-Per-axis deadzone, response curve, inversion, and scale for all 6 gamepad axes. Defaults:
+Marks which shipped key map and file schema the file was written from. Lowering or removing it makes
+the game regenerate the file from the current defaults. When the game upgrades the file it writes your
+old one beside it as `bindings.toml.bak` and says so in the log.
 
-| Axis | deadzone | curve | invert | scale |
-|---|---|---|---|---|
-| `LeftX` (rudder) | `0.1` | `"Linear"` | `false` | `1.0` |
-| `LeftY` | `0.1` | `"Linear"` | `false` | `1.0` |
-| `RightX` (aileron) | `0.1` | `"Linear"` | `false` | `1.0` |
-| `RightY` (elevator) | `0.1` | `"Linear"` | `false` | `1.0` |
-| `TriggerLeft` (throttle) | `0.1` | `"Linear"` | `false` | `1.0` |
-| `TriggerRight` | `0.1` | `"Linear"` | `false` | `1.0` |
+### `[[devices]]`
 
-- **deadzone**: axis magnitude below this maps to 0.0 (clamped to [0, 1]).
-- **curve**: `"Linear"` passes through; `"Cubic"` applies a cubic ease-in (reduces sensitivity near centre).
-- **invert**: `true` flips the axis sign. Note: `invert` is not meaningful for `TriggerLeft` (a unipolar [0, 1] axis); use the HOTAS `hotas_invert_throttle` path instead.
-- **scale**: output multiplier applied after curve (default `1.0`).
-
-### `[primary]`, `[secondary]`, `[gamepad]`
-
-One entry per action per slot. `[primary]` and `[secondary]` hold keyboard/mouse bindings (the gun is
-`Space` in one and the left mouse button in the other); `[gamepad]` holds the pad or stick binding.
-An action may leave any slot at `None`.
+The joysticks this file refers to, recorded the first time each one is connected:
 
 ```toml
-[primary]
-MasterArm = { source = "Keyboard", id = "V" }
-
-[secondary]
-FireWeapon = { source = "MouseButton", id = "Left" }
-
-[gamepad]
-PitchAxis = { source = "GamepadAxis", id = "LeftY", negative = false }
+[[devices]]
+guid = "03000000a1b2c3d4000000000000aaaa"
+name = "Thrustmaster T.16000M"
 ```
 
-`source` is one of `None` / `Keyboard` / `MouseButton` / `GamepadButton` / `GamepadAxis`; `id` is the
-name from the tables above (letters, digits, `Space`, `Enter`, `Tab`, `Escape`, arrows, `Home`,
-`End`, `PageUp`, `PageDown`, `Insert`, `Delete`, `F1`–`F12`, `Minus`, `Equals`, `Comma`, `Period`,
-`Slash`, `Semicolon`, `Apostrophe`, `LeftBracket`, `RightBracket`, `Backslash`, `Grave`,
-`Numpad0`–`Numpad9`, `NumpadPlus`, `NumpadMinus`, `NumpadMultiply`, `NumpadDivide`, `NumpadPeriod`,
-`NumpadEnter`, and the four modifier pairs). `negative` applies to `GamepadAxis` only and selects the
-negative half of the axis.
+The **GUID is the identity**; the name is there so you have something legible to work with and so a
+warning about an absent device can name it. Copy a GUID from here into a binding's `device` field to
+pin that binding to that specific stick.
+
+### `[bindings]`
+
+One array per action. Every entry in the array is live at the same time; order matters only for analog
+axes, where the first one past its deadzone wins.
+
+```toml
+[bindings]
+FireWeapon = [
+  { source = "Keyboard",       id = "Space" },
+  { source = "MouseButton",    id = "Left" },
+  { source = "GamepadButton",  id = "RightShoulder" },
+  { source = "JoystickButton", index = 5, device = "03000000a1b2c3d4000000000000aaaa" },
+  { source = "JoystickButton", index = 7, device = "03000000a1b2c3d4000000000000bbbb" },
+]
+LandingGear = [
+  { source = "Keyboard",    id = "G" },
+  { source = "JoystickHat", index = 0, direction = "Down" },
+]
+PitchAxis = [
+  { source = "JoystickAxis", index = 1 },
+  { source = "GamepadAxis",  id = "RightY", negative = false },
+]
+EcmToggle = []   # explicitly unbound
+```
+
+`source` is one of `None` / `Keyboard` / `MouseButton` / `GamepadButton` / `GamepadAxis` /
+`JoystickButton` / `JoystickAxis` / `JoystickHat`.
+
+- `id` names an enum value: letters, digits, `Space`, `Enter`, `Tab`, `Escape`, arrows, `Home`, `End`,
+  `PageUp`, `PageDown`, `Insert`, `Delete`, `F1`–`F12`, `Minus`, `Equals`, `Comma`, `Period`, `Slash`,
+  `Semicolon`, `Apostrophe`, `LeftBracket`, `RightBracket`, `Backslash`, `Grave`, `Numpad0`–`Numpad9`,
+  `NumpadPlus`, `NumpadMinus`, `NumpadMultiply`, `NumpadDivide`, `NumpadPeriod`, `NumpadEnter` and the
+  four modifier pairs; mouse `Left` / `Middle` / `Right`; the gamepad button and axis names from the
+  tables above.
+- `index` is the raw number for the three `Joystick*` sources, which have no fixed enum.
+- `direction` applies to `JoystickHat` only: `Up`, `UpRight`, `Right`, `DownRight`, `Down`, `DownLeft`,
+  `Left`, `UpLeft`.
+- `negative` applies to axis sources used as an on/off control, and selects the negative half.
+- `device` applies to the `Joystick*` sources; omit it or leave it empty for "whichever stick is
+  plugged in".
+
+An entry the game cannot resolve — an unknown key name, a hat with no direction, a joystick binding
+with no index — makes it reject the whole file and keep the previous bindings rather than guess at a
+different control.
 
 If two actions that are live at the same time end up on the same input, the game logs a warning at
 startup naming both — it will not silently pick one, which is how a radio key came to double as the
 master-arm switch ([#1050](https://github.com/fighters-legacy/fighters-legacy/issues/1050)).
 
-A file written by an older build with an `[alt]` section still loads: `[alt]` is read as `[gamepad]`.
+A file written by an older build still loads: the `[primary]` / `[secondary]` / `[gamepad]` sections
+(and the even older `[alt]`) are read in that order into one binding list per action, so your rebinds
+survive the upgrade.
+
+### `[[axis_config]]`
+
+Per-axis deadzone, response curve, mode, inversion and scale, keyed by the same
+`(source, device, index)` triple a binding uses — so a gamepad, a stick and a second identical stick
+can each be tuned separately.
+
+```toml
+[[axis_config]]
+source = "GamepadAxis"
+id = "RightY"
+deadzone = 0.1
+curve = "Linear"
+mode = "Centered"
+invert = false
+scale = 1.0
+
+[[axis_config]]
+source = "JoystickAxis"
+index = 2
+mode = "Absolute"
+deadzone = 0.05
+invert = false
+```
+
+- **deadzone**: axis magnitude at or below this reads as zero *and* leaves the control to the keyboard
+  (clamped to [0, 0.99]). Ignored in `Absolute` mode.
+- **curve**: `"Linear"` passes through; `"Cubic"` reduces sensitivity near centre.
+- **mode**: `"Centered"` for a spring-return stick or thumbstick — zero is the middle of its travel and
+  the value is the control deflection. `"Absolute"` for a lever that stays where you leave it: the full
+  `[-1, 1]` travel maps onto `[0, 1]`, there is no centre deadzone, and it commands the control even at
+  idle (a closed throttle is a command, not an absent input). Use `Absolute` for a HOTAS throttle.
+- **invert**: flips the axis. In `Absolute` mode it flips which end of the travel is full power, which
+  is what the old `hotas_invert_throttle` did.
+- **scale**: output multiplier applied after the curve (default `1.0`).
+
+Defaults: the six gamepad axes at `deadzone = 0.1`, `Linear`, `Centered`; joystick axes 0, 1 and 3 at
+`deadzone = 0.05`, `Centered`; joystick axis 2 at `deadzone = 0.05`, `Absolute`. An axis with no entry
+of its own falls back to the same axis with no `device` set, and then to those defaults.
 
 ## Haptic feedback
 

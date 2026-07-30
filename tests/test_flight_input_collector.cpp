@@ -5,11 +5,12 @@
 
 #include "CameraInput.h"
 #include "FlightInputCollector.h"
-#include "config/ControlsSettings.h"
 #include "console/CommandRegistry.h"
 #include "console/GameConsole.h"
 #include "input/AxisConfig.h"
 #include "input/InputBindings.h"
+#include "input/InputSources.h"
+#include "input/JoystickDevices.h"
 #include "mock_hal.h"
 #include "render/RenderSnapshot.h"
 #include "render/SimRenderBridge.h"
@@ -17,6 +18,55 @@
 #include <chrono>
 
 using namespace fl;
+
+namespace {
+
+// Keyboard / mouse / gamepad only — no stick attached.
+fl::InputSources kbOnly(MockInput& in) {
+    return fl::InputSources{&in, nullptr, nullptr, 0};
+}
+
+// With a raw joystick and its device table (#1061). The table has to be update()d against the mock
+// before the sources are used, or nothing resolves.
+fl::InputSources withStick(MockInput& in, MockJoystick& joy, fl::JoystickDevices& devices) {
+    devices.update(joy);
+    return fl::InputSources{&in, &joy, &devices, 0};
+}
+
+fl::Binding keyBinding(Key k) {
+    fl::Binding b{};
+    b.source = fl::BindingSource::Keyboard;
+    b.id = static_cast<uint32_t>(k);
+    return b;
+}
+
+fl::Binding padAxisBinding(GamepadAxis a, bool negative = false) {
+    fl::Binding b{};
+    b.source = fl::BindingSource::GamepadAxis;
+    b.id = static_cast<uint32_t>(a);
+    b.axisNegative = negative;
+    return b;
+}
+
+// The action's gamepad-button binding. Slots are gone (#1061), so "the pad binding" is now found by
+// source rather than by pigeonhole.
+fl::Binding padBindingOf(const fl::InputBindings& binds, fl::InputAction action) {
+    for (const fl::Binding& b : binds.get(action))
+        if (b.source == fl::BindingSource::GamepadButton)
+            return b;
+    return fl::Binding{};
+}
+
+// The single HOTAS device the migrated axis tests drive. Eight axes is enough for every index they use.
+MockJoystick::Device& hotasDevice(MockJoystick& joy) {
+    auto& dev = joy.addDevice("03000000a1b2c3d4000000000000aaaa", "MockHotas");
+    dev.axes.assign(8, 0.0f);
+    dev.buttons.assign(16, false);
+    dev.justPressed.assign(16, false);
+    return dev;
+}
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // Rate limiter + seqNum
@@ -33,7 +83,7 @@ TEST_CASE("FlightInputCollector first poll always returns value", "[flight_input
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
 }
 
@@ -48,8 +98,8 @@ TEST_CASE("FlightInputCollector second poll at same clock time returns nullopt",
     fl::ManualClock t;
     fic.setClock(t);
 
-    fic.poll(bridge, cam, console, inp, nullptr, {});
-    auto r2 = fic.poll(bridge, cam, console, inp, nullptr, {});
+    fic.poll(bridge, cam, console, kbOnly(inp));
+    auto r2 = fic.poll(bridge, cam, console, kbOnly(inp));
     CHECK_FALSE(r2.has_value());
 }
 
@@ -65,11 +115,11 @@ TEST_CASE("FlightInputCollector wasWeaponFired resets on rate-limited poll", "[f
     fl::ManualClock t;
     fic.setClock(t);
 
-    fic.poll(bridge, cam, console, inp, nullptr, {});
+    fic.poll(bridge, cam, console, kbOnly(inp));
     CHECK(fic.wasWeaponFired());
 
     // Same tick — nullopt returned, but weaponFired still resets.
-    fic.poll(bridge, cam, console, inp, nullptr, {});
+    fic.poll(bridge, cam, console, kbOnly(inp));
     CHECK_FALSE(fic.wasWeaponFired());
 }
 
@@ -86,7 +136,7 @@ TEST_CASE("FlightInputCollector master arm gates the fire triggers (#641)", "[fl
     fic.setClock(t);
 
     // Default is ARM: the trigger fires.
-    auto r1 = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r1 = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r1.has_value());
     CHECK(fic.masterArm());
     CHECK((r1->buttons & 1u) != 0u);
@@ -96,7 +146,7 @@ TEST_CASE("FlightInputCollector master arm gates the fire triggers (#641)", "[fl
     // push-to-talk, and while master arm shared it, keying the mic silently safed the guns (#1050).
     inp.held.insert(Key::Num4);
     t.advance(std::chrono::milliseconds(17));
-    auto r2 = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r2 = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r2.has_value());
     CHECK_FALSE(fic.masterArm());
     // SAFE suppresses the gun trigger (bit 0) and the fire-store (bit 2), and clears wasWeaponFired.
@@ -107,10 +157,10 @@ TEST_CASE("FlightInputCollector master arm gates the fire triggers (#641)", "[fl
     // Release it, press it again -> back to ARM.
     inp.held.erase(Key::Num4);
     t.advance(std::chrono::milliseconds(17));
-    fic.poll(bridge, cam, console, inp, nullptr, {});
+    fic.poll(bridge, cam, console, kbOnly(inp));
     inp.held.insert(Key::Num4);
     t.advance(std::chrono::milliseconds(17));
-    auto r4 = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r4 = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r4.has_value());
     CHECK(fic.masterArm());
     CHECK((r4->buttons & 1u) != 0u);
@@ -119,10 +169,10 @@ TEST_CASE("FlightInputCollector master arm gates the fire triggers (#641)", "[fl
     // master arm exactly where it was.
     inp.held.erase(Key::Num4);
     t.advance(std::chrono::milliseconds(17));
-    fic.poll(bridge, cam, console, inp, nullptr, {});
+    fic.poll(bridge, cam, console, kbOnly(inp));
     inp.held.insert(Key::V);
     t.advance(std::chrono::milliseconds(17));
-    auto r5 = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r5 = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r5.has_value());
     CHECK(fic.masterArm());
     CHECK((r5->buttons & 1u) != 0u);
@@ -139,9 +189,9 @@ TEST_CASE("FlightInputCollector advancing clock past gate returns value", "[flig
     fl::ManualClock t;
     fic.setClock(t);
 
-    fic.poll(bridge, cam, console, inp, nullptr, {});
+    fic.poll(bridge, cam, console, kbOnly(inp));
     t.advance(std::chrono::milliseconds(17));
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
 }
 
@@ -156,17 +206,17 @@ TEST_CASE("FlightInputCollector seqNum increments across polls", "[flight_input]
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r0 = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r0 = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r0.has_value());
     CHECK(r0->seqNum == 0u);
 
     t.advance(std::chrono::milliseconds(17));
-    auto r1 = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r1 = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r1.has_value());
     CHECK(r1->seqNum == 1u);
 
     t.advance(std::chrono::milliseconds(17));
-    auto r2 = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r2 = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r2.has_value());
     CHECK(r2->seqNum == 2u);
 }
@@ -193,7 +243,7 @@ TEST_CASE("FlightInputCollector leaves the snapshot ack unset", "[flight_input]"
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK(r->tickIndex == 0u); // left default — stamped later by stampAck()
     CHECK(r->ackMask == 0u);
@@ -215,7 +265,7 @@ TEST_CASE("FlightInputCollector Space sets fire bit and wasWeaponFired", "[fligh
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK((r->buttons & 1u) != 0u);
     CHECK(fic.wasWeaponFired());
@@ -233,7 +283,7 @@ TEST_CASE("FlightInputCollector Tab sets afterburner bit", "[flight_input]") {
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK((r->buttons & 2u) != 0u);
     CHECK_FALSE(fic.wasWeaponFired());
@@ -251,7 +301,7 @@ TEST_CASE("FlightInputCollector ArrowUp gives negative elevator", "[flight_input
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK(r->elevator == Catch::Approx(-1.f));
 }
@@ -268,7 +318,7 @@ TEST_CASE("FlightInputCollector ArrowDown gives positive elevator", "[flight_inp
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK(r->elevator == Catch::Approx(1.f));
 }
@@ -285,7 +335,7 @@ TEST_CASE("FlightInputCollector ArrowLeft gives negative aileron", "[flight_inpu
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK(r->aileron == Catch::Approx(-1.f));
 }
@@ -302,7 +352,7 @@ TEST_CASE("FlightInputCollector ArrowRight gives positive aileron", "[flight_inp
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK(r->aileron == Catch::Approx(1.f));
 }
@@ -319,7 +369,7 @@ TEST_CASE("FlightInputCollector Key Z gives negative rudder", "[flight_input]") 
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK(r->rudder == Catch::Approx(-1.f));
 }
@@ -336,7 +386,7 @@ TEST_CASE("FlightInputCollector Key X gives positive rudder", "[flight_input]") 
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK(r->rudder == Catch::Approx(1.f));
 }
@@ -353,7 +403,7 @@ TEST_CASE("FlightInputCollector LeftShift sets throttle to 1", "[flight_input]")
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK(r->throttle == Catch::Approx(1.f));
 }
@@ -371,7 +421,7 @@ TEST_CASE("FlightInputCollector PageUp increases throttle via camInput", "[fligh
     fic.setClock(t);
 
     const float before = cam.throttle();
-    fic.poll(bridge, cam, console, inp, nullptr, {});
+    fic.poll(bridge, cam, console, kbOnly(inp));
     CHECK(cam.throttle() > before);
 }
 
@@ -389,7 +439,7 @@ TEST_CASE("FlightInputCollector PageDown decreases throttle via camInput", "[fli
 
     // Start at half-throttle so there is room to decrease.
     cam.setThrottle(0.5f);
-    fic.poll(bridge, cam, console, inp, nullptr, {});
+    fic.poll(bridge, cam, console, kbOnly(inp));
     CHECK(cam.throttle() < 0.5f);
 }
 
@@ -406,7 +456,7 @@ TEST_CASE("FlightInputCollector opposing Up+Down cancel to zero elevator", "[fli
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK(r->elevator == Catch::Approx(0.f));
 }
@@ -424,7 +474,7 @@ TEST_CASE("FlightInputCollector opposing Left+Right cancel to zero aileron", "[f
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK(r->aileron == Catch::Approx(0.f));
 }
@@ -442,7 +492,7 @@ TEST_CASE("FlightInputCollector opposing Z+X cancel to zero rudder", "[flight_in
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK(r->rudder == Catch::Approx(0.f));
 }
@@ -465,7 +515,7 @@ TEST_CASE("FlightInputCollector console open suppresses keyboard input", "[fligh
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK(r->buttons == 0u);
     CHECK(r->elevator == Catch::Approx(0.f));
@@ -479,7 +529,6 @@ TEST_CASE("FlightInputCollector console open suppresses gamepad input", "[flight
     console.openHeadless();
     MockInput inp;
     inp.gamepadCount = 1;
-    ControlsSettings cs;
     inp.gpDown.insert({0, GamepadButton::RightShoulder});
     CameraInput cam;
     fl::SimRenderBridge bridge;
@@ -487,7 +536,7 @@ TEST_CASE("FlightInputCollector console open suppresses gamepad input", "[flight
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, cs);
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK(r->buttons == 0u);
 }
@@ -505,7 +554,7 @@ TEST_CASE("FlightInputCollector console open still reads throttle from camInput"
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK(r->throttle == Catch::Approx(0.7f));
 }
@@ -520,7 +569,6 @@ TEST_CASE("FlightInputCollector gamepad fireButton sets bit 0 and wasWeaponFired
     GameConsole console(log, reg);
     MockInput inp;
     inp.gamepadCount = 1;
-    ControlsSettings cs;
     inp.gpDown.insert({0, GamepadButton::RightShoulder});
     CameraInput cam;
     fl::SimRenderBridge bridge;
@@ -528,7 +576,7 @@ TEST_CASE("FlightInputCollector gamepad fireButton sets bit 0 and wasWeaponFired
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, cs);
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK((r->buttons & 1u) != 0u);
     CHECK(fic.wasWeaponFired());
@@ -540,7 +588,6 @@ TEST_CASE("FlightInputCollector gamepad afterburnerButton sets bit 1", "[flight_
     GameConsole console(log, reg);
     MockInput inp;
     inp.gamepadCount = 1;
-    ControlsSettings cs;
     inp.gpDown.insert({0, GamepadButton::LeftShoulder});
     CameraInput cam;
     fl::SimRenderBridge bridge;
@@ -548,7 +595,7 @@ TEST_CASE("FlightInputCollector gamepad afterburnerButton sets bit 1", "[flight_
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, cs);
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK((r->buttons & 2u) != 0u);
     CHECK_FALSE(fic.wasWeaponFired());
@@ -561,14 +608,13 @@ TEST_CASE("FlightInputCollector gamepad TriggerLeft above deadzone sets throttle
     MockInput inp;
     inp.gamepadCount = 1;
     inp.axisValues[{0, GamepadAxis::TriggerLeft}] = 0.5f;
-    ControlsSettings cs;
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, cs);
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK(r->throttle > 0.f);
 }
@@ -580,7 +626,9 @@ TEST_CASE("FlightInputCollector gamepad TriggerLeft at deadzone does not overrid
     MockInput inp;
     inp.gamepadCount = 1;
     fl::AxisConfigTable axes;
-    const float dz = axes.get(GamepadAxis::TriggerLeft).deadzone; // 0.1f default
+    const float dz =
+        axes.effective(fl::AxisKey{fl::BindingSource::GamepadAxis, static_cast<uint32_t>(GamepadAxis::TriggerLeft), {}})
+            .deadzone; // 0.1f default
     inp.axisValues[{0, GamepadAxis::TriggerLeft}] = dz;
     CameraInput cam;
     cam.setThrottle(0.3f);
@@ -590,7 +638,7 @@ TEST_CASE("FlightInputCollector gamepad TriggerLeft at deadzone does not overrid
     fic.setClock(t);
     fic.setAxisConfig(axes);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     // Trigger at deadzone → apply() returns 0.0f → keyboard throttle (camInput) holds.
     CHECK(r->throttle == Catch::Approx(0.3f));
@@ -603,14 +651,13 @@ TEST_CASE("FlightInputCollector gamepad RightY above deadzone overrides elevator
     MockInput inp;
     inp.gamepadCount = 1;
     inp.axisValues[{0, GamepadAxis::RightY}] = 0.5f;
-    ControlsSettings cs;
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, cs);
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK(r->elevator != Catch::Approx(0.f));
 }
@@ -622,14 +669,13 @@ TEST_CASE("FlightInputCollector gamepad RightX above deadzone overrides aileron"
     MockInput inp;
     inp.gamepadCount = 1;
     inp.axisValues[{0, GamepadAxis::RightX}] = 0.5f;
-    ControlsSettings cs;
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, cs);
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK(r->aileron != Catch::Approx(0.f));
 }
@@ -641,14 +687,13 @@ TEST_CASE("FlightInputCollector gamepad LeftX above deadzone overrides rudder", 
     MockInput inp;
     inp.gamepadCount = 1;
     inp.axisValues[{0, GamepadAxis::LeftX}] = 0.5f;
-    ControlsSettings cs;
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, cs);
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK(r->rudder != Catch::Approx(0.f));
 }
@@ -660,7 +705,6 @@ TEST_CASE("FlightInputCollector gamepad axis below deadzone leaves keyboard valu
     MockInput inp;
     inp.gamepadCount = 1;
     inp.held.insert(Key::ArrowUp);
-    ControlsSettings cs;
     // Below deadzone — should not override.
     inp.axisValues[{0, GamepadAxis::RightY}] = 0.01f;
     CameraInput cam;
@@ -669,7 +713,7 @@ TEST_CASE("FlightInputCollector gamepad axis below deadzone leaves keyboard valu
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, cs);
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK(r->elevator == Catch::Approx(-1.f));
 }
@@ -687,15 +731,20 @@ TEST_CASE("FlightInputCollector gamepad RightY invert flips elevator sign", "[fl
     FlightInputCollector fic_normal;
     fl::ManualClock t;
     fic_normal.setClock(t);
-    auto r_normal = fic_normal.poll(bridge, cam, console, inp, nullptr, {});
+    auto r_normal = fic_normal.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r_normal.has_value());
 
     fl::AxisConfigTable axisInv;
-    axisInv.get(GamepadAxis::RightY).invert = true;
+    {
+        const fl::AxisKey k{fl::BindingSource::GamepadAxis, static_cast<uint32_t>(GamepadAxis::RightY), {}};
+        fl::AxisConfig c = axisInv.effective(k);
+        c.invert = true;
+        axisInv.set(k, c);
+    }
     FlightInputCollector fic_inv;
     fic_inv.setClock(t);
     fic_inv.setAxisConfig(axisInv);
-    auto r_inv = fic_inv.poll(bridge, cam, console, inp, nullptr, {});
+    auto r_inv = fic_inv.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r_inv.has_value());
 
     CHECK(r_normal->elevator * r_inv->elevator < 0.f);
@@ -712,7 +761,6 @@ TEST_CASE("FlightInputCollector keyboard Space and gamepad afterburner set both 
     MockInput inp;
     inp.gamepadCount = 1;
     inp.held.insert(Key::Space);
-    ControlsSettings cs;
     inp.gpDown.insert({0, GamepadButton::LeftShoulder});
     CameraInput cam;
     fl::SimRenderBridge bridge;
@@ -720,7 +768,7 @@ TEST_CASE("FlightInputCollector keyboard Space and gamepad afterburner set both 
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, cs);
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK((r->buttons & 3u) == 3u);
 }
@@ -732,7 +780,6 @@ TEST_CASE("FlightInputCollector keyboard Tab and gamepad fireButton set both bit
     MockInput inp;
     inp.gamepadCount = 1;
     inp.held.insert(Key::Tab);
-    ControlsSettings cs;
     inp.gpDown.insert({0, GamepadButton::RightShoulder});
     CameraInput cam;
     fl::SimRenderBridge bridge;
@@ -740,13 +787,17 @@ TEST_CASE("FlightInputCollector keyboard Tab and gamepad fireButton set both bit
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, cs);
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK((r->buttons & 3u) == 3u);
 }
 
 // ---------------------------------------------------------------------------
-// HOTAS path
+// Raw joystick / HOTAS path (#1061)
+//
+// The HOTAS axes are ordinary bindings now — `JoystickAxis` entries in the shipped defaults with their
+// tuning in the axis-config table — so these tests drive them through the same actionAxis() path the
+// gamepad uses. There is no separate HOTAS block in the collector left to test.
 // ---------------------------------------------------------------------------
 
 TEST_CASE("FlightInputCollector HOTAS throttle axis sets absolute throttle", "[flight_input]") {
@@ -755,20 +806,41 @@ TEST_CASE("FlightInputCollector HOTAS throttle axis sets absolute throttle", "[f
     GameConsole console(log, reg);
     MockInput inp;
     MockJoystick joy;
-    joy.count = 1;
-    joy.axisCount = 4;
-    ControlsSettings cs;
-    // hotasThrottleAxis default = 2; raw 0.5 → (0.5+1)/2 = 0.75.
-    joy.axisValues[{0, cs.hotasThrottleAxis}] = 0.5f;
+    fl::JoystickDevices devices;
+    // Default throttle axis = 2, mode Absolute: raw 0.5 -> (0.5 + 1) / 2 = 0.75.
+    hotasDevice(joy).axes[fl::kHotasAxisThrottle] = 0.5f;
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, &joy, cs);
+    auto r = fic.poll(bridge, cam, console, withStick(inp, joy, devices));
     REQUIRE(r.has_value());
     CHECK(r->throttle == Catch::Approx(0.75f));
+}
+
+TEST_CASE("FlightInputCollector HOTAS throttle at idle still overrides the keyboard", "[flight_input]") {
+    MockLogger log;
+    CommandRegistry reg;
+    GameConsole console(log, reg);
+    MockInput inp;
+    MockJoystick joy;
+    fl::JoystickDevices devices;
+    hotasDevice(joy).axes[fl::kHotasAxisThrottle] = -1.0f; // lever closed
+    CameraInput cam;
+    cam.setThrottle(0.6f); // whatever the keyboard had built up
+    fl::SimRenderBridge bridge;
+    FlightInputCollector fic;
+    fl::ManualClock t;
+    fic.setClock(t);
+
+    auto r = fic.poll(bridge, cam, console, withStick(inp, joy, devices));
+    REQUIRE(r.has_value());
+    // An absolute lever is in command even when it reads zero. If it were treated as "inactive because
+    // the value is 0" the keyboard throttle would win and the aircraft would fly at 60% with the
+    // throttle shut.
+    CHECK(r->throttle == Catch::Approx(0.0f));
 }
 
 TEST_CASE("FlightInputCollector HOTAS elevator axis overrides keyboard", "[flight_input]") {
@@ -778,19 +850,17 @@ TEST_CASE("FlightInputCollector HOTAS elevator axis overrides keyboard", "[fligh
     MockInput inp;
     inp.held.insert(Key::ArrowUp);
     MockJoystick joy;
-    joy.count = 1;
-    joy.axisCount = 4;
-    ControlsSettings cs;
-    joy.axisValues[{0, cs.hotasElevatorAxis}] = 0.6f;
+    fl::JoystickDevices devices;
+    hotasDevice(joy).axes[fl::kHotasAxisPitch] = 0.6f;
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, &joy, cs);
+    auto r = fic.poll(bridge, cam, console, withStick(inp, joy, devices));
     REQUIRE(r.has_value());
-    // HOTAS axis 0.6 above deadzone 0.05: overrides ArrowUp (-1).
+    // 0.6 is past the 0.05 HOTAS deadzone, so it overrides ArrowUp (-1).
     CHECK(r->elevator != Catch::Approx(-1.f));
     CHECK(r->elevator > 0.f);
 }
@@ -802,17 +872,15 @@ TEST_CASE("FlightInputCollector HOTAS aileron axis overrides keyboard", "[flight
     MockInput inp;
     inp.held.insert(Key::ArrowLeft);
     MockJoystick joy;
-    joy.count = 1;
-    joy.axisCount = 4;
-    ControlsSettings cs;
-    joy.axisValues[{0, cs.hotasAileronAxis}] = 0.6f;
+    fl::JoystickDevices devices;
+    hotasDevice(joy).axes[fl::kHotasAxisRoll] = 0.6f;
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, &joy, cs);
+    auto r = fic.poll(bridge, cam, console, withStick(inp, joy, devices));
     REQUIRE(r.has_value());
     CHECK(r->aileron != Catch::Approx(-1.f));
     CHECK(r->aileron > 0.f);
@@ -825,17 +893,15 @@ TEST_CASE("FlightInputCollector HOTAS rudder axis overrides keyboard", "[flight_
     MockInput inp;
     inp.held.insert(Key::Z);
     MockJoystick joy;
-    joy.count = 1;
-    joy.axisCount = 4;
-    ControlsSettings cs;
-    joy.axisValues[{0, cs.hotasRudderAxis}] = 0.6f;
+    fl::JoystickDevices devices;
+    hotasDevice(joy).axes[fl::kHotasAxisYaw] = 0.6f;
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, &joy, cs);
+    auto r = fic.poll(bridge, cam, console, withStick(inp, joy, devices));
     REQUIRE(r.has_value());
     CHECK(r->rudder != Catch::Approx(-1.f));
     CHECK(r->rudder > 0.f);
@@ -848,68 +914,153 @@ TEST_CASE("FlightInputCollector HOTAS axis at deadzone does not override keyboar
     MockInput inp;
     inp.held.insert(Key::ArrowUp);
     MockJoystick joy;
-    joy.count = 1;
-    joy.axisCount = 4;
-    ControlsSettings cs;
-    // Exactly at deadzone — applyHotas returns 0, so keyboard wins.
-    joy.axisValues[{0, cs.hotasElevatorAxis}] = cs.hotasDeadzone;
+    fl::JoystickDevices devices;
+    hotasDevice(joy).axes[fl::kHotasAxisPitch] = fl::kHotasDefaultDeadzone;
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, &joy, cs);
+    auto r = fic.poll(bridge, cam, console, withStick(inp, joy, devices));
     REQUIRE(r.has_value());
     CHECK(r->elevator == Catch::Approx(-1.f));
 }
 
-TEST_CASE("FlightInputCollector HOTAS hotasInvertPitch flips elevator sign", "[flight_input]") {
+TEST_CASE("FlightInputCollector HOTAS axis inversion flips elevator sign", "[flight_input]") {
     MockLogger log;
     CommandRegistry reg;
     GameConsole console(log, reg);
     MockInput inp;
     MockJoystick joy;
-    joy.count = 1;
-    joy.axisCount = 4;
-    ControlsSettings cs_normal;
-    cs_normal.hotasElevatorAxis = 1;
-    joy.axisValues[{0, 1}] = 0.6f;
+    fl::JoystickDevices devices;
+    hotasDevice(joy).axes[fl::kHotasAxisPitch] = 0.6f;
     CameraInput cam;
     fl::SimRenderBridge bridge;
 
     FlightInputCollector fic_n;
     fl::ManualClock t;
     fic_n.setClock(t);
-    auto r_n = fic_n.poll(bridge, cam, console, inp, &joy, cs_normal);
+    auto r_n = fic_n.poll(bridge, cam, console, withStick(inp, joy, devices));
     REQUIRE(r_n.has_value());
 
-    ControlsSettings cs_inv = cs_normal;
-    cs_inv.hotasInvertPitch = true;
+    // Inversion is per-axis config now, not a hotas_invert_pitch flag in a second config file.
+    fl::AxisConfigTable inverted;
+    fl::AxisConfig cfg = inverted.effective(fl::AxisKey{fl::BindingSource::JoystickAxis, fl::kHotasAxisPitch, {}});
+    cfg.invert = true;
+    inverted.set(fl::AxisKey{fl::BindingSource::JoystickAxis, fl::kHotasAxisPitch, {}}, cfg);
     FlightInputCollector fic_i;
     fic_i.setClock(t);
-    auto r_i = fic_i.poll(bridge, cam, console, inp, &joy, cs_inv);
+    fic_i.setAxisConfig(inverted);
+    auto r_i = fic_i.poll(bridge, cam, console, withStick(inp, joy, devices));
     REQUIRE(r_i.has_value());
 
     CHECK(r_n->elevator * r_i->elevator < 0.f);
 }
 
-TEST_CASE("FlightInputCollector nullptr joystick skips HOTAS path", "[flight_input]") {
+TEST_CASE("FlightInputCollector a HOTAS BUTTON can fire the gun (#1061)", "[flight_input]") {
     MockLogger log;
     CommandRegistry reg;
     GameConsole console(log, reg);
     MockInput inp;
-    inp.held.insert(Key::ArrowUp);
+    MockJoystick joy;
+    fl::JoystickDevices devices;
+    hotasDevice(joy);
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
     fl::ManualClock t;
     fic.setClock(t);
 
-    // joystick=nullptr must not crash and keyboard must win.
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    // The headline of #1061: before it, BindingSource had no joystick entry at all, so a HOTAS trigger
+    // could not be bound to ANY action and nothing in game/ or engine/ ever called IJoystick's button
+    // methods.
+    fl::InputBindings b;
+    fl::Binding trigger{};
+    trigger.source = fl::BindingSource::JoystickButton;
+    trigger.id = 5;
+    trigger.device = fl::makeDeviceRef("03000000a1b2c3d4000000000000aaaa");
+    REQUIRE(b.add(fl::InputAction::FireWeapon, trigger));
+    fic.setBindings(b);
+
+    auto r = fic.poll(bridge, cam, console, withStick(inp, joy, devices));
+    REQUIRE(r.has_value());
+    CHECK((r->buttons & fl::kInputButtonGun) == 0u);
+
+    joy.devices[0].buttons[5] = true;
+    t.advance(std::chrono::milliseconds(20));
+    auto r2 = fic.poll(bridge, cam, console, withStick(inp, joy, devices));
+    REQUIRE(r2.has_value());
+    CHECK((r2->buttons & fl::kInputButtonGun) != 0u);
+    CHECK(fic.wasWeaponFired());
+}
+
+TEST_CASE("FlightInputCollector a HOTAS HAT can latch the landing gear (#1061)", "[flight_input]") {
+    MockLogger log;
+    CommandRegistry reg;
+    GameConsole console(log, reg);
+    MockInput inp;
+    MockJoystick joy;
+    fl::JoystickDevices devices;
+    auto& dev = hotasDevice(joy);
+    dev.hats.assign(1, HatPosition::Centered);
+    CameraInput cam;
+    fl::SimRenderBridge bridge;
+    FlightInputCollector fic;
+    fl::ManualClock t;
+    fic.setClock(t);
+
+    fl::InputBindings b;
+    fl::Binding hat{};
+    hat.source = fl::BindingSource::JoystickHat;
+    hat.id = 0;
+    hat.hat = HatPosition::Down;
+    hat.device = fl::makeDeviceRef("03000000a1b2c3d4000000000000aaaa");
+    b.set(fl::InputAction::LandingGear, std::vector<fl::Binding>{hat});
+    fic.setBindings(b);
+
+    REQUIRE(fic.gearDown()); // parked configuration
+    joy.devices[0].hats[0] = HatPosition::Down;
+    t.advance(std::chrono::milliseconds(20));
+    REQUIRE(fic.poll(bridge, cam, console, withStick(inp, joy, devices)).has_value());
+    CHECK_FALSE(fic.gearDown());
+
+    // A HELD hat is one toggle, not one per frame — the latch rides the collector's own edge tracker,
+    // which is what makes an axis- or hat-driven switch behave like a button.
+    t.advance(std::chrono::milliseconds(20));
+    REQUIRE(fic.poll(bridge, cam, console, withStick(inp, joy, devices)).has_value());
+    CHECK_FALSE(fic.gearDown());
+
+    joy.devices[0].hats[0] = HatPosition::Centered;
+    t.advance(std::chrono::milliseconds(20));
+    REQUIRE(fic.poll(bridge, cam, console, withStick(inp, joy, devices)).has_value());
+    joy.devices[0].hats[0] = HatPosition::Down;
+    t.advance(std::chrono::milliseconds(20));
+    REQUIRE(fic.poll(bridge, cam, console, withStick(inp, joy, devices)).has_value());
+    CHECK(fic.gearDown());
+}
+
+TEST_CASE("FlightInputCollector an absent stick leaves the keyboard in charge", "[flight_input]") {
+    MockLogger log;
+    CommandRegistry reg;
+    GameConsole console(log, reg);
+    MockInput inp;
+    inp.held.insert(Key::ArrowUp);
+    MockJoystick joy; // no devices at all
+    fl::JoystickDevices devices;
+    CameraInput cam;
+    fl::SimRenderBridge bridge;
+    FlightInputCollector fic;
+    fl::ManualClock t;
+    fic.setClock(t);
+
+    // The shipped defaults bind a joystick axis to every flight axis. With nothing plugged in those
+    // bindings are inert and the keyboard is untouched — a binding on an absent device is preserved and
+    // does nothing, never pruned and never resolved against some other device.
+    auto r = fic.poll(bridge, cam, console, withStick(inp, joy, devices));
     REQUIRE(r.has_value());
     CHECK(r->elevator == Catch::Approx(-1.f));
+    CHECK(r->throttle == Catch::Approx(0.f));
 }
 
 // ---------------------------------------------------------------------------
@@ -931,11 +1082,10 @@ TEST_CASE("FlightInputCollector setBindings remaps PitchAxis to LeftY", "[flight
     fic.setClock(t);
 
     fl::InputBindings b;
-    b.set(fl::InputAction::PitchAxis,
-          {fl::BindingSource::GamepadAxis, static_cast<uint32_t>(GamepadAxis::LeftY), false}, fl::BindingSlot::Gamepad);
+    b.set(fl::InputAction::PitchAxis, std::vector<fl::Binding>{padAxisBinding(GamepadAxis::LeftY)});
     fic.setBindings(b);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK(r->elevator != Catch::Approx(0.f)); // LeftY drove elevator
 
@@ -945,7 +1095,7 @@ TEST_CASE("FlightInputCollector setBindings remaps PitchAxis to LeftY", "[flight
     FlightInputCollector fic2;
     fic2.setClock(t);
     fic2.setBindings(b);
-    auto r2 = fic2.poll(bridge, cam, console, inp, nullptr, {});
+    auto r2 = fic2.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r2.has_value());
     CHECK(r2->elevator == Catch::Approx(0.f));
 }
@@ -965,10 +1115,10 @@ TEST_CASE("FlightInputCollector setBindings PitchAxis None leaves keyboard eleva
     fic.setClock(t);
 
     fl::InputBindings b;
-    b.clear(fl::InputAction::PitchAxis, fl::BindingSlot::Gamepad); // source = None
+    b.clear(fl::InputAction::PitchAxis); // no axis binding at all
     fic.setBindings(b);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK(r->elevator == Catch::Approx(-1.f)); // keyboard value preserved
 }
@@ -986,15 +1136,20 @@ TEST_CASE("FlightInputCollector setAxisConfig scale multiplies axis output", "[f
 
     FlightInputCollector fic_default;
     fic_default.setClock(t);
-    auto r_default = fic_default.poll(bridge, cam, console, inp, nullptr, {});
+    auto r_default = fic_default.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r_default.has_value());
 
     fl::AxisConfigTable axes;
-    axes.get(GamepadAxis::RightY).scale = 2.0f;
+    {
+        const fl::AxisKey k{fl::BindingSource::GamepadAxis, static_cast<uint32_t>(GamepadAxis::RightY), {}};
+        fl::AxisConfig c = axes.effective(k);
+        c.scale = 2.0f;
+        axes.set(k, c);
+    }
     FlightInputCollector fic_scaled;
     fic_scaled.setClock(t);
     fic_scaled.setAxisConfig(axes);
-    auto r_scaled = fic_scaled.poll(bridge, cam, console, inp, nullptr, {});
+    auto r_scaled = fic_scaled.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r_scaled.has_value());
 
     CHECK(r_scaled->elevator == Catch::Approx(r_default->elevator * 2.0f));
@@ -1014,13 +1169,11 @@ TEST_CASE("FlightInputCollector readButton GamepadAxis positive threshold sets f
     fic.setClock(t);
 
     fl::InputBindings b;
-    b.set(fl::InputAction::FireWeapon,
-          {fl::BindingSource::GamepadAxis, static_cast<uint32_t>(GamepadAxis::TriggerRight), false},
-          fl::BindingSlot::Gamepad);
+    b.set(fl::InputAction::FireWeapon, std::vector<fl::Binding>{padAxisBinding(GamepadAxis::TriggerRight)});
     fic.setBindings(b);
 
     inp.axisValues[{0, GamepadAxis::TriggerRight}] = 0.6f;
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK((r->buttons & 1u) != 0u);
     CHECK(fic.wasWeaponFired());
@@ -1029,7 +1182,7 @@ TEST_CASE("FlightInputCollector readButton GamepadAxis positive threshold sets f
     FlightInputCollector fic2;
     fic2.setClock(t);
     fic2.setBindings(b);
-    auto r2 = fic2.poll(bridge, cam, console, inp, nullptr, {});
+    auto r2 = fic2.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r2.has_value());
     CHECK((r2->buttons & 1u) == 0u);
     CHECK_FALSE(fic2.wasWeaponFired());
@@ -1049,11 +1202,11 @@ TEST_CASE("FlightInputCollector readButton GamepadAxis negative threshold sets a
 
     fl::InputBindings b;
     b.set(fl::InputAction::Afterburner,
-          {fl::BindingSource::GamepadAxis, static_cast<uint32_t>(GamepadAxis::LeftY), true}, fl::BindingSlot::Gamepad);
+          std::vector<fl::Binding>{padAxisBinding(GamepadAxis::LeftY, /*negative=*/true)});
     fic.setBindings(b);
 
     inp.axisValues[{0, GamepadAxis::LeftY}] = -0.6f;
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK((r->buttons & 2u) != 0u);
 
@@ -1061,7 +1214,7 @@ TEST_CASE("FlightInputCollector readButton GamepadAxis negative threshold sets a
     FlightInputCollector fic2;
     fic2.setClock(t);
     fic2.setBindings(b);
-    auto r2 = fic2.poll(bridge, cam, console, inp, nullptr, {});
+    auto r2 = fic2.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r2.has_value());
     CHECK((r2->buttons & 2u) == 0u);
 }
@@ -1080,10 +1233,10 @@ TEST_CASE("FlightInputCollector readButton None alt binding does not set fire bi
     fic.setClock(t);
 
     fl::InputBindings b;
-    b.clear(fl::InputAction::FireWeapon, fl::BindingSlot::Gamepad);
+    b.clear(fl::InputAction::FireWeapon);
     fic.setBindings(b);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK((r->buttons & 1u) == 0u);
     CHECK_FALSE(fic.wasWeaponFired());
@@ -1105,7 +1258,7 @@ TEST_CASE("FlightInputCollector Enter and MouseRight set the fire-store bit", "[
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK((r->buttons & 0x04u) != 0u);
     CHECK(r->selectedStation == 255u); // no station count set: selection stays "keep"
@@ -1113,7 +1266,7 @@ TEST_CASE("FlightInputCollector Enter and MouseRight set the fire-store bit", "[
     inp.held.clear();
     inp.mouseDown.insert(MouseButton::Right);
     t.advance(std::chrono::milliseconds(17));
-    auto r2 = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r2 = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r2.has_value());
     CHECK((r2->buttons & 0x04u) != 0u);
 }
@@ -1134,48 +1287,48 @@ TEST_CASE("FlightInputCollector station cycling is edge-triggered, wraps, and is
     // First Next press: 255 ("keep the server default") lands on station 0 — a deliberate cycle is
     // the ONLY thing that replaces the sentinel.
     inp.held.insert(Key::Num1);
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK(r->selectedStation == 0u);
 
     // Held across the next poll: no new edge, no further cycling.
     t.advance(std::chrono::milliseconds(17));
-    r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK(r->selectedStation == 0u);
 
     // Release + press again: 0 -> 1, then 1 -> 2.
     inp.held.clear();
     t.advance(std::chrono::milliseconds(17));
-    fic.poll(bridge, cam, console, inp, nullptr, {});
+    fic.poll(bridge, cam, console, kbOnly(inp));
     inp.held.insert(Key::Num1);
     t.advance(std::chrono::milliseconds(17));
-    r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    r = fic.poll(bridge, cam, console, kbOnly(inp));
     CHECK(r->selectedStation == 1u);
     inp.held.clear();
     t.advance(std::chrono::milliseconds(17));
-    fic.poll(bridge, cam, console, inp, nullptr, {});
+    fic.poll(bridge, cam, console, kbOnly(inp));
     inp.held.insert(Key::Num1);
     t.advance(std::chrono::milliseconds(17));
-    r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    r = fic.poll(bridge, cam, console, kbOnly(inp));
     CHECK(r->selectedStation == 2u);
 
     // Prev wraps: 2 -> 1 -> 0 -> 2 would take three presses; go straight around from 2 via Next.
     inp.held.clear();
     t.advance(std::chrono::milliseconds(17));
-    fic.poll(bridge, cam, console, inp, nullptr, {});
+    fic.poll(bridge, cam, console, kbOnly(inp));
     inp.held.insert(Key::Num1);
     t.advance(std::chrono::milliseconds(17));
-    r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    r = fic.poll(bridge, cam, console, kbOnly(inp));
     CHECK(r->selectedStation == 0u); // Next wrapped 2 -> 0
 
     // And Prev wraps the other way: 0 -> 2.
     inp.held.clear();
     t.advance(std::chrono::milliseconds(17));
-    fic.poll(bridge, cam, console, inp, nullptr, {});
+    fic.poll(bridge, cam, console, kbOnly(inp));
     inp.held.insert(Key::Num2);
     t.advance(std::chrono::milliseconds(17));
-    r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    r = fic.poll(bridge, cam, console, kbOnly(inp));
     CHECK(r->selectedStation == 2u);
 }
 
@@ -1197,7 +1350,7 @@ TEST_CASE("FlightInputCollector uiFocused gates the discrete weapon keys but lea
 
     // The radio menu is open (#610): its picks are the digit keys, and a confirm-style key must not
     // release a store. The aircraft still flies.
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {}, /*uiFocused=*/true);
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp), /*uiFocused=*/true);
     REQUIRE(r.has_value());
     CHECK((r->buttons & 0x04u) == 0u);
     CHECK(r->selectedStation == 255u);
@@ -1219,15 +1372,15 @@ TEST_CASE("FlightInputCollector gamepad FireStore and D-pad cycling reach the wi
 
     // Gamepad defaults (#625 fixed the collision): FireStore, NextWeapon=DpadRight, PrevWeapon=DpadLeft.
     fl::InputBindings b;
-    const fl::Binding fireB = b.get(fl::InputAction::FireStore, fl::BindingSlot::Gamepad);
-    const fl::Binding nextB = b.get(fl::InputAction::NextWeapon, fl::BindingSlot::Gamepad);
+    const fl::Binding fireB = padBindingOf(b, fl::InputAction::FireStore);
+    const fl::Binding nextB = padBindingOf(b, fl::InputAction::NextWeapon);
     REQUIRE(fireB.source == fl::BindingSource::GamepadButton);
     REQUIRE(nextB.source == fl::BindingSource::GamepadButton);
     CHECK(static_cast<GamepadButton>(nextB.id) == GamepadButton::DpadRight);
 
     inp.gpDown.insert({0, static_cast<GamepadButton>(fireB.id)});
     inp.gpDown.insert({0, static_cast<GamepadButton>(nextB.id)});
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     CHECK((r->buttons & 0x04u) != 0u);
     CHECK(r->selectedStation == 0u); // first deliberate cycle replaces the "keep" sentinel with 0
@@ -1247,7 +1400,7 @@ namespace {
 fl::MsgClientInput pollNext(FlightInputCollector& fic, fl::ManualClock& t, fl::SimRenderBridge& bridge,
                             CameraInput& cam, GameConsole& console, MockInput& inp) {
     t.advance(std::chrono::milliseconds(20));
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r.has_value());
     return *r;
 }
@@ -1267,7 +1420,7 @@ TEST_CASE("FlightInputCollector: gear starts DOWN and G toggles it (#639)", "[fl
 
     // An aircraft is parked on its wheels, so the switch starts DOWN — matching the server's
     // parked-spawn configuration, which is what stops a fresh sortie from belly-scraping.
-    auto first = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto first = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(first.has_value());
     CHECK((first->artButtons & fl::kArtButtonGearDown) != 0);
     CHECK(fic.gearDown());
@@ -1296,7 +1449,7 @@ TEST_CASE("FlightInputCollector: F steps the flap detent clean/manoeuvre/full (#
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto first = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto first = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(first.has_value());
     CHECK(first->flaps == 0); // clean
 
@@ -1325,7 +1478,7 @@ TEST_CASE("FlightInputCollector: hook and canopy latch; the airbrake is momentar
     FlightInputCollector fic;
     fl::ManualClock t;
     fic.setClock(t);
-    (void)fic.poll(bridge, cam, console, inp, nullptr, {});
+    (void)fic.poll(bridge, cam, console, kbOnly(inp));
 
     // H latches the hook down and it STAYS down after release — a switch, not a button.
     inp.held.insert(Key::H);
@@ -1364,7 +1517,7 @@ TEST_CASE("FlightInputCollector: articulation state rides EVERY packet (#639)", 
     FlightInputCollector fic;
     fl::ManualClock t;
     fic.setClock(t);
-    (void)fic.poll(bridge, cam, console, inp, nullptr, {});
+    (void)fic.poll(bridge, cam, console, kbOnly(inp));
 
     inp.held.insert(Key::G); // gear up
     (void)pollNext(fic, t, bridge, cam, console, inp);
@@ -1395,21 +1548,21 @@ TEST_CASE("FlightInputCollector: master arm honours its own binding (#1050)", "[
     fic.setClock(t);
 
     fl::InputBindings b;
-    b.set(fl::InputAction::MasterArm, {fl::BindingSource::Keyboard, static_cast<uint32_t>(Key::Num8), false});
+    b.set(fl::InputAction::MasterArm, std::vector<fl::Binding>{keyBinding(Key::Num8)});
     fic.setBindings(b);
     REQUIRE(fic.masterArm());
 
     // The DEFAULT key no longer does anything once the action has been rebound.
     inp.held.insert(Key::Num4);
     t.advance(std::chrono::milliseconds(17));
-    REQUIRE(fic.poll(bridge, cam, console, inp, nullptr, {}).has_value());
+    REQUIRE(fic.poll(bridge, cam, console, kbOnly(inp)).has_value());
     CHECK(fic.masterArm());
     inp.held.erase(Key::Num4);
 
     // The rebound key does.
     inp.held.insert(Key::Num8);
     t.advance(std::chrono::milliseconds(17));
-    REQUIRE(fic.poll(bridge, cam, console, inp, nullptr, {}).has_value());
+    REQUIRE(fic.poll(bridge, cam, console, kbOnly(inp)).has_value());
     CHECK_FALSE(fic.masterArm());
 }
 
@@ -1427,14 +1580,14 @@ TEST_CASE("FlightInputCollector: a secondary slot drives the same action (#1050)
     fic.setClock(t);
 
     inp.held.insert(Key::Space);
-    auto r1 = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r1 = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r1.has_value());
     CHECK((r1->buttons & fl::kInputButtonGun) != 0u);
 
     inp.held.erase(Key::Space);
     inp.mouseDown.insert(MouseButton::Left);
     t.advance(std::chrono::milliseconds(17));
-    auto r2 = fic.poll(bridge, cam, console, inp, nullptr, {});
+    auto r2 = fic.poll(bridge, cam, console, kbOnly(inp));
     REQUIRE(r2.has_value());
     CHECK((r2->buttons & fl::kInputButtonGun) != 0u);
 }
@@ -1468,12 +1621,12 @@ TEST_CASE("FlightInputCollector: every rebound flight control follows its action
         {fl::InputAction::CountermeasureDispense, Key::L}, {fl::InputAction::EcmToggle, Key::RightBracket},
     };
     for (const auto& r : remaps)
-        b.set(r.action, {fl::BindingSource::Keyboard, static_cast<uint32_t>(r.key), false});
+        b.set(r.action, std::vector<fl::Binding>{keyBinding(r.key)});
     fic.setBindings(b);
 
     auto pump = [&]() {
         t.advance(std::chrono::milliseconds(17));
-        auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+        auto r = fic.poll(bridge, cam, console, kbOnly(inp));
         REQUIRE(r.has_value());
         return *r;
     };
@@ -1543,7 +1696,7 @@ TEST_CASE("FlightInputCollector: uiFocused leaves the gun and the flight control
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {}, /*uiFocused=*/true);
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp), /*uiFocused=*/true);
     REQUIRE(r.has_value());
     CHECK((r->buttons & fl::kInputButtonGun) != 0u);
     CHECK(fic.wasWeaponFired());
@@ -1575,7 +1728,7 @@ TEST_CASE("FlightInputCollector: textEntry suppresses keyboard and mouse, never 
     inp.held.insert(Key::PageUp);                    // throttle up
     inp.axisValues[{0, GamepadAxis::RightY}] = 0.8f; // pad elevator
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {}, /*uiFocused=*/false, /*textEntry=*/true);
+    auto r = fic.poll(bridge, cam, console, kbOnly(inp), /*uiFocused=*/false, /*textEntry=*/true);
     REQUIRE(r.has_value());
     // Typing must not fire the gun, and clicking Send must not either.
     CHECK((r->buttons & fl::kInputButtonGun) == 0u);
@@ -1588,7 +1741,7 @@ TEST_CASE("FlightInputCollector: textEntry suppresses keyboard and mouse, never 
     // The pad's own gun button is likewise unaffected.
     inp.gpDown.insert({0, GamepadButton::RightShoulder});
     t.advance(std::chrono::milliseconds(17));
-    auto r2 = fic.poll(bridge, cam, console, inp, nullptr, {}, /*uiFocused=*/false, /*textEntry=*/true);
+    auto r2 = fic.poll(bridge, cam, console, kbOnly(inp), /*uiFocused=*/false, /*textEntry=*/true);
     REQUIRE(r2.has_value());
     CHECK((r2->buttons & fl::kInputButtonGun) != 0u);
 }

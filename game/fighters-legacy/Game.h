@@ -41,6 +41,11 @@ class Game {
     void recorderEmit(bool& running);
     void recorderFinish();
 
+    // Per-frame joystick reconcile (#1061): refresh the GUID -> index map and this frame's hat state,
+    // log devices arriving and leaving, and report bindings whose device is absent. Called right after
+    // pollEvents(), before anything reads a binding.
+    void reconcileInputDevices();
+
     std::unique_ptr<GameImpl> m_impl;
 };
 

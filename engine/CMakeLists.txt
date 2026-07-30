@@ -37,7 +37,10 @@ target_link_libraries(engine-dynlib
 
 add_library(engine-input STATIC
     input/InputBindings.cpp
+    input/InputNames.cpp
     input/AxisConfig.cpp
+    input/JoystickDevices.cpp
+    input/LegacyHotas.cpp
 )
 
 target_include_directories(engine-input PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

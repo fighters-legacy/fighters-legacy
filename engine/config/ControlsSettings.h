@@ -3,25 +3,44 @@
 
 namespace fl {
 
-// Persisted under the [controls] section of user.toml.
-// Gamepad axis mapping, per-axis deadzone/curve/invert/scale, and button bindings are
-// configured in config/bindings.toml (fl::InputBindings + fl::AxisConfigTable in engine/input/).
-struct ControlsSettings {
-    // HOTAS / raw joystick axis assignments. Index into IJoystick::getAxisValue(0, n).
-    // -1 disables the mapping; clamped to [-1, 127] on load.
-    int hotasAileronAxis{0};
-    int hotasElevatorAxis{1};
-    int hotasThrottleAxis{2};
-    int hotasRudderAxis{3};
-    float hotasDeadzone{0.05f}; // clamped to [0, 0.99] on load
-    bool hotasInvertPitch{false};
-    bool hotasInvertRoll{false};
-    bool hotasInvertRudder{false};
-    bool hotasInvertThrottle{false};
+// The pre-#1061 `[controls]` HOTAS axis mapping, read for MIGRATION ONLY.
+//
+// Until #1061 the four HOTAS axes lived here instead of in the binding table: read by index on device
+// 0, in a config path neither `InputBindings` nor the conflict checker could see — the same defect
+// class #1050 exists to remove, surviving in the one corner that fix did not reach. They are now
+// `JoystickAxis` bindings plus `[[axis_config]]` entries in bindings.toml.
+//
+// This struct is still PARSED so a player who retuned those keys does not lose the tuning when
+// bindings.toml is regenerated at version 3; `migrateLegacyHotas` folds it into the table. It is never
+// WRITTEN back, so once an install has a version-3 bindings.toml the section is inert and can be
+// deleted by hand. `present` is false when user.toml named none of the keys, in which case the shipped
+// defaults already say the same thing.
+struct LegacyHotasAxes {
+    bool present{false};
+    int aileronAxis{0};
+    int elevatorAxis{1};
+    int throttleAxis{2};
+    int rudderAxis{3};
+    float deadzone{0.05f};
+    bool invertPitch{false};
+    bool invertRoll{false};
+    bool invertRudder{false};
+    bool invertThrottle{false};
+};
 
+// Persisted under the [controls] section of user.toml.
+//
+// There are no INPUT MAPPINGS left here (#1061): keyboard, mouse, gamepad and raw joystick bindings,
+// plus every axis's deadzone / curve / inversion / scale, live in config/bindings.toml via
+// fl::InputBindings + fl::AxisConfigTable. What remains is force feedback, which is an OUTPUT.
+// Do NOT include IInput.h here — engine/config must not reach into platform/.
+struct ControlsSettings {
     // Force feedback (#928): cueing effects on an FFB stick (stall buffet / ground roll / gun kick).
     bool ffbEnabled{true};
     float ffbStrength{1.0f}; // [0, 1]
+
+    // Migration input only — see LegacyHotasAxes.
+    LegacyHotasAxes legacyHotas{};
 };
 
 } // namespace fl

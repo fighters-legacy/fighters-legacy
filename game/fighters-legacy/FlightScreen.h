@@ -23,7 +23,6 @@ class FlightInputCollector;
 class GameConsole;
 class HapticController;
 class INetwork;
-class IJoystick;
 class UserConfig;
 
 class SandboxInspector;
@@ -46,6 +45,7 @@ class IGui;
 
 struct EnvironmentState;
 class InputBindings;
+struct InputSources;
 class TargetDesignation;
 class HeadTracker;
 
@@ -64,11 +64,11 @@ struct FlightScreenDeps {
     INetwork* clientNet{nullptr};
     ClientNetEventHandler* clientNetHandler{nullptr}; // for sendHeartbeatIfNeeded; may be null
     EntityTypeRegistry* entityRegistry{nullptr};      // for the observer picker's type-name label (#860)
-    IJoystick* joystick{nullptr};
     UserConfig* userConfig{nullptr};
     SandboxInspector* inspector{nullptr};          // null = no inspector
     ClientPrediction* prediction{nullptr};         // null = no prediction
     const InputBindings* inputBindings{nullptr};   // for edge-detecting autopilot/target actions (#640/#696)
+    const InputSources* inputSources{nullptr};     // the live input hardware bindings resolve against (#1061)
     TargetDesignation* targetDesignation{nullptr}; // client-side designated target (#696); null = disabled
     SceneRenderer* sceneRenderer{nullptr};         // for the target-slaved inset view (#698); null = disabled
     float* nvgIntensity{nullptr};                  // NVG gain sink read by Game.cpp -> setNightVision (#210)

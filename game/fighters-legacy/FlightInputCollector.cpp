@@ -2,9 +2,6 @@
 #include "FlightInputCollector.h"
 
 #include "CameraInput.h"
-#include "IInput.h"
-#include "IJoystick.h"
-#include "config/ControlsSettings.h"
 #include "console/GameConsole.h"
 #include "input/BindingQuery.h"
 #include "render/SimRenderBridge.h"
@@ -17,8 +14,7 @@ namespace fl {
 
 std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRenderBridge& /*bridge*/,
                                                              CameraInput& camInput, const GameConsole& console,
-                                                             IInput& input, IJoystick* joystick,
-                                                             const ControlsSettings& cs, bool uiFocused,
+                                                             const InputSources& sources, bool uiFocused,
                                                              bool textEntry) {
     m_weaponFired = false;
 
@@ -44,7 +40,7 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
         // leaves the gamepad and HOTAS axes live, and a partner keeps flying while you type. The
         // throttle holds because ThrottleUp/Down/Max simply read as not-pressed.
         auto down = [&](fl::InputAction a) {
-            return fl::actionDown(input, m_bindings, a, /*gamepadId=*/0, /*suppressDesktop=*/textEntry);
+            return fl::actionDown(sources, m_bindings, a, /*suppressDesktop=*/textEntry);
         };
         // Discrete controls an in-flight overlay consumes while it is up (the radio menu, #610).
         // The flight axes, throttle, afterburner, wheel brakes and the gun trigger deliberately stay
@@ -152,71 +148,28 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
 
         m_weaponFired = (inp.buttons & fl::kInputButtonGun) != 0u;
 
-        // ── Gamepad analog axes ──────────────────────────────────────────────
-        // The digital paths above already covered the pad's BUTTONS through the shared binding
-        // resolution; only the analog axes need the per-axis deadzone/curve/invert/scale pipeline.
-        if (input.getGamepadCount() > 0) {
-            auto readAxis = [&](fl::InputAction action) -> float {
-                const GamepadAxis ax = fl::actionAxisId(m_bindings, action);
-                if (ax == GamepadAxis::Count)
-                    return 0.0f;
-                return m_axisConfig.get(ax).apply(input.getGamepadAxis(0, ax));
-            };
+        // ── Analog axes ──────────────────────────────────────────────────────
+        // One block for every analog device (#1061). It used to be two: a gamepad block reading the
+        // binding table, then a HOTAS block reading four axis INDICES out of `[controls]` in user.toml
+        // on device 0 — unrebindable, invisible to the conflict checker, and carrying its own
+        // hand-rolled deadzone and invert logic. Now the axes are ordinary bindings and actionAxis()
+        // walks the action's list, taking the first one that is actually driving the control. The
+        // shipped order puts the joystick first, which reproduces the old "HOTAS wins" precedence.
+        //
+        // `active` is not "non-zero": an ABSOLUTE throttle lever parked at idle reads 0.0 and is still
+        // in command, which is why a closed HOTAS throttle correctly overrides the keyboard.
+        auto axis = [&](fl::InputAction a) { return fl::actionAxis(sources, m_bindings, m_axisConfig, a); };
 
-            // ThrottleAxis: TriggerLeft returns [0,1] unipolar. apply() handles deadzone + scale.
-            // Note: AxisConfig::invert for a unipolar trigger negates to [-1,0]; std::clamp brings
-            // it back to 0 (throttle off). Inverted throttle is better configured via the HOTAS path.
-            const float thr = readAxis(fl::InputAction::ThrottleAxis);
-            if (thr != 0.0f) {
-                camInput.setThrottle(std::clamp(thr, 0.0f, 1.0f));
-                inp.throttle = camInput.throttle();
-            }
-            const float elev = readAxis(fl::InputAction::PitchAxis);
-            if (elev != 0.0f)
-                inp.elevator = elev;
-            const float ail = readAxis(fl::InputAction::RollAxis);
-            if (ail != 0.0f)
-                inp.aileron = ail;
-            const float rud = readAxis(fl::InputAction::YawAxis);
-            if (rud != 0.0f)
-                inp.rudder = rud;
+        if (const fl::AxisSample thr = axis(fl::InputAction::ThrottleAxis); thr.active) {
+            camInput.setThrottle(std::clamp(thr.value, 0.0f, 1.0f));
+            inp.throttle = camInput.throttle();
         }
-
-        // HOTAS / raw joystick blend — throttle always sets absolute position;
-        // stick/pedal axes win when |axis| > hotasDeadzone.
-        if (joystick && joystick->getJoystickCount() > 0) {
-            const int axCount = joystick->getAxisCount(0);
-            const float hdz = cs.hotasDeadzone;
-            auto applyHotas = [hdz](float raw) -> float {
-                const float mag = std::abs(raw);
-                if (mag <= hdz)
-                    return 0.0f;
-                return std::copysign((mag - hdz) / (1.0f - hdz), raw);
-            };
-            // Full-range [-1, 1] → [0, 1]; absolute position device.
-            if (cs.hotasThrottleAxis >= 0 && cs.hotasThrottleAxis < axCount) {
-                float raw = joystick->getAxisValue(0, cs.hotasThrottleAxis);
-                if (cs.hotasInvertThrottle)
-                    raw = -raw;
-                camInput.setThrottle(std::clamp((raw + 1.0f) * 0.5f, 0.0f, 1.0f));
-                inp.throttle = camInput.throttle();
-            }
-            if (cs.hotasElevatorAxis >= 0 && cs.hotasElevatorAxis < axCount) {
-                const float elev = applyHotas(joystick->getAxisValue(0, cs.hotasElevatorAxis));
-                if (elev != 0.0f)
-                    inp.elevator = cs.hotasInvertPitch ? -elev : elev;
-            }
-            if (cs.hotasAileronAxis >= 0 && cs.hotasAileronAxis < axCount) {
-                const float ail = applyHotas(joystick->getAxisValue(0, cs.hotasAileronAxis));
-                if (ail != 0.0f)
-                    inp.aileron = cs.hotasInvertRoll ? -ail : ail;
-            }
-            if (cs.hotasRudderAxis >= 0 && cs.hotasRudderAxis < axCount) {
-                const float rud = applyHotas(joystick->getAxisValue(0, cs.hotasRudderAxis));
-                if (rud != 0.0f)
-                    inp.rudder = cs.hotasInvertRudder ? -rud : rud;
-            }
-        }
+        if (const fl::AxisSample elev = axis(fl::InputAction::PitchAxis); elev.active)
+            inp.elevator = std::clamp(elev.value, -1.0f, 1.0f);
+        if (const fl::AxisSample ail = axis(fl::InputAction::RollAxis); ail.active)
+            inp.aileron = std::clamp(ail.value, -1.0f, 1.0f);
+        if (const fl::AxisSample rud = axis(fl::InputAction::YawAxis); rud.active)
+            inp.rudder = std::clamp(rud.value, -1.0f, 1.0f);
     } else {
         inp.throttle = camInput.throttle();
     }

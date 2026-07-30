@@ -776,19 +776,29 @@ bool UserConfig::load() {
         m_accessibility.subtitleDurationScale = static_cast<float>(std::clamp(*v, 0.5, 3.0));
 
     // [controls]
-    m_controls.hotasAileronAxis =
-        std::clamp(static_cast<int>(tbl["controls"]["hotas_aileron_axis"].value_or(0LL)), -1, 127);
-    m_controls.hotasElevatorAxis =
-        std::clamp(static_cast<int>(tbl["controls"]["hotas_elevator_axis"].value_or(1LL)), -1, 127);
-    m_controls.hotasThrottleAxis =
-        std::clamp(static_cast<int>(tbl["controls"]["hotas_throttle_axis"].value_or(2LL)), -1, 127);
-    m_controls.hotasRudderAxis =
-        std::clamp(static_cast<int>(tbl["controls"]["hotas_rudder_axis"].value_or(3LL)), -1, 127);
-    m_controls.hotasDeadzone = std::clamp(tbl["controls"]["hotas_deadzone"].value_or(0.05f), 0.0f, 0.99f);
-    m_controls.hotasInvertPitch = tbl["controls"]["hotas_invert_pitch"].value_or(false);
-    m_controls.hotasInvertRoll = tbl["controls"]["hotas_invert_roll"].value_or(false);
-    m_controls.hotasInvertRudder = tbl["controls"]["hotas_invert_rudder"].value_or(false);
-    m_controls.hotasInvertThrottle = tbl["controls"]["hotas_invert_throttle"].value_or(false);
+    // The four hotas_* axis keys are MIGRATION INPUT ONLY since #1061 — they moved into
+    // config/bindings.toml as JoystickAxis bindings plus [[axis_config]] entries. They are still read
+    // (so a player who retuned them keeps the tuning through the version 2 -> 3 conversion) and
+    // deliberately never written back. `present` gates the migration on the section having actually
+    // named one of them: with none set, the shipped defaults already say the same thing.
+    {
+        auto& l = m_controls.legacyHotas;
+        const char* keys[] = {"hotas_aileron_axis", "hotas_elevator_axis", "hotas_throttle_axis",
+                              "hotas_rudder_axis",  "hotas_deadzone",      "hotas_invert_pitch",
+                              "hotas_invert_roll",  "hotas_invert_rudder", "hotas_invert_throttle"};
+        for (const char* k : keys)
+            l.present = l.present || tbl["controls"][k].type() != toml::node_type::none;
+        l.aileronAxis = std::clamp(static_cast<int>(tbl["controls"]["hotas_aileron_axis"].value_or(0LL)), -1, 127);
+        l.elevatorAxis = std::clamp(static_cast<int>(tbl["controls"]["hotas_elevator_axis"].value_or(1LL)), -1, 127);
+        l.throttleAxis = std::clamp(static_cast<int>(tbl["controls"]["hotas_throttle_axis"].value_or(2LL)), -1, 127);
+        l.rudderAxis = std::clamp(static_cast<int>(tbl["controls"]["hotas_rudder_axis"].value_or(3LL)), -1, 127);
+        // Clamped below 1.0 because the rescale divides by (1 - deadzone).
+        l.deadzone = std::clamp(tbl["controls"]["hotas_deadzone"].value_or(0.05f), 0.0f, 0.99f);
+        l.invertPitch = tbl["controls"]["hotas_invert_pitch"].value_or(false);
+        l.invertRoll = tbl["controls"]["hotas_invert_roll"].value_or(false);
+        l.invertRudder = tbl["controls"]["hotas_invert_rudder"].value_or(false);
+        l.invertThrottle = tbl["controls"]["hotas_invert_throttle"].value_or(false);
+    }
     m_controls.ffbEnabled = tbl["controls"]["ffb_enabled"].value_or(true); // #928
     if (auto v = tbl["controls"]["ffb_strength"].value<double>())
         m_controls.ffbStrength = std::clamp(static_cast<float>(*v), 0.f, 1.f);
@@ -1015,16 +1025,10 @@ bool UserConfig::save() {
     accessibility.insert_or_assign("subtitle_duration_scale",
                                    static_cast<double>(m_accessibility.subtitleDurationScale));
 
+    // No hotas_* keys are written (#1061): the axes live in config/bindings.toml now, and writing them
+    // back would leave two places claiming to own the same mapping — which is the whole defect this
+    // migration removes. An existing file's keys are simply left where they are and ignored.
     toml::table controls;
-    controls.insert_or_assign("hotas_aileron_axis", static_cast<int64_t>(m_controls.hotasAileronAxis));
-    controls.insert_or_assign("hotas_elevator_axis", static_cast<int64_t>(m_controls.hotasElevatorAxis));
-    controls.insert_or_assign("hotas_throttle_axis", static_cast<int64_t>(m_controls.hotasThrottleAxis));
-    controls.insert_or_assign("hotas_rudder_axis", static_cast<int64_t>(m_controls.hotasRudderAxis));
-    controls.insert_or_assign("hotas_deadzone", static_cast<double>(m_controls.hotasDeadzone));
-    controls.insert_or_assign("hotas_invert_pitch", m_controls.hotasInvertPitch);
-    controls.insert_or_assign("hotas_invert_roll", m_controls.hotasInvertRoll);
-    controls.insert_or_assign("hotas_invert_rudder", m_controls.hotasInvertRudder);
-    controls.insert_or_assign("hotas_invert_throttle", m_controls.hotasInvertThrottle);
     controls.insert_or_assign("ffb_enabled", m_controls.ffbEnabled); // #928
     controls.insert_or_assign("ffb_strength", static_cast<double>(m_controls.ffbStrength));
 

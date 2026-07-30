@@ -3,8 +3,9 @@
 
 #include "IClock.h"
 #include "input/AxisConfig.h"    // fl::AxisConfigTable, fl::AxisConfig — also pulls in IInput.h
-#include "input/BindingQuery.h"  // fl::actionDown / fl::ActionEdgeTracker
+#include "input/BindingQuery.h"  // fl::actionDown / fl::actionAxis / fl::ActionEdgeTracker
 #include "input/InputBindings.h" // fl::InputBindings, fl::Binding, fl::BindingSource, fl::InputAction
+#include "input/InputSources.h"  // fl::InputSources — the live hardware, one struct (#1061)
 #include "net/GameProtocol.h"
 
 #include <chrono>
@@ -15,13 +16,15 @@ namespace fl {
 
 class CameraInput;
 class GameConsole;
-class IJoystick;
-struct ControlsSettings;
 
 class SimRenderBridge;
 
-// Assembles a MsgClientInput from keyboard, gamepad, and HOTAS inputs each frame,
+// Assembles a MsgClientInput from keyboard, mouse, gamepad and raw joystick / HOTAS input each frame,
 // rate-limited to 60 Hz to avoid triggering the server's per-peer flood guard.
+//
+// Every control — including the four HOTAS axes, which had their own parallel config path until
+// #1061 — resolves through InputBindings against the InputSources handed to poll(). There is no
+// device-specific block left in this file.
 //
 // Usage (once per frame):
 //   if (auto msg = flightInput.poll(...))
@@ -40,8 +43,7 @@ class FlightInputCollector {
     // chatting. The suppression is per binding SOURCE, not per input block, so a control bound to
     // both a key and a pad button keeps working from the pad.
     std::optional<MsgClientInput> poll(const SimRenderBridge& bridge, CameraInput& camInput, const GameConsole& console,
-                                       IInput& input, IJoystick* joystick, const ControlsSettings& cs,
-                                       bool uiFocused = false, bool textEntry = false);
+                                       const InputSources& sources, bool uiFocused = false, bool textEntry = false);
 
     // True if the most recent poll() that returned a message had the weapon
     // trigger bit set. Resets to false on each poll() call.
@@ -90,8 +92,8 @@ class FlightInputCollector {
     // rebindable, not just the gamepad axis mapping it used to cover.
     void setBindings(InputBindings bindings);
 
-    // Apply a loaded AxisConfigTable for per-axis deadzone/curve/invert/scale.
-    // Default-constructed AxisConfigTable uses deadzone=0.1, Linear, no invert, scale=1.
+    // Apply a loaded AxisConfigTable for per-axis deadzone / curve / mode / invert / scale. Since
+    // #1061 it is keyed by (source, device, axis index), so a stick and a pad can be tuned apart.
     void setAxisConfig(AxisConfigTable cfg);
 
   private:
