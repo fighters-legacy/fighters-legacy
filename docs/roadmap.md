@@ -13,10 +13,10 @@ drifted from reality during Phase 2. Ordering constraints are listed instead.
 | 1 — Engine Foundation ✓ | HAL, content system, CI/CD | — |
 | 2 — Modern-Particles Engine ✓ | Game loop, flight model, networking, renderer, spherical Earth | Phase 1 complete |
 | 3 — Engine Systems ✓ | Spatial partitioning, AI framework, interest management, bindings, quality settings, **scaling seams** (transport replacement, sim job system, wire quantization, load harness) | Phase 2 complete |
-| 4 — Content & Gameplay | fl-base-pack content, weapons/ballistics + sensor framework, mission & campaign runtime, **MP gameplay framework**, avionics/HUD, gameplay audio, advanced vehicle models, replay, agentic-AI substrate + campaign director (Epics M–O start) | Phase 3 complete + fl-base-pack substantially ready |
-| 5 — Multiplayer at Scale & Live Services | Server-side identity/auth, anti-cheat, persistence, ops/observability, k8s/OpenShift operator | Phase 4 complete |
+| 4 — Content & Gameplay | fl-base-pack content, weapons/ballistics + sensor framework, mission & campaign runtime, **MP gameplay framework**, avionics/HUD, gameplay audio, advanced vehicle models, replay, agentic-AI substrate + campaign director (Epics M–O start), **consolidation program** (protocol hardening + interface consolidation) | Phase 3 complete + fl-base-pack substantially ready |
+| 5 — Multiplayer at Scale & Live Services | Server-side identity/auth, anti-cheat, persistence, ops/observability, k8s/OpenShift operator, deployment artifacts (container image, systemd unit — moved from Phase 7) | Phase 4 complete |
 | 6 — UI Layer & Tooling | IGui HAL + Dear ImGui, in-game mission editor, welcome screen | Phase 5 complete |
-| 7 — Platform Release | macOS/Linux/Windows packages, Flathub, fl-server container, crash reporting | Phase 6 complete |
+| 7 — Platform Release | macOS/Linux/Windows packages, Flathub, crash reporting | Phase 6 complete |
 | 8 — Rendering & Alternative Backends | OpenGL 4.1 Core, headless/software renderer for CI, renderer advancement (temporal AA/upscaling, sky LUTs, IBL, AO quality) | Phase 7 complete |
 | 9 — Modding Platform | GPG verification, subprocess isolation, in-game mod browser, community content distribution | Phase 8 complete |
 
@@ -29,14 +29,27 @@ drifted from reality during Phase 2. Ordering constraints are listed instead.
 > the active milestone. The scaling spine (Epics A/B/I/L) landed in Phase 3; the `v0.3.x` series
 > ships interim patches while Phase 4 content is in development.
 
+> **2026-07-30 strategic review.** A **consolidation program** lands inside Phase 4, before the
+> gate, as new stages of the #1036 plan (Stages 1–3 shipped as v0.3.11–v0.3.13): protocol
+> hardening and scale honesty (epic #1063) and interface consolidation and event unification
+> (epic #1064), each stage shipping an interim `v0.3.14+` release. Phase 5 builds identity,
+> persistence, anti-cheat and a cluster operator directly on the server seams, so the seams are
+> cleaned first; the wire and admin surfaces also acquire external users at the gate, which makes
+> afterwards strictly harder. The **gameplay audit (#1065) runs last**, after consolidation and
+> the gating content, so it audits what actually ships. Deployment artifacts moved Phase 7 →
+> Phase 5 (#160, #228, #1096): a self-host-only product ships its hosting artifacts before the
+> fleet operator that consumes them. See the
+> [decision record](developer/architecture.md#decision-records).
+
 ## Releases
 
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html), pre-1.0.
 **`v0.N.0` tags the Phase N gate** — cut when the phase's milestone closes with its
 [acceptance criteria](#verification--acceptance-criteria) verified. Interim patch releases
 (`v0.N.x`) ship fixes and increments while the next phase is in development, as
-v0.2.1–v0.2.6 did during Phase 3 and v0.3.1–v0.3.5 are doing during Phase 4. **`v0.4.0` is
-the Phase 4 gate**, tracked by release Task #729.
+v0.2.1–v0.2.6 did during Phase 3 and v0.3.1–v0.3.13 did during Phase 4 — the consolidation
+stages continue that series as `v0.3.14+`. **`v0.4.0` is the Phase 4 gate**, tracked by release
+Task #729.
 
 Each phase gate is tracked by a `release`-labeled Task in the phase's milestone. It sits at
 milestone level rather than under an epic — a phase-gate release serves every epic in the
@@ -63,7 +76,9 @@ missions/demos/*.yaml` (no GPU). Reference: [demo-recording.md](developer/demo-r
 2026-07-10 Phase 3 close and this revision): tag `v0.N.0` → **record, review, and attach the
 phase demo videos (#909)** → close the milestone → mark the Schedule-table row and the acceptance
 heading ✓ in this file → run an epic re-home sweep (re-home any epic whose last open sub changed
-phase) → prune landed items from the Critical Path.
+phase) → prune landed items from the Critical Path → **file the incoming phase's execution-plan
+Task** (the #1036 pattern: stages, interim releases, architecture decisions made up front) as the
+new milestone's first issue.
 
 **v1.0.0** follows the Phase 9 gate (v0.9.x is the last pre-1.0 series) and adds the
 maintenance-mode policy to README/CONTRIBUTING.
@@ -193,36 +208,30 @@ the load harness (Epic I) + data-parallel sim tick (Epic A: #510–#514) + wire 
 8-core reference env ([#505](https://github.com/fighters-legacy/fighters-legacy/issues/505));
 GameNetworkingSockets behind `INetwork` (Epic L: #506–#509, GNS 128-client gate #649); the
 LuaSandbox → `IEntityController` seam (#359); the server-side AI framework (#352) and the
-scripted wingman command grammar (#610). These are history — the chains below are what remains
-open toward `v0.4.0` and beyond.
+scripted wingman command grammar (#610).
 
-1. **Spherical-Earth world (#468, 9/24) ∥ fl-base-pack terrain (#2/#9) → Phase 4 acceptance.**
-   The single biggest Phase 4 risk: engine cube-sphere terrain streaming and the content pack's
-   real-Earth terrain build gate each other (a mission needs both a world to fly over and the
-   engine to stream it). Sequence them together, not in series.
+**Landed since (`v0.3.1`–`v0.3.13`):** the spherical-Earth world (#468); the sensor →
+avionics/HUD → padlock chain (Epic F #498, #587, #671); the mission and campaign runtime (#584);
+the MP gameplay framework and internet server browser (Epic E #497, #646/#647/#648, #143);
+multi-crew aircraft (#966); the replay core with its determinism gate (#588, #644); and the
+agentic-AI substrate (Epic M #589 stages). Chains 1–4 of the previous revision are fully closed
+and have been pruned per the phase-gate close checklist above.
 
-2. **Sensor core (#677 ✓) → sensors/EW (Epic F #498: #526 → #527/#528/#529/#642/#641) →
-   avionics/HUD (#587) → padlock/targeting view family (#671, #687–#698).** The shared
-   `SensorDef`/`Contact` model is landed; the avionics and view work consume it.
+**One chain remains open toward `v0.4.0`:**
 
-3. **Mission runtime remainder (#584: `world.*` Lua surface #413/#412) → campaign director
-   (Epic N #590).** The kill chain (#583) and the deterministic mission/campaign machinery
-   shipped; what remains under #584 is the Lua mission-scripting surface. The agentic substrate
-   (Epic M #589) precedes N/O/P; the deterministic campaign engine (#635) is the system of record
-   the director drives and cannot precede.
-
-4. **MP gameplay framework (Epic E #497: #646/#647/#648) + internet server browser (#143) →
-   128-client Phase 4 multiplayer acceptance.** Match lifecycle, chat/kill-feed/scoreboard/
-   respawn, and discovery over the proven A/B/I/L scaling spine.
-
-5. **fl-base-pack content rollup (#54: aircraft roster, terrain, audio, missions) → Phase 4
-   gate (#729) → `v0.4.0`.** Phase 4 acceptance is gated on the content pack being substantially
-   complete; #54 is the cross-repo readiness gauge.
+1. **fl-base-pack gating content (#54 — 13 issues: terrain, missions, audio, AI scripts, crew
+   voice, campaign seed, training set, sensor defs, red air) ∥ the consolidation program
+   (#1036 Stages 5–9: protocol hardening #1063, interface consolidation #1064; interim releases
+   `v0.3.14+`) → pre-gate audits (documentation #1047 ✓, **gameplay #1065 last**) → Phase 4 gate
+   (#729) → `v0.4.0`.** The two run in parallel — content lives in fl-base-pack, consolidation in
+   the engine — and #54's sub-issue rollup is the cross-repo readiness gauge, now containing
+   exactly the gating set.
 
 **Later phases:** IGui HAL (#156) → in-game mission editor (#49) + subtitles (#165) + crash
 overlay (#236) [P6]; persistence (Epic H) → identity (Epic C) → anti-cheat (Epic D) + operator
-(Epic K) [P5]; platform packaging [P7] → OpenGL + headless renderer [P8]. New gameplay/AI epics
-from the 2026-07-17 review slot after chains 2–3's heads; ops/agentic-cluster additions land in
+(Epic K) [P5]; platform packaging [P7] → OpenGL + headless renderer [P8]. Deployment artifacts
+(#160 container image, #228 release packaging, #1096 systemd unit) open Phase 5 alongside Epic G,
+ahead of the Epic K operator work that consumes them. Ops/agentic-cluster additions land in
 Phase 5 after Epics G/K.
 
 ---
@@ -333,7 +342,15 @@ Phase 4 acceptance requires a content pack (fl-base-pack) and is gated on Phase 
 - Sensor framework (Epic F): radar search/track + IFF + a shared team track picture function
   against fl-base-pack content.
 - Scale proven: Epics A/B/I demonstrate the 128-client tick + bandwidth gate (see the
-  cross-cutting initiative) — a prerequisite for Phase 4 multiplayer acceptance.
+  cross-cutting initiative), and the `reference` profile passes **with fl-base-pack sensor content
+  loaded and datalink + voice relay active** — the shipped 128-client claim describes a populated
+  battlespace, not a hollow world. A prerequisite for Phase 4 multiplayer acceptance.
+- Connect-path and message hygiene: every client→server message type is rate-limited or
+  one-shot-gated, and no unauthenticated request produces an amplified reply (2026-07-30 review;
+  epic #1063).
+- Version honesty: the build version travels in the hello/beacon/server-info surfaces and the
+  server browser flags a build mismatch, so two builds that both advertise `kProtocolVersion = 1`
+  cannot silently diverge (#1074).
 - In-match text chat (team/all), kill feed, scoreboard, and respawn/slot management function
   in a 128-client match (Epic E extension: #646/#647/#648).
 - Full kill chain: fire → guidance → warhead → damage → kill credit → debrief stats, with
@@ -341,8 +358,10 @@ Phase 4 acceptance requires a content pack (fl-base-pack) and is gated on Phase 
 - Agentic AI substrate live (world-state API + MCP surface, Epic M #589); the M/N/O spikes
   concluded; no-provider degradation validated (all AI features fall back to scripted
   behaviour — the CI-tested path).
-- Server discovery posture: the LAN browser + fl-lobby internet listing (#143) is the
-  deliberate matchmaking model — no skill-based matchmaking service (self-host posture).
+- Server discovery posture: LAN discovery, direct connect, and the client's federated internet
+  server browser (#143; `[client] lobby_urls`, empty by default) are the deliberate matchmaking
+  model — no skill-based matchmaking service (self-host posture). **v0.4.0 ships the client
+  capability**; the fl-lobby reference listing service is Phase 5 (#999).
 - Multi-crew aircraft (Epic #966): a crewed airframe spawns with every authored seat bot-filled
   (or empty per authoring); a human joins any non-human seat at connect or in-session and drives
   only that seat's capabilities; on vacate/disconnect the seat reverts to its authored default with
@@ -367,6 +386,9 @@ Phase 5 acceptance is the **live-services tier** that makes 128-player public/co
 operable, identifiable, and cheat-resistant. Engine-layer scaling seams (transport, job system,
 wire quantization, load harness) are validated earlier as Phase 3–4 gates.
 
+Phase 5 opens by authoring its **execution plan** — the #1036 pattern, filed as the milestone's
+first Task — so its ~70 open issues are staged there rather than here.
+
 - Transport replacement (Epic L) holds the Epic I scale gate: 128 clients @ 60 Hz, sim tick
   ≤ 16.6 ms p99 on the reference instance, soak-stable for 2 h.
 - Quantized snapshot stream + priority/budget scheduling keep sustained downstream
@@ -375,9 +397,16 @@ wire quantization, load harness) are validated earlier as Phase 3–4 gates.
   (offline-verifiable signed token); guest play still allowed when the server permits it.
 - Persistence (`IPersistence`): accounts, stats, and bans survive restart; file banlists import.
 - Anti-cheat: live input validation rejects impossible states in-tick; the offline `fl-review`
-  pipeline flags a seeded cheat corpus.
+  pipeline flags a seeded cheat corpus; **content-pack hashes are verified at join** (#1098 — the
+  reserved `contentHash` wire field becomes enforced).
 - Observability: `fl-server` exports Prometheus metrics; bundled Grafana dashboards render; the
   admin web interface performs kick/ban/config-reload against a running server.
+- Admin surfaces: the HTTP admin and MCP listener serves TLS natively, or refuses a non-loopback
+  bind without it (#1097); RCON is dual-stack (#316).
+- Deployment artifacts: the official `fl-server` container image publishes to GHCR (#160),
+  `fl-server` ships in the release archives (#228), and a systemd unit is provided (#1096) —
+  moved forward from Phase 7 by the 2026-07-30 review so the hosting artifacts precede the
+  operator that consumes them.
 - Operator: the k8s/OpenShift operator deploys a fleet, autoscales on population, and drains a
   live match gracefully on scale-down (reusing the shutdown countdown). Installs on OCP via OLM.
 - All three CI platforms green; new Go repos green on their own CI lanes.
@@ -396,7 +425,6 @@ wire quantization, load harness) are validated earlier as Phase 3–4 gates.
 - macOS .app bundle signed and notarized; passes Gatekeeper on a clean machine.
 - Linux Flatpak published to Flathub; AppImage available for direct download.
 - Windows Inno Setup installer; statically-linked VCRT; no external DLL requirement.
-- fl-server official container image published to GHCR.
 - Crash reporting operational on all three platforms; reports reach the configured endpoint.
 - All three platforms in CI green with release artifacts attached.
 

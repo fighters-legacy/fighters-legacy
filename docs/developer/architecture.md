@@ -220,6 +220,52 @@ revised by a dated decision record instead of a full RFC, provided the change is
 with its rationale. This keeps the velocity of pre-1.0 architecture work without leaving the
 locked table silently stale.
 
+**2026-07-30 — strategic architecture review: consolidation lands inside Phase 4, deployment
+artifacts move forward, and the scale gate is made honest (plan #1036 Stages 5–9, epics #1063 /
+#1064).** A full survey of the interfaces, the wire protocol, and the tracker against a 2026
+128-player release, checked against code rather than against documentation. Ten decisions:
+
+1. **The consolidation program lands inside M4.0, before the `v0.4.0` gate**, as new stages of
+   #1036 with each stage shipping an interim `v0.3.14+` release. Phase 5 builds identity,
+   persistence, anti-cheat, observability and a cluster operator directly on the server seams,
+   and the review found those seams carrying enough debt that building on them would multiply it.
+   Cleaning up afterwards is also strictly harder: the wire and the admin surface acquire external
+   users at the gate. The **gameplay audit (#1065) runs last**, so it audits what actually ships.
+2. **Two epics, not one.** Protocol hardening (#1063) and interface consolidation (#1064) map onto
+   distinct components, distinct stages and distinct releases; a single 29-sub epic would have had
+   a rollup nobody could read.
+3. **Four hardening fixes join M4** — the rate-limit trio, connect-path fuzz seeds, `--persistent`
+   stub removal, and the LAN-discovery port de-alias (the #1054 leftover). All four are live
+   defects in released builds rather than design debt.
+4. **fl-base-pack gating fixed at 13 issues.** #10, #11, #18, #44, #45 and — newly ruled — #42 are
+   non-gating and re-homed under the successor content epic #1102, so **#54's sub-issue rollup
+   equals gate truth** instead of needing mental adjustment while it is the number being watched.
+5. **Deployment artifacts move Phase 7 → Phase 5** (#160, #228, #1096). The ordering was backwards
+   for a self-host-only product: the Kubernetes operator that deploys the image sat a phase ahead
+   of the image.
+6. **New M5 gap issues** for what nothing tracked: admin-surface TLS (#1097 — no issue existed
+   anywhere, while the MCP surface that can *act* rides the same plaintext listener), content-hash
+   enforcement at join (#1098 — the wire field is already reserved and zero-filled), the
+   sensor-driven relevance spike (#1099), transport-auth posture after identity (#1100), and
+   `MsgClientInput` button widening (#1101 — bit 7 was the last free bit).
+7. **`CLAUDE.md` (#1052) pulled to M4 and sequenced at the end of consolidation**, so the primary
+   onboarding surface documents the post-consolidation architecture rather than being written
+   twice.
+8. **Declined:** auto-update (distribution channels own updates; the player-visible mismatch UX is
+   the build-version work in #1074) and sensor-driven relevance as a Deferred Lever (the registry
+   takes design-complete levers only, so it is a Spike until it is one).
+9. **Two new Phase 4 acceptance lines** — the `reference` scale profile must pass with sensor
+   content loaded and datalink plus voice active, and every client→server message type must be
+   rate-limited or one-shot-gated with no amplified reply. The first exists because the committed
+   128-client numbers were measured against a hollow world: `bot_swarm` bots carry no sensor
+   content, so contact tables are empty and the `O(P²)` datalink fusion cost the review found is
+   invisible to CI. **A gate that cannot fail on the bug it exists to catch is not evidence.**
+10. **Every phase gate now files the incoming phase's execution-plan Task.** #1036 is why M4 landed
+    in three clean interim releases; M5.0 currently holds ~70 open issues with no equivalent.
+
+Architecture decisions D10–D23 arising from this review are recorded in #1036 and mirrored here
+individually by the stage PRs that implement them.
+
 **2026-07-27 — player-facing AI content policy, RATIFIED (#932, RFC resolved).** Player sentiment
 toward generative AI in games is strongly negative (mid-2026 surveys ~85 % below neutral). A project
 that ships an agentic-AI initiative into that without a stated position invites every player to
