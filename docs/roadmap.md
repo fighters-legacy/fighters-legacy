@@ -342,9 +342,10 @@ Phase 4 acceptance requires a content pack (fl-base-pack) and is gated on Phase 
 - Sensor framework (Epic F): radar search/track + IFF + a shared team track picture function
   against fl-base-pack content.
 - Scale proven: Epics A/B/I demonstrate the 128-client tick + bandwidth gate (see the
-  cross-cutting initiative), and the `reference` profile passes **with fl-base-pack sensor content
-  loaded and datalink + voice relay active** — the shipped 128-client claim describes a populated
-  battlespace, not a hollow world. A prerequisite for Phase 4 multiplayer acceptance.
+  cross-cutting initiative), and the `reference` profile passes **with sensor content loaded and
+  datalink + voice relay active** — the shipped 128-client claim describes a populated battlespace,
+  not a hollow world. Builtin sensors satisfy this, so the gate never blocks on pack content. A
+  prerequisite for Phase 4 multiplayer acceptance.
 - Connect-path and message hygiene: every client→server message type is rate-limited or
   one-shot-gated, and no unauthenticated request produces an amplified reply (2026-07-30 review;
   epic #1063).
