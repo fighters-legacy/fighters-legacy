@@ -178,9 +178,11 @@ When opening or grooming an issue, set all of:
 - [ ] **`component:` label(s)** — the subsystem(s) it touches.
 - [ ] **Project** — confirm it's on the board (auto-add handles new issues).
 - [ ] **Parent** — link it under its Epic if it's part of one. *Cross-repo:* every new
-      `fl-base-pack` issue is parented under engine epic **#54** (initial content) at triage
-      until #54 closes at the Phase 4 gate, so the engine board's rollup stays an honest
-      content-readiness gauge.
+      `fl-base-pack` issue is parented under the **active content epic** at triage — **#54**
+      (initial content) through the Phase 4 gate, **#1102** (content expansion) after it — so the
+      engine board's rollup stays an honest content-readiness gauge. An issue ruled out of the
+      gate moves to the successor epic immediately rather than at the gate: while #54 is the
+      number being watched, it has to mean what it says.
 - [ ] **Status** — `Todo` until picked up.
 
 ## Decision records and RFCs
