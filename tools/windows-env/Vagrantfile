@@ -1,0 +1,94 @@
+# SPDX-FileCopyrightText: 2026 MKZ Systems LLC
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Windows validation VM — runs the real MSVC toolchain against a local branch, on demand (#1114).
+#
+# THIS IS A CORRECTNESS ENVIRONMENT, NOT A MEASUREMENT ONE. It is sized generously off the host
+# rather than pinned, and it renders through software Vulkan by default — so timings taken here mean
+# nothing. tools/bot_swarm/reference-env/ (pinned 8 vCPU / 16 GB) remains the only instrument any
+# performance number may come from.
+#
+# Optional by design: nothing requires this VM, and no git hook invokes it. Reach for it when a
+# branch looks MSVC-risky (new translation units, template-heavy code, CRT calls); skip it freely.
+#
+#   vagrant up --provider=libvirt          # provision (long: VS Build Tools + Vulkan SDK)
+#   ../windows-env/run-windows-check.sh    # from the host, any time after
+#
+# Windows Server 2022 is the guest because it is what GitHub's `windows-latest` runner image is
+# built on, so the toolchain matches the leg being mirrored; because the Microsoft evaluation
+# images are license-clean for exactly this use (180 days, rebuild to refresh); and because it
+# avoids the TPM/SecureBoot emulation that a Windows 11 guest would need under KVM.
+#
+# Box hosting has bitten this repo before (the Fedora reference VM had to settle a release behind
+# when its box 404'd), so the box is an override: set FL_WINENV_BOX to any Windows box that
+# publishes a libvirt artifact and speaks WinRM.
+Vagrant.configure("2") do |config|
+  config.vm.box = ENV.fetch("FL_WINENV_BOX", "peru/windows-server-2022-standard-x64-eval")
+  config.vm.guest = :windows
+  config.vm.hostname = "fl-winenv"
+
+  # WinRM is how Vagrant drives a Windows guest. The long timeouts are not padding: the Visual
+  # Studio Build Tools installer alone runs 30-60 minutes and the SDK installer is not quick
+  # either, and a WinRM timeout mid-install leaves a half-installed toolchain behind.
+  config.vm.communicator = "winrm"
+  config.vm.boot_timeout = 900
+  config.winrm.timeout = 1800
+  config.winrm.retry_limit = 30
+
+  # No synced folder. Every option is bad for a Windows guest on libvirt: rsync needs rsync in the
+  # guest, virtiofs needs WinFsp, and SMB needs host samba configuration. Source arrives instead as
+  # a git bundle uploaded over WinRM by run-windows-check.sh, into a persistent guest clone — which
+  # also buys warm incremental build trees, the thing that makes a local run worth having over CI.
+  config.vm.synced_folder ".", "/vagrant", disabled: true
+
+  config.vm.provision "shell", path: "provision.ps1", privileged: true
+
+  # Optional: register this guest as a self-hosted Windows runner for the dispatch-only
+  # windows-env workflow. Off by default. Same contract as the Linux reference runner — get a
+  # short-lived registration token (repo Settings -> Actions -> Runners -> New), pass it through
+  # the environment, never commit it:
+  #   FL_WINENV_RUNNER=1 FL_RUNNER_TOKEN=<token> vagrant up --provider=libvirt
+  if ENV["FL_WINENV_RUNNER"] == "1"
+    config.vm.provision "shell", privileged: true, path: "setup-runner.ps1",
+      env: { "FL_RUNNER_TOKEN" => ENV["FL_RUNNER_TOKEN"] }
+  end
+
+  config.vm.provider "libvirt" do |v|
+    # Correctness, not measurement: take a generous slice of the host rather than pinning a
+    # profile. Leave the host enough cores to stay usable while a build runs.
+    v.cpus = Integer(ENV.fetch("FL_WINENV_CPUS", "12"))
+    v.memory = Integer(ENV.fetch("FL_WINENV_MEM_MB", "20480"))
+    # Two MSVC build trees plus VS, the SDK and a vcpkg binary cache do not fit a stock box disk.
+    # The guest grows its partition into this space during provisioning.
+    v.machine_virtual_size = Integer(ENV.fetch("FL_WINENV_DISK_GB", "120"))
+
+    # ---- optional GPU passthrough profile (FL_WINENV_GPU=1) ----
+    #
+    # Hands a real GPU to the guest so the runtime tier renders on the production driver instead of
+    # lavapipe. `managed: "yes"` is the whole reason this is safe to leave in the file: libvirt
+    # detaches the device from its host driver when the domain starts and REATTACHES it when the
+    # domain stops, so the host gets the card back for CUDA/inference the moment you `vagrant halt`.
+    # There is no static vfio-pci bind and no host reboot in the loop.
+    #
+    # The one-time host prerequisites (VT-d in firmware, an additive intel_iommu=on GRUB edit, and
+    # moving the host display to the iGPU) are deliberately NOT automated — they touch firmware and
+    # a hand-maintained boot configuration. See the README's GPU passthrough section, and run its
+    # IOMMU-group check first: if the GPU does not sit alone in its group, stop there.
+    #
+    # Both functions of the card must travel together (the video function and its HDMI audio
+    # function share an IOMMU group), hence two hostdev entries.
+    if ENV["FL_WINENV_GPU"] == "1"
+      gpu_bus = ENV.fetch("FL_WINENV_GPU_BUS", "01")
+      gpu_slot = ENV.fetch("FL_WINENV_GPU_SLOT", "00")
+      v.pci bus: "0x#{gpu_bus}", slot: "0x#{gpu_slot}", function: "0x0"
+      v.pci bus: "0x#{gpu_bus}", slot: "0x#{gpu_slot}", function: "0x1"
+    end
+  end
+
+  # Secondary provider, kept for portability rather than because it is exercised here. Note it has
+  # no disk-growth knob, so a box with a small virtual disk will need one attached by hand.
+  config.vm.provider "virtualbox" do |v|
+    v.cpus = Integer(ENV.fetch("FL_WINENV_CPUS", "12"))
+    v.memory = Integer(ENV.fetch("FL_WINENV_MEM_MB", "20480"))
+  end
+end

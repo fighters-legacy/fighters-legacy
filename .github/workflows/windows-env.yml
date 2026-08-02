@@ -1,0 +1,72 @@
+# Windows validation tiers on the self-hosted Windows VM (#1114). OPT-IN and MANUAL: the hosted
+# Windows legs in ci.yml and scale-gate.yml remain the required PR gates, and nothing here changes
+# the PR-path CI surface. This workflow exists so the same tiers a developer runs locally through
+# tools/windows-env/run-windows-check.sh can also be dispatched at the registered VM — including
+# the `runtime` tier, which renders the game and has no hosted equivalent.
+#
+# There is deliberately no `schedule:` trigger. The VM is not always on, and GitHub does not queue
+# cron runs missed while a runner is offline — a nightly schedule would silently skip instead of
+# reporting. The commented cron below is the one-line re-enable once an always-on runner exists.
+# (Same reasoning as scale-gate.yml's deferred crons.)
+name: Windows Env
+
+on:
+  workflow_dispatch:
+    inputs:
+      tiers:
+        description: 'Check tiers to run'
+        required: false
+        default: 'ci,smoke'
+        type: choice
+        options:
+          - ci
+          - smoke
+          - runtime
+          - ci,smoke
+          - ci,smoke,runtime
+  # schedule:
+  #   - cron: '0 6 * * 1'   # deferred until an always-on Windows runner exists
+
+permissions:
+  contents: read
+
+jobs:
+  # SECURITY INVARIANT (self-hosted runner on a PUBLIC repo): this job must never execute fork-PR
+  # code. It is gated to `workflow_dispatch` (only write-access holders can trigger) on the
+  # canonical repo, and gated again on `vars.FL_WINDOWS_RUNNER_READY` — the operator's on-switch,
+  # and the off-switch the moment the VM is torn down. There is no `pull_request`/fork path to this
+  # runner. Do NOT add `pull_request`/`pull_request_target` triggers.
+  windows-checks:
+    name: Windows checks (tiers=${{ inputs.tiers }})
+    if: >-
+      github.repository == 'fighters-legacy/fighters-legacy' &&
+      github.event_name == 'workflow_dispatch' &&
+      vars.FL_WINDOWS_RUNNER_READY == 'true'
+    runs-on: [self-hosted, windows, x64, fl-windows]
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      # The dispatch input reaches the script as an ENVIRONMENT VARIABLE, never as an expression
+      # interpolated into the script body. Actions substitutes expressions before the script is
+      # written to disk, so a crafted input would become executable text rather than an argument —
+      # the injection class fixed in #1032. `tiers` is a `choice` input, which constrains it
+      # further, but the env indirection is the rule regardless of the input type.
+      - name: Run check tiers
+        shell: pwsh
+        env:
+          FL_TIERS: ${{ inputs.tiers }}
+        run: |
+          .\tools\windows-env\run-checks.ps1 -Tiers $env:FL_TIERS -Source $env:GITHUB_WORKSPACE
+
+      # The screenshot is most interesting exactly when the run failed, hence `always()`.
+      - name: Upload runtime-tier artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-env-artifacts
+          path: C:\fl\out\*
+          if-no-files-found: ignore
+          retention-days: 14

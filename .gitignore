@@ -108,6 +108,9 @@ tools/ai_eval/results/
 # LLM-vs-renderer GPU contention — auto-generated measurement results (#782)
 tools/gpu_contention/results/
 
+# Windows validation VM — screenshots and logs pulled back from the guest (#1114)
+tools/windows-env/results/
+
 # Vagrant machine state (reference-env VM) — keys, box metadata, etc.
 .vagrant/
 
