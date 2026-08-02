@@ -92,6 +92,8 @@ sudo apt-get install -y cmake ninja-build gcc g++ clang clang-format \
 
 > **Note (Lua):** Lua 5.5 is not required on Windows — CMake automatically fetches and compiles it via FetchContent.
 
+> **Developing on Linux or macOS?** [`tools/windows-env/`](https://github.com/fighters-legacy/fighters-legacy/blob/main/tools/windows-env/README.md) is an optional Vagrant VM that runs the MSVC build, `ctest` and a rendered screenshot smoke against your branch, so an MSVC-only failure (a shadowed local, a narrowing conversion, a missing `<string>` include) surfaces before the push. It is not a gate and no hook invokes it.
+
 ### macOS (Apple Silicon, 13+)
 
 ```bash
@@ -786,6 +788,12 @@ paths, both optional and not needed for normal development:
 Windows (Docker Desktop + `.wslconfig`) and macOS (`podman machine`/Docker Desktop sizing,
 Apple-Silicon arm64 caveat) are covered in the
 [reference-env README](https://github.com/fighters-legacy/fighters-legacy/blob/main/tools/bot_swarm/reference-env/README.md).
+
+There is a second VM in the repo and the two are not interchangeable: this one is a **pinned
+measurement** environment and is where performance numbers come from, while
+[`tools/windows-env/`](https://github.com/fighters-legacy/fighters-legacy/blob/main/tools/windows-env/README.md)
+is a **correctness** environment for running the MSVC toolchain locally. Never benchmark in the
+Windows VM — it is sized off the host rather than pinned, and renders through software Vulkan.
 
 ---
 
