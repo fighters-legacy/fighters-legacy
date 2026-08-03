@@ -1122,6 +1122,13 @@ replaces biome shading for that tile. Generate all three with
 [`tools/gen_terrain_color.py`](https://github.com/fighters-legacy/fighters-legacy/blob/main/tools/gen_terrain_color.py); see
 [satellite-terrain.md](satellite-terrain.md).
 
+**A theater pack wants `--bbox`, not full faces.** Both generators take the same
+`--bbox LATMIN LONMIN LATMAX LONMAX` and emit only the tiles covering that region. Without it a run
+covers whole cube faces — 4^level tiles each, so a level-12 theater would attempt millions of tiles
+to produce a region a few hundred km across. It composes with `--skip-existing` for a resumable
+build. A coarse global base (the `build_global_base.sh` path, level ≤ 5) is the case that legitimately
+wants full faces.
+
 **There is no terrain JSON manifest to author.** `TerrainManifest` carries only the terrain id and
 the deepest level the streamer refines to, and paths are fully determined by the convention above.
 

@@ -51,13 +51,20 @@ def test_tile_rel_path_satellite_matches_engine_convention():
     assert gtc.tile_rel_path("world", 2, 8, 130, 44, "satellite") == "terrain/world/f2/l8/tile_130_44_sat.ktx2"
 
 
-def test_bbox_tiles_selects_only_overlapping_tiles():
-    # A tiny bbox near the equator on face 0; low levels should yield a small, non-empty set that
-    # grows with level, and every returned tile's lattice overlaps the box.
-    bbox = (0.0, 0.0, 1.0, 1.0)
+def test_bbox_tiles_is_the_shared_implementation():
+    # bbox -> tile coverage moved into gen_terrain_tiles (#1107) so both generators run one
+    # quadtree descent rather than two filters over the full 4^level enumeration. This module
+    # re-exports it; the coverage/pruning contract is tested in tests/test_gen_terrain_tiles.py.
+    import gen_terrain_tiles
+
+    assert gtc.bbox_tiles is gen_terrain_tiles.bbox_tiles
+
+
+def test_bbox_tiles_selects_a_small_non_empty_subset():
+    bbox = (0.0, 0.0, 1.0, 1.0)  # a tiny box near the equator
     tiles = gtc.bbox_tiles([0, 1, 2, 3, 4, 5], 0, 3, bbox)
-    assert isinstance(tiles, list)
-    for (face, level, i, j) in tiles:
-        lat, lon = gtc.tile_latlon_grid(face, level, i, j, tile_px=8)
-        assert float(lat.max()) >= bbox[0] and float(lat.min()) <= bbox[2]
-        assert float(lon.max()) >= bbox[1] and float(lon.min()) <= bbox[3]
+    assert isinstance(tiles, list) and tiles
+    # Deliberately a conservative superset (the bounds are padded), so assert it stays a small
+    # fraction of the full range rather than an exact set.
+    assert len(tiles) < 6 * (1 + 4 + 16 + 64) / 4
+    assert all(0 <= face < 6 and 0 <= level <= 3 for (face, level, _i, _j) in tiles)

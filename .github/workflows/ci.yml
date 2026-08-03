@@ -571,6 +571,27 @@ jobs:
           print("OK: cube-sphere tile sizes, dtypes, and layers correct")
           EOF
 
+          # --bbox scoping (#1107). An option that is accepted and ignored looks exactly like one
+          # that works until the tile count is checked, so check it: the same level range over a
+          # half-degree box must write far fewer tiles than the full six faces would.
+          python3 tools/gen_terrain_tiles.py \
+            --input /tmp/global_dem.tif \
+            --terrain-id world \
+            --bbox 37.4 -122.6 37.9 -122.0 \
+            --min-level 0 --max-level 5 \
+            --workers 1 \
+            --output-dir /tmp/tiles-bbox
+
+          python3 - <<'EOF'
+          from pathlib import Path
+          written = list(Path("/tmp/tiles-bbox/terrain/world").rglob("tile_*.png"))
+          full_faces = sum(6 * (4 ** level) for level in range(6))   # 8190
+          assert written, "--bbox wrote nothing"
+          assert len(written) < full_faces / 100, \
+              f"--bbox wrote {len(written)} tiles; full faces would be {full_faces} — is it scoping?"
+          print(f"OK: --bbox wrote {len(written)} tiles vs {full_faces} for full faces")
+          EOF
+
   # ---------------------------------------------------------------------------
   # libFuzzer per-PR smoke (#708). fuzz-changes gates on touched paths and emits
   # a JSON matrix of harnesses; fuzz-run builds+smokes each; fuzz-smoke is the

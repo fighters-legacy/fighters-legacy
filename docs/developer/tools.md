@@ -39,7 +39,7 @@ real content bugs are reference bugs, and they are invisible without `--pack`.
 | `terrain-chunk-io` | `terrain-chunk-io <subcommand> [options]` — decode terrain PNGs, generate procedural tiles |
 | `fl-viewer` | Model preview in the game renderer |
 | `locale-extract` | Extract translatable strings |
-| `gen_terrain_tiles.py` | Cube-sphere quadtree tiles from a global DEM (**the current terrain path**) |
+| `gen_terrain_tiles.py` | Cube-sphere quadtree tiles from a global DEM (**the current terrain path**); `--bbox` scopes a run to one theater, full faces otherwise |
 | `gen_terrain_chunks.py` | Planar chunk grid — **legacy**, superseded by the above |
 | `gen_terrain_color.py` | Sentinel-2 satellite imagery tiles |
 | `gen_wind_profile.py` | Altitude wind profile TOML from gridded wind data |
