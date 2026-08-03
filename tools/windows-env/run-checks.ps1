@@ -132,6 +132,28 @@ function Sync-Source {
     Write-Host "source at: $(& git -C $Src rev-parse HEAD)"
 }
 
+# A BUILD TREE CONFIGURED BY A DIFFERENT COMPILER MUST NOT BE REUSED. CMakeCache.txt pins the
+# absolute path of the cl.exe that configured it, while the dev shell supplies whichever toolchain is
+# active now - so after a Visual Studio upgrade the old compiler gets driven with the new STL and the
+# build dies inside <yvals_core.h> with "STL1001: Unexpected compiler version", an error that reads
+# like a broken toolchain rather than a stale directory. Warm trees are the whole point of this
+# environment, which makes this the normal case here, not a corner case.
+function Confirm-CacheMatchesToolchain([string]$BuildDir) {
+    $cache = Join-Path $BuildDir "CMakeCache.txt"
+    if (-not (Test-Path $cache)) { return }
+    $m = Select-String -Path $cache -Pattern '^CMAKE_CXX_COMPILER:[^=]*=(.+)$' | Select-Object -First 1
+    if (-not $m) { return }
+    $cached = $m.Matches[0].Groups[1].Value.Trim()
+    $active = (Get-Command cl.exe -ErrorAction SilentlyContinue).Source
+    if (-not $active -or -not $cached) { return }
+    if (($cached -replace '/', '\') -ieq ($active -replace '/', '\')) { return }
+    Write-Host "build tree at $BuildDir was configured with a different compiler - discarding"
+    Write-Host "  cached: $cached"
+    Write-Host "  active: $active"
+    Remove-Item $cache -Force -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $BuildDir "CMakeFiles") -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 # ---- tier: ci ----
 # 1:1 with the ci.yml windows-latest leg. debug-msvc inherits CMAKE_COMPILE_WARNING_AS_ERROR=ON,
 # so /WX is on - which is the entire point of this environment: C4456 (shadowed local) and C4244
@@ -139,6 +161,7 @@ function Sync-Source {
 function Invoke-TierCi {
     $env:CMAKE_TOOLCHAIN_FILE = "C:\vcpkg\scripts\buildsystems\vcpkg.cmake"
     try {
+        Confirm-CacheMatchesToolchain (Join-Path $Src "build\debug-msvc")
         $cache = Join-Path $Src "build\debug-msvc\CMakeCache.txt"
         $configure = { Invoke-Checked cmake @("--preset", "debug-msvc", "-DVCPKG_TARGET_TRIPLET=x64-windows-static-md") }
         # cmake/dependencies.cmake force-disables GNS when protobuf/OpenSSL are missing, so a broken
@@ -176,6 +199,7 @@ function Invoke-TierCi {
 # no protobuf. Configuring is idempotent, so whichever tier runs first pays for it.
 function Confirm-ReleaseConfigured {
     Remove-Item Env:\CMAKE_TOOLCHAIN_FILE -ErrorAction SilentlyContinue
+    Confirm-CacheMatchesToolchain (Join-Path $Src "build\release-msvc")
     if (-not (Test-Path (Join-Path $Src "build\release-msvc\CMakeCache.txt"))) {
         Invoke-Checked cmake @("--preset", "release-msvc", "-DFL_ENABLE_GNS=OFF")
     }
@@ -351,6 +375,16 @@ foreach ($tier in $TierList) {
 
 Write-Section "summary"
 foreach ($k in $Results.Keys) { "{0,-10} {1}" -f $k, $Results[$k] | Write-Host }
-if ($Results.Values -contains "FAIL") { exit 1 }
+
+# Record the verdict as a FILE the host reads back, and do not rely on the exit code reaching it.
+# `vagrant winrm` has been observed returning 1 for a run whose every tier passed and whose script
+# exited 0 - a false alarm rather than a false pass, but the self-hosted runner job keys off this,
+# and a check that cries wolf gets ignored. The transport is an indirect signal; the verdict is not.
+$failed = @($Results.Keys | Where-Object { $Results[$_] -eq "FAIL" })
+$verdict = if ($failed.Count -gt 0) { "FAIL $($failed -join ',')" } else { "PASS" }
+New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+Set-Content -Path (Join-Path $OutDir "verdict.txt") -Value $verdict -Encoding ASCII
+
+if ($failed.Count -gt 0) { exit 1 }
 Write-Host "all selected tiers passed"
 exit 0

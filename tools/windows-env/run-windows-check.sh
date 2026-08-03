@@ -72,6 +72,21 @@ vagrant winrm -s powershell -c "\$env:FL_WINENV_TIERS='$TIERS'; \
 pwsh -NoProfile -ExecutionPolicy Bypass -File C:\\fl\\windows-env\\run-checks.ps1 -Sha $SHA" \
     || status=$?
 
+# ---- verdict ----
+# Read the verdict the guest WROTE rather than trusting the exit code that came back: `vagrant winrm`
+# has been seen returning 1 for a run in which every tier passed and the guest script exited 0. Its
+# exit code is also only ever a boolean (a remote `exit 3` arrives as 1). The file is written last,
+# so its absence means the run died before finishing - which is itself a failure, hence the fallback.
+verdict="$(vagrant winrm -s powershell -c \
+    "if (Test-Path C:\fl\out\verdict.txt) { Get-Content C:\fl\out\verdict.txt -Raw }" 2>/dev/null \
+    | tr -d '\r\n' | sed 's/[[:space:]]*$//')"
+case "$verdict" in
+    PASS)  echo "=== verdict: PASS ===";        status=0 ;;
+    FAIL*) echo "=== verdict: ${verdict} ===";  status=1 ;;
+    *)     echo "=== verdict: unavailable (the guest did not finish); transport exit ${status} ==="
+           [[ "$status" -eq 0 ]] && status=1 ;;
+esac
+
 # ---- collect artifacts ----
 # Best-effort: a failed run is exactly when the screenshot is worth looking at, so this happens
 # regardless of status and never changes it.
