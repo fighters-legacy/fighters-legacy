@@ -24,9 +24,23 @@ $ErrorActionPreference = "Stop"
 # guest and the hosted runner agree about glslangValidator.
 $VulkanVer = if ($env:FL_WINENV_VULKAN_VER) { $env:FL_WINENV_VULKAN_VER } else { "1.3.290.0" }
 $MesaVer   = if ($env:FL_WINENV_MESA_VER)   { $env:FL_WINENV_MESA_VER }   else { "25.0.7" }
-# Visual Studio channel: /17/ is VS 2022, /18/ is VS 2026. Override if Microsoft moves the alias.
+# Visual Studio bootstrapper channel.
+#
+# THE MAJOR VERSION MUST MATCH CI, or this environment reports failures that do not exist. GitHub's
+# windows runner builds with `Microsoft Visual Studio\18\...\MSVC\14.51.x` (VS 2026). Provisioning
+# VS 2022 instead (toolset 14.44) made the ci tier fail on `tests/test_http_admin.cpp` with C2017
+# "illegal escape sequence" - a raw string containing \" inside a CHECK() macro, which 14.44's
+# traditional preprocessor mis-tokenizes and 14.51 handles. Nothing was wrong with the code; a
+# validation tool that invents failures is worse than no validation tool.
+#
+# `18/insiders` is the VS 2026 Build Tools bootstrapper (`insiders` resolves to the same download).
+# NOTE aka.ms answers an UNKNOWN alias with a 200 OK Bing search page rather than a 404 - `18/pre`,
+# `18/release` and `2026` are all dead - which is how a 190 KB HTML file once got saved as
+# vs_buildtools.exe and failed half an hour later as "corrupted". Get-RemoteFile now catches that.
 $VsBootstrap = if ($env:FL_WINENV_VS_BOOTSTRAP) { $env:FL_WINENV_VS_BOOTSTRAP }
-               else { "https://aka.ms/vs/18/release/vs_buildtools.exe" }
+               else { "https://aka.ms/vs/18/insiders/vs_buildtools.exe" }
+# Reprovisioning must UPGRADE an older Visual Studio, not skip because some VS is present.
+$VsMajorMin = if ($env:FL_WINENV_VS_MAJOR) { [int]$env:FL_WINENV_VS_MAJOR } else { 18 }
 # NVIDIA driver for the GPU passthrough profile. No default: NVIDIA's download URLs are versioned
 # and rot quickly, and a 404 mid-provision is worse than a clear instruction.
 $NvidiaUrl = if ($env:FL_WINENV_NVIDIA_URL) { $env:FL_WINENV_NVIDIA_URL } else { "" }
@@ -36,12 +50,58 @@ $DlDir    = Join-Path $WorkRoot "dl"
 
 function Write-Section([string]$Title) { Write-Host "=== $Title ===" }
 
-function Get-RemoteFile([string]$Url, [string]$Dest) {
-    if (Test-Path $Dest) { Write-Host "  cached: $Dest"; return }
+# A download that returns 200 OK is not necessarily the file you asked for. aka.ms answers an
+# unknown alias with a Bing search PAGE, and Invoke-WebRequest will happily write that HTML to
+# whatever name you chose - producing a "vs_buildtools.exe" that fails 30 minutes later with
+# "the file or directory is corrupted and unreadable", pointing nowhere near the actual mistake.
+# So every download is checked against the magic bytes its extension implies, at the moment it
+# lands. The check also runs over a CACHED file: without that, one bad download poisons the cache
+# and every later run reuses it.
+function Test-DownloadedFile([string]$Path, [string]$Magic) {
+    if (-not (Test-Path $Path)) { return $false }
+    $len = (Get-Item $Path).Length
+    if ($len -lt 4) { return $false }
+    $head = [IO.File]::ReadAllBytes($Path)[0..3]
+    $ascii = -join ($head | ForEach-Object { [char]$_ })
+    # An HTML body means a redirect to an error/search page, whatever the status code said.
+    if ($ascii -match '^\s*(<!|<h|<H)') { return $false }
+    if ($Magic -and -not $ascii.StartsWith($Magic)) { return $false }
+    return $true
+}
+
+function Get-RemoteFile([string]$Url, [string]$Dest, [string]$Magic = "") {
+    # The cache is keyed on the URL, not just the filename. Validating the SHAPE of a cached file is
+    # not enough: when the Visual Studio channel changed, `vs_buildtools.exe` from the old URL was
+    # still a perfectly valid PE, so it was served from cache and quietly installed the OLD compiler
+    # while the log said it was installing the new one. A stale artefact that passes its own
+    # integrity check is exactly the kind of plausible-but-wrong result worth designing against.
+    $stamp = "$Dest.url"
+    if (Test-Path $Dest) {
+        $cachedUrl = if (Test-Path $stamp) { (Get-Content $stamp -Raw -ErrorAction SilentlyContinue).Trim() } else { "" }
+        if ($cachedUrl -ne $Url) {
+            Write-Host "  cached file at $Dest came from a different URL - discarding"
+            Remove-Item $Dest, $stamp -Force -ErrorAction SilentlyContinue
+        } elseif (Test-DownloadedFile $Dest $Magic) {
+            Write-Host "  cached: $Dest"
+            return
+        } else {
+            Write-Host "  cached file at $Dest is not a valid download - discarding"
+            Remove-Item $Dest, $stamp -Force -ErrorAction SilentlyContinue
+        }
+    }
     Write-Host "  downloading $Url"
     for ($try = 1; $try -le 3; $try++) {
-        try { Invoke-WebRequest -Uri $Url -OutFile $Dest -UseBasicParsing; return }
-        catch {
+        try {
+            Invoke-WebRequest -Uri $Url -OutFile $Dest -UseBasicParsing
+            if (Test-DownloadedFile $Dest $Magic) {
+                Set-Content -Path $stamp -Value $Url -Encoding ASCII
+                return
+            }
+            $size = if (Test-Path $Dest) { (Get-Item $Dest).Length } else { 0 }
+            Remove-Item $Dest -Force -ErrorAction SilentlyContinue
+            throw "the server returned $size bytes that are not a valid file (an HTML error or " +
+                  "search page, most likely a dead URL): $Url"
+        } catch {
             if ($try -eq 3) { throw }
             Write-Host "  attempt $try failed, retrying: $($_.Exception.Message)"
             Start-Sleep -Seconds 10
@@ -93,7 +153,24 @@ choco install -y --no-progress cmake --installargs 'ADD_CMAKE_TO_PATH=System'
 # different defaults (notably file encoding), and mirroring a CI leg under the other one would make
 # this environment disagree with the thing it exists to predict.
 choco install -y --no-progress powershell-core
+# OpenSSL is a GameNetworkingSockets dependency, and it is NOT in the repo's vcpkg.json - CI never
+# had to ask for it because GitHub's windows-latest image ships OpenSSL preinstalled. A bare Windows
+# Server guest does not, so `cmake/dependencies.cmake` silently force-disables GNS and the ci tier
+# builds enet6-only. (Found the hard way: the tier's own FL_ENABLE_GNS assertion caught it.)
+choco install -y --no-progress openssl
 $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine")
+
+# Point CMake's FindOpenSSL at it explicitly rather than trusting the install to land somewhere the
+# module already probes - the choco package's directory carries its version and has moved before.
+$sslRoot = Get-ChildItem "$env:ProgramFiles\OpenSSL*" -Directory -ErrorAction SilentlyContinue |
+           Sort-Object Name -Descending | Select-Object -First 1
+if ($sslRoot) {
+    [Environment]::SetEnvironmentVariable("OPENSSL_ROOT_DIR", $sslRoot.FullName, "Machine")
+    $env:OPENSSL_ROOT_DIR = $sslRoot.FullName
+    Write-Host "  OPENSSL_ROOT_DIR = $($sslRoot.FullName)"
+} else {
+    Write-Host "  WARNING: OpenSSL install directory not found - the ci tier's GNS assertion will fail"
+}
 
 Write-Section "git configuration"
 # MSVC object paths under a deep build tree exceed MAX_PATH, and a checkout that rewrites line
@@ -107,12 +184,22 @@ Write-Section "visual studio build tools"
 $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
 $haveVc = $false
 if (Test-Path $vswhere) {
-    $inst = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-    if ($inst) { $haveVc = $true; Write-Host "  present: $inst" }
+    $inst = & $vswhere -latest -prerelease -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    $ver  = & $vswhere -latest -prerelease -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationVersion
+    $major = 0
+    if ($ver -and ($ver -match '^(\d+)')) { $major = [int]$Matches[1] }
+    if ($inst -and $major -ge $VsMajorMin) {
+        $haveVc = $true
+        Write-Host "  present: $inst (version $ver)"
+    } elseif ($inst) {
+        # Present but too old to match CI - upgrade rather than silently keep predicting with the
+        # wrong compiler. The bootstrapper installs the newer product side by side.
+        Write-Host "  found Visual Studio $ver, but CI builds with $VsMajorMin.x - installing the newer Build Tools"
+    }
 }
 if (-not $haveVc) {
     $bootstrap = Join-Path $DlDir "vs_buildtools.exe"
-    Get-RemoteFile $VsBootstrap $bootstrap
+    Get-RemoteFile $VsBootstrap $bootstrap "MZ"
     Write-Host "  installing (this takes 30-60 minutes)"
     $p = Start-Process -FilePath $bootstrap -Wait -PassThru -ArgumentList @(
         "--quiet", "--wait", "--norestart", "--nocache",
@@ -130,12 +217,30 @@ if (Test-Path "C:\VulkanSDK\$VulkanVer\Bin\glslangValidator.exe") {
     Write-Host "  present"
 } else {
     $sdk = Join-Path $DlDir "VulkanSDK-$VulkanVer-Installer.exe"
-    Get-RemoteFile "https://sdk.lunarg.com/sdk/download/$VulkanVer/windows/VulkanSDK-$VulkanVer-Installer.exe" $sdk
+    Get-RemoteFile "https://sdk.lunarg.com/sdk/download/$VulkanVer/windows/VulkanSDK-$VulkanVer-Installer.exe" $sdk "MZ"
     $p = Start-Process -FilePath $sdk -Wait -PassThru -ArgumentList @(
         "--root", "C:\VulkanSDK\$VulkanVer", "--accept-licenses", "--default-answer",
         "--confirm-command", "install")
     if ($p.ExitCode -ne 0) { throw "Vulkan SDK installer failed with exit code $($p.ExitCode)" }
     [Environment]::SetEnvironmentVariable("VULKAN_SDK", "C:\VulkanSDK\$VulkanVer", "Machine")
+}
+
+Write-Section "vulkan loader (runtime)"
+# The SDK ships headers, libs and tools but NOT the loader, and `vulkan-1.dll` normally arrives with
+# a GPU driver - which a headless guest has none of. Without it the game links fine and then dies at
+# startup with 0xC0000135 (STATUS_DLL_NOT_FOUND), nowhere near anything Vulkan-shaped. lavapipe
+# supplies the ICD and the driver (`vulkan_lvp.dll`); this supplies the loader that finds them.
+if (Test-Path "$env:SystemRoot\System32\vulkan-1.dll") {
+    Write-Host "  present"
+} else {
+    $rt = Join-Path $DlDir "VulkanRT-$VulkanVer-Installer.exe"
+    Get-RemoteFile "https://sdk.lunarg.com/sdk/download/$VulkanVer/windows/VulkanRT-$VulkanVer-Installer.exe" $rt "MZ"
+    $p = Start-Process -FilePath $rt -Wait -PassThru -ArgumentList @("/S")
+    if ($p.ExitCode -ne 0) { Write-Host "  WARNING: Vulkan runtime installer exit code $($p.ExitCode)" }
+    if (-not (Test-Path "$env:SystemRoot\System32\vulkan-1.dll")) {
+        throw "Vulkan loader still absent after installing the runtime - the runtime tier cannot start the game"
+    }
+    Write-Host "  installed $env:SystemRoot\System32\vulkan-1.dll"
 }
 
 Write-Section "vcpkg"
@@ -159,7 +264,7 @@ if (Test-Path $icd) {
     Write-Host "  present: $icd"
 } else {
     $archive = Join-Path $DlDir "mesa3d-$MesaVer-release-msvc.7z"
-    Get-RemoteFile "https://github.com/pal1000/mesa-dist-win/releases/download/$MesaVer/mesa3d-$MesaVer-release-msvc.7z" $archive
+    Get-RemoteFile "https://github.com/pal1000/mesa-dist-win/releases/download/$MesaVer/mesa3d-$MesaVer-release-msvc.7z" $archive "7z"
     & "$env:ProgramFiles\7-Zip\7z.exe" x $archive "-oC:\mesa" -y | Out-Null
     if (-not (Test-Path $icd)) {
         throw "mesa extracted but $icd is missing - check the mesa-dist-win layout for $MesaVer"
@@ -178,7 +283,7 @@ if (-not (Get-PnpDevice -Class Display -ErrorAction SilentlyContinue |
     Write-Host "  driver by hand in the guest. Until then the runtime tier must stay on lavapipe."
 } else {
     $drv = Join-Path $DlDir "nvidia-driver.exe"
-    Get-RemoteFile $NvidiaUrl $drv
+    Get-RemoteFile $NvidiaUrl $drv "MZ"
     $p = Start-Process -FilePath $drv -Wait -PassThru -ArgumentList @("-s", "-noreboot", "-clean")
     if ($p.ExitCode -ne 0) { Write-Host "  WARNING: driver installer exit code $($p.ExitCode)" }
 }
@@ -186,7 +291,7 @@ if (-not (Get-PnpDevice -Class Display -ErrorAction SilentlyContinue |
 Write-Section "summary"
 $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine")
 if (Test-Path $vswhere) {
-    $vc = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    $vc = & $vswhere -latest -prerelease -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
     Write-Host "  msvc      : $vc"
 }
 Write-Host "  cmake     : $((cmake --version | Select-Object -First 1))"

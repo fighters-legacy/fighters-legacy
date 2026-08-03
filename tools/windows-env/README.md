@@ -29,9 +29,32 @@ failures rather than predictions.
 ## Files
 
 - `Vagrantfile` — the guest definition (libvirt, WinRM, optional GPU passthrough + runner tiers).
-- `provision.ps1` — toolchain install: VS Build Tools, Vulkan SDK, Ninja, CMake, git, vcpkg, lavapipe,
-  and PowerShell 7 (the shell GitHub's Windows runners use for `run:` steps, so the tiers execute
-  under the same interpreter CI uses rather than Windows PowerShell 5.1).
+- `provision.ps1` — toolchain install: VS Build Tools, Vulkan SDK **+ loader**, Ninja, CMake, git,
+  vcpkg, **OpenSSL**, lavapipe, and PowerShell 7 (the shell GitHub's Windows runners use for `run:`
+  steps, so the tiers execute under the same interpreter CI uses rather than Windows PowerShell 5.1).
+
+### ⚠ The compiler major version must match CI
+
+CI builds with **Visual Studio 18 (2026)**, MSVC toolset `14.51.x`. Provisioning installs VS 2026
+Build Tools from `aka.ms/vs/18/insiders/vs_buildtools.exe` for exactly that reason, and
+`run-checks.ps1` prints the version it is using and **warns loudly if it is older**.
+
+This is not pedantry. With VS 2022 (toolset 14.44) the `ci` tier fails to compile
+`tests/test_http_admin.cpp` with `C2017: illegal escape sequence` — a raw string containing `\"`
+inside a `CHECK()` macro, which 14.44's traditional preprocessor mis-tokenizes and 14.51 accepts.
+Nothing is wrong with that code and CI compiles it happily. **A validation tool that invents
+failures is worse than no validation tool**, so if you see the version warning, re-provision before
+believing anything the tiers tell you.
+
+Two Microsoft-specific traps worth knowing if you touch this:
+
+- `vswhere` **hides prerelease instances unless you pass `-prerelease`**. The VS 2026 Build Tools
+  install as an "Insiders" instance, so every query here passes that flag — without it the scripts
+  silently report the older VS 2022 that is still on the box.
+- `aka.ms` answers an **unknown** alias with a `200 OK` Bing search page rather than a 404. Only
+  `vs/17/release`, `vs/17/pre`, `vs/18/insiders` and `vs/insiders` resolve to a real installer.
+  `Get-RemoteFile` validates magic bytes on arrival *and* keys its cache on the URL, because a
+  cached-but-wrong installer is a valid PE that quietly installs the wrong compiler.
 - `run-checks.ps1` — the in-guest driver; runs the tiers below. Also used by the CI runner tier.
 - `run-windows-check.sh` — host entry point: bundles the branch, runs the checks, fetches artifacts.
 - `setup-runner.ps1` / `runner-cleanup.ps1` — optional self-hosted Windows runner + its cleanup hook.
@@ -47,8 +70,30 @@ failures rather than predictions.
     # just the build + ctest leg, which is what catches the warning classes above
     FL_WINENV_TIERS=ci tools/windows-env/run-windows-check.sh
 
-Host prerequisites: `vagrant`, the `vagrant-libvirt` plugin, and a working libvirt/KVM stack
-(`vagrant plugin install vagrant-libvirt`). The WinRM gems `vagrant upload` needs ship with Vagrant.
+### Host prerequisites
+
+⚠ **Use HashiCorp's Vagrant, not your distribution's package.** A Windows guest is driven over
+WinRM, and Vagrant's WinRM communicator hard-requires the `winrm`, `winrm-fs` and `winrm-elevated`
+gems. Fedora's `vagrant` RPM patches in **rubyzip 3.x**, while every published `winrm-fs` (newest:
+1.3.5, 2020) caps at `rubyzip ~> 2.0` — there is no version combination that resolves, so
+`vagrant up` dies with `cannot load such file -- winrm` before it even fetches the box, and
+`vagrant plugin install` cannot fix it. Upstream Vagrant wants `rubyzip ~> 2.3`, so this is a
+packaging artifact rather than an upstream limitation. HashiCorp's build bundles its own Ruby with
+all three gems already present.
+
+    # Fedora — replaces the distro package (removes vagrant-libvirt with it)
+    sudo dnf config-manager addrepo --from-repofile=https://rpm.releases.hashicorp.com/fedora/hashicorp.repo
+    sudo dnf install -y --allowerasing --repo=hashicorp vagrant
+    sudo dnf install -y libvirt-devel      # to build the plugin against
+    vagrant plugin install vagrant-libvirt # no sudo
+
+⚠ **If you also use [`reference-env`](../bot_swarm/reference-env/):** newer `vagrant-libvirt`
+defaults to `qemu:///system`. A VM created under `qemu:///session` will read as *not created*, and
+running `vagrant status` in that state **deletes** `.vagrant/machines/default/libvirt/id`, detaching
+Vagrant from a VM that is otherwise fine. Export `LIBVIRT_DEFAULT_URI=qemu:///session` for that
+directory, or restore the file by writing the domain's UUID
+(`virsh --connect qemu:///session domuuid <domain>`) back into it. The VM and its disk are never
+touched.
 
 ## Check tiers
 
@@ -226,6 +271,22 @@ which skips whatever already succeeded.
 
 **Everything rebuilds every run.** Check that the guest is reusing `C:\fl\src` rather than a fresh
 checkout, and that `C:\fl` is still on the Defender exclusion list (`Get-MpPreference`).
+
+**The `ci` tier says GNS was force-disabled.** GNS needs OpenSSL, which is **not** in the repo's
+`vcpkg.json` — CI never had to ask for it because GitHub's runner image ships OpenSSL preinstalled.
+Provisioning installs it and sets `OPENSSL_ROOT_DIR`. If the tier still complains after that, note
+that **CMake never retries a cached `NOTFOUND`**: an earlier configure recorded
+`OPENSSL_INCLUDE_DIR-NOTFOUND` and every later configure reuses it, so installing the dependency
+appears to have no effect. The tier purges the configure cache and retries once before believing
+the assertion; `rm -r build/debug-msvc` in the guest is the manual equivalent.
+
+**The `runtime` tier exits with `-1073741515` (`0xC0000135`).** That is `STATUS_DLL_NOT_FOUND`, and
+it names no file. The usual cause is a missing **Vulkan loader**: `vulkan-1.dll` normally arrives
+with a GPU driver, and a headless guest has none — the SDK ships headers and tools but not the
+loader, and mesa ships the ICD and driver but not the loader either. Provisioning installs LunarG's
+Vulkan runtime for this. The tier now captures the game's stdout/stderr to
+`C:\fl\out\runtime-smoke.{out,err}.txt` and echoes them on failure, so later failures explain
+themselves rather than reporting a bare exit code.
 
 ## Deferred
 

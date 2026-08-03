@@ -63,12 +63,29 @@ function Enter-MsvcEnvironment {
     if ($env:VSCMD_ARG_TGT_ARCH -eq "x64") { return }
     $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
     if (-not (Test-Path $vswhere)) { throw "vswhere not found - is Visual Studio Build Tools installed?" }
-    $vsPath = & $vswhere -latest -products * `
+    $vsPath = & $vswhere -latest -prerelease -products * `
         -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
     if (-not $vsPath) { throw "no Visual Studio instance with the C++ toolset - re-run provisioning" }
+    $vsVer = & $vswhere -latest -prerelease -products * `
+        -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationVersion
     Import-Module (Join-Path $vsPath "Common7\Tools\Microsoft.VisualStudio.DevShell.dll")
     Enter-VsDevShell -VsInstallPath $vsPath -SkipAutomaticLocation -DevCmdArguments "-arch=x64" | Out-Null
-    Write-Host "msvc environment: $vsPath (x64)"
+    Write-Host "msvc environment: $vsPath (version $vsVer, x64)"
+
+    # Say out loud which compiler is predicting CI. A DIFFERENT MAJOR VERSION INVENTS FAILURES: on
+    # 14.44 (VS 2022) this repo fails to compile a raw string inside a CHECK() macro that 14.51
+    # (VS 2026, what the runner uses) accepts. Someone reading a red tier has to be able to tell
+    # "your branch is broken" from "this VM is not the compiler CI runs".
+    $ciMajor = if ($env:FL_WINENV_VS_MAJOR) { [int]$env:FL_WINENV_VS_MAJOR } else { 18 }
+    $major = 0
+    if ($vsVer -and ($vsVer -match '^(\d+)')) { $major = [int]$Matches[1] }
+    if ($major -lt $ciMajor) {
+        Write-Host ""
+        Write-Host "WARNING: this guest builds with Visual Studio $major.x, but CI builds with $ciMajor.x."
+        Write-Host "         Compiler-version-specific errors reported below may not reproduce in CI."
+        Write-Host "         Re-run provisioning to install the matching Build Tools."
+        Write-Host ""
+    }
 }
 
 # ---- source ----
@@ -105,13 +122,28 @@ function Sync-Source {
 function Invoke-TierCi {
     $env:CMAKE_TOOLCHAIN_FILE = "C:\vcpkg\scripts\buildsystems\vcpkg.cmake"
     try {
-        Invoke-Checked cmake @("--preset", "debug-msvc", "-DVCPKG_TARGET_TRIPLET=x64-windows-static-md")
-
+        $cache = Join-Path $Src "build\debug-msvc\CMakeCache.txt"
+        $configure = { Invoke-Checked cmake @("--preset", "debug-msvc", "-DVCPKG_TARGET_TRIPLET=x64-windows-static-md") }
         # cmake/dependencies.cmake force-disables GNS when protobuf/OpenSSL are missing, so a broken
-        # vcpkg setup would otherwise SILENTLY build enet6-only and pass. CI asserts this; so do we.
-        if (-not (Select-String -Path (Join-Path $Src "build\debug-msvc\CMakeCache.txt") `
-                                -Pattern 'FL_ENABLE_GNS:BOOL=ON' -Quiet)) {
-            throw "GNS was force-disabled at configure - protobuf/OpenSSL not found via vcpkg"
+        # setup would otherwise SILENTLY build enet6-only and pass. CI asserts this; so do we.
+        $gnsOn = { (Test-Path $cache) -and (Select-String -Path $cache -Pattern 'FL_ENABLE_GNS:BOOL=ON' -Quiet) }
+
+        & $configure
+
+        # A CACHED `NOTFOUND` IS NEVER RETRIED. find_package writes OPENSSL_INCLUDE_DIR-NOTFOUND into
+        # the cache, and every later configure reuses it - so installing the missing dependency has
+        # no effect and the tier keeps reporting a failure that has already been fixed. This env
+        # keeps its build trees warm on purpose, which makes that stale-negative case the norm here
+        # rather than the exception. Purge and reconfigure once before believing the assertion.
+        if (-not (& $gnsOn)) {
+            Write-Host "GNS reads as disabled - discarding the configure cache in case it is a stale NOTFOUND"
+            Remove-Item $cache -Force -ErrorAction SilentlyContinue
+            Remove-Item (Join-Path $Src "build\debug-msvc\CMakeFiles") -Recurse -Force -ErrorAction SilentlyContinue
+            & $configure
+        }
+        if (-not (& $gnsOn)) {
+            throw "GNS was force-disabled at configure even after a clean reconfigure - OpenSSL or " +
+                  "protobuf really is missing (check OPENSSL_ROOT_DIR and the vcpkg manifest)"
         }
 
         Invoke-Checked cmake @("--build", "--preset", "debug-msvc")
@@ -142,6 +174,23 @@ function Invoke-TierSmoke {
     # `run:` step on a Windows runner), and 5.1 differs in enough defaults to be a different test.
     Invoke-Checked "pwsh" @("-NoProfile", "-ExecutionPolicy", "Bypass",
         "-File", ".\tools\bot_swarm\run_loadtest.ps1", "build\release-msvc", "8", "3", "weave")
+}
+
+# Echo whatever the game managed to say before it died. Windows startup failures in particular are
+# reported only as an NTSTATUS exit code (0xC0000135 = a missing DLL, for instance), which names no
+# file and points nowhere near the cause.
+function Show-RuntimeLog([string]$OutFile, [string]$ErrFile) {
+    foreach ($f in @(@{p=$OutFile; n="stdout"}, @{p=$ErrFile; n="stderr"})) {
+        if (Test-Path $f.p) {
+            $text = (Get-Content $f.p -Raw -ErrorAction SilentlyContinue)
+            if ($text -and $text.Trim()) {
+                Write-Host "--- game $($f.n) ---"
+                ($text -split "`n" | Select-Object -Last 40) | ForEach-Object { Write-Host "  $($_.TrimEnd())" }
+            } else {
+                Write-Host "--- game $($f.n): empty ---"
+            }
+        }
+    }
 }
 
 # ---- tier: runtime ----
@@ -178,12 +227,21 @@ function Invoke-TierRuntime {
     if ($ViaTask) {
         Invoke-RuntimeViaTask -Game $game -GameArgs $gameArgs
     } else {
+        # CAPTURE THE GAME'S OUTPUT. Without this the tier can only report "exited with code N",
+        # which for a startup failure says nothing at all - the first real failure here was a
+        # missing DLL and the second was a bare exit 1, neither of which the harness could explain.
+        # A check that cannot say why it failed costs more time than it saves.
+        $stdout = Join-Path $OutDir "runtime-smoke.out.txt"
+        $stderr = Join-Path $OutDir "runtime-smoke.err.txt"
         $p = Start-Process -FilePath $game -ArgumentList $gameArgs -WorkingDirectory $Src `
-                           -NoNewWindow -PassThru
+                           -NoNewWindow -PassThru `
+                           -RedirectStandardOutput $stdout -RedirectStandardError $stderr
         if (-not $p.WaitForExit(600000)) {
             $p.Kill()
+            Show-RuntimeLog $stdout $stderr
             throw "runtime smoke: watchdog expired after 10 minutes"
         }
+        if ($p.ExitCode -ne 0) { Show-RuntimeLog $stdout $stderr }
         if ($p.ExitCode -ne 0) { throw "game exited with code $($p.ExitCode)" }
     }
 
