@@ -15,18 +15,13 @@ subprocess launch is covered by the ctest that invokes this script against the c
 """
 import argparse
 import json
-import socket
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-
-def free_port():
-    """Grab an ephemeral TCP port so parallel ctest runs never collide on a fixed one."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
+from fl_ports import BindFailure, looks_like_bind_failure, with_free_port  # noqa: E402
 
 
 def evaluate_report(report, expect_outcome=None, min_triggers=None, min_survivors=None, min_spawned=None):
@@ -53,14 +48,24 @@ def evaluate_report(report, expect_outcome=None, min_triggers=None, min_survivor
 
 
 def run_mission(server, assets, mission, report_path, timeout_s=60):
-    """Launch fl-server headless; it runs the mission to completion, writes the report, and exits."""
-    port = str(free_port())
-    cmd = [server, port, "8", "--bind", "127.0.0.1", "--assets", assets,
-           "--mission", mission, "--mission-report", report_path, "--transport", "enet"]
-    proc = subprocess.run(cmd, timeout=timeout_s, capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError(f"fl-server exited {proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
-    return proc
+    """Launch fl-server headless; it runs the mission to completion, writes the report, and exits.
+
+    The port comes from `fl_ports.with_free_port`, which probes UDP (what fl-server actually binds)
+    and retries when the server reports a bind failure anyway -- the probe socket is closed before
+    the server starts, so the choice is racy by construction (#1056).
+    """
+    def attempt(port):
+        cmd = [server, str(port), "8", "--bind", "127.0.0.1", "--assets", assets,
+               "--mission", mission, "--mission-report", report_path, "--transport", "enet"]
+        proc = subprocess.run(cmd, timeout=timeout_s, capture_output=True, text=True)
+        if proc.returncode != 0:
+            detail = f"fl-server exited {proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+            if looks_like_bind_failure(proc.stdout + proc.stderr):
+                raise BindFailure(detail)
+            raise RuntimeError(detail)
+        return proc
+
+    return with_free_port(attempt)
 
 
 def main(argv=None):

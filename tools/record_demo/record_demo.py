@@ -20,20 +20,21 @@ subprocess orchestration is exercised manually and by the optional demo-videos C
 import argparse
 import json
 import os
-import socket
 import subprocess
 import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
+from fl_ports import BindFailure, looks_like_bind_failure, with_free_port  # noqa: E402
+
 DEFAULT_ICD = "/usr/share/vulkan/icd.d/lvp_icd.x86_64.json"
 
-
-def free_port():
-    """Grab an ephemeral TCP port so parallel runs never collide on a fixed one."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+# wait_for_listening outcomes. A bind failure is distinguished from a timeout because only the
+# former is worth retrying on a fresh port (#1056).
+LISTEN_READY = "ready"
+LISTEN_BIND_FAILED = "bind-failed"
+LISTEN_TIMEOUT = "timeout"
 
 
 def load_manifest(path):
@@ -77,16 +78,24 @@ def ffprobe_duration(path, ffprobe="ffprobe"):
 
 
 def wait_for_listening(log_path, deadline_s=15.0):
-    """Poll an fl-server log for its 'listening on' line."""
+    """Poll an fl-server log until it is listening, fails to bind, or the deadline passes.
+
+    Returns one of `LISTEN_READY` / `LISTEN_BIND_FAILED` / `LISTEN_TIMEOUT`. Reporting the bind
+    failure distinctly is what lets `record_one` retry on a different port instead of spending the
+    full deadline and then blaming the demo (#1056).
+    """
     end = time.monotonic() + deadline_s
     while time.monotonic() < end:
         try:
-            if "listening on" in Path(log_path).read_text(encoding="utf-8", errors="ignore"):
-                return True
+            text = Path(log_path).read_text(encoding="utf-8", errors="ignore")
         except FileNotFoundError:
-            pass
+            text = ""
+        if "listening on" in text:
+            return LISTEN_READY
+        if looks_like_bind_failure(text):
+            return LISTEN_BIND_FAILED
         time.sleep(0.15)
-    return False
+    return LISTEN_TIMEOUT
 
 
 def record_one(args, demo, env):
@@ -96,59 +105,70 @@ def record_one(args, demo, env):
         return False, f"mission file not found: {mission}"
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    port = str(free_port())
     srv_log = str(out_dir / f"{demo['out_name']}-server.log")
 
-    # 1) Launch a standalone fl-server at a reduced wall-rate so the recorder keeps pace. NOTE: do NOT
-    # force --transport enet here — the game client with --connect uses the server default (GNS when
-    # built with FL_ENABLE_GNS, else the enet fallback), and both ends must agree or the client never
-    # connects. Leaving transport unset keeps the server on the same default the client picks.
-    with open(srv_log, "w", encoding="utf-8") as slog:
-        server = subprocess.Popen(
-            [args.server, port, "8", "--bind", "127.0.0.1", "--assets", args.assets,
-             "--mission", mission, "--time-rate", args.time_rate],
-            stdout=slog, stderr=subprocess.STDOUT, env=env,
-        )
-    try:
-        if not wait_for_listening(srv_log):
-            return False, f"server never reported 'listening on' (see {srv_log})"
-
-        # 2) Launch the headless observer recorder client.
-        client = [args.game, "--connect", f"127.0.0.1:{port}", "--observer", "--auto",
-                  "--assets", args.assets, "--shot-track", mission,
-                  "--record-fps", str(args.fps), "--record-res", args.res,
-                  "--exit-on-mission-end", "--record-max-sec", str(args.max_sec),
-                  "--record-max-dup", str(args.max_dup)]
-        if args.headless:
-            client.append("--headless")
-        if args.png:
-            png_dir = out_dir / demo["out_name"]
-            png_dir.mkdir(parents=True, exist_ok=True)
-            client += ["--record-png-dir", str(png_dir)]
-            out_path = str(png_dir)
-        else:
-            out_path = str(out_dir / f"{demo['out_name']}.mp4")
-            client += ["--record", out_path]
-
-        proc = subprocess.run(client, timeout=args.timeout, env=env)
-        if proc.returncode != 0:
-            return False, f"recorder client exited {proc.returncode} (duplicated-frame cap or encoder error)"
-    finally:
-        server.terminate()
+    def attempt(port):
+        port = str(port)
+        # 1) Launch a standalone fl-server at a reduced wall-rate so the recorder keeps pace. NOTE: do NOT
+        # force --transport enet here — the game client with --connect uses the server default (GNS when
+        # built with FL_ENABLE_GNS, else the enet fallback), and both ends must agree or the client never
+        # connects. Leaving transport unset keeps the server on the same default the client picks.
+        with open(srv_log, "w", encoding="utf-8") as slog:
+            server = subprocess.Popen(
+                [args.server, port, "8", "--bind", "127.0.0.1", "--assets", args.assets,
+                 "--mission", mission, "--time-rate", args.time_rate],
+                stdout=slog, stderr=subprocess.STDOUT, env=env,
+            )
         try:
-            server.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            server.kill()
+            listening = wait_for_listening(srv_log)
+            if listening == LISTEN_BIND_FAILED:
+                # Retried on a fresh port by with_free_port; the transport binds UDP and the probe
+                # socket is closed before the server starts, so the port can be taken in the gap.
+                raise BindFailure(f"fl-server could not bind port {port} (see {srv_log})")
+            if listening != LISTEN_READY:
+                return False, f"server never reported 'listening on' (see {srv_log})"
 
-    # 3) Smoke-check the output (mp4 only; PNG sequences are checked by frame count).
-    if args.png:
-        frames = len(list((out_dir / demo["out_name"]).glob("frame_*.png")))
-        if frames <= 0:
-            return False, "no PNG frames written"
-        return True, f"{frames} PNG frame(s)"
-    dur = ffprobe_duration(out_path, args.ffprobe)
-    ok, reason = duration_ok(dur, float(demo["expected_duration"]))
-    return ok, f"{out_path}: {reason}"
+            # 2) Launch the headless observer recorder client.
+            client = [args.game, "--connect", f"127.0.0.1:{port}", "--observer", "--auto",
+                      "--assets", args.assets, "--shot-track", mission,
+                      "--record-fps", str(args.fps), "--record-res", args.res,
+                      "--exit-on-mission-end", "--record-max-sec", str(args.max_sec),
+                      "--record-max-dup", str(args.max_dup)]
+            if args.headless:
+                client.append("--headless")
+            if args.png:
+                png_dir = out_dir / demo["out_name"]
+                png_dir.mkdir(parents=True, exist_ok=True)
+                client += ["--record-png-dir", str(png_dir)]
+                out_path = str(png_dir)
+            else:
+                out_path = str(out_dir / f"{demo['out_name']}.mp4")
+                client += ["--record", out_path]
+
+            proc = subprocess.run(client, timeout=args.timeout, env=env)
+            if proc.returncode != 0:
+                return False, f"recorder client exited {proc.returncode} (duplicated-frame cap or encoder error)"
+        finally:
+            server.terminate()
+            try:
+                server.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                server.kill()
+
+        # 3) Smoke-check the output (mp4 only; PNG sequences are checked by frame count).
+        if args.png:
+            frames = len(list((out_dir / demo["out_name"]).glob("frame_*.png")))
+            if frames <= 0:
+                return False, "no PNG frames written"
+            return True, f"{frames} PNG frame(s)"
+        dur = ffprobe_duration(out_path, args.ffprobe)
+        ok, reason = duration_ok(dur, float(demo["expected_duration"]))
+        return ok, f"{out_path}: {reason}"
+
+    try:
+        return with_free_port(attempt)
+    except BindFailure as e:
+        return False, str(e)
 
 
 def build_env(headless):

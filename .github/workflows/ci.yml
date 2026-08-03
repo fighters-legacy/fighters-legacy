@@ -412,6 +412,12 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: python3 -m pytest tests/test_gpu_contention.py -v
 
+      # The shared free-port probe + bind retry both fl-server launchers use (#1056). Pure logic
+      # plus two real loopback UDP binds — no fl-server, no network traffic.
+      - name: Unit test common/fl_ports.py (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 -m pytest tests/test_fl_ports.py -v
+
       # Pure assertion logic only; the full harness run against fl-server is the mission_harness_ci_smoke
       # ctest (#856).
       - name: Unit test mission_test/mission_test.py (Ubuntu)
