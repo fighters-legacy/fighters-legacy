@@ -142,7 +142,17 @@ SensorDef parseSensorDef(std::string_view toml_src) {
 
     // ── ECCM (#529, optional) ────────────────────────────────────────────────
     // Resistance to noise jamming, [0, 1]. Extends the burn-through range against a jamming target.
-    s.eccm = opt_float(tbl["eccm"], 0.f);
+    //
+    // Read from the [sensor] TABLE, which is where every authoring reference puts it and where TOML
+    // scoping puts a key written under the `[sensor]` header. This used to read the ROOT table
+    // (#1105): a def authored per docs/modding/weapons-sensors.md silently got eccm = 0 — no error,
+    // no warning, just a radar with no burn-through advantage against jamming. A misplaced key at
+    // the root is now a hard error naming the fix rather than a silent default, because that is the
+    // whole failure mode: the value LOOKS authored and does nothing.
+    if (tbl["eccm"])
+        throw std::runtime_error("sensor def parse error: `eccm` is at the file root; it belongs "
+                                 "inside the [sensor] table (move it above the [search] header)");
+    s.eccm = opt_float(sen["eccm"], 0.f);
     if (s.eccm < 0.f || s.eccm > 1.f)
         throw std::runtime_error("sensor eccm must be in [0, 1]");
 

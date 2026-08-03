@@ -223,6 +223,9 @@ flare_count = 30    # ir-decoy rounds;    0 = no flare dispenser
   its *burn-through range*: the radar still gets a bearing strobe, but no firing solution until it
   closes inside where the skin return beats the noise. A radar's **`eccm`** (on its sensor def)
   extends that burn-through — a good radar burns through farther out; a poor one must merge.
+  `eccm` belongs **inside the `[sensor]` table**, above the `[search]` header; and it is only
+  consumed by a radar that has a `[track]` lobe, since burn-through is a question about holding a
+  lock. `validate-sensor` warns when it is authored where nothing can read it.
 
 Which aircraft carry a jammer is content policy: give a dedicated EW platform a high `eccm` radar and
 generous `chaff_count`/`flare_count`, and give a strike aircraft flares to survive the IR threat.

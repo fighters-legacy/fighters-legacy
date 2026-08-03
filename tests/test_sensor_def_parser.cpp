@@ -246,6 +246,69 @@ pod               = 0.35
     CHECK_THAT(s.lockHoldS, WithinAbs(0.0, 1e-6));
 }
 
+TEST_CASE("parseSensorDef reads eccm from the [sensor] table, where the docs author it") {
+    // #1105: the parser read the ROOT table while every authoring reference (weapons-sensors.md,
+    // the worked N019 example, the SensorDef.h field comment) puts eccm inside [sensor]. TOML
+    // scoping put the key in the sensor table, which was never consulted — so a def authored per
+    // the docs silently flew with eccm = 0: no error, no warning, no burn-through advantage.
+    auto radarWithEccm = [](const char* eccmLine) {
+        return std::string(R"toml(
+[sensor]
+id      = "t:eccm"
+name    = "ECCM radar"
+type    = "radar"
+emitter = true
+)toml") + eccmLine +
+               R"toml(
+[search]
+az_half_angle_deg = 60.0
+el_half_angle_deg = 30.0
+max_range_nm      = 40.0
+pod               = 0.35
+
+[track]
+az_half_angle_deg = 30.0
+el_half_angle_deg = 20.0
+max_range_nm      = 30.0
+pod               = 0.65
+lock_hold_s       = 4.0
+)toml";
+    };
+
+    const SensorDef s = parseSensorDef(radarWithEccm("eccm    = 0.25\n"));
+    CHECK_THAT(s.eccm, WithinAbs(0.25, 1e-6));
+
+    // Absent = no ECCM, the same default a sensor that never mentions it gets.
+    CHECK_THAT(parseSensorDef(radarWithEccm("")).eccm, WithinAbs(0.0, 1e-6));
+    CHECK_THAT(parseSensorDef(kRadar).eccm, WithinAbs(0.0, 1e-6));
+
+    // Still range-checked, in its new home.
+    CHECK_THROWS_AS(parseSensorDef(radarWithEccm("eccm = 1.5\n")), std::runtime_error);
+    CHECK_THROWS_AS(parseSensorDef(radarWithEccm("eccm = -0.1\n")), std::runtime_error);
+}
+
+TEST_CASE("parseSensorDef refuses an eccm written at the file root") {
+    // The old spelling. Accepting it quietly would leave two places claiming the same field, and
+    // ignoring it quietly is the #1105 failure itself — a value that LOOKS authored and does
+    // nothing. It is an error that names the fix.
+    const std::string rootEccm = R"toml(
+eccm = 0.25
+
+[sensor]
+id      = "t:root-eccm"
+name    = "Misplaced ECCM"
+type    = "radar"
+emitter = true
+
+[search]
+az_half_angle_deg = 60.0
+el_half_angle_deg = 30.0
+max_range_nm      = 40.0
+pod               = 0.35
+)toml";
+    CHECK_THROWS_AS(parseSensorDef(rootEccm), std::runtime_error);
+}
+
 TEST_CASE("the builtin eyeball exists with no content pack and is search-only") {
     // Honest sensing is the DEFAULT, not an opt-in: an AI entity with no declared sensors gets this
     // one, in every configuration of the engine including the zero-content sandbox.
