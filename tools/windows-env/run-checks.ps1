@@ -191,6 +191,18 @@ function Show-RuntimeLog([string]$OutFile, [string]$ErrFile) {
             }
         }
     }
+
+    # The game logs to a FILE, not to stdout, so a startup failure leaves both pipes empty and the
+    # tier looks mute. This is where the real reason lives - a missing audio device, for instance,
+    # appears only here.
+    $logDir = Join-Path $env:APPDATA "mkzsystems\fighters-legacy\logs"
+    $log = Get-ChildItem $logDir -Filter *.log -ErrorAction SilentlyContinue |
+           Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($log) {
+        Write-Host "--- game log ($($log.Name)) ---"
+        Get-Content $log.FullName -Tail 25 -ErrorAction SilentlyContinue |
+            ForEach-Object { Write-Host "  $($_.TrimEnd())" }
+    }
 }
 
 # ---- tier: runtime ----

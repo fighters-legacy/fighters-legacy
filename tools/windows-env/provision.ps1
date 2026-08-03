@@ -225,6 +225,22 @@ if (Test-Path "C:\VulkanSDK\$VulkanVer\Bin\glslangValidator.exe") {
     [Environment]::SetEnvironmentVariable("VULKAN_SDK", "C:\VulkanSDK\$VulkanVer", "Machine")
 }
 
+Write-Section "audio service"
+# Windows Server ships the Windows Audio service DISABLED and with no audio hardware. That matters
+# here because the game treats a failed alcOpenDevice as fatal and exits before opening a window -
+# so with no audio device the runtime tier cannot render anything, and the failure surfaces as a
+# bare "exited with code 1" with nothing on stdout. The Vagrantfile supplies an emulated sound card;
+# this starts the service that exposes it.
+foreach ($svc in @("Audiosrv", "AudioEndpointBuilder")) {
+    try {
+        Set-Service -Name $svc -StartupType Automatic -ErrorAction Stop
+        Start-Service -Name $svc -ErrorAction Stop
+        Write-Host "  $svc running"
+    } catch {
+        Write-Host "  WARNING: could not start $svc - $($_.Exception.Message)"
+    }
+}
+
 Write-Section "vulkan loader (runtime)"
 # The SDK ships headers, libs and tools but NOT the loader, and `vulkan-1.dll` normally arrives with
 # a GPU driver - which a headless guest has none of. Without it the game links fine and then dies at
