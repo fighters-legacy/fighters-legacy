@@ -354,6 +354,15 @@ TEST_CASE("pitbull_nm only means something on an active-radar seeker", "[weapon]
     CHECK_THROWS_AS(parseWeaponDef(s), std::runtime_error);
 }
 
+TEST_CASE("pitbull_range_m is refused by name rather than ignored", "[weapon]") {
+    // weapons-sensors.md documented `pitbull_range_m`; the parser reads `pitbull_nm` (#1106). The
+    // documented key was silently dropped, so an ARH missile authored per the guide went active
+    // straight off the rail with nothing to indicate the field had not taken.
+    std::string s(kMissile);
+    s.replace(s.find("pitbull_nm"), std::string("pitbull_nm").size(), "pitbull_range_m");
+    CHECK_THROWS_AS(parseWeaponDef(s), std::runtime_error);
+}
+
 TEST_CASE("loft_bias_deg and loft_range_nm come as a pair", "[weapon]") {
     std::string one(kMissile);
     one.replace(one.find("loft_range_nm   = 15"), std::string("loft_range_nm   = 15").size(), "");

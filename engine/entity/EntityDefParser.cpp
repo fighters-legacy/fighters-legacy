@@ -45,6 +45,22 @@ namespace {
     return v ? std::move(*v) : std::string{};
 }
 
+// Reject a key that is not in a section's CLOSED vocabulary (#1106). Only for the sections whose
+// field set really is closed — `[signatures]` and `[ai]`. TOML scopes a bare key written after a
+// table header INTO that table, so the commonest authoring slip is a key that belongs to `[entity]`
+// landing in the section below it; ignoring it silently is how a MiG-29 whose `sensors` suite fell
+// into `[signatures]` flies with the builtin eyeball and nothing anywhere says so. A misplaced key
+// is an author who meant something, so say what happened rather than dropping it.
+void reject_unknown_keys(const toml::table& section, const char* name, std::initializer_list<std::string_view> known) {
+    for (const auto& [key, _] : section) {
+        const std::string_view k = key.str();
+        if (std::find(known.begin(), known.end(), k) == known.end())
+            throw std::runtime_error(std::string("unknown key in [") + name + "]: " + std::string(k) +
+                                     " — check it is not a key that belongs to an earlier table (a bare "
+                                     "key written after a [section] header is scoped into that section)");
+    }
+}
+
 // A signature multiplier: absent keeps the baseline the caller passed in. Zero is rejected along
 // with the negatives — a signature of 0 is not "very stealthy", it is a target no sensor of that
 // type can ever detect at any range, and an author who wants that should say so with a number.
@@ -443,6 +459,7 @@ EntityDef parseEntityDef(std::string_view toml_src) {
     // Optional signature section. Unitless multipliers against a baseline fighter (1.0); absent
     // fields keep the baseline, so a pack tunes only what differs.
     if (auto sig_node = tbl["signatures"]; sig_node && sig_node.as_table()) {
+        reject_unknown_keys(*sig_node.as_table(), "signatures", {"rcs", "ir", "visual", "laser"});
         def.signatures.rcs = parse_signature(sig_node["rcs"], "signatures.rcs", def.signatures.rcs);
         def.signatures.ir = parse_signature(sig_node["ir"], "signatures.ir", def.signatures.ir);
         def.signatures.visual = parse_signature(sig_node["visual"], "signatures.visual", def.signatures.visual);
@@ -451,6 +468,7 @@ EntityDef parseEntityDef(std::string_view toml_src) {
 
     // Optional per-unit AI tuning.
     if (auto ai_node = tbl["ai"]; ai_node && ai_node.as_table()) {
+        reject_unknown_keys(*ai_node.as_table(), "ai", {"skill", "reaction"});
         AiTuning tuning;
         tuning.skill = parse_unit_fraction(ai_node["skill"], "ai.skill", tuning.skill);
         tuning.reaction = parse_unit_fraction(ai_node["reaction"], "ai.reaction", tuning.reaction);

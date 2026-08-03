@@ -171,15 +171,27 @@ radar. What stays on the weapon is *employment doctrine*, not sensing:
 
 ```toml
 [seeker]
-type             = "semi_active_radar"  # active_radar | semi_active_radar | infrared | laser | gps | anti_radiation | unguided
-sensor_id        = "fl-base:aim7m-seeker"
-fire_and_forget  = false                # false = the launch platform must keep supporting the shot (STT)
-pitbull_range_m  = 0                     # ARH: range-to-go where the missile's own radar goes active
+type            = "semi-active-radar"  # active-radar | semi-active-radar | ir (or infrared) | laser | gps | anti-radiation | unguided
+sensor_id       = "fl-base:aim7m-seeker"
+fire_and_forget = false                # false = the launch platform must keep supporting the shot (STT)
 ```
 
-- A **SARH** (`semi_active_radar`) shot rides the **shooter's** contact table — it needs the shooter
+**The seeker `type` vocabulary is hyphenated**, and `parseWeaponDef` throws on anything else — so an
+underscored `semi_active_radar` does not load. The one exception is infrared, which accepts both `ir`
+and `infrared`.
+
+- A **SARH** (`semi-active-radar`) shot rides the **shooter's** contact table — it needs the shooter
   to hold the target in **STT** (firing-quality illumination). Drop the lock and the shot goes dumb.
-- An **ARH** (`active_radar`) shot is supported until *pitbull*, then its own radar takes over.
+- An **ARH** (`active-radar`) shot is supported until *pitbull*, then its own radar takes over. The
+  handover range is **`pitbull_nm`**, in nautical miles — range-to-go, **not** a `_m` field:
+
+      [seeker]
+      type       = "active-radar"
+      sensor_id  = "fl-base:aim120c-seeker"
+      pitbull_nm = 10                    # own radar goes active (and emitting) inside 10 nm to go
+
+  `0` (the default) means active straight off the rail, and the field is rejected on any seeker
+  that is not `active-radar` — going active *is* the pitbull.
 - An **IR** shot is fire-and-forget.
 
 See [formats.md](formats.md#weapon-data--toml) for the full `[seeker]`/`[performance]`/`[warhead]`
@@ -239,13 +251,19 @@ id          = "fl-base:mig-29"
 max_hp      = 100
 chaff_count = 30
 flare_count = 60
+sensors     = ["fl-base:n019", "fl-base:eyeball_day"]   # what it can see WITH
 
-[signatures]
+[signatures]                                            # what it can be seen AS
 rcs = 3.0   # a big radar target...
 ir  = 1.5   # ...and a hot one
-
-sensors = ["fl-base:n019", "fl-base:eyeball_day"]
 ```
+
+**`sensors` belongs to `[entity]`, so it must be written above the `[signatures]` header.** A bare
+key after a table header is scoped *into* that table by TOML, and `EntityDefParser` reads
+`entity["sensors"]` — an aircraft whose suite landed in `[signatures]` would fly with the builtin
+eyeball, which is the "builtin-radar fallback" the red-air acceptance criteria forbid. `[signatures]`
+and `[ai]` have closed field sets, so the parser now **rejects** any other key in them by name
+rather than dropping it; `validate-entity` reports the same error.
 
 `sensors/n019.toml` (a capable radar with modest ECCM):
 
