@@ -161,6 +161,14 @@ WeaponDef parseWeaponDef(std::string_view toml_src) {
         s.fireAndForget = opt_bool(node["fire_and_forget"], false);
         s.requiresDesignator = opt_bool(node["requires_designator"], false);
 
+        // `pitbull_range_m` is a spelling weapons-sensors.md documented and this parser never read
+        // (#1106) — an ARH missile authored per that guide went active straight off the rail, with
+        // no error. Name it rather than ignore it: the field exists, it is `pitbull_nm`, and it is
+        // authored in nautical miles like every other range on a weapon def.
+        if (node["pitbull_range_m"])
+            throw std::runtime_error(std::string(section) +
+                                     ".pitbull_range_m does not exist — the field is `pitbull_nm`, "
+                                     "in nautical miles (range-to-go, like every other weapon range)");
         s.pitbullRangeM = opt_float(node["pitbull_nm"], 0.f) * kMetresPerNauticalMile;
         require_non_negative(s.pitbullRangeM, "seeker.pitbull_nm");
         if (s.pitbullRangeM > 0.f && s.type != SeekerType::ActiveRadar)

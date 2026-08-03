@@ -1411,6 +1411,23 @@ TEST_CASE("EntityDefParser: a partial [ai] section keeps the default for the oth
     CHECK_THAT(def.aiTuning->reaction, WithinAbs(0.5f, 1e-6f)); // AiTuning{} default
 }
 
+TEST_CASE("EntityDefParser: a key that does not belong in [signatures] or [ai] is refused", "[parser]") {
+    // #1106: weapons-sensors.md's worked example wrote `sensors = [...]` AFTER the [signatures]
+    // header, which TOML scopes into the signatures table. The parser reads entity["sensors"], so a
+    // copied def flew with the builtin eyeball only — silently, which is the "builtin-radar
+    // fallback" the red-air acceptance criteria forbid. Both sections have closed vocabularies, so
+    // an unknown key is an author who meant something; say what happened.
+    CHECK_THROWS_AS(fl::parseEntityDef(entityWith("\n[signatures]\nrcs = 3.0\nsensors = [\"fl-base:n019\"]\n")),
+                    std::runtime_error);
+    CHECK_THROWS_AS(fl::parseEntityDef(entityWith("\n[signatures]\nrcs = 3.0\nrsc = 0.5\n")), std::runtime_error);
+    CHECK_THROWS_AS(fl::parseEntityDef(entityWith("\n[ai]\nskill = 0.9\nreaction_time = 0.2\n")), std::runtime_error);
+
+    // The full documented vocabulary still parses, and an empty section is still fine.
+    CHECK_NOTHROW(fl::parseEntityDef(entityWith("\n[signatures]\nrcs = 1.0\nir = 1.0\nvisual = 1.0\nlaser = 1.0\n")));
+    CHECK_NOTHROW(fl::parseEntityDef(entityWith("\n[signatures]\n")));
+    CHECK_NOTHROW(fl::parseEntityDef(entityWith("\n[ai]\nskill = 0.5\nreaction = 0.5\n")));
+}
+
 TEST_CASE("EntityDefParser: signature values outside (0, 100] throw runtime_error", "[parser]") {
     // Zero is rejected with the negatives on purpose: a signature of 0 is not "very stealthy", it is
     // a target that sensor type can NEVER detect at any range.
