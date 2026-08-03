@@ -43,7 +43,7 @@ jobs:
     name: Apply statistics block
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Apply statistics to minor releases
         env:
