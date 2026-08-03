@@ -26,7 +26,8 @@ the layering rules every change has to respect.
 | [GNS backend](gns-backend.md) | GameNetworkingSockets integration notes |
 | [Voice](voice.md) | Radio-net model, relay, jitter buffer |
 | [Haptics](haptics.md) | The `IInput` haptic API and the rumble event catalogue |
-| [Rendering](rendering.md) | Pass order and quality tiers |
+| [Rendering](rendering.md) | Pass order, GPU layouts, the camera-relative invariant, HUD, quality tiers |
+| [Audio](audio.md) | SFX/music/warning-tone managers, byte-stable builtin PCM, headless testing |
 
 ## Tools and instruments
 

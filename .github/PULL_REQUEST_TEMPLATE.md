@@ -12,7 +12,7 @@ Closes #
 
 - [ ] CI passes on all three platforms (Windows, Linux, macOS)
 - [ ] Tests added or updated for changed code
-- [ ] `CHANGELOG.md` updated under `[Unreleased]`
+- [ ] Commit subject reads as the changelog entry it will become (`CHANGELOG.md` is generated from commits — do not edit it here, see #1123)
 - [ ] `Signed-off-by` present on all commits (`git commit -s`)
 <!-- REUSE-IgnoreStart -->
 - [ ] SPDX header on any new source files (`// SPDX-License-Identifier: GPL-3.0-or-later`)

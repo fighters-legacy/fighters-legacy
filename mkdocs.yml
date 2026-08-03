@@ -107,6 +107,7 @@ nav:
           - Voice: developer/voice.md
           - Haptics: developer/haptics.md
           - Rendering: developer/rendering.md
+          - Audio: developer/audio.md
           - GNS backend: developer/gns-backend.md
       - Tooling:
           - Tools: developer/tools.md

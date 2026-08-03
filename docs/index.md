@@ -75,7 +75,7 @@ For people working on the engine itself.
 | [AI architecture](developer/ai-architecture.md) | The provider seam, world-state API and agent surface |
 | [Tools](developer/tools.md) | Every CLI tool in `tools/`, and what each is for |
 | [Debug console](developer/debug-console.md) | Developer console commands and the sandbox key map |
-| [Voice](developer/voice.md) · [Haptics](developer/haptics.md) · [Rendering](developer/rendering.md) | Subsystem references |
+| [Voice](developer/voice.md) · [Haptics](developer/haptics.md) · [Rendering](developer/rendering.md) · [Audio](developer/audio.md) | Subsystem references |
 | [Load testing](developer/load-testing.md) · [Demo recording](developer/demo-recording.md) | Tooling guides |
 | [GNS backend](developer/gns-backend.md) · [References](developer/references.md) | Transport internals, and upstream docs per dependency |
 | **[Decision records](developer/decisions/index.md)** | Frozen spike resolutions — history, not guides |
