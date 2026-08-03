@@ -8,6 +8,7 @@
 
 #include "EngineAudioManager.h"
 #include "ILogger.h"
+#include "NullAudio.h"
 #include "audio/EngineAudio.h"
 #include "config/AudioSettings.h"
 
@@ -27,7 +28,7 @@ struct NullLoggerEa : ILogger {
 
 // Records the per-source state EngineAudioManager sets, so the doppler / head-lock / distance wiring
 // can be asserted without a device.
-struct TrackingAudio : IAudio {
+struct TrackingAudio : fl::NullAudio {
     struct SrcState {
         bool playing{false};
         bool looping{false};
@@ -47,27 +48,10 @@ struct TrackingAudio : IAudio {
     AudioBufferId nextBuf{1};
     AudioSourceId nextSrc{1};
 
-    bool init() override {
-        return true;
-    }
-    void shutdown() override {}
-    const char* getLastError() const override {
-        return nullptr;
-    }
     AudioBufferId uploadBuffer(const void*, std::size_t, int, int) override {
         ++uploads;
         return nextBuf++;
     }
-    void freeBuffer(AudioBufferId) override {}
-    AudioBufferId allocStreamBuffer() override {
-        return nextBuf++;
-    }
-    void queueBuffer(AudioSourceId, AudioBufferId, const void*, std::size_t, int, int) override {}
-    int processedBufferCount(AudioSourceId) override {
-        return 0;
-    }
-    void unqueueProcessed(AudioSourceId, AudioBufferId*, int) override {}
-    void detachBuffers(AudioSourceId) override {}
     AudioSourceId createSource() override {
         AudioSourceId s = nextSrc++;
         src[s];
@@ -84,8 +68,6 @@ struct TrackingAudio : IAudio {
         src[s].playing = false;
         ++src[s].stopCount;
     }
-    void pause(AudioSourceId) override {}
-    void resume(AudioSourceId) override {}
     bool isPlaying(AudioSourceId s) const override {
         auto it = src.find(s);
         return it != src.end() && it->second.playing;
@@ -121,8 +103,6 @@ struct TrackingAudio : IAudio {
     void setSourceRelative(AudioSourceId s, bool r) override {
         src[s].relative = r;
     }
-    void setListenerTransform(const float[3], const float[3], const float[3]) override {}
-    void setListenerVelocity(const float[3]) override {}
 };
 
 EntityRenderEntry makeEntry(uint32_t idx, glm::dvec3 pos, glm::vec3 vel, uint8_t throttle, bool ab) {

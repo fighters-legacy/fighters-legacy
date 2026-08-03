@@ -1069,6 +1069,12 @@ add_executable(test_utf8_decode test_utf8_decode.cpp)
 target_link_libraries(test_utf8_decode PRIVATE Catch2::Catch2WithMain platform-hal)
 catch_discover_tests(test_utf8_decode)
 
+# The no-op IAudio (#1117) — the degradation path a machine with no audio device takes, and the
+# base every audio test double derives from. Header-only, so platform-hal is the whole dependency.
+add_executable(test_null_audio test_null_audio.cpp)
+target_link_libraries(test_null_audio PRIVATE Catch2::Catch2WithMain platform-hal)
+catch_discover_tests(test_null_audio)
+
 # IGui HAL contract test (#156) — drives the scripted NullGui (tests/mock_gui.h), the seam every
 # UI-screen test uses. platform-hal supplies IGui.h; the real Dear ImGui backend needs a GPU (not in CI).
 add_executable(test_gui test_gui.cpp)

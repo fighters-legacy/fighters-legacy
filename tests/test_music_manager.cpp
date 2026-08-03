@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ILogger.h"
+#include "NullAudio.h"
 #include "audio/MusicBuiltinTracks.h"
 #include "audio/MusicManager.h"
 #include "audio/OggDecoder.h"
@@ -23,60 +24,9 @@
 
 using namespace fl;
 
-// ---------------------------------------------------------------------------
-// NullAudio — no-op IAudio for unit tests (no OpenAL device required).
-// All streaming + detach methods must be implemented or the test will not compile.
-// ---------------------------------------------------------------------------
-struct NullAudio : IAudio {
-    bool init() override {
-        return true;
-    }
-    void shutdown() override {}
-    const char* getLastError() const override {
-        return nullptr;
-    }
-
-    AudioBufferId uploadBuffer(const void*, std::size_t, int, int) override {
-        return 1;
-    }
-    void freeBuffer(AudioBufferId) override {}
-
-    AudioBufferId allocStreamBuffer() override {
-        return ++m_nextBuf;
-    }
-    void queueBuffer(AudioSourceId, AudioBufferId, const void*, std::size_t, int, int) override {}
-    int processedBufferCount(AudioSourceId) override {
-        return 0;
-    }
-    void unqueueProcessed(AudioSourceId, AudioBufferId*, int) override {}
-    void detachBuffers(AudioSourceId) override {}
-
-    AudioSourceId createSource() override {
-        return ++m_nextSrc;
-    }
-    void destroySource(AudioSourceId) override {}
-    void play(AudioSourceId, AudioBufferId) override {}
-    void stop(AudioSourceId) override {}
-    void pause(AudioSourceId) override {}
-    void resume(AudioSourceId) override {}
-    bool isPlaying(AudioSourceId) const override {
-        return false;
-    }
-    void setLooping(AudioSourceId, bool) override {}
-    void setPitch(AudioSourceId, float) override {}
-    void setGain(AudioSourceId, float) override {}
-    void setPosition(AudioSourceId, float, float, float) override {}
-    void setVelocity(AudioSourceId, float, float, float) override {}
-    void setReferenceDistance(AudioSourceId, float) override {}
-    void setMaxDistance(AudioSourceId, float) override {}
-    void setRolloffFactor(AudioSourceId, float) override {}
-    void setSourceRelative(AudioSourceId, bool) override {}
-    void setListenerTransform(const float[3], const float[3], const float[3]) override {}
-    void setListenerVelocity(const float[3]) override {}
-
-    AudioBufferId m_nextBuf{0};
-    AudioSourceId m_nextSrc{0};
-};
+// NullAudio is the SHARED platform/NullAudio.h (#1117) — the same no-op IAudio the game falls back
+// to on a machine with no audio device. One null implementation, so a new IAudio pure virtual is a
+// one-line change there rather than an edit to every mock in tests/.
 
 // ---------------------------------------------------------------------------
 // NullLogger — discards all messages.

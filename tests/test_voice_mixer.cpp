@@ -2,6 +2,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "NullAudio.h"
 #include "voice/RadioDsp.h"
 #include "voice/VoiceCodec.h"
 #include "voice/VoiceMixer.h"
@@ -19,7 +20,7 @@ namespace {
 // A tracking IAudio double. mock_hal.h's MockAudio always reports zero processed buffers and
 // isPlaying()==false, which is fine for one-shot SFX but would never let a STREAM recycle a buffer;
 // this one models the queue so the mixer's refill loop is actually exercised.
-struct StreamingAudio final : public IAudio {
+struct StreamingAudio final : public fl::NullAudio {
     struct Src {
         std::vector<AudioBufferId> queued;
         int processed{0};
@@ -44,17 +45,9 @@ struct StreamingAudio final : public IAudio {
         }
     }
 
-    bool init() override {
-        return true;
-    }
-    void shutdown() override {}
-    const char* getLastError() const override {
-        return nullptr;
-    }
     AudioBufferId uploadBuffer(const void*, std::size_t, int, int) override {
         return nextBuffer++;
     }
-    void freeBuffer(AudioBufferId) override {}
     AudioBufferId allocStreamBuffer() override {
         return nextBuffer++;
     }
@@ -98,7 +91,6 @@ struct StreamingAudio final : public IAudio {
     void stop(AudioSourceId src) override {
         sources[src].playing = false;
     }
-    void pause(AudioSourceId) override {}
     void resume(AudioSourceId src) override {
         sources[src].playing = true;
     }
@@ -106,8 +98,6 @@ struct StreamingAudio final : public IAudio {
         const auto it = sources.find(src);
         return it != sources.end() && it->second.playing;
     }
-    void setLooping(AudioSourceId, bool) override {}
-    void setPitch(AudioSourceId, float) override {}
     void setGain(AudioSourceId src, float g) override {
         sources[src].gain = g;
     }
@@ -116,8 +106,6 @@ struct StreamingAudio final : public IAudio {
         sources[src].pos[1] = y;
         sources[src].pos[2] = z;
     }
-    void setVelocity(AudioSourceId, float, float, float) override {}
-    void setReferenceDistance(AudioSourceId, float) override {}
     void setMaxDistance(AudioSourceId src, float d) override {
         sources[src].maxDist = d;
     }
@@ -127,8 +115,6 @@ struct StreamingAudio final : public IAudio {
     void setSourceRelative(AudioSourceId src, bool r) override {
         sources[src].relative = r;
     }
-    void setListenerTransform(const float[3], const float[3], const float[3]) override {}
-    void setListenerVelocity(const float[3]) override {}
 };
 
 // One real Opus frame, so the mixer decodes something a decoder actually accepts.

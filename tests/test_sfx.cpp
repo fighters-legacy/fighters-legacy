@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "ILogger.h"
+#include "NullAudio.h"
 #include "audio/SfxBuiltinSounds.h"
 #include "audio/SfxManager.h"
 #include "config/AudioSettings.h"
@@ -25,7 +26,7 @@ struct NullLoggerSfx : ILogger {
 
 // A MockAudio that records what SfxManager did: uploads, source creation, and the last play's
 // position/gain per source.
-struct TrackingAudio : IAudio {
+struct TrackingAudio : fl::NullAudio {
     int uploads = 0;
     int sourcesCreated = 0;
     int plays = 0;
@@ -38,43 +39,17 @@ struct TrackingAudio : IAudio {
     std::map<AudioSourceId, SrcState> srcState;
     float listenerPos[3]{-999, -999, -999};
 
-    bool init() override {
-        return true;
-    }
-    void shutdown() override {}
-    const char* getLastError() const override {
-        return nullptr;
-    }
     AudioBufferId uploadBuffer(const void*, std::size_t, int, int) override {
         ++uploads;
         return nextBuf++;
     }
-    void freeBuffer(AudioBufferId) override {}
-    AudioBufferId allocStreamBuffer() override {
-        return nextBuf++;
-    }
-    void queueBuffer(AudioSourceId, AudioBufferId, const void*, std::size_t, int, int) override {}
-    int processedBufferCount(AudioSourceId) override {
-        return 0;
-    }
-    void unqueueProcessed(AudioSourceId, AudioBufferId*, int) override {}
-    void detachBuffers(AudioSourceId) override {}
     AudioSourceId createSource() override {
         ++sourcesCreated;
         return nextSrc++;
     }
-    void destroySource(AudioSourceId) override {}
     void play(AudioSourceId, AudioBufferId) override {
         ++plays;
     }
-    void stop(AudioSourceId) override {}
-    void pause(AudioSourceId) override {}
-    void resume(AudioSourceId) override {}
-    bool isPlaying(AudioSourceId) const override {
-        return false;
-    }
-    void setLooping(AudioSourceId, bool) override {}
-    void setPitch(AudioSourceId, float) override {}
     void setGain(AudioSourceId s, float g) override {
         srcState[s].gain = g;
     }
@@ -83,17 +58,11 @@ struct TrackingAudio : IAudio {
         srcState[s].pos[1] = y;
         srcState[s].pos[2] = z;
     }
-    void setVelocity(AudioSourceId, float, float, float) override {}
-    void setSourceRelative(AudioSourceId, bool) override {}
-    void setReferenceDistance(AudioSourceId, float) override {}
-    void setMaxDistance(AudioSourceId, float) override {}
-    void setRolloffFactor(AudioSourceId, float) override {}
     void setListenerTransform(const float pos[3], const float[3], const float[3]) override {
         listenerPos[0] = pos[0];
         listenerPos[1] = pos[1];
         listenerPos[2] = pos[2];
     }
-    void setListenerVelocity(const float[3]) override {}
 };
 
 } // namespace
