@@ -128,7 +128,7 @@ See [Testing → Code coverage](#code-coverage) for the full local workflow.
 **gh (GitHub CLI)** — used by `scripts/roadmap-status.sh` and `scripts/prune_merged_branches.py`. Both scripts degrade gracefully without it, but `prune_merged_branches.py` will miss squash-merged and rebase-merged branches if `gh` is not authenticated. Install from [cli.github.com](https://cli.github.com) and authenticate with `gh auth login`.
 
 <!-- REUSE-IgnoreStart -->
-Copyright is declared centrally in `REUSE.toml` rather than in each file. All `.h` and `.cpp` files are covered by a glob annotation there — new source files do not need an in-file `SPDX-FileCopyrightText` line. The `// SPDX-License-Identifier: GPL-3.0-or-later` line in each source file is still required (see `CLAUDE.md`).
+Copyright is declared centrally in `REUSE.toml` rather than in each file. All `.h` and `.cpp` files are covered by a glob annotation there — new source files do not need an in-file `SPDX-FileCopyrightText` line. The `// SPDX-License-Identifier: GPL-3.0-or-later` line in each source file is still required.
 <!-- REUSE-IgnoreEnd -->
 
 ### Third-party dependencies & licenses
@@ -531,6 +531,48 @@ For links to upstream documentation for each dependency, see [`docs/developer/re
 CI runs on `ubuntu-latest`, `windows-latest`, and `macos-latest`. The maintainer's primary dev platform is Fedora — this is intentional. Both are Linux x86-64 with GCC/Clang; using different distros catches platform-specific assumptions (e.g. library paths, default compiler versions) earlier than a perfectly matched environment would.
 
 See `.github/workflows/ci.yml` for the full three-platform matrix.
+
+### Workflow structure
+
+A **`lint`** job (REUSE + `clang-format-22`) gates the `build` matrix via `needs: [lint]`, so a
+formatting failure fails fast without burning macOS/Windows minutes.
+
+The build job's **"Verify static linking (Linux)"** step `ldd`s the game binary (rejecting dynamic
+`sdl3|openal|ktx`) and `fl-server` (rejecting `sdl3|vulkan|openal` — no client backend). That is the
+binary-level backstop for `cmake/layering.cmake`: the guard fails configure, this fails the build.
+
+Ubuntu apt dependencies are centralised in `.github/actions/install-linux-deps/` — a composite
+action with boolean inputs `vulkan`, `gcc`, `clang`, `clang_format`, `python_tools`, `lcov`, `gns`.
+**A new Python tool dependency goes there**, plus the matching input set to `'true'` in the ci.yml
+build job.
+
+| Workflow | Trigger | What it is |
+|---|---|---|
+| `ci.yml` | every PR + push | The three-platform build/test matrix, the install-set assertion, the Python tool unit tests + GDAL smokes, and the fuzz chain below. |
+| `coverage.yml` | push to main only | Coverage trends are a post-merge metric, not a PR gate. |
+| `asan.yml` | PR | ASan + UBSan. |
+| `tsan.yml` | PR | ThreadSanitizer, **Ubuntu only** (no MSVC support). Scoped to the data-parallel sim targets (`test_job_system`, `test_world_broadcaster`) which link no SDL3/OpenAL/ENet/Vulkan; `tools/tsan.supp` suppresses third-party threads. |
+| `scale-gate.yml` | PR + nightly | See below. |
+| `docs-drift.yml` | PR | Runs `tools/docs_drift.py`, which diffs documented surfaces against the code **both ways**. |
+| `fuzz-deep.yml` | weekly | 30 min per harness; auto-files a `fuzzing`-labelled findings issue. |
+
+**Scale gate** (#520) is the 128-client perf/soak gate. The Linux `pr-gate` job (Release `fl-server`
++ `bot_swarm`, Vulkan disabled via `-DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON`) hard-fails on bandwidth
+(≤ 150 KB/s/client), admission, and a `downstream_kbs_per_client` baseline regression on every PR —
+tick-Hz is a collapse tripwire and tick-ms p99 is advisory, because shared runners cannot be trusted
+for latency. A `windows-smoke` job runs `run_loadtest.ps1` (8 clients) to keep the launcher from
+bitrotting. A `reference-gate` job (nightly cron + `workflow_dispatch`) runs the 128-client
+`reference`/`soak` profiles, GNS-primary since #773 (both ends on GameNetworkingSockets, built
+`FL_ENABLE_GNS=ON`; `reference-enet` is the enet6 regression leg), and applies the strict tick-ms p99
+(≤ 16.6) only with `--strict` on an 8-core reference/self-hosted runner. Driven by
+`tools/bot_swarm/scale_gate.py` over `scale-gate.json`, against the committed
+`scale-gate-baseline.json`.
+
+**Fuzzing** (#94) is the `fuzz-changes → fuzz-run → fuzz-smoke` chain in ci.yml. `fuzz-changes`
+path-filters and auto-enumerates `fuzz/fuzz_*.cpp` into a per-harness matrix; `fuzz-run` builds and
+runs each for a 60 s smoke; the stable `fuzz-smoke` aggregate is the **required** check, and is green
+when no fuzzable file changed. The `fuzz` preset is clang/Linux-only, so the MSVC/GCC matrix is
+unaffected.
 
 ---
 
