@@ -54,6 +54,15 @@ void checkPlausibility(const SensorDef& s, SensorValidationResult& r) {
         r.warnings.push_back("search.max_range_nm is implausibly long for a visual sensor — an "
                              "unaided eye does not find a fighter at this range");
 
+    // ECCM extends an ECM burn-through range, and burn-through is evaluated in exactly one place:
+    // a RADAR deciding whether it may hold a LOCK on a jamming target (SensorSystem). Authored on
+    // anything else the value parses, stores, and does nothing — the same shape as #1105, where an
+    // eccm the parser never read looked authored and was inert. Say so rather than let it read as
+    // tuning.
+    if (s.eccm > 0.f && (s.type != SensorType::Radar || !s.track))
+        r.warnings.push_back("eccm > 0 on a sensor that can never use it — burn-through applies "
+                             "only to a radar holding a track lock, so this value is inert");
+
     if (s.search.pod < kGlacialPod)
         r.warnings.push_back("search.pod is so low the sensor will effectively never acquire "
                              "(PoD is per check at 10 Hz, not per second)");

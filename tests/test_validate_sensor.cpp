@@ -238,3 +238,72 @@ pod               = 0.65
     CHECK(r.ok);
     CHECK(warns(r, "lock_hold_s"));
 }
+
+TEST_CASE("validate-sensor warns about an eccm that can never be used") {
+    // Burn-through is evaluated in exactly one place: a radar deciding whether it may hold a lock
+    // on a jamming target. Anywhere else the value parses, stores, and does nothing — an inert
+    // number that reads as tuning, which is the shape #1105 hid in for as long as it did.
+    const char* kEccmOnIrst = R"toml(
+[sensor]
+id   = "t:irst"
+name = "IRST"
+type = "ir"
+eccm = 0.4
+
+[search]
+az_half_angle_deg = 60.0
+el_half_angle_deg = 30.0
+max_range_nm      = 20.0
+pod               = 0.30
+)toml";
+
+    const char* kEccmOnSearchOnlyRadar = R"toml(
+[sensor]
+id      = "t:search-only"
+name    = "Search-only radar"
+type    = "radar"
+emitter = true
+eccm    = 0.4
+
+[search]
+az_half_angle_deg = 60.0
+el_half_angle_deg = 30.0
+max_range_nm      = 40.0
+pod               = 0.35
+)toml";
+
+    const auto irst = validateSensor(kEccmOnIrst);
+    CHECK(irst.ok);
+    CHECK(warns(irst, "eccm"));
+
+    const auto searchOnly = validateSensor(kEccmOnSearchOnlyRadar);
+    CHECK(searchOnly.ok);
+    CHECK(warns(searchOnly, "eccm"));
+}
+
+TEST_CASE("validate-sensor does not warn about eccm on a tracking radar") {
+    const auto r = validateSensor(R"toml(
+[sensor]
+id      = "t:n019"
+name    = "N019 Sapfir radar"
+type    = "radar"
+emitter = true
+eccm    = 0.25
+
+[search]
+az_half_angle_deg = 65.0
+el_half_angle_deg = 30.0
+max_range_nm      = 35.0
+pod               = 0.35
+
+[track]
+az_half_angle_deg = 60.0
+el_half_angle_deg = 28.0
+max_range_nm      = 26.0
+pod               = 0.72
+lock_hold_s       = 4.0
+)toml");
+
+    CHECK(r.ok);
+    CHECK(r.warnings.empty());
+}
