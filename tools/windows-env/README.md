@@ -32,6 +32,9 @@ failures rather than predictions.
 - `provision.ps1` — toolchain install: VS Build Tools, Vulkan SDK **+ loader**, Ninja, CMake, git,
   vcpkg, **OpenSSL**, lavapipe, and PowerShell 7 (the shell GitHub's Windows runners use for `run:`
   steps, so the tiers execute under the same interpreter CI uses rather than Windows PowerShell 5.1).
+- `run-checks.ps1` — the in-guest driver; runs the tiers below. Also used by the CI runner tier.
+- `run-windows-check.sh` — host entry point: bundles the branch, runs the checks, fetches artifacts.
+- `setup-runner.ps1` / `runner-cleanup.ps1` — optional self-hosted Windows runner + its cleanup hook.
 
 ### ⚠ The compiler major version must match CI
 
@@ -55,9 +58,6 @@ Two Microsoft-specific traps worth knowing if you touch this:
   `vs/17/release`, `vs/17/pre`, `vs/18/insiders` and `vs/insiders` resolve to a real installer.
   `Get-RemoteFile` validates magic bytes on arrival *and* keys its cache on the URL, because a
   cached-but-wrong installer is a valid PE that quietly installs the wrong compiler.
-- `run-checks.ps1` — the in-guest driver; runs the tiers below. Also used by the CI runner tier.
-- `run-windows-check.sh` — host entry point: bundles the branch, runs the checks, fetches artifacts.
-- `setup-runner.ps1` / `runner-cleanup.ps1` — optional self-hosted Windows runner + its cleanup hook.
 
 ## Quick start
 
@@ -97,13 +97,27 @@ touched.
 
 ## Check tiers
 
-Selected with `FL_WINENV_TIERS` (comma-separated, default `ci,smoke,runtime`).
+Selected with `FL_WINENV_TIERS` (comma-separated, default `ci,smoke` — `runtime` is opt-in).
 
 | Tier | Mirrors | What runs |
 |---|---|---|
 | `ci` | the `windows-latest` leg of [`ci.yml`](../../.github/workflows/ci.yml) | `cmake --preset debug-msvc` under the vcpkg toolchain (triplet `x64-windows-static-md`), the `FL_ENABLE_GNS:BOOL=ON` cache assertion, the full build, the `--version` smokes, then `ctest --preset debug-msvc` |
 | `smoke` | `windows-smoke` in [`scale-gate.yml`](../../.github/workflows/scale-gate.yml) | `cmake --preset release-msvc -DFL_ENABLE_GNS=OFF`, build `fl-server` + `bot_swarm`, then `run_loadtest.ps1 build\release-msvc 8 3 weave` |
-| `runtime` | *nothing — no hosted equivalent* | builds the game, renders `builtin:shape-gallery` and asserts a `--screenshot` PNG came back: window + swapchain creation, shader loading, the content path and the embedded `fl-server` handshake, all in one |
+| `runtime` ⚠ | *nothing — no hosted equivalent* | builds the game, renders `builtin:shape-gallery` and asserts a `--screenshot` PNG came back. **Does not currently work — opt in explicitly, see below.** |
+
+⚠ **`runtime` is not in the default tier set and does not pass on a headless guest.** The game gets
+as far as `window init failed` (`Game.cpp`) and exits: the emulated display is not enough for SDL to
+create a window. This was verified both over WinRM *and* from a scheduled task running in an
+autologon console session with `explorer.exe` present — so an earlier revision of this README was
+wrong to offer the scheduled-task path as a workaround. It is not one. The plausible routes are the
+GPU passthrough profile below (untested for this) or a virtual display driver; neither is verified.
+The tier itself is sound — it builds the game and reports the engine log on failure — so it is kept
+for when the display question is solved. Run it with `FL_WINENV_TIERS=runtime`.
+
+Getting that far also required two fixes worth knowing about, because both failed *silently*: the
+guest needs the **Vulkan loader** (`vulkan-1.dll` ships with GPU drivers, and there is no GPU) and
+an **audio device** — the game treats a failed `alcOpenDevice` as fatal and exits before opening a
+window, so a machine with no sound card cannot start it at all.
 
 The GNS assertion in tier `ci` is not decoration: `cmake/dependencies.cmake` *silently* force-disables
 GNS when protobuf/OpenSSL are missing, so a broken vcpkg setup would otherwise build enet6-only and
@@ -127,7 +141,7 @@ your working tree is dirty, but it cannot ship uncommitted changes.
 
 | Var | Default | Meaning |
 |---|---|---|
-| `FL_WINENV_TIERS` | `ci,smoke,runtime` | which tiers to run |
+| `FL_WINENV_TIERS` | `ci,smoke` | which tiers to run (`runtime` is opt-in; see above) |
 | `FL_WINENV_BOX` | `peru/windows-server-2022-standard-x64-eval` | Vagrant box (any Windows box with a libvirt artifact + WinRM) |
 | `FL_WINENV_CPUS` | `12` | guest vCPUs |
 | `FL_WINENV_MEM_MB` | `20480` | guest RAM |
@@ -240,10 +254,12 @@ the runner itself: `cd C:\actions-runner; .\config.cmd remove --token <removal-t
 
 ## Troubleshooting
 
-**The runtime tier produces no screenshot.** A WinRM shell has no interactive desktop, and a Vulkan
-swapchain needs a window. Tiers `ci` and `smoke` are unaffected (they are headless by construction —
-they run on hosted runners today). For the runtime tier, enable autologon in the guest and re-run
-with the scheduled-task path, which executes in the console session instead:
+**The runtime tier produces no screenshot.** Expected — see the tier table above. The game exits at
+`window init failed`; tiers `ci` and `smoke` are unaffected, being headless by construction (they
+are what the hosted runners do today). `FL_WINENV_RUNTIME_VIA_TASK=1` runs the game from a scheduled
+task in the console session and is kept for further experiments, but **it was tested with autologon
+enabled and `explorer.exe` running, and the window still failed to initialise** — do not expect it
+to help as-is:
 
     # in the guest, elevated — replace the password with the box's vagrant account password
     $k = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
@@ -252,6 +268,10 @@ with the scheduled-task path, which executes in the console session instead:
 
     # from the host, after a reboot
     FL_WINENV_RUNTIME_VIA_TASK=1 FL_WINENV_TIERS=runtime tools/windows-env/run-windows-check.sh
+
+When a run does fail, the tier prints the game's stdout, stderr **and the newest engine log** from
+`%APPDATA%\mkzsystems\fighters-legacy\logs`. That last one matters: the game logs to a file rather
+than to a console, so both pipes come back empty and the failure looks mute without it.
 
 **The evaluation licence expired.** The guest is a 180-day Microsoft evaluation image. `slmgr /rearm`
 buys another period; otherwise `vagrant destroy -f && vagrant up` rebuilds from the box. A rebuild

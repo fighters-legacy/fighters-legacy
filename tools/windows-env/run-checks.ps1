@@ -30,8 +30,13 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# DEFAULT IS ci,smoke - `runtime` is opt-in because it does not currently work on a headless libvirt
+# guest. The game reaches `window init failed` (Game.cpp) whether it is started over WinRM or from a
+# scheduled task in an autologon console session; the emulated display is not enough for SDL to
+# create a window. Ask for it explicitly if you are experimenting with a fix or running with a
+# passed-through GPU. See the README.
 if ($Tiers -eq "") {
-    $Tiers = if ($env:FL_WINENV_TIERS) { $env:FL_WINENV_TIERS } else { "ci,smoke,runtime" }
+    $Tiers = if ($env:FL_WINENV_TIERS) { $env:FL_WINENV_TIERS } else { "ci,smoke" }
 }
 $Src = if ($Source) { $Source }
        elseif ($env:FL_WINENV_SRC) { $env:FL_WINENV_SRC }
@@ -103,12 +108,24 @@ function Sync-Source {
     # branch has nothing origin does not already have, in which case a plain fetch is enough.
     $bundle = "C:\fl\incoming\head.bundle"
     if (Test-Path $bundle) {
-        Invoke-Checked git @("-C", $Src, "fetch", "--force", $bundle, "+refs/*:refs/winenv/*")
+        # `git bundle create <file> BASE..HEAD` writes exactly ONE ref, literally named `HEAD` - not
+        # anything under refs/. Fetching `+refs/*:refs/winenv/*` therefore matched nothing, and git
+        # EXITED 0 having transferred no objects; only the checkout that followed failed, on a commit
+        # that had never been sent. Fetch HEAD by name instead.
+        Invoke-Checked git @("-C", $Src, "fetch", "--force", $bundle, "+HEAD:refs/winenv/head")
     } else {
         Invoke-Checked git @("-C", $Src, "fetch", "origin")
     }
 
     if ($Revision) {
+        # Trust the objects, not the exit code: a fetch that quietly transferred nothing is the exact
+        # defect above, and checking out a missing commit reports "unable to read tree", which reads
+        # like a corrupt repository rather than an empty transfer.
+        & git -C $Src cat-file -e "$Revision^{commit}" 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            throw "commit $Revision never reached the guest - the bundle transferred nothing " +
+                  "(is the local branch based on a commit the guest's clone already has?)"
+        }
         Invoke-Checked git @("-C", $Src, "checkout", "--detach", $Revision)
     }
     Invoke-Checked git @("-C", $Src, "submodule", "update", "--init", "--recursive")
