@@ -29,12 +29,35 @@ failures rather than predictions.
 ## Files
 
 - `Vagrantfile` — the guest definition (libvirt, WinRM, optional GPU passthrough + runner tiers).
-- `provision.ps1` — toolchain install: VS Build Tools, Vulkan SDK, Ninja, CMake, git, vcpkg, lavapipe,
-  and PowerShell 7 (the shell GitHub's Windows runners use for `run:` steps, so the tiers execute
-  under the same interpreter CI uses rather than Windows PowerShell 5.1).
+- `provision.ps1` — toolchain install: VS Build Tools, Vulkan SDK **+ loader**, Ninja, CMake, git,
+  vcpkg, **OpenSSL**, lavapipe, and PowerShell 7 (the shell GitHub's Windows runners use for `run:`
+  steps, so the tiers execute under the same interpreter CI uses rather than Windows PowerShell 5.1).
 - `run-checks.ps1` — the in-guest driver; runs the tiers below. Also used by the CI runner tier.
 - `run-windows-check.sh` — host entry point: bundles the branch, runs the checks, fetches artifacts.
 - `setup-runner.ps1` / `runner-cleanup.ps1` — optional self-hosted Windows runner + its cleanup hook.
+
+### ⚠ The compiler major version must match CI
+
+CI builds with **Visual Studio 18 (2026)**, MSVC toolset `14.51.x`. Provisioning installs VS 2026
+Build Tools from `aka.ms/vs/18/insiders/vs_buildtools.exe` for exactly that reason, and
+`run-checks.ps1` prints the version it is using and **warns loudly if it is older**.
+
+This is not pedantry. With VS 2022 (toolset 14.44) the `ci` tier fails to compile
+`tests/test_http_admin.cpp` with `C2017: illegal escape sequence` — a raw string containing `\"`
+inside a `CHECK()` macro, which 14.44's traditional preprocessor mis-tokenizes and 14.51 accepts.
+Nothing is wrong with that code and CI compiles it happily. **A validation tool that invents
+failures is worse than no validation tool**, so if you see the version warning, re-provision before
+believing anything the tiers tell you.
+
+Two Microsoft-specific traps worth knowing if you touch this:
+
+- `vswhere` **hides prerelease instances unless you pass `-prerelease`**. The VS 2026 Build Tools
+  install as an "Insiders" instance, so every query here passes that flag — without it the scripts
+  silently report the older VS 2022 that is still on the box.
+- `aka.ms` answers an **unknown** alias with a `200 OK` Bing search page rather than a 404. Only
+  `vs/17/release`, `vs/17/pre`, `vs/18/insiders` and `vs/insiders` resolve to a real installer.
+  `Get-RemoteFile` validates magic bytes on arrival *and* keys its cache on the URL, because a
+  cached-but-wrong installer is a valid PE that quietly installs the wrong compiler.
 
 ## Quick start
 
@@ -47,18 +70,54 @@ failures rather than predictions.
     # just the build + ctest leg, which is what catches the warning classes above
     FL_WINENV_TIERS=ci tools/windows-env/run-windows-check.sh
 
-Host prerequisites: `vagrant`, the `vagrant-libvirt` plugin, and a working libvirt/KVM stack
-(`vagrant plugin install vagrant-libvirt`). The WinRM gems `vagrant upload` needs ship with Vagrant.
+### Host prerequisites
+
+⚠ **Use HashiCorp's Vagrant, not your distribution's package.** A Windows guest is driven over
+WinRM, and Vagrant's WinRM communicator hard-requires the `winrm`, `winrm-fs` and `winrm-elevated`
+gems. Fedora's `vagrant` RPM patches in **rubyzip 3.x**, while every published `winrm-fs` (newest:
+1.3.5, 2020) caps at `rubyzip ~> 2.0` — there is no version combination that resolves, so
+`vagrant up` dies with `cannot load such file -- winrm` before it even fetches the box, and
+`vagrant plugin install` cannot fix it. Upstream Vagrant wants `rubyzip ~> 2.3`, so this is a
+packaging artifact rather than an upstream limitation. HashiCorp's build bundles its own Ruby with
+all three gems already present.
+
+    # Fedora — replaces the distro package (removes vagrant-libvirt with it)
+    sudo dnf config-manager addrepo --from-repofile=https://rpm.releases.hashicorp.com/fedora/hashicorp.repo
+    sudo dnf install -y --allowerasing --repo=hashicorp vagrant
+    sudo dnf install -y libvirt-devel      # to build the plugin against
+    vagrant plugin install vagrant-libvirt # no sudo
+
+⚠ **If you also use [`reference-env`](../bot_swarm/reference-env/):** newer `vagrant-libvirt`
+defaults to `qemu:///system`. A VM created under `qemu:///session` will read as *not created*, and
+running `vagrant status` in that state **deletes** `.vagrant/machines/default/libvirt/id`, detaching
+Vagrant from a VM that is otherwise fine. Export `LIBVIRT_DEFAULT_URI=qemu:///session` for that
+directory, or restore the file by writing the domain's UUID
+(`virsh --connect qemu:///session domuuid <domain>`) back into it. The VM and its disk are never
+touched.
 
 ## Check tiers
 
-Selected with `FL_WINENV_TIERS` (comma-separated, default `ci,smoke,runtime`).
+Selected with `FL_WINENV_TIERS` (comma-separated, default `ci,smoke` — `runtime` is opt-in).
 
 | Tier | Mirrors | What runs |
 |---|---|---|
 | `ci` | the `windows-latest` leg of [`ci.yml`](../../.github/workflows/ci.yml) | `cmake --preset debug-msvc` under the vcpkg toolchain (triplet `x64-windows-static-md`), the `FL_ENABLE_GNS:BOOL=ON` cache assertion, the full build, the `--version` smokes, then `ctest --preset debug-msvc` |
 | `smoke` | `windows-smoke` in [`scale-gate.yml`](../../.github/workflows/scale-gate.yml) | `cmake --preset release-msvc -DFL_ENABLE_GNS=OFF`, build `fl-server` + `bot_swarm`, then `run_loadtest.ps1 build\release-msvc 8 3 weave` |
-| `runtime` | *nothing — no hosted equivalent* | builds the game, renders `builtin:shape-gallery` and asserts a `--screenshot` PNG came back: window + swapchain creation, shader loading, the content path and the embedded `fl-server` handshake, all in one |
+| `runtime` ⚠ | *nothing — no hosted equivalent* | builds the game, renders `builtin:shape-gallery` and asserts a `--screenshot` PNG came back. **Does not currently work — opt in explicitly, see below.** |
+
+⚠ **`runtime` is not in the default tier set and does not pass on a headless guest.** The game gets
+as far as `window init failed` (`Game.cpp`) and exits: the emulated display is not enough for SDL to
+create a window. This was verified both over WinRM *and* from a scheduled task running in an
+autologon console session with `explorer.exe` present — so an earlier revision of this README was
+wrong to offer the scheduled-task path as a workaround. It is not one. The plausible routes are the
+GPU passthrough profile below (untested for this) or a virtual display driver; neither is verified.
+The tier itself is sound — it builds the game and reports the engine log on failure — so it is kept
+for when the display question is solved. Run it with `FL_WINENV_TIERS=runtime`.
+
+Getting that far also required two fixes worth knowing about, because both failed *silently*: the
+guest needs the **Vulkan loader** (`vulkan-1.dll` ships with GPU drivers, and there is no GPU) and
+an **audio device** — the game treats a failed `alcOpenDevice` as fatal and exits before opening a
+window, so a machine with no sound card cannot start it at all.
 
 The GNS assertion in tier `ci` is not decoration: `cmake/dependencies.cmake` *silently* force-disables
 GNS when protobuf/OpenSSL are missing, so a broken vcpkg setup would otherwise build enet6-only and
@@ -82,7 +141,7 @@ your working tree is dirty, but it cannot ship uncommitted changes.
 
 | Var | Default | Meaning |
 |---|---|---|
-| `FL_WINENV_TIERS` | `ci,smoke,runtime` | which tiers to run |
+| `FL_WINENV_TIERS` | `ci,smoke` | which tiers to run (`runtime` is opt-in; see above) |
 | `FL_WINENV_BOX` | `peru/windows-server-2022-standard-x64-eval` | Vagrant box (any Windows box with a libvirt artifact + WinRM) |
 | `FL_WINENV_CPUS` | `12` | guest vCPUs |
 | `FL_WINENV_MEM_MB` | `20480` | guest RAM |
@@ -195,10 +254,12 @@ the runner itself: `cd C:\actions-runner; .\config.cmd remove --token <removal-t
 
 ## Troubleshooting
 
-**The runtime tier produces no screenshot.** A WinRM shell has no interactive desktop, and a Vulkan
-swapchain needs a window. Tiers `ci` and `smoke` are unaffected (they are headless by construction —
-they run on hosted runners today). For the runtime tier, enable autologon in the guest and re-run
-with the scheduled-task path, which executes in the console session instead:
+**The runtime tier produces no screenshot.** Expected — see the tier table above. The game exits at
+`window init failed`; tiers `ci` and `smoke` are unaffected, being headless by construction (they
+are what the hosted runners do today). `FL_WINENV_RUNTIME_VIA_TASK=1` runs the game from a scheduled
+task in the console session and is kept for further experiments, but **it was tested with autologon
+enabled and `explorer.exe` running, and the window still failed to initialise** — do not expect it
+to help as-is:
 
     # in the guest, elevated — replace the password with the box's vagrant account password
     $k = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
@@ -207,6 +268,10 @@ with the scheduled-task path, which executes in the console session instead:
 
     # from the host, after a reboot
     FL_WINENV_RUNTIME_VIA_TASK=1 FL_WINENV_TIERS=runtime tools/windows-env/run-windows-check.sh
+
+When a run does fail, the tier prints the game's stdout, stderr **and the newest engine log** from
+`%APPDATA%\mkzsystems\fighters-legacy\logs`. That last one matters: the game logs to a file rather
+than to a console, so both pipes come back empty and the failure looks mute without it.
 
 **The evaluation licence expired.** The guest is a 180-day Microsoft evaluation image. `slmgr /rearm`
 buys another period; otherwise `vagrant destroy -f && vagrant up` rebuilds from the box. A rebuild
@@ -226,6 +291,22 @@ which skips whatever already succeeded.
 
 **Everything rebuilds every run.** Check that the guest is reusing `C:\fl\src` rather than a fresh
 checkout, and that `C:\fl` is still on the Defender exclusion list (`Get-MpPreference`).
+
+**The `ci` tier says GNS was force-disabled.** GNS needs OpenSSL, which is **not** in the repo's
+`vcpkg.json` — CI never had to ask for it because GitHub's runner image ships OpenSSL preinstalled.
+Provisioning installs it and sets `OPENSSL_ROOT_DIR`. If the tier still complains after that, note
+that **CMake never retries a cached `NOTFOUND`**: an earlier configure recorded
+`OPENSSL_INCLUDE_DIR-NOTFOUND` and every later configure reuses it, so installing the dependency
+appears to have no effect. The tier purges the configure cache and retries once before believing
+the assertion; `rm -r build/debug-msvc` in the guest is the manual equivalent.
+
+**The `runtime` tier exits with `-1073741515` (`0xC0000135`).** That is `STATUS_DLL_NOT_FOUND`, and
+it names no file. The usual cause is a missing **Vulkan loader**: `vulkan-1.dll` normally arrives
+with a GPU driver, and a headless guest has none — the SDK ships headers and tools but not the
+loader, and mesa ships the ICD and driver but not the loader either. Provisioning installs LunarG's
+Vulkan runtime for this. The tier now captures the game's stdout/stderr to
+`C:\fl\out\runtime-smoke.{out,err}.txt` and echoes them on failure, so later failures explain
+themselves rather than reporting a bare exit code.
 
 ## Deferred
 
