@@ -27,6 +27,7 @@
 #include "MissionBriefScreen.h"
 #include "MissionSelectScreen.h"
 #include "NetworkFactory.h"
+#include "NullAudio.h"
 #include "Platform.h"
 #include "PrecipitationController.h"
 #include "RecordScheduler.h"
@@ -476,6 +477,14 @@ struct GameServices {
     bool headless{false};
     int headlessW{1280};
     int headlessH{720};
+
+    // Audio degradation (#1117). `--no-audio` skips opening a device at all — for a deliberately
+    // silent run (CI, an automated screenshot, a VM) where probing a driver that is known to be
+    // absent is only a source of warnings and startup latency. `audioDegraded` records that we
+    // MEANT to have sound and could not; it is what the HUD notice and `--version`-style diagnosis
+    // key on, so "silent because asked" and "silent because broken" stay distinguishable.
+    bool noAudio{false};
+    bool audioDegraded{false};
 
     // Cinematic recorder (#916): drives the camera from the mission's `cameras:` shots via ShotDirector
     // and pipes rendered frames to ffmpeg (mp4) or a PNG sequence. Active when --record/--record-png-dir
@@ -1027,6 +1036,8 @@ bool Game::initPlatform(int argc, char** argv) {
             d.services.autoStart = true; // menu bypass: Free Flight, or Join Server with --connect
         else if (std::strcmp(argv[i], "--headless") == 0)
             d.services.headless = true; // no window/display; swapchain-free renderer (#913)
+        else if (std::strcmp(argv[i], "--no-audio") == 0)
+            d.services.noAudio = true; // run silent; do not open a device at all (#1117)
         else if (std::strcmp(argv[i], "--exit-on-mission-end") == 0)
             d.services.recorder.exitOnMissionEnd = true; // stop recording at the objective outcome (#916)
     }
@@ -1059,12 +1070,34 @@ bool Game::initPlatform(int argc, char** argv) {
                                   "hot-reload enabled (FL_HOT_RELOAD=1): editing an asset updates the game live");
     }
 
-    auto oalAudio = std::make_unique<OALAudio>();
-    if (!oalAudio->init()) {
-        d.services.rawLogger->log(LogLevel::Error, __FILE__, __LINE__, oalAudio->getLastError());
-        return false;
+    // Audio DEGRADES, it does not gate launch (#1117). A machine with no audio endpoint — a headless
+    // VM, an RDP session, sound disabled in firmware, a broken driver — used to get one line in the
+    // engine log and exit 1 with nothing on stdout, before the window, renderer or content system
+    // existed. That reads as a crash rather than a missing speaker, and it took the documented
+    // `--screenshot` visual-verification path with it, on exactly the machines where an automated
+    // screenshot is most useful. Sound is not a prerequisite for flying an aircraft.
+    if (d.services.noAudio) {
+        d.services.rawLogger->log(LogLevel::Info, __FILE__, __LINE__,
+                                  "--no-audio: running silent, no audio device opened");
+        d.services.p.audio = std::make_unique<fl::NullAudio>();
+    } else {
+        auto oalAudio = std::make_unique<OALAudio>();
+        if (oalAudio->init()) {
+            d.services.p.audio = std::move(oalAudio);
+        } else {
+            // Warn, not Error: this is a degraded launch, not a failed one, and it must say both
+            // what happened and what it did about it — the old message named only the first half.
+            char buf[256];
+            std::snprintf(buf, sizeof(buf), "audio device unavailable (%s) — running silent",
+                          oalAudio->getLastError() ? oalAudio->getLastError() : "unknown");
+            d.services.rawLogger->log(LogLevel::Warn, __FILE__, __LINE__, buf);
+            // FileLogger writes to a file only, so the log alone leaves a player wondering why the
+            // game is mute. Say it where they are — the same channel the log-file fallback above uses.
+            std::fprintf(stderr, "fighters-legacy: %s (pass --no-audio to skip the device probe)\n", buf);
+            d.services.p.audio = std::make_unique<fl::NullAudio>();
+            d.services.audioDegraded = true;
+        }
     }
-    d.services.p.audio = std::move(oalAudio);
 
     d.services.p.input = std::make_unique<SDL3Input>();
     d.services.p.joystick = std::make_unique<SDL3Joystick>();

@@ -6,6 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "ILogger.h"
+#include "NullAudio.h"
 #include "audio/WarningToneManager.h"
 #include "config/AudioSettings.h"
 
@@ -24,7 +25,7 @@ struct NullLoggerWt : ILogger {
 };
 
 // Records what WarningToneManager did to each source: play/stop, looping, relative, gain.
-struct TrackingAudio : IAudio {
+struct TrackingAudio : fl::NullAudio {
     struct SrcState {
         bool playing{false};
         bool looping{false};
@@ -38,27 +39,10 @@ struct TrackingAudio : IAudio {
     AudioBufferId nextBuf{1};
     AudioSourceId nextSrc{1};
 
-    bool init() override {
-        return true;
-    }
-    void shutdown() override {}
-    const char* getLastError() const override {
-        return nullptr;
-    }
     AudioBufferId uploadBuffer(const void*, std::size_t, int, int) override {
         ++uploads;
         return nextBuf++;
     }
-    void freeBuffer(AudioBufferId) override {}
-    AudioBufferId allocStreamBuffer() override {
-        return nextBuf++;
-    }
-    void queueBuffer(AudioSourceId, AudioBufferId, const void*, std::size_t, int, int) override {}
-    int processedBufferCount(AudioSourceId) override {
-        return 0;
-    }
-    void unqueueProcessed(AudioSourceId, AudioBufferId*, int) override {}
-    void detachBuffers(AudioSourceId) override {}
     AudioSourceId createSource() override {
         AudioSourceId s = nextSrc++;
         src[s];
@@ -75,8 +59,6 @@ struct TrackingAudio : IAudio {
         src[s].playing = false;
         ++src[s].stopCount;
     }
-    void pause(AudioSourceId) override {}
-    void resume(AudioSourceId) override {}
     bool isPlaying(AudioSourceId s) const override {
         auto it = src.find(s);
         return it != src.end() && it->second.playing;
@@ -84,20 +66,12 @@ struct TrackingAudio : IAudio {
     void setLooping(AudioSourceId s, bool l) override {
         src[s].looping = l;
     }
-    void setPitch(AudioSourceId, float) override {}
     void setGain(AudioSourceId s, float g) override {
         src[s].gain = g;
     }
-    void setPosition(AudioSourceId, float, float, float) override {}
-    void setVelocity(AudioSourceId, float, float, float) override {}
-    void setReferenceDistance(AudioSourceId, float) override {}
-    void setMaxDistance(AudioSourceId, float) override {}
-    void setRolloffFactor(AudioSourceId, float) override {}
     void setSourceRelative(AudioSourceId s, bool r) override {
         src[s].relative = r;
     }
-    void setListenerTransform(const float[3], const float[3], const float[3]) override {}
-    void setListenerVelocity(const float[3]) override {}
 
     // Test helper: the single currently-playing source (tests only ever fire one channel at a time).
     const SrcState* onlyPlaying() const {

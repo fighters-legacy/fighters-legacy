@@ -114,10 +114,15 @@ GPU passthrough profile below (untested for this) or a virtual display driver; n
 The tier itself is sound — it builds the game and reports the engine log on failure — so it is kept
 for when the display question is solved. Run it with `FL_WINENV_TIERS=runtime`.
 
-Getting that far also required two fixes worth knowing about, because both failed *silently*: the
-guest needs the **Vulkan loader** (`vulkan-1.dll` ships with GPU drivers, and there is no GPU) and
-an **audio device** — the game treats a failed `alcOpenDevice` as fatal and exits before opening a
-window, so a machine with no sound card cannot start it at all.
+Getting that far also required the **Vulkan loader** (`vulkan-1.dll` ships with GPU drivers, and
+there is no GPU) — a silent failure, since the game linked cleanly and then died at startup with
+`0xC0000135`.
+
+The guest also needed an **emulated audio device**, because the game used to treat a failed
+`alcOpenDevice` as fatal and exit before opening a window. **Fixed in #1117**: a missing audio device
+now degrades to a silent game with a warning, so a headless guest no longer needs a sound card at
+all, and `--no-audio` skips the probe outright. The emulated card is kept because it costs nothing
+and keeps the guest closer to a real machine.
 
 The GNS assertion in tier `ci` is not decoration: `cmake/dependencies.cmake` *silently* force-disables
 GNS when protobuf/OpenSSL are missing, so a broken vcpkg setup would otherwise build enet6-only and

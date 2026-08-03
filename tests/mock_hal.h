@@ -11,6 +11,7 @@
 #include "ILogger.h"
 #include "IRenderer.h"
 #include "IWindow.h"
+#include "NullAudio.h"
 
 #include <cstring>
 #include <map>
@@ -27,7 +28,7 @@
 
 namespace fl {
 
-struct MockAudio : public IAudio {
+struct MockAudio : public fl::NullAudio {
     int uploadCount = 0;
     int createCount = 0;
     int playCount = 0;
@@ -35,35 +36,19 @@ struct MockAudio : public IAudio {
     AudioBufferId nextBufferId = 1;
     AudioSourceId nextSourceId = 1;
 
-    bool init() override {
-        return true;
-    }
-    void shutdown() override {}
-    const char* getLastError() const override {
-        return nullptr;
-    }
-
     AudioBufferId uploadBuffer(const void*, std::size_t, int, int) override {
         ++uploadCount;
         return nextBufferId++;
     }
-    void freeBuffer(AudioBufferId) override {}
 
     AudioBufferId allocStreamBuffer() override {
         return nextBufferId++;
     }
-    void queueBuffer(AudioSourceId, AudioBufferId, const void*, std::size_t, int, int) override {}
-    int processedBufferCount(AudioSourceId) override {
-        return 0;
-    }
-    void unqueueProcessed(AudioSourceId, AudioBufferId*, int) override {}
-    void detachBuffers(AudioSourceId) override {}
 
     AudioSourceId createSource() override {
         ++createCount;
         return nextSourceId++;
     }
-    void destroySource(AudioSourceId) override {}
 
     void play(AudioSourceId, AudioBufferId) override {
         ++playCount;
@@ -71,23 +56,6 @@ struct MockAudio : public IAudio {
     void stop(AudioSourceId) override {
         ++stopCount;
     }
-    void pause(AudioSourceId) override {}
-    void resume(AudioSourceId) override {}
-    bool isPlaying(AudioSourceId) const override {
-        return false;
-    }
-
-    void setLooping(AudioSourceId, bool) override {}
-    void setPitch(AudioSourceId, float) override {}
-    void setGain(AudioSourceId, float) override {}
-    void setPosition(AudioSourceId, float, float, float) override {}
-    void setVelocity(AudioSourceId, float, float, float) override {}
-    void setSourceRelative(AudioSourceId, bool) override {}
-    void setReferenceDistance(AudioSourceId, float) override {}
-    void setMaxDistance(AudioSourceId, float) override {}
-    void setRolloffFactor(AudioSourceId, float) override {}
-    void setListenerTransform(const float[3], const float[3], const float[3]) override {}
-    void setListenerVelocity(const float[3]) override {}
 };
 
 struct MockInput : public IInput {
