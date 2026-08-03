@@ -27,6 +27,8 @@ encode_heights = _mod.encode_heights
 merge_bathymetry = _mod.merge_bathymetry
 tile_rel_path = _mod.tile_rel_path
 enumerate_tiles = _mod.enumerate_tiles
+bbox_tiles = _mod.bbox_tiles
+tile_latlon_bounds = _mod.tile_latlon_bounds
 _parse_faces = _mod._parse_faces
 TILE_PIXELS = _mod.TILE_PIXELS
 TERRAIN_ID_RE = _mod.TERRAIN_ID_RE
@@ -176,6 +178,91 @@ class TestEnumerateTiles:
         assert len(tiles) == n * n
         assert all(f == 2 and level == 2 for (f, level, _i, _j) in tiles)
         assert (2, 2, 3, 3) in tiles
+
+
+ALL_FACES = [0, 1, 2, 3, 4, 5]
+
+
+def _lattice_overlaps(face, level, i, j, bbox, tile_px=17):
+    """Does the tile's raw (unpadded) sample lattice meet the bbox? The reference the descent must
+    never miss — bbox_tiles is allowed to return MORE than this, never less."""
+    lat_min, lon_min, lat_max, lon_max = bbox
+    lat, lon = tile_latlon_grid(face, level, i, j, tile_px)
+    if float(lat.max()) < lat_min or float(lat.min()) > lat_max:
+        return False
+    if float(lon.max()) < lon_min or float(lon.min()) > lon_max:
+        return False
+    return True
+
+
+class TestBboxTiles:
+    """bbox-limited enumeration (#1107). The contract is a conservative SUPERSET found by
+    descending the quadtree — never a filter over the full 4^level range."""
+
+    BOX = (30.0, 32.0, 38.0, 42.0)  # an 8 x 10 degree theater
+
+    def test_selects_a_small_subset_of_the_full_enumeration(self):
+        scoped = bbox_tiles(ALL_FACES, 0, 5, self.BOX)
+        full = list(enumerate_tiles(ALL_FACES, 0, 5))
+        assert 0 < len(scoped) < len(full) / 10
+
+    def test_misses_nothing_a_brute_force_filter_would_find(self):
+        # The property that makes pruning safe: a parent whose padded bounds miss the box cannot
+        # have a descendant that hits it. Checked against the exhaustive filter at a level small
+        # enough to enumerate.
+        for max_level in (3, 5, 6):
+            got = set(bbox_tiles(ALL_FACES, 0, max_level, self.BOX))
+            for key in enumerate_tiles(ALL_FACES, 0, max_level):
+                if _lattice_overlaps(*key, self.BOX):
+                    assert key in got, f"{key} overlaps the bbox but was pruned"
+
+    def test_over_inclusion_stays_marginal(self):
+        # The pad admits a few near-miss tiles. That is the safe direction, but it should be a
+        # rounding effect, not a doubling — a bbox option that quietly returns half the globe is
+        # the problem it was added to solve.
+        got = bbox_tiles(ALL_FACES, 0, 6, self.BOX)
+        overlapping = [k for k in got if _lattice_overlaps(*k, self.BOX)]
+        assert len(got) <= len(overlapping) * 1.5 + 6
+
+    def test_a_global_bbox_returns_the_full_enumeration(self):
+        assert set(bbox_tiles(ALL_FACES, 0, 3, (-90.0, -180.0, 90.0, 180.0))) == \
+            set(enumerate_tiles(ALL_FACES, 0, 3))
+
+    def test_min_level_is_descended_through_but_not_emitted(self):
+        # Levels below min_level are the path to the wanted tiles; they must not appear in output.
+        got = bbox_tiles(ALL_FACES, 4, 5, self.BOX)
+        assert got, "descending from level 0 must still reach level 4"
+        assert {level for (_f, level, _i, _j) in got} == {4, 5}
+
+    def test_deep_levels_are_reachable_without_enumerating_the_face(self):
+        # The point of the issue: level 12 is 16.7 M tiles per face. A descent visits only the
+        # covering subtree, so this returns in seconds instead of never.
+        got = bbox_tiles([0, 4], 12, 12, (35.0, 36.0, 35.2, 36.2))
+        assert 0 < len(got) < 20000
+
+    def test_output_is_coarse_first_and_matches_the_unfiltered_ordering(self):
+        got = bbox_tiles(ALL_FACES, 0, 4, self.BOX)
+        levels = [level for (_f, level, _i, _j) in got]
+        assert levels == sorted(levels)  # coarse-first, so --skip-existing resumes identically
+        order = {key: n for n, key in enumerate(enumerate_tiles(ALL_FACES, 0, 4))}
+        for level in set(levels):
+            at_level = [order[k] for k in got if k[1] == level]
+            assert at_level == sorted(at_level)
+
+    def test_enumerate_tiles_delegates_when_given_a_bbox(self):
+        assert list(enumerate_tiles(ALL_FACES, 0, 3, self.BOX)) == bbox_tiles(ALL_FACES, 0, 3, self.BOX)
+        # No bbox = the full faces, unchanged.
+        assert list(enumerate_tiles(ALL_FACES, 0, 2, None)) == list(enumerate_tiles(ALL_FACES, 0, 2))
+
+    def test_reversed_bounds_are_rejected(self):
+        with pytest.raises(ValueError):
+            bbox_tiles(ALL_FACES, 0, 2, (38.0, 32.0, 30.0, 42.0))
+
+    def test_bounds_are_a_superset_of_the_sampled_lattice(self):
+        lat_min, lon_min, lat_max, lon_max = tile_latlon_bounds(4, 3, 3, 4)
+        lat, lon = tile_latlon_grid(4, 3, 3, 4, 17)
+        assert lat_min <= float(lat.min()) and lat_max >= float(lat.max())
+        assert lon_min <= float(lon.min()) and lon_max >= float(lon.max())
 
 
 class TestParseFaces:

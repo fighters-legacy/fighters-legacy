@@ -32,7 +32,7 @@ from pathlib import Path
 
 # Reuse the cube-sphere + tile helpers (they guard their own GDAL import).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gen_terrain_tiles import tile_latlon_grid, tile_rel_path, enumerate_tiles  # noqa: E402
+from gen_terrain_tiles import bbox_tiles, tile_latlon_grid, tile_rel_path  # noqa: E402
 
 try:
     import numpy as np  # type: ignore
@@ -93,20 +93,10 @@ def select_scenes(features, max_cloud=20.0, limit=6):
     return [f for _, f in scored[:limit]]
 
 
-def bbox_tiles(faces, min_level, max_level, bbox):
-    """Cube-sphere tiles whose lat/lon lattice bounds intersect the bbox (lat_min, lon_min, lat_max,
-    lon_max, degrees). A coarse superset is fine — empty/cloud-only tiles are skipped downstream.
-    Antimeridian-spanning boxes are not handled (a theater is a small region)."""
-    lat_min, lon_min, lat_max, lon_max = bbox
-    out = []
-    for (face, level, i, j) in enumerate_tiles(faces, min_level, max_level):
-        lat, lon = tile_latlon_grid(face, level, i, j, tile_px=8)  # degrees, numpy arrays
-        if float(lat.max()) < lat_min or float(lat.min()) > lat_max:
-            continue
-        if float(lon.max()) < lon_min or float(lon.min()) > lon_max:
-            continue
-        out.append((face, level, i, j))
-    return out
+# bbox -> tile coverage now lives in gen_terrain_tiles.bbox_tiles (#1107), which BOTH generators
+# call. It used to be here, filtering the full 4^level enumeration; a level-12 theater would test
+# a hundred million keys to select a few hundred. It is a quadtree descent now, so this module gets
+# the fix for free and there is one answer to "which tiles cover this box".
 
 
 def _stac_search(bbox, max_cloud):  # pragma: no cover - network

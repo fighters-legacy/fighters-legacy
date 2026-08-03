@@ -18,13 +18,26 @@ convention (Geodetic.h): lat = asin(dir.y), lon = atan2(dir.x, dir.z), longitude
 The cube-sphere math is ported from engine/render/CubeSphere.h; verify against
 tests/test_cube_sphere.cpp if that warp changes.
 
-Usage:
+Usage — a coarse GLOBAL base (full faces, every tile at each level):
     python3 tools/gen_terrain_tiles.py \\
         --input world_dem.vrt \\
         --terrain-id world \\
         --output-dir mods/fl-base-pack/ \\
         --min-level 0 --max-level 5 \\
         --landcover-source worldcover.vrt
+
+Usage — a THEATER (only the tiles covering a region, #1107):
+    python3 tools/gen_terrain_tiles.py \\
+        --input world_dem.vrt \\
+        --terrain-id world \\
+        --output-dir mods/my-theater/ \\
+        --bbox 30.0 32.0 38.0 42.0 \\
+        --min-level 10 --max-level 12 \\
+        --skip-existing
+
+Without --bbox the run covers FULL faces — 4^level tiles each, so level 12 is millions of tiles
+per face. --bbox scopes the run geographically (the same option gen_terrain_color.py takes) and
+composes with --skip-existing for a resumable build.
 
 Height encoding (matches generateProceduralTile so pack + procedural tiles are consistent):
     uint16 = clamp(elevation_m * height_scale + height_offset, 0, 65535)   (default offset 32768)
@@ -160,14 +173,105 @@ def tile_rel_path(terrain_id: str, face: int, level: int, i: int, j: int,
     return f"terrain/{terrain_id}/f{face}/l{level}/tile_{i}_{j}{suffix}"
 
 
-def enumerate_tiles(faces, min_level: int, max_level: int):
-    """Yield (face, level, i, j) for every tile in the face x level range."""
+def enumerate_tiles(faces, min_level: int, max_level: int, bbox=None):
+    """Yield (face, level, i, j) for the requested tiles.
+
+    Without `bbox`: every tile in the face x level range — 4^level per face, which is the whole
+    globe and is what a coarse global base wants.
+
+    With `bbox` = (lat_min, lon_min, lat_max, lon_max) in degrees: only the tiles covering that
+    region. See `bbox_tiles` for why this is a quadtree DESCENT and not a filter over the full
+    enumeration (#1107).
+    """
+    if bbox is not None:
+        yield from bbox_tiles(faces, min_level, max_level, bbox)
+        return
     for level in range(min_level, max_level + 1):
         n = 1 << level
         for face in faces:
             for j in range(n):
                 for i in range(n):
                     yield (face, level, i, j)
+
+
+# Lattice used to bound a tile's lat/lon extent. Odd, so it samples the tile's centre lines: a
+# cube-sphere tile's latitude extremum in u sits at the face-axis zero (u = 0.5), not on an edge,
+# so an even grid can miss it.
+_BOUNDS_LATTICE = 17
+
+
+def tile_latlon_bounds(face: int, level: int, i: int, j: int) -> tuple:
+    """Conservative (lat_min, lon_min, lat_max, lon_max) degree bounds for one tile.
+
+    Sampled, then PADDED by the widest adjacent-sample step. A cube-sphere tile is a smooth curved
+    patch, so its true extremum can fall between samples; the pad is what makes these bounds a
+    superset rather than an estimate, which is the property the descent below relies on.
+
+    A tile spanning the antimeridian or containing a pole reports a near-global longitude span
+    (samples land at both +180 and -180). That is over-inclusive, never under-inclusive, so it
+    costs a few extra tiles and cannot drop a wanted one.
+    """
+    lat, lon = tile_latlon_grid(face, level, i, j, _BOUNDS_LATTICE)
+    lat_pad = max(float(np.abs(np.diff(lat, axis=0)).max()), float(np.abs(np.diff(lat, axis=1)).max()))
+    lon_pad = max(float(np.abs(np.diff(lon, axis=0)).max()), float(np.abs(np.diff(lon, axis=1)).max()))
+    return (float(lat.min()) - lat_pad, float(lon.min()) - lon_pad,
+            float(lat.max()) + lat_pad, float(lon.max()) + lon_pad)
+
+
+def _bbox_intersects(bounds: tuple, bbox: tuple) -> bool:
+    """Do a tile's (lat_min, lon_min, lat_max, lon_max) bounds overlap the requested bbox?"""
+    t_lat_min, t_lon_min, t_lat_max, t_lon_max = bounds
+    lat_min, lon_min, lat_max, lon_max = bbox
+    if t_lat_max < lat_min or t_lat_min > lat_max:
+        return False
+    if t_lon_max < lon_min or t_lon_min > lon_max:
+        return False
+    return True
+
+
+def bbox_tiles(faces, min_level: int, max_level: int, bbox) -> list:
+    """Tiles covering a lat/lon bbox, found by DESCENDING the quadtree.
+
+    `bbox` = (lat_min, lon_min, lat_max, lon_max) in degrees.
+
+    The descent is the whole point. Filtering the full `enumerate_tiles` range instead — which is
+    what a naive bbox option would do — still visits 4^level keys per face: a starter theater at
+    level 12 would test 100 million tiles to select a few hundred, so the tool would appear to hang
+    before it wrote anything. Children nest strictly inside their parent's uv square, so a parent
+    whose (padded, superset) bounds miss the bbox cannot have a descendant that hits it, and
+    pruning there discards 4^k tiles for the cost of one test.
+
+    Levels below `min_level` are still descended through — they are the path to the tiles that are
+    wanted — but only `min_level..max_level` is emitted. Output is ordered coarse-first (by level,
+    then face, then j, then i) to match the unfiltered enumeration, so `--skip-existing` resumes a
+    partial run the same way either way.
+
+    Pure numpy — no GDAL, unit-tested.
+    """
+    lat_min, lon_min, lat_max, lon_max = (float(v) for v in bbox)
+    if lat_min > lat_max or lon_min > lon_max:
+        raise ValueError("bbox must be (lat_min, lon_min, lat_max, lon_max) with min <= max")
+    box = (lat_min, lon_min, lat_max, lon_max)
+
+    by_level = {level: [] for level in range(min_level, max_level + 1)}
+
+    def descend(face: int, level: int, i: int, j: int) -> None:
+        if not _bbox_intersects(tile_latlon_bounds(face, level, i, j), box):
+            return
+        if level >= min_level:
+            by_level[level].append((face, level, i, j))
+        if level < max_level:
+            for cj in (2 * j, 2 * j + 1):
+                for ci in (2 * i, 2 * i + 1):
+                    descend(face, level + 1, ci, cj)
+
+    for face in faces:
+        descend(face, 0, 0, 0)
+
+    out = []
+    for level in range(min_level, max_level + 1):
+        out.extend(sorted(by_level[level], key=lambda k: (k[0], k[3], k[2])))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +420,12 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    help="Lowest quadtree level to generate (default: 0)")
     p.add_argument("--max-level", required=True, type=int, metavar="N",
                    help="Highest quadtree level to generate (2^level tiles per face axis)")
+    p.add_argument("--bbox", nargs=4, type=float, default=None,
+                   metavar=("LATMIN", "LONMIN", "LATMAX", "LONMAX"),
+                   help="Restrict output to the tiles covering this lat/lon box (degrees), the same "
+                        "scoping gen_terrain_color.py takes. Without it the run covers the FULL "
+                        "faces — 4^level tiles each, which is a global build. Composes with "
+                        "--skip-existing for a resumable theater build")
     p.add_argument("--landcover-source", default=None, metavar="PATH",
                    help="Optional global land-cover source; also emits _lc.png tiles")
     p.add_argument("--bathymetry-source", default=None, metavar="PATH",
@@ -349,6 +459,13 @@ def _validate_args(args: argparse.Namespace) -> None:
         sys.exit("Error: --max-level > 20 would generate an astronomical tile count")
     if args.tile_pixels < 2:
         sys.exit("Error: --tile-pixels must be >= 2")
+    if args.bbox is not None:
+        lat_min, lon_min, lat_max, lon_max = args.bbox
+        if not (-90.0 <= lat_min <= lat_max <= 90.0):
+            sys.exit("Error: --bbox requires -90 <= LATMIN <= LATMAX <= 90")
+        if not (-180.0 <= lon_min <= lon_max <= 180.0):
+            sys.exit("Error: --bbox requires -180 <= LONMIN <= LONMAX <= 180 "
+                     "(a box crossing the antimeridian must be built as two runs)")
 
 
 def main(argv=None) -> None:
@@ -369,8 +486,12 @@ def main(argv=None) -> None:
     except ValueError as exc:
         sys.exit(f"Error: --faces: {exc}")
 
-    tiles = list(enumerate_tiles(faces, args.min_level, args.max_level))
+    bbox = tuple(args.bbox) if args.bbox is not None else None
+    tiles = list(enumerate_tiles(faces, args.min_level, args.max_level, bbox))
     total = len(tiles)
+    if total == 0:
+        sys.exit("Error: no tiles selected — check --bbox against --faces "
+                 "(a bbox outside the selected faces produces nothing)")
     workers = args.workers if args.workers is not None else os.cpu_count()
     dem_path = str(Path(args.input).resolve())
     lc_path = str(Path(args.landcover_source).resolve()) if args.landcover_source else None
@@ -378,7 +499,9 @@ def main(argv=None) -> None:
     common = (str(args.output_dir), args.terrain_id, args.tile_pixels,
               args.height_scale, args.height_offset, args.skip_existing)
 
-    print(f"[1/2] Generating {total} tile(s) across faces {faces}, "
+    scope = (f"bbox lat {bbox[0]}..{bbox[2]}, lon {bbox[1]}..{bbox[3]}" if bbox
+             else f"full faces {faces}")
+    print(f"[1/2] Generating {total} tile(s) across {scope}, "
           f"levels {args.min_level}..{args.max_level} ({workers} worker(s))"
           f"{' + land cover' if lc_path else ''}{' + bathymetry' if bathy_path else ''}")
 

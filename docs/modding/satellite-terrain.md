@@ -29,6 +29,17 @@ For each cube-sphere tile intersecting the bounding box it:
 5. BC7-encodes the result to `terrain/<id>/f<face>/l<level>/tile_<i>_<j>_sat.ktx2` via `tex-compress`
    (**mipmapped** — do not skip mipmaps; minification without them aliases into colour noise).
 
+`gen_terrain_tiles.py` takes the **same `--bbox`**, so the height and land-cover tiles under the
+imagery are built with the identical scoping — one box, one theater, three layers:
+
+```bash
+tools/gen_terrain_tiles.py \
+    --input world_dem.vrt --terrain-id world --output-dir mypack \
+    --bbox 37.40 -122.52 37.85 -122.05 \
+    --min-level 8 --max-level 10 \
+    --landcover-source worldcover.vrt --skip-existing
+```
+
 **Prerequisites:** GDAL Python bindings + numpy (`apt install python3-gdal python3-numpy` /
 `dnf install python3-gdal python3-numpy`), `tex-compress` (which shells out to `toktx`), and outbound
 HTTPS to AWS. Choose a tile level whose tile size is close to the imagery footprint you want per tile
