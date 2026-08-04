@@ -4,6 +4,7 @@
 #include "HeadTracker.h"     // HeadPose (#927 head tracking)
 #include "PadlockTracker.h"  // padlock aim + lock state machine (#697)
 #include "flight/Geodetic.h" // kEarthRadiusM (default planet radius)
+#include "net/TickRate.h"    // server tick rate paired with the render alpha (#1075)
 
 #include <chrono>
 #include <glm/glm.hpp>
@@ -87,6 +88,12 @@ class CameraInput {
         m_renderAlpha = alpha;
     }
 
+    // The server's tick rate (#1075), from MsgConnectAck. Must be the same rate the render alpha was
+    // computed at — the two are multiplied together to extrapolate a target's position.
+    void setServerTickRate(fl::TickRate rate) noexcept {
+        m_serverTickRate = rate;
+    }
+
     // Set the planet sphere radius (metres) used to compute the camera "up" as the radial direction
     // from the planet centre, so the horizon stays level far from the world origin (#479). From
     // MsgConnectAck; defaults to Earth radius. Call on entering Flight.
@@ -162,6 +169,10 @@ class CameraInput {
 
     // Render alpha — set by Game.cpp via setRenderAlpha() before update() each frame.
     float m_renderAlpha{0.f};
+    // The server tick rate the render alpha was computed at (#1075). Paired with m_renderAlpha for
+    // velocity extrapolation, so a literal 1/60 here would disagree with the alpha on any server not
+    // stepping at 60 Hz.
+    fl::TickRate m_serverTickRate{fl::kServerTickRate};
 
     // Planet radius (m) for the radial camera "up"; Earth default until MsgConnectAck arrives.
     double m_planetRadiusM{kEarthRadiusM};

@@ -1404,6 +1404,11 @@ inline constexpr uint32_t kNoVoiceEntity = 0xFFFFFFFFu;
 // Raw UDP presence broadcast sent by fl-server on 255.255.255.255:<port> (IPv4 broadcast) and
 // [ff02::1]:<port> (IPv6 link-local multicast) every discoveryIntervalMs milliseconds.
 // Not sent over ENet - must not be injected into an ENet connection.
+// Build-version field width, shared by every message that carries one (#1074). Sized for a semantic
+// version plus a pre-release/build suffix ("0.3.14-rc1+abcdef1"); senders truncate, receivers
+// force-terminate.
+inline constexpr std::size_t kBuildVersionBytes = 24;
+
 struct MsgLanBeacon {
     uint8_t msgId{static_cast<uint8_t>(MsgId::LanBeacon)};
     uint8_t reserved{0};
@@ -1416,8 +1421,19 @@ struct MsgLanBeacon {
     uint16_t shutdownSeconds{0}; // @10 seconds until shutdown when kGameModeShuttingDown is set (#226); 0 = n/a
     uint16_t queryPort{0};       // @12 the server's info-query port (#997); 0 = query disabled
     char name[64]{};             // @14 null-terminated server name
-}; // 78 bytes, align 2
-static_assert(sizeof(MsgLanBeacon) == 78u, "MsgLanBeacon wire size changed");
+    // --- appended at the tail (#1074); additive, prior offsets unchanged ---
+    // The server's BUILD version, so the browser can show it without connecting. kProtocolVersion
+    // stays 1 for every additive message and ExtTag, so it cannot tell a v0.3.11 server from a
+    // v0.4.1 one — which is the whole reason a build string is on the wire. Empty = not advertised.
+    char build[kBuildVersionBytes]{}; // @78 null-terminated build version, e.g. "0.3.14"
+}; // 102 bytes, align 2
+static_assert(sizeof(MsgLanBeacon) == 102u, "MsgLanBeacon wire size changed");
+
+// The beacon's pre-#1074 size. A receiver requires only THIS many bytes and reads `build` only when
+// the datagram actually carries it: growing a fixed struct is additive for a sender, but a receiver
+// that demands the new sizeof would silently drop every older server's beacon — precisely the
+// version-blind failure #1074 exists to remove.
+inline constexpr std::size_t kLanBeaconLegacyBytes = 78;
 static_assert(alignof(MsgLanBeacon) == 2u, "MsgLanBeacon alignment changed");
 static_assert(offsetof(MsgLanBeacon, protocolVersion) == 2u, "MsgLanBeacon::protocolVersion offset changed");
 static_assert(offsetof(MsgLanBeacon, gamePort) == 4u, "MsgLanBeacon::gamePort offset changed");
@@ -1427,6 +1443,28 @@ static_assert(offsetof(MsgLanBeacon, gameModeFlags) == 8u, "MsgLanBeacon::gameMo
 static_assert(offsetof(MsgLanBeacon, shutdownSeconds) == 10u, "MsgLanBeacon::shutdownSeconds offset changed");
 static_assert(offsetof(MsgLanBeacon, queryPort) == 12u, "MsgLanBeacon::queryPort offset changed");
 static_assert(offsetof(MsgLanBeacon, name) == 14u, "MsgLanBeacon::name offset changed");
+static_assert(offsetof(MsgLanBeacon, build) == 78u, "MsgLanBeacon::build offset changed");
+static_assert(offsetof(MsgLanBeacon, build) == kLanBeaconLegacyBytes,
+              "the legacy beacon prefix must end exactly where the #1074 tail begins");
+
+// The LAN discovery port (#1071). A protocol constant, not deployment config: every server on a
+// segment broadcasts MsgLanBeacon TO it and every browser binds it, so the two ends must agree the
+// way they agree on a message id.
+//
+// It is DELIBERATELY NOT THE GAME PORT. Discovery used to alias the game port — the beacon
+// broadcast to 4778 and the browser's listener bound 4778 — which meant a client could not run its
+// server browser while a dedicated fl-server ran on the same machine: enet6's enet_host_create sets
+// no SO_REUSEADDR, so whoever bound second failed outright. That is the whole of #1054, and it cost
+// a hardcoded embedded-server port, a lazily-created listener and fifteen lines of rationale about
+// which neighbouring ports were safe. The alias bought nothing, because MsgLanBeacon::gamePort
+// already carries the connect port explicitly: a browser learns where to connect from the PACKET,
+// never from the port it heard the packet on.
+//
+// Only the browser's listener ever binds this, and it does so with SO_REUSEADDR, so several clients
+// on one host coexist; a beacon only ever sends, and needs no bind at all. 4780 is chosen so it is
+// not derived from any other port in use — the game port (4778) and the query port it derives
+// (game + 1 = 4779) are both clear of it, and nothing derives 4780 from anything.
+static constexpr uint16_t kDiscoveryPort = 4780;
 
 // Bitmask constants for MsgLanBeacon::gameModeFlags.
 static constexpr uint8_t kGameModeCampaign = 0x01u;
@@ -1450,9 +1488,9 @@ struct MsgServerQuery {
     uint16_t protocolVersion{kProtocolVersion};              // @2
     uint32_t nonce{0};                                       // @4 client-chosen; echoed back
     uint64_t clientTimeMs{0};                                // @8 client steady-clock ms; echoed verbatim
-    uint8_t pad[176]{};                                      // @16 anti-amplification padding
-}; // 192 bytes, align 8
-static_assert(sizeof(MsgServerQuery) == 192u, "MsgServerQuery wire size changed");
+    uint8_t pad[192]{};                                      // @16 anti-amplification padding
+}; // 208 bytes, align 8
+static_assert(sizeof(MsgServerQuery) == 208u, "MsgServerQuery wire size changed");
 static_assert(offsetof(MsgServerQuery, nonce) == 4u, "MsgServerQuery::nonce offset changed");
 static_assert(offsetof(MsgServerQuery, clientTimeMs) == 8u, "MsgServerQuery::clientTimeMs offset changed");
 
@@ -1471,14 +1509,34 @@ struct MsgServerInfo {
     char name[64]{};                                        // @24 server name
     char modeId[32]{};                                      // @88 game-mode id (empty until set)
     char mission[64]{};                                     // @120 current mission/map display name
-}; // 184 bytes, align 8
-static_assert(sizeof(MsgServerInfo) == 184u, "MsgServerInfo wire size changed");
+    // --- appended at the tail (#1074); additive, prior offsets unchanged ---
+    char build[kBuildVersionBytes]{}; // @184 null-terminated build version; empty = not advertised
+}; // 208 bytes, align 8
+static_assert(sizeof(MsgServerInfo) == 208u, "MsgServerInfo wire size changed");
+
+// The reply's pre-#1074 size, for the same reason as kLanBeaconLegacyBytes: a client must still
+// accept an older server's shorter reply rather than drop it.
+inline constexpr std::size_t kServerInfoLegacyBytes = 184;
 static_assert(offsetof(MsgServerInfo, nonce) == 4u, "MsgServerInfo::nonce offset changed");
 static_assert(offsetof(MsgServerInfo, clientTimeMs) == 8u, "MsgServerInfo::clientTimeMs offset changed");
 static_assert(offsetof(MsgServerInfo, gamePort) == 16u, "MsgServerInfo::gamePort offset changed");
 static_assert(offsetof(MsgServerInfo, name) == 24u, "MsgServerInfo::name offset changed");
 static_assert(offsetof(MsgServerInfo, modeId) == 88u, "MsgServerInfo::modeId offset changed");
 static_assert(offsetof(MsgServerInfo, mission) == 120u, "MsgServerInfo::mission offset changed");
+static_assert(offsetof(MsgServerInfo, build) == 184u, "MsgServerInfo::build offset changed");
+static_assert(offsetof(MsgServerInfo, build) == kServerInfoLegacyBytes,
+              "the legacy server-info prefix must end exactly where the #1074 tail begins");
+
+// ANTI-AMPLIFICATION INVARIANT. The query responder answers an UNAUTHENTICATED raw-UDP datagram from
+// a spoofable source address, so the reply must never be larger than the request that provoked it —
+// otherwise the query port is a reflector with gain. MsgServerQuery::pad exists solely to hold this,
+// and the responder additionally DROPS any datagram shorter than sizeof(MsgServerQuery).
+//
+// This assert is here because the invariant is easy to break from the far end: growing MsgServerInfo
+// (as #1074's build field did) silently inverts it unless the padding follows. Grow `pad`, do not
+// relax this.
+static_assert(sizeof(MsgServerQuery) >= sizeof(MsgServerInfo),
+              "MsgServerQuery must not be smaller than MsgServerInfo — the reply would amplify");
 
 // Extension tag registry for TLV blocks appended after fixed message structs (see WireCodec.h).
 // Wire format per entry: [tag: uint16_t LE][len: uint16_t LE][data: len bytes].
@@ -1489,6 +1547,7 @@ static_assert(offsetof(MsgServerInfo, mission) == 120u, "MsgServerInfo::mission 
 //   0x0300–0x03FF  MsgClientInput extensions (reserved for future use)
 //   0x0400–0x04FF  MsgWeatherState extensions (reserved for future use)
 //   0x0500–0x05FF  MsgConnectRequest extensions (0x0500 = ConnectSeatClaim #974; RFC #871 token reserved)
+//   0x0600–0x06FF  MsgHello extensions (0x0600 = HelloBuildVersion #1074)
 //   Values outside defined ranges are reserved and must not be sent.
 enum class ExtTag : uint16_t {
     SnapshotPeerCount = 0x0100,   // uint16_t: active connected peer count at snapshot time
@@ -1545,6 +1604,27 @@ enum class ExtTag : uint16_t {
                                   // UI affordances — cosmetic only; the server remains the enforcement
                                   // point. Old clients skip the unknown tag. First tag in the reserved
                                   // 0x0200-0x02FF MsgConnectAck range.
+
+    ConnectAckTypesUnchanged = 0x0202, // #1070: this MsgConnectAck carries NO MsgEntityTypeDef records
+                                       // (typeCount == 0) because the server's entity-type table has
+                                       // not changed since the last ack it sent this peer — keep the
+                                       // cached one. Zero-length payload; the presence of the tag IS
+                                       // the signal. sendConnectAck is re-sent on every seat change,
+                                       // role change, team change and authority grant, and the table
+                                       // is typeCount x 380 B (~23 KB at a realistic 60-type
+                                       // registry), so re-sending it was the amplification factor
+                                       // behind the un-rate-limited seat/team requests (#1069).
+                                       // Additive: a client that ignores the tag sees typeCount == 0
+                                       // and keeps its table anyway, because the record loop only
+                                       // ever ADDS types it does not already have.
+
+    HelloBuildVersion = 0x0600, // #1074: the server's build version, appended to MsgHello. Payload =
+                                // raw UTF-8 version bytes (no NUL), 1..kBuildVersionBytes. MsgHello is
+                                // the FIRST thing a server sends, so the client knows the build before
+                                // it has committed to anything. WARN-ONLY while kProtocolVersion stays
+                                // 1: a mismatch is surfaced, never a refusal, because refusing here
+                                // would break the LAN sessions this exists to help. Opens the reserved
+                                // 0x0600-0x06FF MsgHello range.
 
     ConnectSeatClaim = 0x0500,    // #974: join-at-connect seat claim in MsgConnectRequest's TLV block.
                                   // Payload = { uint32 entityIdx (LE), uint32 entityGen (LE), uint8 seatIndex }
@@ -1669,9 +1749,9 @@ inline constexpr MsgInfo kMsgTable[] = {
     {MsgId::VoiceRelay, "VoiceRelay", MsgDir::ServerToClient, MsgReliability::Unreliable, kNetChVoice, 16, false},
     {MsgId::AlertLevelChange, "AlertLevelChange", MsgDir::ServerToClient, MsgReliability::Reliable, kNetChReliable, 4,
      false},
-    {MsgId::LanBeacon, "LanBeacon", MsgDir::ServerToClient, MsgReliability::Datagram, kNoNetChannel, 78, false},
-    {MsgId::ServerQuery, "ServerQuery", MsgDir::ClientToServer, MsgReliability::Datagram, kNoNetChannel, 192, false},
-    {MsgId::ServerInfo, "ServerInfo", MsgDir::ServerToClient, MsgReliability::Datagram, kNoNetChannel, 184, false},
+    {MsgId::LanBeacon, "LanBeacon", MsgDir::ServerToClient, MsgReliability::Datagram, kNoNetChannel, 102, false},
+    {MsgId::ServerQuery, "ServerQuery", MsgDir::ClientToServer, MsgReliability::Datagram, kNoNetChannel, 208, false},
+    {MsgId::ServerInfo, "ServerInfo", MsgDir::ServerToClient, MsgReliability::Datagram, kNoNetChannel, 208, false},
 };
 
 // The dense ENet id range is [0x00, kEnetMsgIdCount); raw-UDP ids are [0x40, 0x40 + kRawUdpMsgIdCount).

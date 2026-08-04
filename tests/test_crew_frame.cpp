@@ -158,6 +158,18 @@ struct CrewFixture {
             });
     }
 
+    // Admit a peer the way a real one arrives (#853): onConnect, then its MsgConnectRequest. Joining
+    // as an Observer spawns no aircraft of its own, so the seat binding is the only thing that gives
+    // this peer an entity — which is exactly the human-gunner case. Required since #1069, where the
+    // dispatch preamble drops every client->server message from a peer that has not completed the
+    // handshake; before that a test could send input from a peer that had never connected at all.
+    void admitPeer(uint32_t peerId) {
+        wb->onConnect(peerId);
+        MsgConnectRequest req{};
+        req.requestedRole = static_cast<uint8_t>(PeerRole::Observer);
+        wb->onReceive(peerId, &req, sizeof(req));
+    }
+
     EntityId spawnBomber(double x) {
         EntityTransform t{};
         t.pos[0] = x;
@@ -286,6 +298,7 @@ TEST_CASE("Crewed frame: a human gunner fires from its masked input, along its o
     const EntityId bomber = fx.spawnBomber(0.0);
 
     constexpr uint32_t kGunnerPeer = 7;
+    fx.admitPeer(kGunnerPeer); // a human gunner is an admitted peer (#1069 gates un-admitted input)
     REQUIRE(fx.wb->setSeatOccupant(bomber, /*seat=*/1, kGunnerPeer));
 
     // Phase 1: look straight up (+Y), hold fire, with flight fields set (which MUST be masked off since
@@ -325,6 +338,7 @@ TEST_CASE("Crewed frame: vacating a human seat resumes its bot (#972)", "[crew]"
     const EntityId bomber = fx.spawnBomber(0.0);
     constexpr uint32_t kGunnerPeer = 9;
 
+    fx.admitPeer(kGunnerPeer);
     REQUIRE(fx.wb->setSeatOccupant(bomber, 1, kGunnerPeer));
     fx.wb->clearSeatOccupant(kGunnerPeer); // human leaves immediately
     fx.tick(120);                          // the bot (StubGunner) slews then fires again after tick 90

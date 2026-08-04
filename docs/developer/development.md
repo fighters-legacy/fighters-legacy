@@ -340,6 +340,14 @@ Harnesses cover the network codecs, the content/asset parsers, and the on-disk f
   untrusted client surface). Both use `fuzz/FuzzFrames.h` to pack several `onReceive` packets into one
   input so a single corpus entry reaches the multi-packet states (chunk reassembly, delta-after-full
   snapshot decode, ack advance).
+- **The connect path** (`fuzz_connect_path`, #1073): the only harness that COMPLETES a handshake.
+  `fuzz_server_msg` calls `onConnect` and stops, which leaves two areas unreachable from it — the
+  `handleConnectRequest` parser (a `packCount × PackManifestEntry` record loop plus three TLV parses
+  at an attacker-controlled offset) and every handler gated on `handshakeComplete` (chat, voice, seat,
+  team). This harness drives the first fuzz frame into the connect path and feeds the rest to a
+  separately-admitted peer, with the radio-net table populated so the voice relay fan-out actually
+  runs. Measured against `fuzz_server_msg` on equal-length runs: `handleChat`, `handleVoiceFrame` and
+  `selectVoiceRecipients` go from **zero** hits to covered.
 - **Content / asset parsers**: `fuzz_asset_validator`, `fuzz_terrain_png`, `fuzz_ogg` (the
   libvorbis-backed `decodeOgg` + streaming API — the untrusted content-pack audio path, #723),
   `fuzz_flight_model_toml`, `fuzz_entity_def_toml`, `fuzz_playlist_toml`, `fuzz_server_config_toml`,

@@ -179,6 +179,16 @@ static const char* kDefaultToml =
     "# Range [0, 1024]. Applies post-handshake, after the rate-limit check.\n"
     "max_connections_per_ip = 0\n"
     "\n"
+    "# World-mutating request limits. A seat or team grant despawns and respawns an entity and\n"
+    "# re-sends the whole entity-type table, so these bound how OFTEN a peer may ask, not how\n"
+    "# fast it may type. Over the limit a request is dropped silently — a reply per rejected\n"
+    "# packet would be the amplifier these exist to remove.\n"
+    "seat_request_rate_limit_per_s = 2   # seat requests per second per player; [1, 60]\n"
+    "team_switch_cooldown_s = 5          # seconds between accepted team switches; 0 = none; [0, 3600]\n"
+    "# Heartbeats per second per player that draw a ping reply; [1, 60]. Excess heartbeats still\n"
+    "# refresh liveness (a flooding peer cannot time itself out), they just go unanswered.\n"
+    "heartbeat_rate_limit_per_s = 4\n"
+    "\n"
     "# Per-IP lockout for the operator network admin channel (MsgAdminCommand).\n"
     "# After admin_auth_max_failures consecutive wrong passwords from the same IP the peer\n"
     "# is kicked and reconnections from that IP are refused for admin_auth_lockout_s seconds.\n"
@@ -964,6 +974,30 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                          "security.max_connections_per_ip out of range [0,1024]; using default");
             } else {
                 cfg.maxConnectionsPerIp = static_cast<int>(*v);
+            }
+        }
+        if (auto v = tomlInt(tbl["security"]["seat_request_rate_limit_per_s"])) {
+            if (*v < 1 || *v > 60) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "security.seat_request_rate_limit_per_s out of range [1,60]; using default");
+            } else {
+                cfg.seatRequestRateLimitPerS = static_cast<int>(*v);
+            }
+        }
+        if (auto v = tomlInt(tbl["security"]["team_switch_cooldown_s"])) {
+            if (*v < 0 || *v > 3600) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "security.team_switch_cooldown_s out of range [0,3600]; using default");
+            } else {
+                cfg.teamSwitchCooldownS = static_cast<int>(*v);
+            }
+        }
+        if (auto v = tomlInt(tbl["security"]["heartbeat_rate_limit_per_s"])) {
+            if (*v < 1 || *v > 60) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "security.heartbeat_rate_limit_per_s out of range [1,60]; using default");
+            } else {
+                cfg.heartbeatRateLimitPerS = static_cast<int>(*v);
             }
         }
         if (auto v = tomlInt(tbl["security"]["admin_auth_max_failures"])) {

@@ -13,6 +13,8 @@
 #include <sys/socket.h>
 #endif
 
+#include "net/GameProtocol.h" // kDiscoveryPort — the LAN-wide port both ends agree on (#1071)
+
 #include <chrono>
 #include <cstdint>
 #include <string>
@@ -30,10 +32,21 @@ class DiscoveryBeacon {
   public:
     struct Config {
         std::string name;
-        uint16_t port{4778};
+        // The port a client CONNECTS to — advertised in MsgLanBeacon::gamePort, not the port this
+        // beacon is sent to (#1071). The two used to be one field, which is what made discovery
+        // alias the game port and blocked a browser and a dedicated server from coexisting on one
+        // host. A browser learns the connect port from the packet.
+        uint16_t gamePort{4778};
+        // Where the beacon is BROADCAST. A LAN-wide constant both ends agree on (fl::kDiscoveryPort);
+        // overridable so a loopback test can pick a free port instead of the shared one.
+        uint16_t discoveryPort{kDiscoveryPort};
         uint8_t maxPlayers{32};
         uint8_t gameModeFlags{0};
         uint16_t queryPort{0}; // #997: the server's info-query port; 0 = query disabled
+        // The server's build version (#1074), advertised so a browser can show it without
+        // connecting. Passed IN rather than compiled in: engine-protocol and engine-net are
+        // content- and build-agnostic, and fl-server is the layer that knows FL_VERSION_STRING.
+        std::string buildVersion;
         int intervalMs{2000};
         std::string broadcastAddr{"255.255.255.255"}; // configurable for loopback tests
     };

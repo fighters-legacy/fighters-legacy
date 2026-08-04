@@ -99,6 +99,13 @@ fl_add_fuzzer(fuzz_server_msg)
 target_link_libraries(fuzz_server_msg PRIVATE engine-net)
 target_include_directories(fuzz_server_msg PRIVATE "${CMAKE_SOURCE_DIR}/tests")
 
+# The connect path + everything behind the handshake gate (#1073). fuzz_server_msg never completes a
+# handshake, so handleConnectRequest -- the largest untrusted parser in the server -- and every
+# handler gated on handshakeComplete were unreachable from it.
+fl_add_fuzzer(fuzz_connect_path)
+target_link_libraries(fuzz_connect_path PRIVATE engine-net)
+target_include_directories(fuzz_connect_path PRIVATE "${CMAKE_SOURCE_DIR}/tests")
+
 # ClientNetEventHandler::onReceive — the widest untrusted-input surface on the client. The handler
 # lives in the SDL-gated game exe, so compile its .cpp directly (mirrors tests/test_client_net_event_handler).
 fl_add_fuzzer(fuzz_client_msg)

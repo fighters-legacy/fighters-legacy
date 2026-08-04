@@ -475,6 +475,7 @@ int main(int argc, char** argv) {
             fl::ServerQueryResponder::StaticInfo si;
             si.name = cfg.name;
             si.gamePort = cfg.port;
+            si.buildVersion = FL_VERSION_STRING; // #1074
             si.maxPlayers = static_cast<uint8_t>(cfg.maxPeers > 255 ? 255 : cfg.maxPeers);
             si.gameModeFlags = discoveryGameModeFlags;
             queryResponder->setStaticInfo(std::move(si));
@@ -486,7 +487,11 @@ int main(int argc, char** argv) {
     if (cfg.discoveryEnabled && !flagNoDiscovery) {
         DiscoveryBeacon::Config dcfg;
         dcfg.name = cfg.name;
-        dcfg.port = cfg.port;
+        dcfg.gamePort = cfg.port;              // advertised as MsgLanBeacon::gamePort — where clients connect
+        dcfg.buildVersion = FL_VERSION_STRING; // #1074: the browser shows it without connecting
+        // Broadcast to the dedicated discovery port (#1071), never to the game port. The old alias is
+        // why a client could not run its browser while a dedicated server held the game port.
+        dcfg.discoveryPort = fl::kDiscoveryPort;
         dcfg.maxPlayers = static_cast<uint8_t>(cfg.maxPeers > 255 ? 255 : cfg.maxPeers);
         dcfg.gameModeFlags = discoveryGameModeFlags;
         dcfg.queryPort = queryResponder ? queryPort : 0; // #997: advertise the query port to browsers
@@ -980,7 +985,14 @@ int main(int argc, char** argv) {
     // engine-ai — spawning a flight, building a controller, designating a target — are injected here
     // as std::functions. fl-server links both, so this is the seam where they meet.
     broadcaster.setPlayerFaction(cfg.playerFaction);
+    broadcaster.setBuildVersion(FL_VERSION_STRING); // #1074: rides MsgHello so a peer knows the build
     broadcaster.setFlightCommandRateLimit(cfg.flight.commandRateLimitPerS);
+
+    // World-mutating request limits (#1069): seat/team grants cost a despawn+respawn and a full
+    // ConnectAck; heartbeats cost a reply. These bound how often a peer may ask for each.
+    broadcaster.setSeatRequestRateLimit(cfg.seatRequestRateLimitPerS);
+    broadcaster.setTeamSwitchCooldownSeconds(cfg.teamSwitchCooldownS);
+    broadcaster.setHeartbeatRateLimit(cfg.heartbeatRateLimitPerS);
 
     // In-match text chat (#646). The moderation hook default logs an audit line and allows every message;
     // an operator replaces it with a filter. Rate limit + enable come from [chat].

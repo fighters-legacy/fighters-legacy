@@ -115,6 +115,9 @@ pre_handshake_window_ms        = 1000 # sliding window in milliseconds
 admin_auth_max_failures        = 5    # wrong operator passwords before per-IP lockout [1,100]
 admin_auth_lockout_s           = 300  # per-IP lockout duration in seconds [1,86400]
 idle_timeout_s                 = 0    # disconnect inactive peers after N seconds; 0 = disabled [0,86400]
+seat_request_rate_limit_per_s  = 2    # seat requests per second per player [1,60]
+team_switch_cooldown_s         = 5    # seconds between accepted team switches; 0 = none [0,3600]
+heartbeat_rate_limit_per_s     = 4    # heartbeats per second that draw a ping reply [1,60]
 
 [rcon]
 enabled           = false
@@ -1001,9 +1004,21 @@ survivable-arrival threshold). Ordinary landings are never affected.
 ## [discovery] — LAN server discovery
 
 Configures the UDP broadcast beacon that lets players on the same LAN find this server
-automatically. The beacon is a raw UDP packet sent on `255.255.255.255:<port>` (IPv4 broadcast)
-and `[ff02::1]:<port>` (IPv6 link-local multicast) every `interval_ms` milliseconds. It is
+automatically. The beacon is a raw UDP packet sent on `255.255.255.255:4780` (IPv4 broadcast)
+and `[ff02::1]:4780` (IPv6 link-local multicast) every `interval_ms` milliseconds. It is
 independent of ENet and requires no router configuration.
+
+**Discovery has its own port (4780), separate from the game port** (#1071). It is a LAN-wide
+constant rather than a setting: every server broadcasts to it and every browser binds it, so the two
+ends must agree the way they agree on a message id. The beacon carries this server's *connect* port
+in `MsgLanBeacon::gamePort`, so a browser learns where to connect from the packet, never from the
+port it heard the packet on.
+
+Before this the beacon was broadcast to the **game** port, which meant a client could not run its
+server browser while a dedicated `fl-server` ran on the same machine — enet6 sets no `SO_REUSEADDR`,
+so whoever bound second failed outright, and single-player died with "Port already in use" (#1054).
+Only the browser's listener ever binds 4780, and it does so with `SO_REUSEADDR`, so several clients
+on one host coexist; a beacon only sends and needs no bind at all.
 
 Client-side parsing and the server browser UI are tracked in issue #143.
 
@@ -1410,6 +1425,42 @@ immediately if the count would reach or exceed the limit.
 Set to `0` (default) to disable this check. This is distinct from `connect_rate_limit_count`,
 which limits connection *attempts* per time window; `max_connections_per_ip` limits *held*
 connections. Both can be active simultaneously.
+
+### `seat_request_rate_limit_per_s`
+
+| Type | Default | Valid range |
+|---|---|---|
+| integer | `2` | 1–60 |
+
+Seat requests (`MsgSeatRequest`, #974) accepted per second from one peer. A *granted* seat
+request is expensive: it despawns the peer's aircraft, rebinds the seat, re-broadcasts the crew
+roster and re-sends the entire `MsgConnectAck` type table. Requests over the limit are dropped
+**silently** — replying to each rejected packet would preserve the amplification the limit exists
+to remove. 2/s is far above any human seat-menu interaction.
+
+### `team_switch_cooldown_s`
+
+| Type | Default | Valid range |
+|---|---|---|
+| integer | `5` | 0–3600 |
+
+Minimum seconds between *accepted* team-switch requests (`MsgTeamRequest`, #522) from one peer.
+A cooldown rather than a per-second budget, because the cost is the despawn-and-respawn on the new
+team: the honest bound is how often a player may change teams. The cooldown starts at the last
+accepted request, so a peer cannot hold itself in cooldown by spamming. Set to `0` to disable it and
+let every request reach the team-balance guard.
+
+### `heartbeat_rate_limit_per_s`
+
+| Type | Default | Valid range |
+|---|---|---|
+| integer | `4` | 1–60 |
+
+Heartbeats (`MsgHeartbeat`, ~1/s from a healthy client) per second per peer that draw a
+`MsgPeerDelay` reply. Without a limit the heartbeat is a 1:1 reflector — every 16-byte packet
+produced a reply. Excess heartbeats are still **accounted**: they refresh liveness, the delay
+estimate and the snapshot ack, so a flooding peer cannot time itself out in a way a well-behaved one
+cannot. Only the reply is suppressed.
 
 ### `banlist_path`
 

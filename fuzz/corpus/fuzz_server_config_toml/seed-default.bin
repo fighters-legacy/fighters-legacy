@@ -3,7 +3,7 @@
 name = "Unnamed Server"
 
 # UDP port fl-server binds on. Port 4778 is the fighters-legacy default.
-# See IANA registration note in docs/architecture.md.
+# See IANA registration note in docs/developer/architecture.md.
 port = 4778
 
 # Network interface to bind on.
@@ -63,6 +63,13 @@ stack = []
 [world]
 save_path = "world.sav"
 autosave_interval_s = 300
+# entity_soft_cap = 0              # ceiling on live world objects; 0 = unlimited (#1049).
+#                                  # Spawns past it are REFUSED (nothing is killed to make room),
+#                                  # so a runaway mission script or a stuck respawn loop cannot
+#                                  # exhaust memory. max_peers entities are reserved for player
+#                                  # airframes, so a world full of projectiles cannot lock pilots
+#                                  # out; refusals are logged and counted in `status`/metrics.
+#                                  # Hot-reloadable via reload_config. [0, INT_MAX]
 # player_entity_type = "builtin:debug-entity"  # aircraft a connecting pilot flies when the
 #                                  # client requests none; clamped to a registered type (#834).
 # allow_observers = true           # false = refuse observer-role (spectator) connections (#857).
@@ -149,6 +156,16 @@ pre_handshake_window_ms = 1000
 # Range [0, 1024]. Applies post-handshake, after the rate-limit check.
 max_connections_per_ip = 0
 
+# World-mutating request limits. A seat or team grant despawns and respawns an entity and
+# re-sends the whole entity-type table, so these bound how OFTEN a peer may ask, not how
+# fast it may type. Over the limit a request is dropped silently — a reply per rejected
+# packet would be the amplifier these exist to remove.
+seat_request_rate_limit_per_s = 2   # seat requests per second per player; [1, 60]
+team_switch_cooldown_s = 5          # seconds between accepted team switches; 0 = none; [0, 3600]
+# Heartbeats per second per player that draw a ping reply; [1, 60]. Excess heartbeats still
+# refresh liveness (a flooding peer cannot time itself out), they just go unanswered.
+heartbeat_rate_limit_per_s = 4
+
 # Per-IP lockout for the operator network admin channel (MsgAdminCommand).
 # After admin_auth_max_failures consecutive wrong passwords from the same IP the peer
 # is kicked and reconnections from that IP are refused for admin_auth_lockout_s seconds.
@@ -180,6 +197,51 @@ lockout_seconds = 300
 # token = "change-me"
 # role  = "admin"   # admin | moderator | gm | faction_leader
 # faction = -1        # faction index for a faction-scoped role; -1 = unbound
+# autonomy = ""     # MCP tier override: observe | recommend | act. Empty = [ai.mcp] autonomy
+
+[ai.mcp]
+# Model Context Protocol surface (#601). A SECOND FRONTEND on the [http_admin] listener above --
+# same port, same token table, same per-IP lockout -- so this needs http_admin enabled too.
+# Streamable HTTP: POST <path> for calls, GET <path> for the notification stream.
+# Tools: world_state, events (observe) | submit_mission (recommend) | admin_command (act).
+# A tool call is ALSO checked against the token's role capabilities, so 'act' is a ceiling and
+# not a bypass: an act-tier moderator token still cannot shut the server down.
+enabled = false
+path = "/mcp"
+# Default tier for a token row that does not set its own. Read-only by default.
+autonomy = "observe"
+# Commands an act-tier token may run. EMPTY PERMITS NOTHING -- list them explicitly.
+allowlist = []
+rate_limit_per_min = 120
+max_sessions = 32
+
+[ai.provider]
+# Generative-AI provider seam (#163): missions, campaign events, narrative, faction decisions,
+# and the free-text wingman intent tier. OPT-IN -- with this off (the default) every AI feature
+# degrades to its scripted path, which is the CI-tested one.
+enabled = false
+# Path to an IWorldAiProvider shared library. Empty = the built-in NullAiProvider (supports
+# nothing, and says so, so callers degrade by asking rather than by discovering).
+plugin = ""
+endpoint = ""
+model = ""
+# The NAME of the environment variable holding the API key -- never the key itself. A key in
+# this file gets committed; a key on a command line shows up in `ps`.
+api_key_env = "FL_AI_API_KEY"
+max_calls_per_minute = 10
+world_evolution_interval_min = 60
+
+[ai.chat_intent]
+# Free-text wingman commands over TEAM chat (#611). Needs [ai.provider] with the `intent`
+# capability; without one the in-game radio menu is the path (decision #769).
+# The model only ever CHOOSES among the six scripted commands -- it never invents an action and
+# never supplies a target, so a successful prompt injection buys "a real command at the wrong
+# time", which is what pressing a menu key would also buy.
+enabled = false
+# Model calls per minute per peer. Much lower than the chat rate limit: a chat line is free and
+# a model call is not.
+rate_limit_per_min = 6
+notify_on_decline = true
 
 [rcon]
 # Source Engine RCON (TCP) remote admin channel. Disabled by default.
@@ -194,7 +256,7 @@ lockout_seconds = 60
 [metrics]
 # Per-phase server tick-budget JSON export. Empty path = disabled. Written atomically each
 # interval; consumed by bot_swarm (--server-metrics) and any external scraper. See
-# docs/load-testing.md for the JSON schema.
+# docs/developer/load-testing.md for the JSON schema.
 tick_json_path = ""
 tick_json_interval_ms = 1000
 
@@ -210,11 +272,11 @@ profile_path = ""
 # MsgClientInput is recorded to a per-peer FLIT trace (trace_peer<id>_<n>.flit) in that
 # directory, capturing real sessions for bot_swarm `--pattern trace:<file>` replay and the
 # Phase 4 replay epic. Empty = disabled. The trace_start [dir] / trace_stop admin commands
-# toggle it at runtime. See docs/load-testing.md for the trace format.
+# toggle it at runtime. See docs/developer/load-testing.md for the trace format.
 input_trace_dir = ""
 
 [replay]
-# Server-side match recording to the .flrep replay format (#643, docs/replay-format.md). Every
+# Server-side match recording to the .flrep replay format (#643, docs/developer/replay-format.md). Every
 # match is recorded automatically; the client plays these back with full camera control and a
 # scrubbable timeline. Disk use is bounded by rotation, not by remembering to clean up.
 enabled = true
@@ -236,7 +298,7 @@ hash_log = ""
 [network]
 # Transport backend: "gns" (GameNetworkingSockets — encrypted UDP, congestion control, 128+
 # headroom; default for dedicated servers) or "enet" (enet6 — LAN / low-count). See
-# docs/transport-selection.md. Requires a server restart to change.
+# docs/developer/decisions/transport-selection.md. Requires a server restart to change.
 transport = "gns"
 # GNS only: accept unauthenticated peers (standalone GNS has no Steam PKI). true = encrypted but
 # unauthenticated (opportunistic, like TLS-without-cert). Ignored by the enet backend.

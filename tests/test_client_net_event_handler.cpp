@@ -3104,3 +3104,282 @@ TEST_CASE("ClientNetEventHandler: GmWorldState reassembles chunks into one tick 
     REQUIRE(handler.gmWorldState().entities.size() == 1u);
     CHECK(handler.gmWorldState().entities[0].entityIdx == 9u);
 }
+
+// ---------------------------------------------------------------------------
+// #1070: the client keeps its cached entity-type table across a skipped re-ack
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// A MsgConnectAck carrying `typeIds` as entity-type records, optionally followed by the
+// ConnectAckTypesUnchanged tag (which a real server only ever sets with zero records).
+static std::vector<uint8_t> makeConnectAck(const std::vector<std::string>& typeIds, bool typesUnchangedTag,
+                                           uint32_t peerId = 7u) {
+    fl::MsgConnectAck ack{};
+    ack.typeCount = static_cast<uint16_t>(typeIds.size());
+    ack.peerId = peerId;
+    ack.planetRadiusKm = 6371.f;
+    ack.grantedRole = static_cast<uint8_t>(fl::PeerRole::Pilot);
+    std::vector<uint8_t> pkt;
+    fl::appendMsg(pkt, ack);
+    for (const std::string& id : typeIds) {
+        fl::MsgEntityTypeDef td{};
+        std::snprintf(td.id, sizeof(td.id), "%s", id.c_str());
+        std::snprintf(td.name, sizeof(td.name), "%s", id.c_str());
+        fl::appendMsg(pkt, td);
+    }
+    if (typesUnchangedTag)
+        fl::appendExtRaw(pkt, static_cast<uint16_t>(fl::ExtTag::ConnectAckTypesUnchanged), nullptr, 0);
+    return pkt;
+}
+
+} // namespace
+
+TEST_CASE("ClientNetEventHandler: a skipped type table keeps the cached types (#1070)", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    // First ack: the full table.
+    const auto full = makeConnectAck({"pack:f16", "pack:mig29"}, /*typesUnchangedTag=*/false);
+    handler.onReceive(0u, full.data(), full.size());
+    REQUIRE(registry.typeCount() == 2u);
+    CHECK(registry.findById("pack:f16") != nullptr);
+    CHECK_FALSE(handler.typeTableSkipped());
+
+    // Re-ack after a seat hop: zero records plus the tag. The cached table must survive — before
+    // #1070 the server re-sent all ~23 KB of it to say exactly this.
+    const auto skipped = makeConnectAck({}, /*typesUnchangedTag=*/true);
+    handler.onReceive(0u, skipped.data(), skipped.size());
+    CHECK(handler.typeTableSkipped());
+    CHECK(registry.typeCount() == 2u);
+    CHECK(registry.findById("pack:f16") != nullptr);
+    CHECK(registry.findById("pack:mig29") != nullptr);
+    // The rest of the ack still applies.
+    CHECK(handler.gotConnectAck());
+    CHECK(handler.selfPeerId() == 7u);
+}
+
+TEST_CASE("ClientNetEventHandler: a client that ignores the skip tag still keeps its types (#1070)",
+          "[client_net_event_handler]") {
+    // The old-client compatibility case the additive-TLV rule promises: a receiver that never looks
+    // for ConnectAckTypesUnchanged sees typeCount == 0 and must be unharmed, because the record loop
+    // only ever ADDS types. Modelled by feeding a zero-record ack with NO tag at all — byte-for-byte
+    // what an unaware client effectively processes.
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    const auto full = makeConnectAck({"pack:f16"}, false);
+    handler.onReceive(0u, full.data(), full.size());
+    REQUIRE(registry.typeCount() == 1u);
+
+    const auto bare = makeConnectAck({}, /*typesUnchangedTag=*/false);
+    handler.onReceive(0u, bare.data(), bare.size());
+    CHECK(registry.typeCount() == 1u);
+    CHECK(registry.findById("pack:f16") != nullptr);
+    CHECK_FALSE(handler.typeTableSkipped()); // no tag present, so nothing claims a skip
+}
+
+TEST_CASE("ClientNetEventHandler: a re-ack that does carry types still merges them (#1070)",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    const auto first = makeConnectAck({"pack:f16"}, false);
+    handler.onReceive(0u, first.data(), first.size());
+    REQUIRE(registry.typeCount() == 1u);
+
+    // The registry changed server-side, so the re-ack carries the whole table again; the client must
+    // pick up the new type and not duplicate the one it has.
+    const auto second = makeConnectAck({"pack:f16", "pack:su27"}, false);
+    handler.onReceive(0u, second.data(), second.size());
+    CHECK(registry.typeCount() == 2u);
+    CHECK(registry.findById("pack:su27") != nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// #1075: the handshake's tickRateHz actually governs the client's conversions
+// ---------------------------------------------------------------------------
+
+TEST_CASE("TickRate: conversions follow the rate, and a zero rate is refused (#1075)", "[client_net_event_handler]") {
+    constexpr fl::TickRate std60{60};
+    CHECK(std60.hz() == 60);
+    CHECK(std60.ticksToMs(60) == 1000u);
+    CHECK(std60.msToTicks(1000) == 60u);
+    CHECK(std60.dtSeconds() == Catch::Approx(1.0f / 60.0f));
+
+    // A different rate must change every derived value — the whole point of the issue is that today
+    // nothing does.
+    constexpr fl::TickRate hz30{30};
+    CHECK(hz30.ticksToMs(60) == 2000u); // 60 ticks at 30 Hz is two seconds, not one
+    CHECK(hz30.msToTicks(1000) == 30u);
+    CHECK(hz30.dtSeconds() == Catch::Approx(1.0f / 30.0f));
+    CHECK(hz30 != std60);
+
+    // alpha is "how far through a tick": half a 30 Hz tick is 16.6 ms, and it clamps at a full tick
+    // so a frame that overran cannot extrapolate past the snapshot it has not received.
+    CHECK(hz30.alphaFromSeconds(1.0f / 60.0f) == Catch::Approx(0.5f));
+    CHECK(hz30.alphaFromSeconds(10.0f) == Catch::Approx(1.0f));
+    CHECK(hz30.alphaFromSeconds(-1.0f) == Catch::Approx(0.0f));
+
+    // The rate arrives from an untrusted server and every accessor divides by it, so a zero is
+    // clamped to the default rather than propagated into a division.
+    constexpr fl::TickRate zero{0};
+    CHECK(zero.hz() == fl::TickRate::kDefaultHz);
+    CHECK(zero.ticksToMs(60) == 1000u);
+}
+
+TEST_CASE("ClientNetEventHandler: the ack's tickRateHz drives the ping readout (#1075)", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    // Until an ack arrives the client assumes the standard rate.
+    CHECK(handler.serverTickRate().hz() == fl::TickRate::kDefaultHz);
+
+    // A server advertising 30 Hz: the field has been on the wire since the first handshake and was
+    // never read, so before #1075 this ack changed nothing at all.
+    fl::MsgConnectAck ack{};
+    ack.tickRateHz = 30;
+    ack.peerId = 4u;
+    std::vector<uint8_t> pkt;
+    fl::appendMsg(pkt, ack);
+    handler.onReceive(0u, pkt.data(), pkt.size());
+    CHECK(handler.serverTickRate().hz() == 30);
+    CHECK(handler.tickAlpha.tickRate().hz() == 30); // render interpolation follows it too
+
+    // 30 delay ticks is 1000 ms at 30 Hz. Under the old hardcoded /60 it read as 500 — a ping
+    // readout that was exactly half the truth, with nothing to indicate it.
+    fl::MsgPeerDelay pd{};
+    pd.delayTicks = 30;
+    handler.onReceive(0u, &pd, sizeof(pd));
+    CHECK(handler.lastRttMs() == 1000u);
+}
+
+TEST_CASE("ClientNetEventHandler: a malformed zero tick rate falls back rather than dividing by it (#1075)",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    fl::MsgConnectAck ack{};
+    ack.tickRateHz = 0; // hostile or broken server
+    std::vector<uint8_t> pkt;
+    fl::appendMsg(pkt, ack);
+    handler.onReceive(0u, pkt.data(), pkt.size());
+    CHECK(handler.serverTickRate().hz() == fl::TickRate::kDefaultHz);
+
+    fl::MsgPeerDelay pd{};
+    pd.delayTicks = 60;
+    handler.onReceive(0u, &pd, sizeof(pd)); // must not divide by zero
+    CHECK(handler.lastRttMs() == 1000u);
+}
+
+// ---------------------------------------------------------------------------
+// #1074: the build version on the wire, and the warn-only mismatch
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// A MsgHello, optionally carrying the HelloBuildVersion TLV.
+static std::vector<uint8_t> makeHello(std::string_view build, uint16_t protocolVersion = fl::kProtocolVersion) {
+    fl::MsgHello hello{};
+    hello.protocolVersion = protocolVersion;
+    std::vector<uint8_t> pkt;
+    fl::appendMsg(pkt, hello);
+    if (!build.empty())
+        fl::appendExtRaw(pkt, static_cast<uint16_t>(fl::ExtTag::HelloBuildVersion), build.data(),
+                         static_cast<uint16_t>(build.size()));
+    return pkt;
+}
+
+} // namespace
+
+TEST_CASE("ClientNetEventHandler: a differing server build warns but never refuses (#1074)",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.clientBuildVersion = "0.4.1";
+
+    const auto hello = makeHello("0.3.11");
+    handler.onReceive(0u, hello.data(), hello.size());
+
+    CHECK(handler.serverBuildVersion() == "0.3.11");
+    CHECK(handler.buildMismatch());
+    // Warn-only is the whole point: refusing here would break the LAN sessions this helps.
+    CHECK(net.disconnectCount == 0);
+}
+
+TEST_CASE("ClientNetEventHandler: a matching server build is not a mismatch (#1074)", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.clientBuildVersion = "0.4.1";
+
+    const auto hello = makeHello("0.4.1");
+    handler.onReceive(0u, hello.data(), hello.size());
+    CHECK(handler.serverBuildVersion() == "0.4.1");
+    CHECK_FALSE(handler.buildMismatch());
+}
+
+TEST_CASE("ClientNetEventHandler: a server that advertises no build is not a mismatch (#1074)",
+          "[client_net_event_handler]") {
+    // The short-packet case: a server built before the TLV existed sends a bare 4-byte MsgHello. It
+    // must parse exactly as before and must NOT be reported as a mismatch — calling every older
+    // server "mismatched" would fire the warning constantly and teach players to ignore it.
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.clientBuildVersion = "0.4.1";
+
+    const auto hello = makeHello("");
+    REQUIRE(hello.size() == sizeof(fl::MsgHello));
+    handler.onReceive(0u, hello.data(), hello.size());
+    CHECK(handler.serverBuildVersion().empty());
+    CHECK_FALSE(handler.buildMismatch());
+    CHECK(net.disconnectCount == 0);
+}
+
+TEST_CASE("ClientNetEventHandler: a protocol mismatch still disconnects, build or not (#1074)",
+          "[client_net_event_handler]") {
+    // The build check is additive to the protocol check, not a replacement: a genuine protocol
+    // mismatch is still fatal and must not be softened into a warning.
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.clientBuildVersion = "0.4.1";
+
+    const auto hello = makeHello("0.4.1", static_cast<uint16_t>(fl::kProtocolVersion + 1));
+    handler.onReceive(0u, hello.data(), hello.size());
+    CHECK(net.disconnectCount == 1);
+}

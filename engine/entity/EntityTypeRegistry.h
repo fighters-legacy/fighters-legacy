@@ -34,11 +34,22 @@ class EntityTypeRegistry {
         return static_cast<uint32_t>(m_defs.size());
     }
 
+    // Monotonic change counter, bumped by every successful registerType and by clear(). A consumer
+    // that has REPLICATED this table (the #1070 connect-ack skip) remembers the value it replicated
+    // and compares. typeCount() cannot answer that question: clear() followed by re-registering the
+    // same number of types leaves the count identical and the contents different, and a consumer
+    // keying on the count would keep a stale table forever. Starts at 0 = "nothing registered yet",
+    // which is why a replicated generation of 0 never matches a populated registry.
+    [[nodiscard]] uint32_t generation() const noexcept {
+        return m_generation;
+    }
+
     void clear();
 
   private:
     std::vector<EntityDef> m_defs;
     std::unordered_map<std::string, uint32_t> m_index;
+    uint32_t m_generation{0};
 };
 
 } // namespace fl

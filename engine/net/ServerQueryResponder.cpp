@@ -153,6 +153,7 @@ void ServerQueryResponder::run() {
         {
             std::lock_guard<std::mutex> lk(m_infoMutex);
             info.gamePort = m_static.gamePort;
+            std::snprintf(info.build, sizeof(info.build), "%s", m_static.buildVersion.c_str()); // #1074
             info.maxPlayers = m_static.maxPlayers;
             info.gameModeFlags = m_static.gameModeFlags;
             if (m_dynamic.shuttingDown)

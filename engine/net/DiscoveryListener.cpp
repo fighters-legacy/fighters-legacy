@@ -271,13 +271,20 @@ void DiscoveryListener::drainSock(int sock, bool isIPv6) {
             break;
         }
         // Validate minimum size and msgId
-        if (static_cast<std::size_t>(n) < sizeof(fl::MsgLanBeacon))
+        // Require only the pre-#1074 prefix: a server built before the build-version tail sends a
+        // shorter datagram, and demanding the current sizeof would drop it outright — a browser that
+        // silently cannot see older servers is a worse failure than not knowing their build.
+        if (static_cast<std::size_t>(n) < fl::kLanBeaconLegacyBytes)
             continue;
         if (buf[0] != static_cast<uint8_t>(fl::MsgId::LanBeacon))
             continue;
 
-        fl::MsgLanBeacon pkt;
-        std::memcpy(&pkt, buf, sizeof(pkt));
+        // Copy only what actually arrived. A legacy (pre-#1074) datagram is kLanBeaconLegacyBytes
+        // long, so a full-sizeof memcpy would read past the received bytes; the value-initialized
+        // struct leaves `build` empty, which is exactly "this server did not advertise one".
+        fl::MsgLanBeacon pkt{};
+        std::memcpy(&pkt, buf, std::min(static_cast<std::size_t>(n), sizeof(pkt)));
+        pkt.build[sizeof(pkt.build) - 1] = '\0'; // untrusted char[]: force-terminate before use
 
         // Format source address
         std::string srcAddr = formatAddr(reinterpret_cast<const sockaddr*>(&src));

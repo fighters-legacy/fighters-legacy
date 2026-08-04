@@ -26,6 +26,7 @@
 #include "flight/AeroForces.h"
 #include "flight/IGravityField.h"
 #include "loop/ISimUpdate.h"
+#include "net/TickRate.h"    // the one authority for the server tick rate + tick<->ms (#1075)
 #include "net/VoiceRouter.h" // radio-net routing for relayed voice frames (#532)
 #include "perf/TickProfiler.h"
 #include "sensor/SensorSystem.h"
@@ -151,6 +152,43 @@ struct PeerInputState {
     uint32_t chatCount{0};
     bool chatRateLimitWarned{false};
     bool chatMuted{false};
+
+    // Seat-request channel (#974/#1069). A grant is expensive — despawnPeerEntity + setSeatOccupant +
+    // broadcastCrewRoster + a full sendConnectAck — so this is a WORLD-MUTATING request with a per-
+    // second budget, not a chat-style nuisance limit. Over the limit: drop silently, no MsgSeatResult
+    // (a reply per rejected packet is the amplifier this issue exists to remove).
+    std::chrono::steady_clock::time_point seatWindowStart{};
+    uint32_t seatCount{0};
+
+    // Team-switch channel (#522/#1069). A COOLDOWN in seconds rather than a per-second budget: a grant
+    // despawns and respawns the pilot on the new team, so the honest bound is "how often may a player
+    // change teams", not "how many requests per second". hasTeamRequest gates the first request rather
+    // than comparing against a default-constructed time_point (whose meaning depends on the epoch).
+    std::chrono::steady_clock::time_point lastTeamRequest{};
+    bool hasTeamRequest{false};
+
+    // Heartbeat channel (#1069). Every heartbeat draws a MsgPeerDelay reply, so an unlimited heartbeat
+    // is a 1:1 reflector. The client sends ~1/s; 4/s leaves headroom for a burst after a stall. Over
+    // the limit the packet is still ACCOUNTED (it refreshes liveness) but the REPLY is suppressed —
+    // dropping liveness would let a flooding peer time itself out in a way a well-behaved one cannot.
+    std::chrono::steady_clock::time_point heartbeatWindowStart{};
+    uint32_t heartbeatCount{0};
+
+    // Entity-type table replication state (#1070). sendConnectAck is re-sent on every seat change,
+    // role change, team change and authority grant, and it shipped the whole typeCount x 380 B table
+    // each time — ~23 KB the client already had. This records the EntityTypeRegistry generation this
+    // peer was last sent, so a re-ack whose table is unchanged carries zero records and the
+    // ConnectAckTypesUnchanged tag instead. hasTypeTable distinguishes "never sent" from "sent
+    // generation 0", which matters because a fresh peer must always receive the full table.
+    uint32_t sentTypeTableGen{0};
+    bool hasTypeTable{false};
+
+    // Normalized source IP, resolved ONCE at onConnect (#1069). The per-IP concurrent-connection check
+    // walks every connected peer, and reading each one's address through
+    // extractIp(getPeerAddress(pid)) built a std::string per peer per connect attempt — an O(P) string
+    // storm on the sim thread that an attacker triggers by connecting. Empty = address unknown, which
+    // is what the allowlist/rate-limit paths already treat as "skip the IP checks".
+    std::string peerIp;
 
     // Voice channel (#532). The rate limit here is a BANDWIDTH bound, not an anti-spam measure: a
     // frame is up to kMaxVoiceFrameBytes and is fanned out to every recipient on the net, so an
@@ -967,6 +1005,44 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     void setChatModerationHook(ChatModerationHook fn) {
         m_chatModerationHook = std::move(fn);
     }
+    // ── world-mutating request limits (#1069) — sim-thread only ─────────────
+    // Seat and team requests are cheap to SEND and expensive to GRANT: each one can despawn and
+    // respawn an entity and re-send the whole ConnectAck type table. These bound how often a peer may
+    // ask. Over the limit the request is dropped SILENTLY — the amplification this issue removes came
+    // as much from the replies as from the grants.
+    //
+    // Seat requests per second per peer. 2/s is well above any human seat-menu interaction.
+    void setSeatRequestRateLimit(int perSecond) noexcept {
+        m_seatRequestRateLimit = perSecond < 1 ? 1 : perSecond;
+    }
+    // Minimum seconds between accepted team switches for one peer. A cooldown, not a per-second
+    // budget: the cost is the despawn/respawn, so the honest question is how often a player may
+    // change teams. 0 disables the cooldown (every request reaches the balance guard).
+    void setTeamSwitchCooldownSeconds(int seconds) noexcept {
+        m_teamSwitchCooldownS = seconds < 0 ? 0 : seconds;
+    }
+    // Heartbeats per second per peer that draw a MsgPeerDelay reply. Excess heartbeats still refresh
+    // liveness (so a flooding peer cannot time itself out) but go unanswered.
+    void setHeartbeatRateLimit(int perSecond) noexcept {
+        m_heartbeatRateLimit = perSecond < 1 ? 1 : perSecond;
+    }
+
+    // The server's BUILD version, sent as a MsgHello TLV (#1074) and reported to a browser via the
+    // beacon and the query responder. Passed in rather than compiled in: engine-net is build-agnostic
+    // and fl-server is the layer that knows FL_VERSION_STRING. Empty = do not advertise one.
+    void setBuildVersion(std::string version) {
+        m_buildVersion = std::move(version);
+    }
+    [[nodiscard]] const std::string& buildVersion() const noexcept {
+        return m_buildVersion;
+    }
+
+    // The tick rate this server steps at and advertises in MsgConnectAck (#1075). Read it rather than
+    // writing `60` or `1000/60` at a call site — that is the defect this replaced.
+    [[nodiscard]] TickRate tickRate() const noexcept {
+        return m_tickRate;
+    }
+
     // Session-scoped mute for a peer (admin mute/unmute). Sim-thread. Returns false if the peer is
     // unknown. A muted peer's chat lines are dropped silently (no rate-limit warning).
     bool setPeerMuted(uint32_t peerId, bool muted);
@@ -1541,6 +1617,16 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     int m_chatRateLimit{2};                                            // #646: chat lines per second per peer
     ChatModerationHook m_chatModerationHook;                           // #646: null = every line passes
     ChatIntentHook m_chatIntentHook;                                   // #611: null = the intent tier is off
+    // World-mutating request limits (#1069). Seat and team requests each cost a despawn/respawn plus
+    // a full ConnectAck on grant; heartbeats each cost a MsgPeerDelay reply.
+    // The rate this server actually steps at, and the value MsgConnectAck advertises (#1075). Fixed
+    // at 60: physics, prediction, lag compensation and the scale gate all assume it. It is a value
+    // rather than a literal so the wire field is honest and every tick<->ms conversion has one source.
+    TickRate m_tickRate{kServerTickRate};
+    std::string m_buildVersion;    // #1074: advertised in MsgHello / the beacon / the query reply
+    int m_seatRequestRateLimit{2}; // seat requests per second per peer
+    int m_teamSwitchCooldownS{5};  // seconds between accepted team switches per peer; 0 = no cooldown
+    int m_heartbeatRateLimit{4};   // heartbeats per second per peer that draw a reply
     // Voice comms (#532). The table is server-authoritative and replicated at admit time.
     RadioNetTable m_radioNets;
     bool m_voiceEnabled{true};

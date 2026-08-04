@@ -941,6 +941,14 @@ TEST_CASE("AdminConsole wb: status and admin_auth_status reflect active lockout"
     f.broadcaster.setAdminDispatch([](std::string_view, const CommandIssuer&) { return std::string{}; });
     f.registry.registerType(makeWbEntityDef());
     f.broadcaster.onConnect(0u);
+    // Complete the handshake: since #1069 an un-admitted peer's MsgAdminCommand is dropped in the
+    // dispatch preamble, so it can no longer burn admin-auth attempts — and lock out an IP — without
+    // ever having joined. A real operator's client is always admitted before it opens the console.
+    {
+        fl::MsgConnectRequest creq{};
+        creq.requestedRole = static_cast<uint8_t>(fl::PeerRole::Pilot);
+        f.broadcaster.onReceive(0u, &creq, sizeof(creq));
+    }
 
     fl::MsgAdminCommand cmd{};
     std::snprintf(cmd.token, sizeof(cmd.token), "%s", "wrongpass");
@@ -967,6 +975,14 @@ TEST_CASE("AdminConsole wb: admin_auth_status shows pending failure line", "[adm
     f.broadcaster.setAdminDispatch([](std::string_view, const CommandIssuer&) { return std::string{}; });
     f.registry.registerType(makeWbEntityDef());
     f.broadcaster.onConnect(0u);
+    // Complete the handshake: since #1069 an un-admitted peer's MsgAdminCommand is dropped in the
+    // dispatch preamble, so it can no longer burn admin-auth attempts — and lock out an IP — without
+    // ever having joined. A real operator's client is always admitted before it opens the console.
+    {
+        fl::MsgConnectRequest creq{};
+        creq.requestedRole = static_cast<uint8_t>(fl::PeerRole::Pilot);
+        f.broadcaster.onReceive(0u, &creq, sizeof(creq));
+    }
 
     fl::MsgAdminCommand cmd{};
     std::snprintf(cmd.token, sizeof(cmd.token), "%s", "wrongpass");

@@ -1561,13 +1561,20 @@ void Game::initScreenManager() {
     // Server browser (#143): LAN discovery + a query client + (when an HTTP backend exists) a lobby-list
     // client feed a ServerBrowserModel. Selecting a row prefills the join form; Refresh re-sweeps.
     //
-    // The LAN DiscoveryListener is deliberately NOT created here (#1054). It binds the GAME port 4778
-    // (discovery aliases it by design — the beacon broadcasts *to* 4778), and an application-lifetime
-    // wildcard bind means the embedded fl-server can never bind 127.0.0.1:4778 for single-player: enet6
-    // sets no SO_REUSEADDR, so its bind fails and Instant Action / Free Flight die with "Port already in
-    // use." The listener is owned by the ServerBrowser screen instead — see handleTransition().
+    // The LAN DiscoveryListener is created here, for the application lifetime, and binds
+    // fl::kDiscoveryPort — NOT the game port (#1071). It used to be screen-scoped precisely because it
+    // bound the game port, so an application-lifetime wildcard bind stopped the embedded fl-server
+    // binding 127.0.0.1:4778 for single-player and Instant Action died with "Port already in use"
+    // (#1054). With discovery on its own port nothing contends, so the listener goes back to living as
+    // long as the model it feeds.
     {
+        d.services.browserDiscovery.emplace(fl::kDiscoveryPort, *d.services.rawLogger);
+        if (!d.services.browserDiscovery->isOpen())
+            d.services.rawLogger->log(LogLevel::Warn, __FILE__, __LINE__,
+                                      "LAN discovery listener: no sockets opened; LAN servers will not be listed");
         d.services.browserQuery.emplace(*d.services.rawLogger);
+        // #1074: the model needs this client's build to flag a per-row build mismatch.
+        d.services.browserModel.setClientBuildVersion(FL_VERSION_STRING);
         if (d.services.p.httpClient) {
             d.services.lobbyList =
                 std::make_unique<fl::LobbyListClient>(*d.services.p.httpClient, *d.services.rawLogger);
@@ -1874,6 +1881,8 @@ void Game::startGame(const std::string& mission) {
             }
         };
         d.session.clientHandler->motdDisplaySeconds = d.services.userConfig->client().motdDisplayS;
+        // #1074: this client's build, compared against the server's MsgHello TLV. Warn-only.
+        d.session.clientHandler->clientBuildVersion = FL_VERSION_STRING;
         d.session.clientHandler->sessionFailure = &d.session.sessionFailure;
         // Connect-handshake inputs (#853/#834/#857): request a specific aircraft if --aircraft was given
         // (empty = let the server pick its [world] player_entity_type default), and the observer role if
@@ -2170,19 +2179,11 @@ void Game::handleTransition(Screen next) {
     if (entersReplaySession(prev, next))
         d.services.pendingReplayPath = d.services.screenMgr->replaySelect().selectedReplay();
 
-    // LAN discovery socket lifetime (#1054): the listener binds the game port, so it may only be open
-    // while the browser is the active screen. Holding it for the process lifetime blocked the embedded
-    // single-player server from binding that same port. Open on entry, close on exit — the browser is
-    // also the only screen that polls it.
-    if (next == Screen::ServerBrowser && prev != Screen::ServerBrowser) {
-        d.services.browserDiscovery.emplace(static_cast<uint16_t>(4778), *d.services.rawLogger);
-        if (!d.services.browserDiscovery->isOpen())
-            d.services.rawLogger->log(LogLevel::Warn, __FILE__, __LINE__,
-                                      "LAN discovery listener: no sockets opened; LAN servers will not be listed");
-    } else if (prev == Screen::ServerBrowser && next != Screen::ServerBrowser) {
-        d.services.browserDiscovery.reset();
+    // Leaving the browser clears the model so a stale server list is not shown on re-entry. The
+    // listener itself is application-lifetime now (#1071) — it binds the dedicated discovery port and
+    // contends with nothing, so the open-on-entry/close-on-exit dance #1054 forced is gone.
+    if (prev == Screen::ServerBrowser && next != Screen::ServerBrowser)
         d.services.browserModel.rebuild({}, {}, {});
-    }
 
     if (entersSession(prev, next)) {
         const std::string mission = (prev == Screen::MissionBrief)
@@ -2410,6 +2411,15 @@ void Game::run() {
             playerEntry = findPlayerEntry(d.services.renderBridge, d.session.clientHandler->assignedEntityIdx,
                                           d.session.clientHandler->assignedEntityGen);
             alpha = d.session.clientHandler->tickAlpha.get();
+            // #1075: the alpha above and the tick period the extrapolators multiply it by must come
+            // from the SAME rate — the one the server advertised in MsgConnectAck. Pushed here, where
+            // the alpha is read, so the two can never be set from different sources.
+            {
+                const fl::TickRate rate = d.session.clientHandler->serverTickRate();
+                d.services.camInput.setServerTickRate(rate);
+                if (d.services.sceneRenderer)
+                    d.services.sceneRenderer->setServerTickRate(rate);
+            }
             aspect = static_cast<float>(d.services.p.window->width()) /
                      static_cast<float>(d.services.p.window->height() > 0 ? d.services.p.window->height() : 1);
             d.services.camInput.setRenderAlpha(alpha);

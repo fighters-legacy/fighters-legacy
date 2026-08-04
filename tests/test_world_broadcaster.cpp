@@ -11804,3 +11804,428 @@ TEST_CASE("WorldBroadcaster: the server-throttle TLV reports a plausible load an
     CHECK(p[0] <= 100);
     CHECK(p[1] >= 2); // the tag is only emitted when the interval actually widened
 }
+
+// ---------------------------------------------------------------------------
+// #1069: rate limits on the world-mutating request channels, and the handshake gate
+// ---------------------------------------------------------------------------
+// The defect these cover: three client->server messages answered back with no limit at all. The
+// assertion that matters most is the AMPLIFICATION BOUND — bytes out per byte in — because the ratio
+// is the actual defect, not the request count.
+
+// Total bytes this peer was sent, across unicast and broadcast.
+static std::size_t bytesSentTo(const MockNetwork& net, uint32_t peerId) {
+    std::size_t total = 0;
+    for (const auto& [pid, pkt] : net.perPeerSends)
+        if (pid == peerId)
+            total += pkt.size();
+    for (const auto& b : net.broadcasts)
+        total += b.size();
+    return total;
+}
+
+static int countMsgsTo(const MockNetwork& net, uint32_t peerId, fl::MsgId id) {
+    int n = 0;
+    for (const auto& [pid, pkt] : net.perPeerSends)
+        if (pid == peerId && !pkt.empty() && pkt[0] == static_cast<uint8_t>(id))
+            ++n;
+    return n;
+}
+
+TEST_CASE("WorldBroadcaster: heartbeat replies are rate-limited but liveness still counts (#1069)",
+          "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    fl::ManualClock clock;
+    broadcaster.setClock(clock);
+    broadcaster.setHeartbeatRateLimit(4);
+
+    connectPilotPeer(broadcaster, net, 0u);
+    broadcaster.onTick(1.0 / 60.0, 1);
+    net.sends.clear();
+    net.perPeerSends.clear();
+
+    fl::MsgHeartbeat hb{};
+    hb.tickIndex = 1;
+    for (int i = 0; i < 20; ++i)
+        broadcaster.onReceive(0u, &hb, sizeof(hb));
+
+    // 20 heartbeats in one window, 4 replies. Before the limit this was 20 — a 1:1 reflector.
+    CHECK(countMsgsTo(net, 0u, fl::MsgId::PeerDelay) == 4);
+
+    // The window rolls: the next second gets its own budget.
+    clock.advance(std::chrono::seconds(2));
+    net.perPeerSends.clear();
+    for (int i = 0; i < 20; ++i)
+        broadcaster.onReceive(0u, &hb, sizeof(hb));
+    CHECK(countMsgsTo(net, 0u, fl::MsgId::PeerDelay) == 4);
+
+    // Liveness is still accounted for every packet, INCLUDING the unanswered ones: a peer sending far
+    // over the reply budget must not idle-time itself out in a way a well-behaved peer cannot. Ten
+    // heartbeats every half-second, against a 1 s idle timeout, for five seconds of sim time.
+    broadcaster.setIdleTimeout(1);
+    for (uint64_t tick = 2; tick <= 300; ++tick) {
+        broadcaster.onTick(1.0 / 60.0, tick);
+        if (tick % 30 == 0) {
+            clock.advance(std::chrono::milliseconds(500));
+            hb.tickIndex = tick;
+            for (int i = 0; i < 10; ++i)
+                broadcaster.onReceive(0u, &hb, sizeof(hb));
+        }
+    }
+    CHECK(net.disconnectedPeers.empty());
+}
+
+TEST_CASE("WorldBroadcaster: seat requests are rate-limited and over-limit ones are silent (#1069)",
+          "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    registry.registerType(makeCrewBomberDef());
+    fl::WeaponRegistry weapons;
+    weapons.registerWeapon(makeRktWeapon());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster wb(em, registry, net, logger);
+    fl::ManualClock clock;
+    wb.setClock(clock);
+    wb.setWeaponRegistry(&weapons);
+    wb.setGroundElevation(0.f);
+    wb.setSeatRequestRateLimit(2);
+    wb.setSeatControllerFactory(
+        [](const fl::SeatDef&, uint8_t,
+           const fl::WorldBroadcaster::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> { return nullptr; });
+
+    fl::EntityTransform t{};
+    t.pos[1] = 800.0;
+    t.quat[3] = 1.f;
+    const fl::EntityId bomber = em.spawn("test:crewbomber", t);
+    wb.registerController(bomber, std::make_unique<StillCtl>(), nullptr, 0.f);
+
+    connectPilotPeer(wb, net, 1u);
+    net.sends.clear();
+    net.perPeerSends.clear();
+
+    // Ten requests for a seat that does not exist: all cheap denials, but each one used to draw a
+    // reliable MsgSeatResult. Only the first two are answered now.
+    const fl::MsgSeatRequest bad = joinReq(bomber, 99);
+    for (int i = 0; i < 10; ++i)
+        wb.onReceive(1u, &bad, sizeof(bad));
+    CHECK(countMsgsTo(net, 1u, fl::MsgId::SeatResult) == 2);
+
+    clock.advance(std::chrono::seconds(2));
+    net.perPeerSends.clear();
+    for (int i = 0; i < 10; ++i)
+        wb.onReceive(1u, &bad, sizeof(bad));
+    CHECK(countMsgsTo(net, 1u, fl::MsgId::SeatResult) == 2);
+}
+
+TEST_CASE("WorldBroadcaster: a seat-request flood cannot amplify past the limiter (#1069)",
+          "[world_broadcaster][security]") {
+    // The amplification RATIO is the defect: a 12-byte MsgSeatRequest whose grant re-sends the whole
+    // ConnectAck type table was ~1900x at a realistic registry. This bounds bytes-out/bytes-in for a
+    // flood, which is what an attacker actually controls.
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    registry.registerType(makeCrewBomberDef());
+    fl::WeaponRegistry weapons;
+    weapons.registerWeapon(makeRktWeapon());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster wb(em, registry, net, logger);
+    fl::ManualClock clock;
+    wb.setClock(clock);
+    wb.setWeaponRegistry(&weapons);
+    wb.setGroundElevation(0.f);
+    wb.setSeatRequestRateLimit(2);
+    wb.setSeatControllerFactory(
+        [](const fl::SeatDef&, uint8_t,
+           const fl::WorldBroadcaster::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> { return nullptr; });
+
+    fl::EntityTransform t{};
+    t.pos[1] = 800.0;
+    t.quat[3] = 1.f;
+    const fl::EntityId bomber = em.spawn("test:crewbomber", t);
+    wb.registerController(bomber, std::make_unique<StillCtl>(), nullptr, 0.f);
+
+    connectPilotPeer(wb, net, 1u);
+    net.sends.clear();
+    net.perPeerSends.clear();
+    net.broadcasts.clear();
+
+    // A hop between the gunner seat and back, flooded: every accepted grant is a despawn/respawn plus
+    // a full ConnectAck, so an unlimited flood is unbounded output for 12 bytes in per packet.
+    const fl::MsgSeatRequest join = joinReq(bomber, 1);
+    fl::MsgSeatRequest leave{};
+    leave.msgId = static_cast<uint8_t>(fl::MsgId::SeatRequest);
+    leave.flags = fl::kSeatRequestFlagLeave;
+
+    std::size_t bytesIn = 0;
+    for (int i = 0; i < 50; ++i) {
+        const fl::MsgSeatRequest& req = (i % 2 == 0) ? join : leave;
+        wb.onReceive(1u, &req, sizeof(req));
+        bytesIn += sizeof(req);
+    }
+    const std::size_t bytesOut = bytesSentTo(net, 1u);
+
+    // With the limiter only 2 of the 50 are served in this window, and since #1070 a re-ack no longer
+    // drags the entity-type table along, so the served ones are small too. Both halves of the fix show
+    // up here: without the limiter the output grows linearly with the flood, and without the type-table
+    // skip each served request alone would blow this bound at a realistic registry.
+    CHECK(bytesIn == 50u * sizeof(fl::MsgSeatRequest));
+    CHECK(bytesOut < 4u * bytesIn);
+}
+
+TEST_CASE("WorldBroadcaster: team switches are on a cooldown, and a rejected one is silent (#1069)",
+          "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    fl::ManualClock clock;
+    broadcaster.setClock(clock);
+    broadcaster.setTeamSwitchCooldownSeconds(5);
+
+    int guardCalls = 0;
+    broadcaster.setTeamSwitchGuard([&guardCalls](uint32_t, uint16_t) {
+        ++guardCalls;
+        return true;
+    });
+
+    connectPilotPeer(broadcaster, net, 0u);
+    net.sends.clear();
+    net.perPeerSends.clear();
+
+    fl::MsgTeamRequest req{};
+    req.msgId = static_cast<uint8_t>(fl::MsgId::TeamRequest);
+    req.factionIndex = 1;
+    for (int i = 0; i < 20; ++i)
+        broadcaster.onReceive(0u, &req, sizeof(req));
+
+    // One accepted switch in the cooldown window; the other 19 never reach the guard at all.
+    CHECK(guardCalls == 1);
+
+    // The cooldown starts at the ACCEPTED request, so spamming does not extend it.
+    clock.advance(std::chrono::seconds(6));
+    broadcaster.onReceive(0u, &req, sizeof(req));
+    CHECK(guardCalls == 2);
+
+    // A cooled-down rejection sends nothing — a notice per rejected packet would be the amplifier.
+    net.perPeerSends.clear();
+    for (int i = 0; i < 10; ++i)
+        broadcaster.onReceive(0u, &req, sizeof(req));
+    CHECK(guardCalls == 2);
+    CHECK(countMsgsTo(net, 0u, fl::MsgId::ServerNotice) == 0);
+}
+
+TEST_CASE("WorldBroadcaster: an unadmitted peer's client input is ignored (#1069)", "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    // onConnect ONLY — no MsgConnectRequest, so the peer has an input slot but is not admitted (#853).
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+    net.perPeerSends.clear();
+
+    // Before #1069 the MsgClientInput branch had no handshake gate while chat/voice/seat/team all did,
+    // so an unadmitted peer could drive the jitter buffer, the EWMA estimators and the trace writer.
+    // Advance the server's tick first so an ACCEPTED input (tickIndex 0) would leave a large,
+    // visible estimatedDelayTicks behind — the state this asserts stays clean.
+    for (uint64_t tick = 1; tick <= 100; ++tick)
+        broadcaster.onTick(1.0 / 60.0, tick);
+    const auto pkt = makeClientInputPacket();
+    for (int i = 0; i < 10; ++i)
+        broadcaster.onReceive(0u, pkt.data(), pkt.size());
+
+    // A heartbeat from the same unadmitted peer is dropped too — no reply to an unauthenticated peer.
+    fl::MsgHeartbeat hb{};
+    broadcaster.onReceive(0u, &hb, sizeof(hb));
+    CHECK(countMsgsTo(net, 0u, fl::MsgId::PeerDelay) == 0);
+
+    // Admit the peer now. Admission REUSES the PeerInputState created at onConnect, so anything the
+    // pre-handshake flood had managed to write would still be sitting there — which is exactly how a
+    // poisoned delay estimate would have survived into the admitted session.
+    fl::MsgConnectRequest req{};
+    req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Pilot);
+    broadcaster.onReceive(0u, &req, sizeof(req));
+
+    bool found = false;
+    broadcaster.forEachPeer([&](const fl::PeerInfo& p) {
+        if (p.peerId == 0u) {
+            found = true;
+            CHECK(p.delayTicks == 0u); // no delay estimate was taken from the unadmitted packets
+            CHECK(p.queueDepth == 0u); // and none of them reached the jitter buffer
+        }
+    });
+    CHECK(found);
+}
+
+TEST_CASE("WorldBroadcaster: banning an IP disconnects observers and unadmitted peers too (#1069)",
+          "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    net.peerAddresses[0] = "9.9.9.9:1000"; // pilot (has an entity)
+    net.peerAddresses[1] = "9.9.9.9:1001"; // observer (no entity)
+    net.peerAddresses[2] = "9.9.9.9:1002"; // connected but never sent a MsgConnectRequest
+    connectPilotPeer(broadcaster, net, 0u);
+    connectObserverPeer(broadcaster, net, 1u);
+    broadcaster.onConnect(2u);
+
+    broadcaster.banAddress("9.9.9.9");
+
+    // The kick used to walk m_peerEntities — peers WITH an entity — so a ban reached the pilot and
+    // left the observer and the unadmitted peer connected, which is the opposite of what a ban means.
+    CHECK(std::count(net.disconnectedPeers.begin(), net.disconnectedPeers.end(), 0u) == 1);
+    CHECK(std::count(net.disconnectedPeers.begin(), net.disconnectedPeers.end(), 1u) == 1);
+    CHECK(std::count(net.disconnectedPeers.begin(), net.disconnectedPeers.end(), 2u) == 1);
+}
+
+// ---------------------------------------------------------------------------
+// #1070: the connect-ack entity-type table is sent once, not on every re-ack
+// ---------------------------------------------------------------------------
+
+// Every MsgConnectAck sent to this peer, in order.
+static std::vector<std::vector<uint8_t>> connectAcksFor(const MockNetwork& net, uint32_t peerId) {
+    std::vector<std::vector<uint8_t>> out;
+    for (const auto& [pid, pkt] : net.perPeerSends)
+        if (pid == peerId && !pkt.empty() && pkt[0] == static_cast<uint8_t>(fl::MsgId::ConnectAck))
+            out.push_back(pkt);
+    return out;
+}
+
+static bool ackSkipsTypes(const std::vector<uint8_t>& ack) {
+    fl::MsgConnectAck hdr{};
+    REQUIRE(fl::readMsg(ack.data(), ack.size(), hdr));
+    const std::size_t off = sizeof(hdr) + static_cast<std::size_t>(hdr.typeCount) * sizeof(fl::MsgEntityTypeDef);
+    if (off > ack.size())
+        return false;
+    uint16_t len = 0;
+    return fl::findExt(ack.data() + off, ack.size() - off, static_cast<uint16_t>(fl::ExtTag::ConnectAckTypesUnchanged),
+                       len) != nullptr;
+}
+
+TEST_CASE("WorldBroadcaster: a re-ack omits the unchanged entity-type table (#1070)", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    registry.registerType(makeCrewBomberDef());
+    fl::WeaponRegistry weapons;
+    weapons.registerWeapon(makeRktWeapon());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster wb(em, registry, net, logger);
+    fl::ManualClock clock;
+    wb.setClock(clock);
+    wb.setWeaponRegistry(&weapons);
+    wb.setGroundElevation(0.f);
+    wb.setSeatControllerFactory(
+        [](const fl::SeatDef&, uint8_t,
+           const fl::WorldBroadcaster::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> { return nullptr; });
+
+    fl::EntityTransform t{};
+    t.pos[1] = 800.0;
+    t.quat[3] = 1.f;
+    const fl::EntityId bomber = em.spawn("test:crewbomber", t);
+    wb.registerController(bomber, std::make_unique<StillCtl>(), nullptr, 0.f);
+
+    connectPilotPeer(wb, net, 1u);
+
+    // The FIRST ack always carries the table — a fresh peer has nothing cached.
+    auto acks = connectAcksFor(net, 1u);
+    REQUIRE(acks.size() == 1u);
+    fl::MsgConnectAck first{};
+    REQUIRE(fl::readMsg(acks[0].data(), acks[0].size(), first));
+    CHECK(first.typeCount == registry.typeCount());
+    CHECK_FALSE(ackSkipsTypes(acks[0]));
+    const std::size_t firstAckBytes = acks[0].size();
+
+    // A seat hop re-acks. The table is unchanged, so this one carries no records.
+    net.perPeerSends.clear();
+    const fl::MsgSeatRequest join = joinReq(bomber, 1);
+    wb.onReceive(1u, &join, sizeof(join));
+
+    acks = connectAcksFor(net, 1u);
+    REQUIRE(acks.size() == 1u);
+    fl::MsgConnectAck second{};
+    REQUIRE(fl::readMsg(acks[0].data(), acks[0].size(), second));
+    CHECK(second.typeCount == 0u);
+    CHECK(ackSkipsTypes(acks[0]));
+    // The re-ack is a fixed header plus one 4-byte tag, not ~23 KB of records.
+    CHECK(acks[0].size() < firstAckBytes);
+    CHECK(acks[0].size() <= sizeof(fl::MsgConnectAck) + 8u);
+
+    // Everything that identifies the peer still travels on the skipped ack: this is a payload
+    // omission, not a degraded ack.
+    CHECK(second.peerId == 1u);
+    CHECK(second.planetRadiusKm == first.planetRadiusKm);
+}
+
+TEST_CASE("WorldBroadcaster: a changed type table is re-sent even to a peer that had one (#1070)",
+          "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster wb(em, registry, net, logger);
+
+    connectPilotPeer(wb, net, 1u);
+    REQUIRE(connectAcksFor(net, 1u).size() == 1u);
+
+    // Register a new type, then force a re-ack via an authority grant.
+    fl::EntityDef extra;
+    extra.id = "test:late-arrival";
+    extra.name = "Late";
+    extra.category = fl::ObjectCategory::AirVehicle;
+    extra.maxHp = 50.f;
+    registry.registerType(std::move(extra));
+
+    net.perPeerSends.clear();
+    fl::PeerAuthority auth;
+    auth.caps = fl::kAllCaps;
+    wb.setPeerAuthority(1u, auth);
+
+    auto acks = connectAcksFor(net, 1u);
+    REQUIRE(acks.size() == 1u);
+    fl::MsgConnectAck ack{};
+    REQUIRE(fl::readMsg(acks[0].data(), acks[0].size(), ack));
+    CHECK(ack.typeCount == registry.typeCount()); // the new type must reach the client
+    CHECK_FALSE(ackSkipsTypes(acks[0]));
+}
+
+TEST_CASE("EntityTypeRegistry: generation distinguishes a cleared table from an unchanged one (#1070)",
+          "[world_broadcaster]") {
+    // typeCount() cannot answer "has this table changed" — clear() then re-register the same number of
+    // types leaves the count identical. The connect-ack skip keys on generation() for exactly this.
+    fl::EntityTypeRegistry registry;
+    CHECK(registry.generation() == 0u);
+
+    registry.registerType(makeDebugDef());
+    const uint32_t afterOne = registry.generation();
+    CHECK(afterOne != 0u);
+
+    // A duplicate id registers nothing, so it must not move the generation.
+    registry.registerType(makeDebugDef());
+    CHECK(registry.generation() == afterOne);
+
+    const uint32_t countBefore = registry.typeCount();
+    registry.clear();
+    registry.registerType(makeDebugDef());
+    CHECK(registry.typeCount() == countBefore); // same count...
+    CHECK(registry.generation() != afterOne);   // ...different table, and the generation says so
+}

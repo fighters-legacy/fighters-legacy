@@ -155,7 +155,7 @@ bool DiscoveryBeacon::openSock6() {
 void DiscoveryBeacon::send(const TickState& state) {
     fl::MsgLanBeacon pkt;
     pkt.protocolVersion = fl::kProtocolVersion;
-    pkt.gamePort = m_cfg.port;
+    pkt.gamePort = m_cfg.gamePort; // where to CONNECT — independent of where this beacon is sent
     pkt.playerCount = static_cast<uint8_t>(std::clamp(state.playerCount, 0, 255));
     pkt.maxPlayers = m_cfg.maxPlayers;
     pkt.gameModeFlags = m_cfg.gameModeFlags;
@@ -165,6 +165,7 @@ void DiscoveryBeacon::send(const TickState& state) {
         pkt.shutdownSeconds = state.shutdownSeconds;
     }
     std::snprintf(pkt.name, sizeof(pkt.name), "%s", m_cfg.name.c_str());
+    std::snprintf(pkt.build, sizeof(pkt.build), "%s", m_cfg.buildVersion.c_str()); // #1074
 
     uint8_t buf[sizeof(fl::MsgLanBeacon)];
     std::memcpy(buf, &pkt, sizeof(pkt));
@@ -177,7 +178,7 @@ void DiscoveryBeacon::send(const TickState& state) {
 #endif
         sockaddr_in d4{};
         d4.sin_family = AF_INET;
-        d4.sin_port = htons(m_cfg.port);
+        d4.sin_port = htons(m_cfg.discoveryPort);
         inet_pton(AF_INET, m_cfg.broadcastAddr.c_str(), &d4.sin_addr);
         if (sendto(m_sock4, reinterpret_cast<const char*>(buf), static_cast<int>(sizeof(buf)), 0,
                    reinterpret_cast<const sockaddr*>(&d4), static_cast<int>(sizeof(d4))) < 0)
@@ -192,7 +193,7 @@ void DiscoveryBeacon::send(const TickState& state) {
 #endif
         sockaddr_in6 d6{};
         d6.sin6_family = AF_INET6;
-        d6.sin6_port = htons(m_cfg.port);
+        d6.sin6_port = htons(m_cfg.discoveryPort);
         d6.sin6_scope_id = 0;
         inet_pton(AF_INET6, "ff02::1", &d6.sin6_addr);
         if (sendto(m_sock6, reinterpret_cast<const char*>(buf), static_cast<int>(sizeof(buf)), 0,
