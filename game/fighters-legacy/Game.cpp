@@ -2410,6 +2410,15 @@ void Game::run() {
             playerEntry = findPlayerEntry(d.services.renderBridge, d.session.clientHandler->assignedEntityIdx,
                                           d.session.clientHandler->assignedEntityGen);
             alpha = d.session.clientHandler->tickAlpha.get();
+            // #1075: the alpha above and the tick period the extrapolators multiply it by must come
+            // from the SAME rate — the one the server advertised in MsgConnectAck. Pushed here, where
+            // the alpha is read, so the two can never be set from different sources.
+            {
+                const fl::TickRate rate = d.session.clientHandler->serverTickRate();
+                d.services.camInput.setServerTickRate(rate);
+                if (d.services.sceneRenderer)
+                    d.services.sceneRenderer->setServerTickRate(rate);
+            }
             aspect = static_cast<float>(d.services.p.window->width()) /
                      static_cast<float>(d.services.p.window->height() > 0 ? d.services.p.window->height() : 1);
             d.services.camInput.setRenderAlpha(alpha);

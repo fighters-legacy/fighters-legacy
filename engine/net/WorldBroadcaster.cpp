@@ -1950,8 +1950,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             // Per-peer latency TLVs. Omitted when estimatedDelayTicks == 0 (e.g. single-player localhost)
             // so the client's m_hasSnapshotLatency stays false and the HUD indicator remains hidden.
             if (pin.estimatedDelayTicks > 0) {
-                const auto latMs = static_cast<uint16_t>(
-                    std::min(static_cast<uint64_t>(pin.estimatedDelayTicks) * 1000u / 60u, uint64_t{65535u}));
+                const auto latMs =
+                    static_cast<uint16_t>(std::min(m_tickRate.ticksToMs(pin.estimatedDelayTicks), uint64_t{65535u}));
                 appendExt(buf, static_cast<uint16_t>(ExtTag::SnapshotPeerLatency), latMs);
                 const auto delayTicks = static_cast<uint16_t>(std::min(pin.estimatedDelayTicks, uint32_t{65535u}));
                 appendExt(buf, static_cast<uint16_t>(ExtTag::SnapshotPeerDelayTicks), delayTicks);
@@ -6413,7 +6413,7 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned, PeerRo
 
     MsgConnectAck ack;
     ack.msgId = static_cast<uint8_t>(MsgId::ConnectAck);
-    ack.tickRateHz = 60;
+    ack.tickRateHz = m_tickRate.hz(); // #1075: the value that actually governs, not a literal
     ack.typeCount = static_cast<uint16_t>(typeCount);
     ack.assignedEntityIdx = assigned.index;
     ack.assignedEntityGen = assigned.generation;
@@ -6609,7 +6609,7 @@ void WorldBroadcaster::appendScoreboardRows(std::vector<uint8_t>& pkt, std::size
         if (!isBotParticipant(pid)) {
             const auto pit = m_peerInputs.find(pid);
             if (pit != m_peerInputs.end()) {
-                const uint32_t ms = static_cast<uint32_t>(pit->second.estimatedDelayTicks) * 1000u / 60u;
+                const uint32_t ms = static_cast<uint32_t>(m_tickRate.ticksToMs(pit->second.estimatedDelayTicks));
                 row.pingMs = static_cast<uint16_t>(std::min<uint32_t>(ms, 0xFFFFu));
             }
         }

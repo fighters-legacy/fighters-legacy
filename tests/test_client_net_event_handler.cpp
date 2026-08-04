@@ -3207,3 +3207,87 @@ TEST_CASE("ClientNetEventHandler: a re-ack that does carry types still merges th
     CHECK(registry.typeCount() == 2u);
     CHECK(registry.findById("pack:su27") != nullptr);
 }
+
+// ---------------------------------------------------------------------------
+// #1075: the handshake's tickRateHz actually governs the client's conversions
+// ---------------------------------------------------------------------------
+
+TEST_CASE("TickRate: conversions follow the rate, and a zero rate is refused (#1075)", "[client_net_event_handler]") {
+    constexpr fl::TickRate std60{60};
+    CHECK(std60.hz() == 60);
+    CHECK(std60.ticksToMs(60) == 1000u);
+    CHECK(std60.msToTicks(1000) == 60u);
+    CHECK(std60.dtSeconds() == Catch::Approx(1.0f / 60.0f));
+
+    // A different rate must change every derived value — the whole point of the issue is that today
+    // nothing does.
+    constexpr fl::TickRate hz30{30};
+    CHECK(hz30.ticksToMs(60) == 2000u); // 60 ticks at 30 Hz is two seconds, not one
+    CHECK(hz30.msToTicks(1000) == 30u);
+    CHECK(hz30.dtSeconds() == Catch::Approx(1.0f / 30.0f));
+    CHECK(hz30 != std60);
+
+    // alpha is "how far through a tick": half a 30 Hz tick is 16.6 ms, and it clamps at a full tick
+    // so a frame that overran cannot extrapolate past the snapshot it has not received.
+    CHECK(hz30.alphaFromSeconds(1.0f / 60.0f) == Catch::Approx(0.5f));
+    CHECK(hz30.alphaFromSeconds(10.0f) == Catch::Approx(1.0f));
+    CHECK(hz30.alphaFromSeconds(-1.0f) == Catch::Approx(0.0f));
+
+    // The rate arrives from an untrusted server and every accessor divides by it, so a zero is
+    // clamped to the default rather than propagated into a division.
+    constexpr fl::TickRate zero{0};
+    CHECK(zero.hz() == fl::TickRate::kDefaultHz);
+    CHECK(zero.ticksToMs(60) == 1000u);
+}
+
+TEST_CASE("ClientNetEventHandler: the ack's tickRateHz drives the ping readout (#1075)", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    // Until an ack arrives the client assumes the standard rate.
+    CHECK(handler.serverTickRate().hz() == fl::TickRate::kDefaultHz);
+
+    // A server advertising 30 Hz: the field has been on the wire since the first handshake and was
+    // never read, so before #1075 this ack changed nothing at all.
+    fl::MsgConnectAck ack{};
+    ack.tickRateHz = 30;
+    ack.peerId = 4u;
+    std::vector<uint8_t> pkt;
+    fl::appendMsg(pkt, ack);
+    handler.onReceive(0u, pkt.data(), pkt.size());
+    CHECK(handler.serverTickRate().hz() == 30);
+    CHECK(handler.tickAlpha.tickRate().hz() == 30); // render interpolation follows it too
+
+    // 30 delay ticks is 1000 ms at 30 Hz. Under the old hardcoded /60 it read as 500 — a ping
+    // readout that was exactly half the truth, with nothing to indicate it.
+    fl::MsgPeerDelay pd{};
+    pd.delayTicks = 30;
+    handler.onReceive(0u, &pd, sizeof(pd));
+    CHECK(handler.lastRttMs() == 1000u);
+}
+
+TEST_CASE("ClientNetEventHandler: a malformed zero tick rate falls back rather than dividing by it (#1075)",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    fl::MsgConnectAck ack{};
+    ack.tickRateHz = 0; // hostile or broken server
+    std::vector<uint8_t> pkt;
+    fl::appendMsg(pkt, ack);
+    handler.onReceive(0u, pkt.data(), pkt.size());
+    CHECK(handler.serverTickRate().hz() == fl::TickRate::kDefaultHz);
+
+    fl::MsgPeerDelay pd{};
+    pd.delayTicks = 60;
+    handler.onReceive(0u, &pd, sizeof(pd)); // must not divide by zero
+    CHECK(handler.lastRttMs() == 1000u);
+}

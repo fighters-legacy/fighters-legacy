@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "net/TickRate.h"            // server tick rate paired with the render alpha (#1075)
 #include "render/CameraController.h" // makeCameraView
 
 #include <glm/glm.hpp>
@@ -13,9 +14,12 @@ namespace fl {
 // cannot diverge.
 [[nodiscard]] inline CameraView buildTargetInsetView(const glm::dvec3& targetPos, const glm::vec3& targetVel,
                                                      float renderAlpha, const glm::dvec3& ownPos, glm::vec3 worldUp,
-                                                     float rectAspect, double standoffM = 30.0) {
-    constexpr float kTickDt = 1.0f / 60.0f;
-    const glm::dvec3 extTgt = targetPos + glm::dvec3(targetVel * (renderAlpha * kTickDt));
+                                                     float rectAspect, double standoffM = 30.0,
+                                                     TickRate serverTickRate = kServerTickRate) {
+    // renderAlpha is "how far through a SERVER tick", so the period it multiplies must be that
+    // server's period (#1075) — a hardcoded 1/60 here would disagree with the alpha on any server
+    // not stepping at 60 Hz. Defaulted so the pure-math call sites in tests stay one-liners.
+    const glm::dvec3 extTgt = targetPos + glm::dvec3(targetVel * (renderAlpha * serverTickRate.dtSeconds()));
 
     // Eye behind the target along the target->ownship line. Degenerate (ownship on target): offset by
     // worldUp x an arbitrary axis so the look direction stays well-defined.

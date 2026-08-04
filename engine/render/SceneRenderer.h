@@ -2,6 +2,7 @@
 #pragma once
 
 #include "RenderTypes.h"
+#include "net/TickRate.h" // server tick rate for velocity extrapolation (#1075)
 #include "render/ArtChannel.h"
 #include "render/BuiltinShape.h"
 #include "render/MeshArticulation.h"
@@ -111,6 +112,12 @@ class SceneRenderer {
     // Set the maximum entity draw distance.  Entities beyond this range are
     // culled before building RenderItems.  Default is 50 km.
     void setDrawDistance(float distanceKm) noexcept;
+
+    // The server tick rate this scene extrapolates against (#1075); set it from MsgConnectAck's
+    // advertised rate when a session starts.
+    void setServerTickRate(TickRate rate) noexcept {
+        m_serverTickRate = rate;
+    }
 
     // When enabled, a 4 km flat floor plane is appended to every submitted FrameScene
     // as the last opaque RenderItem.  Uses the builtin olive-gray floor material.
@@ -245,8 +252,11 @@ class SceneRenderer {
 
     float m_drawDistanceSq{50000.0f * 50000.0f}; // squared cull distance in meters (default 50 km)
 
-    // Nominal tick period used for velocity-based position extrapolation.
-    static constexpr float kTickDt = 1.0f / 60.0f;
+    // Tick period used for velocity-based position extrapolation, from the server's advertised rate
+    // (#1075). It must match the rate the render alpha was computed at: alpha is "how far through a
+    // server tick", so pairing it with a hardcoded 1/60 would mis-scale extrapolation on any server
+    // not stepping at 60 Hz. Defaults to the standard rate until a session sets it.
+    TickRate m_serverTickRate{kServerTickRate};
 
     // Builtin fallback resources — uploaded once on first renderFrame call.
     // Entity meshes: one placeholder silhouette per BuiltinShape (#886) + a wreck variant per

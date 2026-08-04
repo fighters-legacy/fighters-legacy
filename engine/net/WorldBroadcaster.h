@@ -26,6 +26,7 @@
 #include "flight/AeroForces.h"
 #include "flight/IGravityField.h"
 #include "loop/ISimUpdate.h"
+#include "net/TickRate.h"    // the one authority for the server tick rate + tick<->ms (#1075)
 #include "net/VoiceRouter.h" // radio-net routing for relayed voice frames (#532)
 #include "perf/TickProfiler.h"
 #include "sensor/SensorSystem.h"
@@ -1026,6 +1027,12 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         m_heartbeatRateLimit = perSecond < 1 ? 1 : perSecond;
     }
 
+    // The tick rate this server steps at and advertises in MsgConnectAck (#1075). Read it rather than
+    // writing `60` or `1000/60` at a call site — that is the defect this replaced.
+    [[nodiscard]] TickRate tickRate() const noexcept {
+        return m_tickRate;
+    }
+
     // Session-scoped mute for a peer (admin mute/unmute). Sim-thread. Returns false if the peer is
     // unknown. A muted peer's chat lines are dropped silently (no rate-limit warning).
     bool setPeerMuted(uint32_t peerId, bool muted);
@@ -1602,6 +1609,10 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     ChatIntentHook m_chatIntentHook;                                   // #611: null = the intent tier is off
     // World-mutating request limits (#1069). Seat and team requests each cost a despawn/respawn plus
     // a full ConnectAck on grant; heartbeats each cost a MsgPeerDelay reply.
+    // The rate this server actually steps at, and the value MsgConnectAck advertises (#1075). Fixed
+    // at 60: physics, prediction, lag compensation and the scale gate all assume it. It is a value
+    // rather than a literal so the wire field is honest and every tick<->ms conversion has one source.
+    TickRate m_tickRate{kServerTickRate};
     int m_seatRequestRateLimit{2}; // seat requests per second per peer
     int m_teamSwitchCooldownS{5};  // seconds between accepted team switches per peer; 0 = no cooldown
     int m_heartbeatRateLimit{4};   // heartbeats per second per peer that draw a reply

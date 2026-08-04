@@ -289,7 +289,7 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
         }
 
         // Velocity extrapolation: advance position by alpha × tick period.
-        glm::dvec3 worldPos = entry.position + glm::dvec3(entry.velocity * (alpha * kTickDt));
+        glm::dvec3 worldPos = entry.position + glm::dvec3(entry.velocity * (alpha * m_serverTickRate.dtSeconds()));
 
         // Camera-relative position: subtract two dvec3 values, then narrow to vec3 (float32-safe).
         glm::vec3 relPos = glm::vec3(worldPos - camera.worldOrigin);

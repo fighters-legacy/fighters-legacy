@@ -148,6 +148,11 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         m_awaitingRespawn = false; // a fresh ack means we (re)spawned — clear the dead-spectate flag (#403)
         m_selfPeerId = ack.peerId; // our own participant id, for roster "you" + chat self-echo (#996)
         m_planetRadiusKm = ack.planetRadiusKm;
+        // #1075: adopt the server's advertised tick rate. It was sent from the first handshake and
+        // never read; every tick<->time conversion on this client now derives from it. A zero is
+        // clamped to the default inside TickRate — this is an untrusted field we go on to divide by.
+        m_serverTickRate = fl::TickRate(ack.tickRateHz);
+        tickAlpha.setTickRate(m_serverTickRate);
         m_grantedRole =
             fl::isPeerRoleOrdinal(ack.grantedRole) ? static_cast<fl::PeerRole>(ack.grantedRole) : fl::PeerRole::Pilot;
         m_gotConnectAck = true; // admitted — an observer's ack has idx 0, so this (not idx) marks success
@@ -685,7 +690,8 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         if (!fl::readMsg(data, size, pd))
             return;
         if (pd.delayTicks > 0) {
-            m_lastRttMs = static_cast<uint32_t>(pd.delayTicks) * 1000u / 60u;
+            // #1075: converted at the rate the SERVER told us in MsgConnectAck, not a literal 60.
+            m_lastRttMs = static_cast<uint32_t>(m_serverTickRate.ticksToMs(pd.delayTicks));
             m_rttValid = true;
         }
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::WingmanAck)) {

@@ -9,6 +9,7 @@
 #include "WingmanMenu.h"
 #include "net/Capability.h"        // CapabilityMask / Capability — granted-authority UI gating (#949)
 #include "net/GameProtocol.h"      // PeerRole, PackManifestEntry (connect handshake #853)
+#include "net/TickRate.h"          // the server tick rate carried by MsgConnectAck (#1075)
 #include "render/RadarView.h"      // RadarView / RadarTrack / RwrStrobe (datalink picture #528)
 #include "render/RenderSnapshot.h" // EntityRenderEntry (stored by value in the retention cache)
 #include "voice/RadioNet.h"        // the server-authoritative radio-net table (#532)
@@ -43,15 +44,28 @@ class SimRenderBridge;
 // Wall-clock render interpolation alpha, reset on each received WorldSnapshot.
 // Replaces the in-process GameLoop::shellTick() that was removed with the
 // embedded server.
+//
+// The rate comes from MsgConnectAck (#1075) rather than a hardcoded 60: alpha is "how far through a
+// SERVER tick are we", so a literal here would silently mis-time interpolation against any server
+// that did not step at 60 Hz. Defaults to the standard rate until the ack arrives.
 struct ClientTickAlpha {
     std::chrono::steady_clock::time_point lastTick{std::chrono::steady_clock::now()};
     void markNewTick() noexcept {
         lastTick = std::chrono::steady_clock::now();
     }
-    float get() const noexcept {
-        float dt = std::chrono::duration<float>(std::chrono::steady_clock::now() - lastTick).count();
-        return std::clamp(dt * 60.0f, 0.0f, 1.0f);
+    void setTickRate(TickRate rate) noexcept {
+        m_rate = rate;
     }
+    [[nodiscard]] TickRate tickRate() const noexcept {
+        return m_rate;
+    }
+    float get() const noexcept {
+        const float dt = std::chrono::duration<float>(std::chrono::steady_clock::now() - lastTick).count();
+        return m_rate.alphaFromSeconds(dt);
+    }
+
+  private:
+    TickRate m_rate{kServerTickRate};
 };
 
 // Parses ENet packets from the local fl-server subprocess and feeds them into
@@ -98,6 +112,12 @@ struct ClientNetEventHandler : INetworkEventHandler {
     // the client needs to branch on it, because the cache is kept either way.
     bool typeTableSkipped() const noexcept {
         return m_typeTableSkipped;
+    }
+
+    // The server's tick rate, from MsgConnectAck (#1075). The standard rate until an ack arrives.
+    // Every tick<->time conversion on the client side derives from this rather than a literal.
+    [[nodiscard]] fl::TickRate serverTickRate() const noexcept {
+        return m_serverTickRate;
     }
 
     // Granted authority (#949), from the MsgConnectAck ConnectAckAuthority TLV. Zero caps until a
@@ -488,6 +508,7 @@ struct ClientNetEventHandler : INetworkEventHandler {
     // entity-type table because this peer already had it. Diagnostic — the cache is kept regardless,
     // since the record loop only ever adds types.
     bool m_typeTableSkipped{false};
+    fl::TickRate m_serverTickRate{fl::kServerTickRate}; // #1075: adopted from MsgConnectAck
     uint32_t m_selfPeerId{0};                           // this client's own participant id, from MsgConnectAck (#996)
     bool m_awaitingRespawn{false};                      // #403: own aircraft dead, awaiting respawn ack
     std::unordered_map<uint32_t, RosterEntry> m_roster; // participant id -> display record (#996)

@@ -22,7 +22,7 @@
 namespace fl {
 
 namespace {
-constexpr float kTickDt = 1.0f / 60.0f;
+
 constexpr double kFlyGroundMarginM = 0.0; // free-fly camera descends to ground level, not below
 
 // Height of the entity's visual centre above its (ground-contact) origin. The cockpit eye is
@@ -202,7 +202,8 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
         if (player) {
             // Locked behind the tail, following the entity heading. The user cannot move it.
             // Aim at the entity (its origin is the ground-contact point, where it visibly sits).
-            const glm::dvec3 target = player->position + glm::dvec3(player->velocity * (m_renderAlpha * kTickDt));
+            const glm::dvec3 target =
+                player->position + glm::dvec3(player->velocity * (m_renderAlpha * m_serverTickRate.dtSeconds()));
             const glm::vec3 fwd = player->orientation * glm::vec3{1.f, 0.f, 0.f};
             const float pr = toRad(m_chasePitch);
             const double horiz = static_cast<double>(m_chaseDistance) * std::cos(pr);
@@ -229,7 +230,7 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
             // Locked inside the entity, looking along its forward axis (+ RMB look offset). The
             // origin is the ground-contact point, so raise the eye to the body centre.
             glm::dvec3 eye =
-                player->position + glm::dvec3(player->velocity * (m_renderAlpha * kTickDt)) +
+                player->position + glm::dvec3(player->velocity * (m_renderAlpha * m_serverTickRate.dtSeconds())) +
                 glm::dvec3(player->orientation * glm::vec3{0.f, static_cast<float>(kEntityCentreHeightM), 0.f});
             if (!m_firstFrame && (mb & SDL_BUTTON_RMASK)) {
                 m_cockpitYaw -= (mx - m_lastMx) * 0.35f;
@@ -275,7 +276,7 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
         if (player) {
             // Eye identical to Cockpit; forward/up come from the padlock tracker slewing to the target.
             const glm::dvec3 eye =
-                player->position + glm::dvec3(player->velocity * (m_renderAlpha * kTickDt)) +
+                player->position + glm::dvec3(player->velocity * (m_renderAlpha * m_serverTickRate.dtSeconds())) +
                 glm::dvec3(player->orientation * glm::vec3{0.f, static_cast<float>(kEntityCentreHeightM), 0.f});
             const glm::vec3 worldUp = radialUp(eye, m_planetRadiusM);
             if (!m_padlockTarget) {
@@ -288,7 +289,8 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
                 break;
             }
             const glm::dvec3 tgt =
-                m_padlockTarget->position + glm::dvec3(m_padlockTarget->velocity * (m_renderAlpha * kTickDt));
+                m_padlockTarget->position +
+                glm::dvec3(m_padlockTarget->velocity * (m_renderAlpha * m_serverTickRate.dtSeconds()));
 
             // Terrain LOS latched at ~15 Hz — a full segment march every 60 Hz frame is wasteful.
             m_losAccumS += dt;
