@@ -62,13 +62,21 @@ struct ServerConfig {
     std::string playerEntityType = "builtin:debug-entity";
     bool allowObservers = true; // #857: false = refuse observer-role connect requests
     int worldAutosaveIntervalS = 300;
-    int entitySoftCap = 0;               // 0 = unlimited; server-enforced object count limit
-    double timeScale = 10.0;             // game seconds per real second; 10 = full day/night ~2.4 real hrs
-    double planetRadiusM = 6'371'000.0;  // sphere radius (m); Earth default
-    bool earthRotation = true;           // #482: Coriolis + centrifugal in the Earth-fixed world frame
-    double drawDistanceKm = 200.0;       // per-peer interest radius (km); [1, 100000]
-    int spectateDelayS = 0;              // dead/observer snapshot delay (s); anti-ghosting; [0, 300]; 0 = off (#403)
-    double spatialCellSizeKm = 10.0;     // SpatialIndex cell size (km); 0 = auto from draw distance; [0, 1000]; restart
+    int entitySoftCap = 0;              // 0 = unlimited; server-enforced object count limit
+    double timeScale = 10.0;            // game seconds per real second; 10 = full day/night ~2.4 real hrs
+    double planetRadiusM = 6'371'000.0; // sphere radius (m); Earth default
+    bool earthRotation = true;          // #482: Coriolis + centrifugal in the Earth-fixed world frame
+    // Per-peer interest radius (km); [1, 100000]. 100 km (#1093, D19): AoI is PRESENTATION
+    // relevance, not sensor truth — sensor knowledge reaches players through the datalink, not the
+    // snapshot radius — and 128 fighters are never 200 km apart, so the old default culled almost
+    // nothing while a full-radius query still visited a 41x41 cell box per peer per tick.
+    double drawDistanceKm = 100.0;
+    int spectateDelayS = 0; // dead/observer snapshot delay (s); anti-ghosting; [0, 300]; 0 = off (#403)
+    // SpatialIndex cell size (km); 0 = AUTO from the draw distance; [0, 1000]; restart. Auto is the
+    // default since #1093: the mechanism has existed since #573 (clamp(drawDist/32, 500 m, 10 km)),
+    // it simply was not what shipped, so a fixed 10 km cell sized the query box for a radius nobody
+    // was using.
+    double spatialCellSizeKm = 0.0;
     uint32_t snapshotBudgetBytes = 1200; // per-client snapshot byte budget; 0 = unlimited; [0, 65535] (#516)
     uint32_t jitterBufferDepth = 4;      // per-peer input queue depth (ticks); [1, 32]
     uint32_t jitterAdaptWindow = 60;     // EWMA smoothing window in ticks; [10, 3600]

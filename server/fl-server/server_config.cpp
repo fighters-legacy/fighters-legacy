@@ -99,10 +99,16 @@ static const char* kDefaultToml =
     "#                                  # NOTE: with this set, a `spawn --faction 2 --ai escort` AI\n"
     "#                                  # now reacts to an approaching player, where before the\n"
     "#                                  # player was invisible to it. [0, 65535]\n"
-    "# draw_distance_km = 200.0         # per-peer interest management radius (km); [1, 100000]\n"
+    "# draw_distance_km = 100.0         # per-peer interest management radius (km); [1, 100000].\n"
+    "#                                  # This is PRESENTATION relevance, not sensor truth: what a\n"
+    "#                                  # player KNOWS arrives via the datalink, which is not bounded\n"
+    "#                                  # by this radius. 100 km is the 128-client validated envelope\n"
+    "#                                  # -- generous for visual and BVR presentation, and the real\n"
+    "#                                  # limiter at scale is the per-snapshot byte budget, not this.\n"
     "# sensor_check_hz = 10.0           # sensor geometry checks/sec; the REFERENCE cadence every "
     "authored pod is tuned against; [1, 60]\n"
-    "# spatial_cell_size_km = 10.0      # SpatialIndex cell size (km); 0 = auto from draw distance; [0, 1000]; "
+    "# spatial_cell_size_km = 0.0       # SpatialIndex cell size (km); 0 = AUTO from draw distance\n"
+    "#                                  # (clamp(draw/32, 500 m, 10 km)), which is the default; [0, 1000]; "
     "restart\n"
     "# snapshot_budget_bytes = 1200     # per-client snapshot byte budget; 0 = unlimited; [0, 65535]\n"
     "# jitter_buffer_depth = 4          # per-peer input queue depth (ticks); global cap for adaptive sizing; [1, 32]\n"
@@ -638,7 +644,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         if (auto v = tbl["world"]["draw_distance_km"].value<double>()) {
             if (*v < 1.0 || *v > 100'000.0) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.draw_distance_km out of range [1, 100000]; using default 200.0");
+                         "world.draw_distance_km out of range [1, 100000]; using default 100.0");
             } else {
                 cfg.drawDistanceKm = *v;
             }
@@ -661,7 +667,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         if (auto v = tbl["world"]["spatial_cell_size_km"].value<double>()) {
             if (*v < 0.0 || *v > 1'000.0) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.spatial_cell_size_km out of range [0, 1000]; using default 10.0");
+                         "world.spatial_cell_size_km out of range [0, 1000]; using default 0.0 (auto)");
             } else {
                 cfg.spatialCellSizeKm = *v;
             }

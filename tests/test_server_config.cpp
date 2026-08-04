@@ -50,8 +50,8 @@ TEST_CASE("parseServerConfig: empty TOML returns all defaults", "[server_config]
     CHECK(cfg.preHandshakeWindowMs == 1000);
     CHECK(cfg.maxConnectionsPerIp == 0);
     CHECK(cfg.idleTimeoutS == 0);
-    CHECK(cfg.drawDistanceKm == 200.0);
-    CHECK(cfg.spatialCellSizeKm == 10.0);
+    CHECK(cfg.drawDistanceKm == 100.0);  // #1093: presentation relevance, not sensor truth
+    CHECK(cfg.spatialCellSizeKm == 0.0); // #1093: 0 = auto (clamp(draw/32, 500 m, 10 km))
     CHECK(cfg.testSpawnAiCount == 0u);
     CHECK(cfg.testSpawnSpreadKm == 50.0);
     CHECK(cfg.testSpawnAglM == 500.0);
@@ -143,7 +143,7 @@ TEST_CASE("parseServerConfig: reads world.spatial_cell_size_km", "[server_config
 TEST_CASE("parseServerConfig: world.spatial_cell_size_km out of range warns and keeps default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\nspatial_cell_size_km = 2000\n", &log);
-    CHECK(cfg.spatialCellSizeKm == 10.0);
+    CHECK(cfg.spatialCellSizeKm == 0.0); // the default is auto (#1093)
     CHECK_FALSE(log.entries.empty());
 }
 
@@ -660,14 +660,14 @@ TEST_CASE("parseServerConfig: reads world.draw_distance_km", "[server_config]") 
 TEST_CASE("parseServerConfig: draw_distance_km below minimum warns and uses default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\ndraw_distance_km = 0.5\n", &log);
-    CHECK(cfg.drawDistanceKm == 200.0);
+    CHECK(cfg.drawDistanceKm == 100.0);
     CHECK(log.hasMessage(LogLevel::Warn, "draw_distance_km"));
 }
 
 TEST_CASE("parseServerConfig: draw_distance_km above maximum warns and uses default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\ndraw_distance_km = 100001.0\n", &log);
-    CHECK(cfg.drawDistanceKm == 200.0);
+    CHECK(cfg.drawDistanceKm == 100.0);
     CHECK(log.hasMessage(LogLevel::Warn, "draw_distance_km"));
 }
 
