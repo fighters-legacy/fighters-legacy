@@ -576,6 +576,34 @@ unaffected.
 
 ---
 
+## Your commit subject is the changelog entry
+
+`CHANGELOG.md` is generated from conventional-commit subjects (#1123). **Feature PRs do not touch
+it** — a hand-written entry means every pair of open PRs conflicts on the same list, which is what
+this replaced. The trade-off is deliberate: an entry is now one line rather than a paragraph of
+rationale, and the rationale lives in the commit body and the PR description instead.
+
+So the subject has to carry its own weight. Write it as a statement to a player or an operator:
+
+```
+# reads well as a published changelog line
+fix(game): degrade to silent audio instead of refusing to start
+feat(game): unlimited per-action bindings across multiple input devices
+fix(server): report the server's uptime, not the machine's
+
+# does not
+fix(game): fix audio bug                     # names no behaviour, and "fix" twice says nothing
+refactor(engine): address review feedback    # describes the process, not the change
+feat(net): part 2                            # meaningless outside the PR it was written in
+```
+
+Because `main` is squash-merged, the **PR title** becomes the commit subject — so the PR title is
+what gets published. `cliff.toml` decides which types appear at all: `feat` → **Added**,
+`fix` → **Fixed**, `docs`/`refactor`/`perf`/`revert` → **Changed**, and `ci`/`chore`/`build`/`test`/
+`style` are skipped entirely. A user-facing change typed `chore:` will not appear in any release.
+A `!` marker or a `BREAKING CHANGE:` footer prefixes the entry with **BREAKING** and survives even
+the skipped types.
+
 ## Release workflow
 
 Releases are tagged with `vMAJOR.MINOR.PATCH`. The `release.yml` workflow triggers on version tags,
@@ -595,14 +623,16 @@ git checkout main && git pull origin main
 ./scripts/cut-release.sh v0.1.0
 ```
 
-This creates a `release/v0.1.0` branch, rolls the `[Unreleased]` CHANGELOG heading to
-`[0.1.0] - <today>` with a fresh empty `[Unreleased]` above it, bumps the CMake version, commits and
-pushes. It does **not** generate the changelog — `CHANGELOG.md` is hand-curated, and the script used
-to overwrite it wholesale with git-cliff output.
+This creates a `release/v0.1.0` branch, runs `scripts/gen_changelog.py` to write a
+`[0.1.0] - <today>` CHANGELOG section from the conventional-commit subjects since the last tag,
+bumps the CMake version, commits and pushes.
 
-Before opening the PR, condense the new section to one line per change with an issue ref, and check
-its scope against `git log --oneline <prev-tag>..HEAD`. Then open the printed PR URL, wait for CI,
-and merge.
+`git-cliff` is a prerequisite of this step — `sudo dnf install git-cliff` on Fedora,
+`brew install git-cliff` on macOS, or `cargo install git-cliff` anywhere. `gen_changelog.py`
+refuses with the install lines if it is missing, and refuses a git-cliff older than 2.0.
+
+Before opening the PR, read the generated section as a player would and check its scope against
+`git log --oneline <prev-tag>..HEAD`. Then open the printed PR URL, wait for CI, and merge.
 
 ### Step 2 — Tag and trigger the release
 

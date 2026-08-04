@@ -1,15 +1,10 @@
 #!/usr/bin/env bash
-# Creates a release branch, rolls the CHANGELOG heading, bumps the CMake version, commits, pushes.
+# Creates a release branch, generates the CHANGELOG section, bumps the CMake version, commits, pushes.
 # After the PR merges, run: ./scripts/tag-release.sh vX.Y.Z
 #
-# This script used to run `git cliff --tag "$VERSION" -o CHANGELOG.md`, which REGENERATED the whole
-# file from conventional commits. CHANGELOG.md is hand-curated — every entry is written per issue
-# with its own rationale — so regenerating it destroyed all of that and replaced it with one terse
-# PR-keyed line per squash commit. That is why the v0.0.x/v0.2.x sections look nothing like the
-# v0.3.x ones: the script was used, then abandoned, and the docs never caught up.
-#
-# The roll below is therefore purely mechanical: rename the [Unreleased] heading and open a fresh
-# empty one above it. Nothing is generated, nothing is overwritten.
+# CHANGELOG.md is GENERATED from conventional-commit subjects by git-cliff (#1123) — no PR writes
+# into it, so there is nothing hand-maintained left to roll. scripts/gen_changelog.py does the
+# generation and carries the guards; read its docstring before changing anything here.
 #
 # The full procedure — including the steps AFTER the tag, which are the ones that get skipped —
 # is docs/developer/project-management.md, "Cutting a release".
@@ -36,32 +31,16 @@ fi
 git pull origin main
 
 SEMVER="${VERSION#v}"
-TODAY=$(date +%F)
+PREV_TAG=$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || echo "")
 
 RELEASE_BRANCH="release/$VERSION"
 git checkout -b "$RELEASE_BRANCH"
 
-# Roll [Unreleased] -> [X.Y.Z] - <today>, leaving a fresh empty [Unreleased] above it.
-# The date must end up matching the TAG date; tag-release.sh refuses to tag if they disagree.
-python3 - "$SEMVER" "$TODAY" <<'PY'
-import sys, re
-semver, today = sys.argv[1], sys.argv[2]
-path = "CHANGELOG.md"
-text = open(path, encoding="utf-8").read()
-
-if re.search(rf"^## \[{re.escape(semver)}\]", text, re.M):
-    sys.exit(f"Error: CHANGELOG.md already has a [{semver}] section")
-if not re.search(r"^## \[Unreleased\]", text, re.M):
-    sys.exit("Error: CHANGELOG.md has no [Unreleased] section to roll")
-
-text = re.sub(r"^## \[Unreleased\][^\n]*$",
-              f"## [Unreleased]\n\n## [{semver}] - {today}",
-              text, count=1, flags=re.M)
-open(path, "w", encoding="utf-8").write(text)
-print(f"rolled [Unreleased] -> [{semver}] - {today}")
-PY
-
-sed -i "s/^project(fighters-legacy VERSION [0-9]*\.[0-9]*\.[0-9]*/project(fighters-legacy VERSION $SEMVER/" CMakeLists.txt
+# Writes the [X.Y.Z] section above the newest existing one and bumps CMakeLists.txt. Refuses rather
+# than guesses: an empty section, a wrong date, a duplicate version, or any change to the released
+# sections below is a hard error. The date it stamps must be the day the tag is created —
+# tag-release.sh refuses to tag if they disagree.
+python3 "$(dirname "$0")/gen_changelog.py" "$VERSION"
 
 git add CHANGELOG.md CMakeLists.txt
 git commit -s -m "chore(release): $VERSION"
@@ -72,15 +51,15 @@ cat <<EOF
 
 Branch '$RELEASE_BRANCH' pushed.
 
-BEFORE OPENING THE PR, edit the new [$SEMVER] section:
+BEFORE OPENING THE PR, read the generated [$SEMVER] section as a PLAYER would:
 
-  * CONDENSE it to one line per change with an issue ref — '- **scope**: Headline (#NNN)'.
-    The long rationale accumulated under [Unreleased] is deliberately dropped; it lives on in
-    the PR bodies and commit messages. A changelog is an index, not an archive.
-  * Merge any duplicate '### Changed' blocks that accumulated.
-  * Check the scope against the range:  git log --oneline <prev-tag>..HEAD
-    Every released issue needs an entry. Nothing from a PRIOR release may be left floating
-    under [Unreleased] for the next release to sweep up.
+  * Each bullet is a commit subject, published verbatim. This is the LAST point at which a
+    subject that reads as a note-to-self can be fixed — after the release PR merges it is
+    history. Reword one by editing the section directly, and say so in the PR.
+  * Check the scope against the range:  git log --oneline ${PREV_TAG:-<prev-tag>}..HEAD
+    Every user-facing change should be there. cliff.toml deliberately skips ci/chore/build/
+    test/style, so a commit missing from the section is either correctly skipped or was typed
+    with the wrong conventional-commit type.
 
 Open a PR: https://github.com/fighters-legacy/fighters-legacy/compare/$RELEASE_BRANCH
 After merging, run: ./scripts/tag-release.sh $VERSION

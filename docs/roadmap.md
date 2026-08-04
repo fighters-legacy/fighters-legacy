@@ -56,8 +56,8 @@ milestone level rather than under an epic — a phase-gate release serves every 
 phase — and it is deliberately the last issue to close in its milestone, so a milestone
 cannot close before its release ships.
 
-**Runbook:** `./scripts/cut-release.sh vX.Y.Z` (release branch + CHANGELOG heading roll +
-CMake version bump) → condense the new section to one line per change and check its scope →
+**Runbook:** `./scripts/cut-release.sh vX.Y.Z` (release branch + CHANGELOG section generated from
+commit subjects + CMake version bump) → read the generated section and check its scope →
 the release PR merges → `./scripts/tag-release.sh vX.Y.Z` → the tag push runs `release.yml`
 (Windows/Linux/macOS artifacts) → **wait for that workflow to complete** → verify the attached
 artifacts → **hand-author the release notes and read the body back on that tag** →
