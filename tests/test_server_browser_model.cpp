@@ -4,6 +4,7 @@
 
 #include "net/GameProtocol.h"
 #include "net/ServerBrowserModel.h"
+#include <algorithm>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -148,12 +149,14 @@ TEST_CASE("ServerBrowserModel: a LAN row carries the advertised build and flags 
     model.rebuild({older, same, silent}, {}, {});
     REQUIRE(model.rows().size() == 3u);
 
+    // find_if + REQUIRE rather than a loop with a trailing FAIL: Catch2's FAIL throws, so MSVC reads
+    // any return after it as unreachable code and /WX turns that warning into a build failure, while
+    // GCC and Clang want a return on every path. This shape satisfies both.
     auto rowFor = [&](const std::string& host) -> const BrowserRow& {
-        for (const BrowserRow& r : model.rows())
-            if (r.host == host)
-                return r;
-        FAIL("no row for " + host);
-        return model.rows().front();
+        const auto it =
+            std::find_if(model.rows().begin(), model.rows().end(), [&](const BrowserRow& r) { return r.host == host; });
+        REQUIRE(it != model.rows().end());
+        return *it;
     };
 
     CHECK(rowFor("10.0.0.5").build == "0.3.11");
