@@ -11,6 +11,7 @@
 #include <content/IContentPack.h>
 #include <entity/EntityTypeRegistry.h>
 #include <mock_content.h>
+#include <sensor/BuiltinSensors.h>
 #include <sensor/SensorDef.h>
 #include <weapon/BuiltinWeapon.h>
 #include <weapon/WeaponDef.h>
@@ -519,4 +520,46 @@ TEST_CASE("builtin static target is a Structure; emplacements stay ground vehicl
     CHECK(builtinNavalVesselDef().category == ObjectCategory::NavalVehicle);
     // Surface entities are not projectiles.
     CHECK(builtinStaticTargetDef().projectileKind == ProjectileKind::None);
+}
+
+// ---------------------------------------------------------------------------
+// #1089: the sensor-carrying builtin fighter
+// ---------------------------------------------------------------------------
+
+TEST_CASE("builtinSensorFighterDef carries sensors the debug entity does not", "[content_bootstrap][1089]") {
+    const EntityDef sensorFighter = builtinSensorFighterDef();
+    const EntityDef debug = builtinDebugEntityDef();
+
+    // The whole point: the scale gate needs bots whose contact tables actually populate. The debug
+    // entity carries no sensors, which is why the gate measured a hollow world.
+    CHECK(debug.sensorIds.empty());
+    REQUIRE(sensorFighter.sensorIds.size() == 2u);
+    CHECK(sensorFighter.sensorIds[0] == "builtin:eyeball");
+    CHECK(sensorFighter.sensorIds[1] == "builtin:ai-radar");
+
+    // A DISTINCT type, so every existing spawn of the debug entity is unaffected — entity-scale
+    // deliberately keeps its hollow sweep.
+    CHECK(sensorFighter.id == "builtin:sensor-fighter");
+    CHECK(sensorFighter.id != debug.id);
+
+    // Otherwise identical to the debug entity: it is the same airframe plus sensors, so a
+    // sensor-loaded gate run is not also a different-flight-model run.
+    CHECK(sensorFighter.category == debug.category);
+    CHECK(sensorFighter.maxHp == debug.maxHp);
+    CHECK(sensorFighter.hardpoints.size() == debug.hardpoints.size());
+}
+
+TEST_CASE("the builtin intercept radar is a forward-scanning emitter with a track lobe", "[content_bootstrap][1089]") {
+    const sensor::SensorDef& d = sensor::BuiltinSensors::interceptRadar();
+    CHECK(d.id == "builtin:ai-radar");
+    CHECK(d.type == sensor::SensorType::Radar);
+    CHECK(d.emitter);               // an airborne radar announces itself to an RWR (#529)
+    CHECK_FALSE(d.omnidirectional); // a nose-mounted scan volume, not a ground battery's hemisphere
+    // A track lobe matters: without it contacts never reach Locked/firing-quality, and the datalink
+    // fusion path would be exercised only at Detected.
+    REQUIRE(d.track.has_value());
+    CHECK(d.track->maxRangeM > d.search.maxRangeM);
+    // Range sits between a missile seeker's and a ground battery's.
+    CHECK(d.search.maxRangeM > sensor::BuiltinSensors::radarSeeker().search.maxRangeM);
+    CHECK(d.search.maxRangeM > sensor::BuiltinSensors::groundRadar().search.maxRangeM);
 }

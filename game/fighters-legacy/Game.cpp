@@ -1635,7 +1635,8 @@ void Game::startGame(const std::string& mission) {
     // builder fl-server uses, so the client-side hardpoint count matches what the server spawned.
     if (d.services.outcome == FirstRunOutcome::LaunchSandboxInspector) {
         d.services.entityRegistry.registerType(fl::builtinDebugEntityDef());
-        d.services.entityRegistry.registerType(fl::builtinBomberDef()); // the crewed bomber (#977)
+        d.services.entityRegistry.registerType(fl::builtinBomberDef());        // the crewed bomber (#977)
+        d.services.entityRegistry.registerType(fl::builtinSensorFighterDef()); // sensor-carrying (#1089)
     }
 
     // A REPLAY session (#41) is a third kind beside single-player and multiplayer: no server process,

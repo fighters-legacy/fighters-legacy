@@ -102,6 +102,11 @@ tools/latency_analysis/results/
 # bot_swarm load-test — auto-generated JSON reports
 tools/bot_swarm/results/
 
+# Recorded sessions (#643). fl-server writes a .flrep per session into replays/, so any local run --
+# a scale-gate profile, a mission smoke, a manual server -- drops artifacts here. They are session
+# output, never source.
+replays/
+
 # Agentic-AI provider evaluation — auto-generated sweep results (#599)
 tools/ai_eval/results/
 

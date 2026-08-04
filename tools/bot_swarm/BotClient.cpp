@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "BotClient.h"
+
+#include <cstdio>
 #include <net/AckWindow.h>
 #include <net/GameProtocol.h>
 #include <net/WireCodec.h>
 
 namespace fl {
 
-BotClient::BotClient(uint32_t index, std::unique_ptr<IFlightPattern> pattern, int rateHz, TransportKind transport)
-    : m_index(index), m_rateHz(rateHz), m_pattern(std::move(pattern)), m_transport(transport) {}
+BotClient::BotClient(uint32_t index, std::unique_ptr<IFlightPattern> pattern, int rateHz, TransportKind transport,
+                     std::string entityType)
+    : m_index(index), m_rateHz(rateHz), m_pattern(std::move(pattern)), m_transport(transport),
+      m_entityType(std::move(entityType)) {}
 
 BotClient::~BotClient() = default;
 
@@ -79,10 +83,13 @@ void BotClient::onConnect(uint32_t /*peerId*/) {
     // #853 unified connect handshake: the client speaks first. Send MsgConnectRequest so the server
     // admits this bot as a PILOT (spawns its entity and delivers snapshots) — without it the server
     // never admits the peer and no snapshots flow, so the scale gate would measure nothing. A synthetic
-    // bot mounts no packs and requests the server's default entity type (empty manifest + type).
+    // bot mounts no packs. It requests an entity type when one was configured (#1089) and otherwise
+    // falls back to the server's default, which is what every pre-#1089 run did.
     if (m_net) {
         MsgConnectRequest req{};
         req.requestedRole = static_cast<uint8_t>(PeerRole::Pilot);
+        if (!m_entityType.empty())
+            std::snprintf(req.requestedEntityType, sizeof(req.requestedEntityType), "%s", m_entityType.c_str());
         m_net->send(0, &req, sizeof(req), /*reliable=*/true);
     }
 }

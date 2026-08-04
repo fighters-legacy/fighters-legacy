@@ -740,3 +740,68 @@ def test_sensing_advisory_never_fails_the_gate():
     sensing = [c for c in result["checks"] if c["name"] == "server_tick.sensing_ms"][0]
     assert sensing["advisory"] is True
     assert sensing["ok"] is True
+
+
+# --- #1089: the gate must measure a POPULATED world ----------------------------------------------
+
+def test_headline_profiles_are_sensor_loaded():
+    """`pr`, `reference` and `soak` must fly a sensor-carrying aircraft.
+
+    This is the instrument, not a detail. With the sensorless default every ContactTable is empty,
+    so datalink team fusion -- the largest O(P^2) cost in the server -- merges nothing and costs
+    nothing, and the committed 128-client numbers describe a hollow battlespace. A gate that cannot
+    fail on the bug it exists to catch is not evidence.
+    """
+    config = sg.load_config(sg.DEFAULT_CONFIG)
+    for name in ("pr", "reference", "soak"):
+        profile = sg.load_profile(config, name)
+        assert profile["entity_type"] == "builtin:sensor-fighter", name
+        # ...and something to detect: sensors with an empty sky still fuse nothing. Deliberately
+        # ai_entity_count and NOT entity_spawn_counts -- the latter is the entity-scale sweep and
+        # carries an exact-count --assert-min-entities that a headline profile should not gate on.
+        assert profile["ai_entity_count"] > 0, name
+        assert not profile.get("entity_spawn_counts"), name
+
+
+def test_entity_scale_keeps_its_hollow_sweep():
+    """`entity-scale` measures entity-pool and spatial-index cost against entity count.
+
+    Loading sensors onto it would confound the one variable it exists to isolate, so it deliberately
+    does NOT get the treatment the headline profiles get.
+    """
+    config = sg.load_config(sg.DEFAULT_CONFIG)
+    profile = sg.load_profile(config, "entity-scale")
+    assert profile["entity_type"] == ""
+
+
+def test_entity_type_reaches_bot_swarm_as_a_flag():
+    """The profile key has to actually arrive at bot_swarm, or the profile is decorative."""
+    profile = dict(sg.PROFILE_DEFAULTS)
+    profile["entity_type"] = "builtin:sensor-fighter"
+    flags = sg.assert_flags(profile, strict=False)
+    assert "--entity-type" in flags
+    assert flags[flags.index("--entity-type") + 1] == "builtin:sensor-fighter"
+
+
+def test_no_entity_type_emits_no_flag():
+    """An unset entity_type must leave the command line exactly as it was before #1089."""
+    profile = dict(sg.PROFILE_DEFAULTS)
+    assert "--entity-type" not in sg.assert_flags(profile, strict=False)
+
+
+def test_ai_entity_count_populates_the_world_without_an_entity_count_assert():
+    """Populating the sky must not drag the entity-scale sweep's exact-count gate along with it.
+
+    entity_spawn_counts emits --assert-min-entities, which is right for a profile whose subject IS
+    the entity count and wrong for a headline profile: a couple of loiter entities dying mid-run
+    would fail the gate while saying nothing about tick time or bandwidth.
+    """
+    profile = dict(sg.PROFILE_DEFAULTS)
+    profile["ai_entity_count"] = 64
+    runs = sg.expand_runs(profile)
+    assert runs
+    for r in runs:
+        env = r["env"] if isinstance(r, dict) else r.env
+        flags = r["flags"] if isinstance(r, dict) else r.flags
+        assert env.get("FL_TEST_SPAWN_AI") == "64"
+        assert "--assert-min-entities" not in flags

@@ -82,6 +82,11 @@ EntityDef builtinDebugEntityDef();
 // off station 0, plus a defensive tail-gunner seat aiming a rear-facing cannon turret (station 1),
 // filled by the builtin turret gunner (#971). The crewed counterpart to builtin:debug-entity — it
 // makes the whole crew → seat-sampling → turret-slew → directional-fire path provable zero-pack.
+// The compiled-in sensor-carrying fighter (#1089): the debug entity plus an eyeball and an airborne
+// intercept radar, so a bot flying it builds a real contact table. Zero-pack, so the scale gate can
+// measure a POPULATED world without waiting on pack sensor defs.
+EntityDef builtinSensorFighterDef();
+
 EntityDef builtinBomberDef();
 
 // Builtin surface targets and threats (#863) — so the ground/naval/static categories and a

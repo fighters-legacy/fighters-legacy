@@ -43,6 +43,16 @@ PROFILE_DEFAULTS = {
     # refuses to fall back to enet6, and the report's "transport" key is cross-checked below so
     # a fallback can never masquerade as a GNS pass.
     "transport": "enet",
+    # The aircraft the bots ask to fly (#1089). Empty = the server default (builtin:debug-entity),
+    # which carries NO SENSORS -- every ContactTable is empty, datalink team fusion merges nothing and
+    # costs nothing, and the sensing pass has no contacts to maintain. The committed 128-client
+    # numbers therefore described a hollow battlespace, and the two systems most likely to break at
+    # 128 players were the two the gate could not see. "builtin:sensor-fighter" carries an eyeball and
+    # an intercept radar, so the picture is populated and the O(P*C) fusion cost is real.
+    "entity_type": "",
+    # AI entities pre-spawned for the sensor-loaded profiles to detect (#1089). 0 = none. Distinct
+    # from entity_spawn_counts (the entity-scale sweep), which also emits --assert-min-entities.
+    "ai_entity_count": 0,
     # Capacity ceiling. The HARD ceiling is on WIRE bytes (#772) — bytes actually on the socket,
     # including transport framing, ENet's range-coder compression and GNS's AES-GCM overhead. That is
     # the number an operator's bandwidth bill is denominated in. `assert_max_kbs` (application payload)
@@ -141,6 +151,9 @@ def assert_flags(profile, strict):
         flags += ["--assert-congestion-engaged-hz", _num(profile["assert_congestion_engaged_hz"])]
     if profile["assert_congestion_recovered_hz"] > 0:
         flags += ["--assert-congestion-recovered-hz", _num(profile["assert_congestion_recovered_hz"])]
+    # Sensor-loaded profiles (#1089): the aircraft each bot requests.
+    if profile.get("entity_type"):
+        flags += ["--entity-type", str(profile["entity_type"])]
     return flags
 
 
@@ -452,6 +465,15 @@ def expand_runs(profile):
     # invoke the runners exactly as before.
     if profile.get("transport", "enet") != "enet":
         profile_env["FL_LOADTEST_TRANSPORT"] = profile["transport"]
+    # Sensor-loaded world population (#1089): AI entities for the bots' radars to actually SEE. This
+    # is deliberately NOT entity_spawn_counts, which exists for the entity-scale SWEEP and brings a
+    # per-run --assert-min-entities with it. That assert is an exact-count gate and is right for a
+    # profile whose subject IS the entity count; for a headline profile it would fail the gate
+    # whenever a couple of loiter entities died mid-run, which says nothing about the thing being
+    # measured. This key populates the sky and changes neither the run label nor the asserts, so the
+    # baseline keys stay comparable across the change.
+    if profile.get("ai_entity_count"):
+        profile_env["FL_TEST_SPAWN_AI"] = str(profile["ai_entity_count"])
     # AI mix + projectile churn (#580): profile-constant, applied to every run in the sweep.
     if profile.get("ai_mix"):
         profile_env["FL_TEST_SPAWN_MIX"] = profile["ai_mix"]

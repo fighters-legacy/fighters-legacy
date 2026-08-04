@@ -102,6 +102,9 @@ void printHelp() {
                 "  --pattern NAME         weave|level|aggressive|idle|random|trace:<file> (default: weave)\n"
                 "  --pattern-mix SPEC     Weighted heterogeneous swarm, e.g. \"weave:80,aggressive:20\"\n"
                 "                         (supersedes --pattern; deterministic per-client assignment)\n"
+                "  --entity-type ID       aircraft each bot asks to fly (default: the server default).\n"
+                "                         builtin:sensor-fighter carries sensors, so contact tables\n"
+                "                         populate and datalink fusion is actually measured (#1089).\n"
                 "  --transport NAME       enet|gns — transport the synthetic clients speak (default: enet).\n"
                 "                         gns requires an FL_ENABLE_GNS=ON build AND fl-server --transport gns\n"
                 "  --json PATH            Write a JSON report to PATH\n"
@@ -158,8 +161,8 @@ void runWorker(int threadIdx, int startIdx, int count, const SwarmConfig cfg, st
     bots.reserve(static_cast<size_t>(count));
     for (int i = 0; i < count; ++i) {
         const auto idx = static_cast<uint32_t>(startIdx + i);
-        bots.push_back(std::make_unique<BotClient>(idx, plan.make(idx), cfg.rateHz,
-                                                   parseTransportKind(cfg.transport, TransportKind::Enet)));
+        bots.push_back(std::make_unique<BotClient>(
+            idx, plan.make(idx), cfg.rateHz, parseTransportKind(cfg.transport, TransportKind::Enet), cfg.entityType));
     }
 
     // ---- Ramp connect ----

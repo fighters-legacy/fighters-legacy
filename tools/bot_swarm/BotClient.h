@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <memory>
 #include <net/NetworkFactory.h>
+#include <string>
 
 namespace fl {
 
@@ -20,8 +21,11 @@ class BotClient : public INetworkEventHandler {
   public:
     // The flight pattern is built by the caller (SwarmPatternPlan) so a shared trace / weighted
     // mix is resolved once for the whole swarm; BotClient takes ownership of its instance.
+    // entityType: the aircraft each bot asks to fly (#1089). Empty = the server's
+    // [world] player_entity_type default, which is what every pre-#1089 run did. The sensor-loaded
+    // gate profiles pass "builtin:sensor-fighter" so contact tables actually populate.
     BotClient(uint32_t index, std::unique_ptr<IFlightPattern> pattern, int rateHz,
-              TransportKind transport = TransportKind::Enet);
+              TransportKind transport = TransportKind::Enet, std::string entityType = {});
     ~BotClient() override;
 
     BotClient(const BotClient&) = delete;
@@ -56,6 +60,7 @@ class BotClient : public INetworkEventHandler {
     std::unique_ptr<IFlightPattern> m_pattern;
     std::unique_ptr<INetwork> m_net;
     TransportKind m_transport{TransportKind::Enet};
+    std::string m_entityType; // #1089: requested aircraft; empty = the server default
     ClientMetrics m_metrics;
 
     double m_now{0.0};          // current steady seconds, set each loop iteration
