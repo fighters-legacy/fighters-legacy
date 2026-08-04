@@ -27,6 +27,9 @@ class ServerQueryResponder {
         uint16_t gamePort{0};
         uint8_t maxPlayers{0};
         uint8_t gameModeFlags{0}; // static capability bits (campaign/mission/sandbox/passworded)
+        // Appended at the tail (#1074) so existing brace-initialization at call sites keeps working —
+        // the same tail-append discipline the wire structs follow, for the same reason.
+        std::string buildVersion; // advertised so a browser shows the build without connecting
     };
     struct DynamicInfo {
         uint8_t playerCount{0};

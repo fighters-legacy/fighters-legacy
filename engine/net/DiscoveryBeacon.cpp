@@ -165,6 +165,7 @@ void DiscoveryBeacon::send(const TickState& state) {
         pkt.shutdownSeconds = state.shutdownSeconds;
     }
     std::snprintf(pkt.name, sizeof(pkt.name), "%s", m_cfg.name.c_str());
+    std::snprintf(pkt.build, sizeof(pkt.build), "%s", m_cfg.buildVersion.c_str()); // #1074
 
     uint8_t buf[sizeof(fl::MsgLanBeacon)];
     std::memcpy(buf, &pkt, sizeof(pkt));

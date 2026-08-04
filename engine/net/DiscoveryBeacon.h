@@ -43,6 +43,10 @@ class DiscoveryBeacon {
         uint8_t maxPlayers{32};
         uint8_t gameModeFlags{0};
         uint16_t queryPort{0}; // #997: the server's info-query port; 0 = query disabled
+        // The server's build version (#1074), advertised so a browser can show it without
+        // connecting. Passed IN rather than compiled in: engine-protocol and engine-net are
+        // content- and build-agnostic, and fl-server is the layer that knows FL_VERSION_STRING.
+        std::string buildVersion;
         int intervalMs{2000};
         std::string broadcastAddr{"255.255.255.255"}; // configurable for loopback tests
     };

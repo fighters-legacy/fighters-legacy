@@ -1027,6 +1027,16 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         m_heartbeatRateLimit = perSecond < 1 ? 1 : perSecond;
     }
 
+    // The server's BUILD version, sent as a MsgHello TLV (#1074) and reported to a browser via the
+    // beacon and the query responder. Passed in rather than compiled in: engine-net is build-agnostic
+    // and fl-server is the layer that knows FL_VERSION_STRING. Empty = do not advertise one.
+    void setBuildVersion(std::string version) {
+        m_buildVersion = std::move(version);
+    }
+    [[nodiscard]] const std::string& buildVersion() const noexcept {
+        return m_buildVersion;
+    }
+
     // The tick rate this server steps at and advertises in MsgConnectAck (#1075). Read it rather than
     // writing `60` or `1000/60` at a call site — that is the defect this replaced.
     [[nodiscard]] TickRate tickRate() const noexcept {
@@ -1613,6 +1623,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // at 60: physics, prediction, lag compensation and the scale gate all assume it. It is a value
     // rather than a literal so the wire field is honest and every tick<->ms conversion has one source.
     TickRate m_tickRate{kServerTickRate};
+    std::string m_buildVersion;    // #1074: advertised in MsgHello / the beacon / the query reply
     int m_seatRequestRateLimit{2}; // seat requests per second per peer
     int m_teamSwitchCooldownS{5};  // seconds between accepted team switches per peer; 0 = no cooldown
     int m_heartbeatRateLimit{4};   // heartbeats per second per peer that draw a reply

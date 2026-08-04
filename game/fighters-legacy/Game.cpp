@@ -1573,6 +1573,8 @@ void Game::initScreenManager() {
             d.services.rawLogger->log(LogLevel::Warn, __FILE__, __LINE__,
                                       "LAN discovery listener: no sockets opened; LAN servers will not be listed");
         d.services.browserQuery.emplace(*d.services.rawLogger);
+        // #1074: the model needs this client's build to flag a per-row build mismatch.
+        d.services.browserModel.setClientBuildVersion(FL_VERSION_STRING);
         if (d.services.p.httpClient) {
             d.services.lobbyList =
                 std::make_unique<fl::LobbyListClient>(*d.services.p.httpClient, *d.services.rawLogger);
@@ -1879,6 +1881,8 @@ void Game::startGame(const std::string& mission) {
             }
         };
         d.session.clientHandler->motdDisplaySeconds = d.services.userConfig->client().motdDisplayS;
+        // #1074: this client's build, compared against the server's MsgHello TLV. Warn-only.
+        d.session.clientHandler->clientBuildVersion = FL_VERSION_STRING;
         d.session.clientHandler->sessionFailure = &d.session.sessionFailure;
         // Connect-handshake inputs (#853/#834/#857): request a specific aircraft if --aircraft was given
         // (empty = let the server pick its [world] player_entity_type default), and the observer role if

@@ -3291,3 +3291,95 @@ TEST_CASE("ClientNetEventHandler: a malformed zero tick rate falls back rather t
     handler.onReceive(0u, &pd, sizeof(pd)); // must not divide by zero
     CHECK(handler.lastRttMs() == 1000u);
 }
+
+// ---------------------------------------------------------------------------
+// #1074: the build version on the wire, and the warn-only mismatch
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// A MsgHello, optionally carrying the HelloBuildVersion TLV.
+static std::vector<uint8_t> makeHello(std::string_view build, uint16_t protocolVersion = fl::kProtocolVersion) {
+    fl::MsgHello hello{};
+    hello.protocolVersion = protocolVersion;
+    std::vector<uint8_t> pkt;
+    fl::appendMsg(pkt, hello);
+    if (!build.empty())
+        fl::appendExtRaw(pkt, static_cast<uint16_t>(fl::ExtTag::HelloBuildVersion), build.data(),
+                         static_cast<uint16_t>(build.size()));
+    return pkt;
+}
+
+} // namespace
+
+TEST_CASE("ClientNetEventHandler: a differing server build warns but never refuses (#1074)",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.clientBuildVersion = "0.4.1";
+
+    const auto hello = makeHello("0.3.11");
+    handler.onReceive(0u, hello.data(), hello.size());
+
+    CHECK(handler.serverBuildVersion() == "0.3.11");
+    CHECK(handler.buildMismatch());
+    // Warn-only is the whole point: refusing here would break the LAN sessions this helps.
+    CHECK(net.disconnectCount == 0);
+}
+
+TEST_CASE("ClientNetEventHandler: a matching server build is not a mismatch (#1074)", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.clientBuildVersion = "0.4.1";
+
+    const auto hello = makeHello("0.4.1");
+    handler.onReceive(0u, hello.data(), hello.size());
+    CHECK(handler.serverBuildVersion() == "0.4.1");
+    CHECK_FALSE(handler.buildMismatch());
+}
+
+TEST_CASE("ClientNetEventHandler: a server that advertises no build is not a mismatch (#1074)",
+          "[client_net_event_handler]") {
+    // The short-packet case: a server built before the TLV existed sends a bare 4-byte MsgHello. It
+    // must parse exactly as before and must NOT be reported as a mismatch — calling every older
+    // server "mismatched" would fire the warning constantly and teach players to ignore it.
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.clientBuildVersion = "0.4.1";
+
+    const auto hello = makeHello("");
+    REQUIRE(hello.size() == sizeof(fl::MsgHello));
+    handler.onReceive(0u, hello.data(), hello.size());
+    CHECK(handler.serverBuildVersion().empty());
+    CHECK_FALSE(handler.buildMismatch());
+    CHECK(net.disconnectCount == 0);
+}
+
+TEST_CASE("ClientNetEventHandler: a protocol mismatch still disconnects, build or not (#1074)",
+          "[client_net_event_handler]") {
+    // The build check is additive to the protocol check, not a replacement: a genuine protocol
+    // mismatch is still fatal and must not be softened into a warning.
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.clientBuildVersion = "0.4.1";
+
+    const auto hello = makeHello("0.4.1", static_cast<uint16_t>(fl::kProtocolVersion + 1));
+    handler.onReceive(0u, hello.data(), hello.size());
+    CHECK(net.disconnectCount == 1);
+}

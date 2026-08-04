@@ -43,6 +43,8 @@ void ServerBrowserModel::rebuild(const std::vector<DiscoveryListener::ServerInfo
         r.shutdownSeconds = s.shutdownSeconds();
         r.source = BrowserSource::Lan;
         r.protocolMismatch = s.beacon.protocolVersion != kProtocolVersion;
+        r.build = cstr(s.beacon.build, sizeof(s.beacon.build)); // #1074
+        r.buildMismatch = !r.build.empty() && !m_clientBuild.empty() && r.build != m_clientBuild;
         index[keyOf(r.host, r.gamePort)] = m_rows.size();
         m_rows.push_back(std::move(r));
     }
@@ -78,6 +80,11 @@ void ServerBrowserModel::rebuild(const std::vector<DiscoveryListener::ServerInfo
         r.players = q.info.playerCount;
         r.maxPlayers = q.info.maxPlayers;
         r.passworded = (q.info.gameModeFlags & kGameModePassworded) != 0u;
+        // A live query is fresher than the beacon, so let it correct the advertised build (#1074).
+        if (const std::string qb = cstr(q.info.build, sizeof(q.info.build)); !qb.empty()) {
+            r.build = qb;
+            r.buildMismatch = !m_clientBuild.empty() && r.build != m_clientBuild;
+        }
         r.shuttingDown = (q.info.gameModeFlags & kGameModeShuttingDown) != 0u;
         r.shutdownSeconds = q.info.shutdownSeconds;
         r.protocolMismatch = q.info.protocolVersion != kProtocolVersion;

@@ -135,6 +135,35 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             logger.log(LogLevel::Error, __FILE__, __LINE__, "server protocol version mismatch — disconnecting");
             signalFailure(SessionFailure::VersionMismatch);
             net.disconnect();
+            return;
+        }
+        // Build version TLV (#1074). kProtocolVersion stays 1 for every additive message and ExtTag,
+        // so protocol agreement does NOT mean the two builds understand the same messages: a v0.3.11
+        // client and a v0.4.1 server both advertise protocol 1, shake hands, and then disagree
+        // silently about everything added in between. WARN-ONLY on purpose — refusal semantics are a
+        // 1.0-freeze question, and refusing here would break the LAN sessions this exists to help.
+        m_serverBuild.clear();
+        m_buildMismatch = false;
+        if (size > sizeof(hello)) {
+            const uint8_t* ext = static_cast<const uint8_t*>(data) + sizeof(hello);
+            const std::size_t extSize = size - sizeof(hello);
+            uint16_t len = 0;
+            if (const uint8_t* p = fl::findExt(ext, extSize, static_cast<uint16_t>(fl::ExtTag::HelloBuildVersion), len);
+                p && len > 0) {
+                m_serverBuild.assign(reinterpret_cast<const char*>(p),
+                                     std::min<std::size_t>(len, fl::kBuildVersionBytes));
+            }
+        }
+        // A server that advertises no build is not a mismatch — it is an older server that predates
+        // the field, and calling that a mismatch would fire the warning on every one of them.
+        if (!m_serverBuild.empty() && !clientBuildVersion.empty() && m_serverBuild != clientBuildVersion) {
+            m_buildMismatch = true;
+            char msg[192];
+            std::snprintf(msg, sizeof(msg), "server build %s does not match this client (%s) — expect problems",
+                          m_serverBuild.c_str(), clientBuildVersion.c_str());
+            logger.log(LogLevel::Warn, __FILE__, __LINE__, msg);
+            if (notice)
+                notice->setNotice(msg, 0, /*visibleSeconds=*/15);
         }
         return;
     }

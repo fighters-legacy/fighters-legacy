@@ -115,9 +115,9 @@ lanes are not configured). Callers must not assume ordering *between* channels.
 | `VoiceRelay` | `0x25` | server→client | unreliable (voice channel) | 16 + payload | The same opaque payload relayed to listeners on the net, plus who sent it (#532). Field table [below](#msgvoicerelay--16--payload-bytes). Additive ID. |
 | `Chat` | `0x20` | client→server | reliable | 4-byte `MsgChatHeader` + NUL-terminated UTF-8 text (≤ `kMaxChatBytes` = 240) | In-match chat line (#646). Header: `channel` @1 (`ChatChannel` All/Team). The server sanitizes (BMP UTF-8, control chars stripped, codepoint-boundary truncation), per-peer rate-limits, applies mute + a moderation hook, then routes a `ChatEvent`. Additive ID. |
 | `ChatEvent` | `0x21` | server→client | reliable | 8-byte `MsgChatEventHeader` + NUL-terminated UTF-8 text | Routed chat line (#646). Header: `channel` @1, `senderPeerId` @4 (participant id; `kNoOwningPeer` = a system line with no sender name). All-channel lines reach every handshake-complete peer incl. the sender's own echo; Team-channel lines reach only the sender's faction. Additive ID. |
-| `LanBeacon` | `0x40` | server→client | raw UDP (not ENet) | 78 bytes | LAN server presence broadcast. The ENet id space is `0x00–0x3F`; `0x40+` is reserved for raw-UDP/non-ENet ids (the boundary was raised from `0x20` in #996 to free ENet ids for the Epic E messages). Carries `gameModeFlags` (incl. `kGameModeShuttingDown` #226 and `kGameModePassworded` #998) + `shutdownSeconds`. |
-| `ServerQuery` | `0x41` | client→server | raw UDP | 192 bytes | A2S-style server-info request (#997), sent to the query port rather than the game port. Answered by the query responder, which runs by default (`[discovery] query_enabled`); the port is advertised in `MsgLanBeacon`, and defaults to game port + 1. |
-| `ServerInfo` | `0x42` | server→client | raw UDP | 184 bytes | Reply to `MsgServerQuery` (#997): live name, player count and mode flags for a browser's details and ping columns. |
+| `LanBeacon` | `0x40` | server→client | raw UDP (not ENet) | 102 bytes | LAN server presence broadcast. The ENet id space is `0x00–0x3F`; `0x40+` is reserved for raw-UDP/non-ENet ids (the boundary was raised from `0x20` in #996 to free ENet ids for the Epic E messages). Carries `gameModeFlags` (incl. `kGameModeShuttingDown` #226 and `kGameModePassworded` #998) + `shutdownSeconds`. |
+| `ServerQuery` | `0x41` | client→server | raw UDP | 208 bytes | A2S-style server-info request (#997), sent to the query port rather than the game port. Answered by the query responder, which runs by default (`[discovery] query_enabled`); the port is advertised in `MsgLanBeacon`, and defaults to game port + 1. |
+| `ServerInfo` | `0x42` | server→client | raw UDP | 208 bytes | Reply to `MsgServerQuery` (#997): live name, player count and mode flags for a browser's details and ping columns. |
 
 ## Struct Definitions
 
@@ -851,7 +851,7 @@ Header:
 | 24 | 4 | `b` | `uint32_t` | Kill: subject's owning peer id. Stats: losses |
 | 28 | 4 | `c` | `int32_t` | Stats: score |
 
-### MsgLanBeacon — 78 bytes
+### MsgLanBeacon — 102 bytes
 
 Broadcast by `fl-server` on `255.255.255.255:4780` (IPv4) and `[ff02::1]:4780` (IPv6
 link-local multicast) every `discovery.interval_ms` milliseconds (default: 2000 ms) using a
@@ -881,6 +881,7 @@ This packet is **not** sent over ENet and must not be injected into an ENet conn
 | 10 | 2 | `shutdownSeconds` | `uint16_t` | Seconds until shutdown when `kGameModeShuttingDown` is set (#226); 0 = n/a |
 | 12 | 2 | `queryPort` | `uint16_t` | The server's info-query port (#997); 0 = query disabled |
 | 14 | 64 | `name[64]` | `char[64]` | Null-terminated server name (UTF-8) |
+| 78 | 24 | `build[24]` | `char[24]` | Null-terminated **build** version (#1074), e.g. `"0.3.14"`; empty = not advertised. Tail-appended, so a receiver requires only the pre-#1074 78-byte prefix (`fl::kLanBeaconLegacyBytes`) and reads this only when the datagram carries it — demanding the new `sizeof` would silently drop every older server's beacon |
 
 **IPv6 multicast:** The sender broadcasts to `ff02::1` (all-nodes link-local); receivers join
 via `IPV6_JOIN_GROUP`. No join is required by the sender. `IPV6_MULTICAST_HOPS` is set to 1
@@ -1027,6 +1028,7 @@ Helpers: `fl::findExt`, `fl::readExtValue<T>`, `fl::appendExt<T>`, `fl::appendEx
 
 | `ConnectAckAuthority` | `0x0201` | `{u64 caps, u16 factionIndex}` (10 B) | `MsgConnectAck` | Granted authority (#949), appended after the entity-type records. Present only when the peer holds non-zero granted capabilities (`CapabilityMask`, `engine/net/Capability.h`); re-sent on a mid-session grant/revoke so the client can show/hide game-master, moderator, and faction-leader UI affordances. **Cosmetic/UX only — the server remains the enforcement point.** Old clients iterate the type records by `typeCount` and skip the unknown tag. Little-endian, unaligned. Parsed by `ClientNetEventHandler::grantedCaps()` / `grantedFactionIndex()`. |
 | `ConnectAckTypesUnchanged` | `0x0202` | none (zero-length) | `MsgConnectAck` | The ack carries **no** `MsgEntityTypeDef` records (`typeCount == 0`) because the server's entity-type table has not changed since the last ack it sent this peer — keep the cached table (#1070). `sendConnectAck` is re-sent on every seat change, role change, team change and authority grant, and the table is `typeCount × 380 B` (~23 KB at a realistic 60-type registry), so re-sending it was the amplification factor behind the un-rate-limited seat/team requests (#1069). The server keys "unchanged" on `EntityTypeRegistry::generation()`, not on the type count — a `clear()` plus re-register leaves the count identical and the contents different. Additive: a client that ignores the tag sees `typeCount == 0` and keeps its table anyway, because the record loop only ever **adds** types it does not already have. |
+| `HelloBuildVersion` | `0x0600` | raw UTF-8 version bytes, 1–24, no NUL | `MsgHello` | The server's **build** version (#1074). `kProtocolVersion` stays 1 for every additive message and ExtTag, so protocol agreement does **not** mean two builds understand the same messages: a v0.3.11 client and a v0.4.1 server both advertise protocol 1, complete the handshake, and then silently disagree about everything added in between. `MsgHello` is the first message a server sends, so the client knows the build before committing to anything. **Warn-only** — the client logs and shows a banner, never refuses; refusal semantics are a 1.0-freeze question and refusing here would break the LAN sessions this exists to help. Opens the reserved `0x0600–0x06FF` `MsgHello` range. |
 | `WeatherWindProfile` | `0x0400` | `uint8 count` + `count × {f32 altM, f32 windX, f32 windZ}` (12 B each) | `MsgWeatherState` | Altitude wind profile (#489), appended after the 32-byte fixed struct. Knots ascending by altitude, absolute world-frame wind (m/s) at each. The client interpolates it by altitude (`WindProfile.h`) in parity with the server's per-entity wind. Omitted when no profile is set; old clients read the 32-byte struct and ignore the tail, keeping the datum-level `windX/windZ`. Little-endian, unaligned; read per-record via memcpy. |
 | `ConnectSeatClaim` | `0x0500` | `{u32 entityIdx, u32 entityGen, u8 seatIndex}` (9 B) | `MsgConnectRequest` | Join-at-connect seat claim (#974): the client asks to occupy a non-fly seat of an existing crewed aircraft instead of spawning its own. The server binds the seat when it is joinable and falls back to a normal pilot spawn otherwise (so a pilot always gets in). Appended after the pack manifest. Little-endian, unaligned. |
 | `ConnectIdentity` | `0x0501` | ASCII UUID (≤ 40 B) | `MsgConnectRequest` | The client's stable pilot identity (#524), taken from `PilotProfile::guid`. Lets the server restore a reconnecting player's team and score tallies inside the `[match] reconnect_grace_s` window, so a dropped connection is not a fresh join. Absent means no reconnect matching is attempted. Little-endian, unaligned. |
@@ -1038,6 +1040,7 @@ Helpers: `fl::findExt`, `fl::readExtValue<T>`, `fl::appendExt<T>`, `fl::appendEx
 - `0x0200–0x02FF`: `MsgConnectAck` extensions (`0x0201` = `ConnectAckAuthority`, `0x0202` = `ConnectAckTypesUnchanged`)
 - `0x0300–0x03FF`: `MsgClientInput` extensions (`0x0400` used by `WeatherWindProfile`)
 - `0x0400–0x04FF`: `MsgWeatherState` extensions (`0x0400` = `WeatherWindProfile`)
+- `0x0600–0x06FF`: `MsgHello` extensions (`0x0600` = `HelloBuildVersion`)
 - `0x0500–0x05FF`: `MsgConnectRequest` extensions (`0x0500` = `ConnectSeatClaim`)
 - All other values: reserved; must not be sent
 

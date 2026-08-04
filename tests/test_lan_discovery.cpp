@@ -179,7 +179,9 @@ static std::vector<DiscoveryListener::ServerInfo> expectNoServers(DiscoveryListe
 // ---------------------------------------------------------------------------
 
 TEST_CASE("MsgLanBeacon struct layout matches wire spec", "[lan_discovery][protocol]") {
-    CHECK(sizeof(fl::MsgLanBeacon) == 78u);
+    CHECK(sizeof(fl::MsgLanBeacon) == 102u);         // #1074 tail-appended build[24]
+    CHECK(fl::kLanBeaconLegacyBytes == 78u);         // the pre-#1074 prefix a receiver still accepts
+    CHECK(offsetof(fl::MsgLanBeacon, build) == 78u); // the tail begins exactly where the prefix ends
     CHECK(offsetof(fl::MsgLanBeacon, protocolVersion) == 2u);
     CHECK(offsetof(fl::MsgLanBeacon, gamePort) == 4u);
     CHECK(offsetof(fl::MsgLanBeacon, playerCount) == 6u);

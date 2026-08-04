@@ -34,6 +34,13 @@ struct BrowserRow {
     bool hasPing{false};
     float pingMs{0.f};
     bool protocolMismatch{false}; // advertised/queried protocol != this client's kProtocolVersion
+    // #1074: the server's BUILD, advertised in the beacon and the query reply. Empty = the server did
+    // not advertise one (it predates the field), which is NOT a mismatch. buildMismatch is set only
+    // when both sides advertised and they differ — protocolMismatch's sibling, and the one that
+    // actually fires during primary development, because kProtocolVersion stays 1 for every additive
+    // change and so protocol agreement says nothing about whether the two builds understand each other.
+    std::string build;
+    bool buildMismatch{false};
 };
 
 // Merges LAN discovery, lobby listings, and server-info query results into a sorted, deduplicated row
@@ -45,12 +52,19 @@ class ServerBrowserModel {
     void rebuild(const std::vector<DiscoveryListener::ServerInfo>& lan, const std::vector<LobbyServer>& lobby,
                  const std::vector<ServerQueryClient::Result>& queries);
 
+    // This client's build, for the per-row build-mismatch flag (#1074). Empty (the default) means the
+    // model never reports a mismatch — a browser that does not know its own build cannot judge.
+    void setClientBuildVersion(std::string version) {
+        m_clientBuild = std::move(version);
+    }
+
     [[nodiscard]] const std::vector<BrowserRow>& rows() const noexcept {
         return m_rows;
     }
 
   private:
     std::vector<BrowserRow> m_rows;
+    std::string m_clientBuild; // #1074: empty = do not judge builds
 };
 
 } // namespace fl

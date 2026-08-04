@@ -77,8 +77,10 @@ uint16_t freeUdpPort() {
 } // namespace
 
 TEST_CASE("Server query protocol: wire layout", "[server_query][protocol]") {
-    CHECK(sizeof(fl::MsgServerQuery) == 192u);
-    CHECK(sizeof(fl::MsgServerInfo) == 184u);
+    CHECK(sizeof(fl::MsgServerQuery) == 208u);
+    CHECK(sizeof(fl::MsgServerInfo) == 208u);          // #1074 tail-appended build[24]
+    CHECK(fl::kServerInfoLegacyBytes == 184u);         // the pre-#1074 prefix a client still accepts
+    CHECK(offsetof(fl::MsgServerInfo, build) == 184u); // the tail begins exactly where the prefix ends
     CHECK(offsetof(fl::MsgServerInfo, name) == 24u);
     CHECK(offsetof(fl::MsgServerInfo, modeId) == 88u);
     CHECK(offsetof(fl::MsgServerInfo, mission) == 120u);
@@ -135,7 +137,7 @@ TEST_CASE("Server query protocol: short datagram is dropped (anti-amplification)
     const uint16_t port = freeUdpPort();
     ServerQueryResponder responder(port, log);
     REQUIRE(responder.start());
-    responder.setStaticInfo({"S", "", "", 4778, 8, 0});
+    responder.setStaticInfo({"S", "", "", 4778, 8, 0, "0.0.0-test"});
 
     // Send a too-short datagram directly; the responder must not reply.
 #if defined(_WIN32)

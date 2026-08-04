@@ -2309,9 +2309,21 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
     std::snprintf(msg, sizeof(msg), "peer %u connected", peerId);
     m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
 
-    // Version handshake. The client checks this and disconnects on mismatch.
+    // Version handshake. The client checks protocolVersion and disconnects on mismatch.
+    //
+    // The BUILD version rides along as a TLV (#1074). kProtocolVersion stays 1 for every additive
+    // message and ExtTag through primary development, so it cannot distinguish a v0.3.11 peer from a
+    // v0.4.1 one: both advertise protocol 1, complete the handshake, and then silently disagree about
+    // every message added in between. MsgHello is the first thing a server sends, so the client knows
+    // the build before committing to anything. Warn-only — see ExtTag::HelloBuildVersion.
+    std::vector<uint8_t> helloBuf;
     MsgHello hello;
-    m_net.send(peerId, &hello, sizeof(hello), /*reliable=*/true);
+    appendMsg(helloBuf, hello);
+    if (!m_buildVersion.empty()) {
+        const auto len = static_cast<uint16_t>(std::min(m_buildVersion.size(), kBuildVersionBytes));
+        appendExtRaw(helloBuf, static_cast<uint16_t>(ExtTag::HelloBuildVersion), m_buildVersion.data(), len);
+    }
+    m_net.send(peerId, helloBuf.data(), helloBuf.size(), /*reliable=*/true);
 
     // Create the peer's input slot now, BEFORE admission (#853). A peer that connects but never sends a
     // MsgConnectRequest keeps this slot (so idle-timeout covers it) but has no entity, no role, and no

@@ -117,3 +117,87 @@ TEST_CASE("ServerBrowserModel: joinable rows sort by descending players (#143)",
     CHECK(m.rows()[1].name == "C"); // 4
     CHECK(m.rows()[2].name == "A"); // 1
 }
+
+// ---------------------------------------------------------------------------
+// #1074: the browser shows a server's build, and flags a mismatch
+// ---------------------------------------------------------------------------
+
+TEST_CASE("ServerBrowserModel: a LAN row carries the advertised build and flags a mismatch (#1074)",
+          "[server_browser]") {
+    ServerBrowserModel model;
+    model.setClientBuildVersion("0.4.1");
+
+    DiscoveryListener::ServerInfo older{};
+    older.address = "10.0.0.5";
+    older.beacon.gamePort = 4778;
+    std::snprintf(older.beacon.name, sizeof(older.beacon.name), "%s", "Old Server");
+    std::snprintf(older.beacon.build, sizeof(older.beacon.build), "%s", "0.3.11");
+
+    DiscoveryListener::ServerInfo same{};
+    same.address = "10.0.0.6";
+    same.beacon.gamePort = 4778;
+    std::snprintf(same.beacon.name, sizeof(same.beacon.name), "%s", "Current Server");
+    std::snprintf(same.beacon.build, sizeof(same.beacon.build), "%s", "0.4.1");
+
+    // A server that predates the field advertises nothing — not a mismatch.
+    DiscoveryListener::ServerInfo silent{};
+    silent.address = "10.0.0.7";
+    silent.beacon.gamePort = 4778;
+    std::snprintf(silent.beacon.name, sizeof(silent.beacon.name), "%s", "Silent Server");
+
+    model.rebuild({older, same, silent}, {}, {});
+    REQUIRE(model.rows().size() == 3u);
+
+    auto rowFor = [&](const std::string& host) -> const BrowserRow& {
+        for (const BrowserRow& r : model.rows())
+            if (r.host == host)
+                return r;
+        FAIL("no row for " + host);
+        return model.rows().front();
+    };
+
+    CHECK(rowFor("10.0.0.5").build == "0.3.11");
+    CHECK(rowFor("10.0.0.5").buildMismatch);
+    CHECK(rowFor("10.0.0.6").build == "0.4.1");
+    CHECK_FALSE(rowFor("10.0.0.6").buildMismatch);
+    CHECK(rowFor("10.0.0.7").build.empty());
+    CHECK_FALSE(rowFor("10.0.0.7").buildMismatch);
+}
+
+TEST_CASE("ServerBrowserModel: a live query corrects the advertised build (#1074)", "[server_browser]") {
+    ServerBrowserModel model;
+    model.setClientBuildVersion("0.4.1");
+
+    DiscoveryListener::ServerInfo lan{};
+    lan.address = "10.0.0.5";
+    lan.beacon.gamePort = 4778;
+    std::snprintf(lan.beacon.name, sizeof(lan.beacon.name), "%s", "Upgraded");
+    std::snprintf(lan.beacon.build, sizeof(lan.beacon.build), "%s", "0.3.11"); // stale beacon
+
+    ServerQueryClient::Result q{};
+    q.address = "10.0.0.5";
+    q.info.gamePort = 4778;
+    q.rttMs = 12.f;
+    std::snprintf(q.info.build, sizeof(q.info.build), "%s", "0.4.1"); // the server has since restarted
+
+    model.rebuild({lan}, {}, {q});
+    REQUIRE(model.rows().size() == 1u);
+    CHECK(model.rows()[0].build == "0.4.1");
+    CHECK_FALSE(model.rows()[0].buildMismatch);
+}
+
+TEST_CASE("ServerBrowserModel: a client that does not know its own build judges nobody (#1074)", "[server_browser]") {
+    // setClientBuildVersion is never called, so the model has nothing to compare against and must not
+    // flag every server as mismatched.
+    ServerBrowserModel model;
+
+    DiscoveryListener::ServerInfo lan{};
+    lan.address = "10.0.0.5";
+    lan.beacon.gamePort = 4778;
+    std::snprintf(lan.beacon.build, sizeof(lan.beacon.build), "%s", "0.3.11");
+
+    model.rebuild({lan}, {}, {});
+    REQUIRE(model.rows().size() == 1u);
+    CHECK(model.rows()[0].build == "0.3.11");
+    CHECK_FALSE(model.rows()[0].buildMismatch);
+}

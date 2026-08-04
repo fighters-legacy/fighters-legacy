@@ -113,7 +113,9 @@ void ServerQueryClient::poll() {
         SockLen slen = sizeof(src);
         const auto n =
             recvfrom(m_sock, reinterpret_cast<char*>(&info), sizeof(info), 0, reinterpret_cast<sockaddr*>(&src), &slen);
-        if (n < 0 || static_cast<std::size_t>(n) < sizeof(MsgServerInfo))
+        // Only the pre-#1074 prefix is required, so a server built before the build-version tail is
+        // still answered rather than silently dropped (see kServerInfoLegacyBytes).
+        if (n < 0 || static_cast<std::size_t>(n) < kServerInfoLegacyBytes)
             break; // no more datagrams (or a short/invalid one)
         if (info.msgId != static_cast<uint8_t>(MsgId::ServerInfo))
             continue;
