@@ -215,6 +215,19 @@ def test_an_lf_file_stays_lf_even_when_git_cliff_emits_crlf():
     assert "\r" not in result
 
 
+@pytest.mark.parametrize("text", [CHANGELOG, CHANGELOG.replace("\n", "\r\n")])
+def test_read_write_round_trip_is_byte_exact(tmp_path, text):
+    """Through real disk I/O, which is where the newline handling actually has to hold.
+
+    `Path.read_text(newline=...)` needs Python 3.13 and CI's runner is older, so `read_file` /
+    `write_file` use `open()` directly. This is the test that would have caught that locally.
+    """
+    path = tmp_path / "CHANGELOG.md"
+    gc.write_file(path, text)
+    assert gc.read_file(path) == text
+    assert path.read_bytes() == text.encode("utf-8")
+
+
 def test_the_trailing_newline_is_preserved():
     assert gc.splice_section(CHANGELOG, SECTION, "0.3.14").endswith("(#500)\n")
     no_trailing = CHANGELOG.rstrip("\n")
@@ -246,8 +259,8 @@ def test_bump_refuses_when_the_project_line_is_duplicated():
 
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
-    (tmp_path / "CHANGELOG.md").write_text(CHANGELOG, encoding="utf-8", newline="")
-    (tmp_path / "CMakeLists.txt").write_text(CMAKELISTS, encoding="utf-8", newline="")
+    gc.write_file(tmp_path / "CHANGELOG.md", CHANGELOG)
+    gc.write_file(tmp_path / "CMakeLists.txt", CMAKELISTS)
     monkeypatch.setattr(gc, "resolve_git_cliff", lambda: ["git-cliff-stub"])
     monkeypatch.setattr(gc, "run_git_cliff", lambda argv, tag, root: SECTION)
     return tmp_path
@@ -255,9 +268,8 @@ def repo(tmp_path, monkeypatch):
 
 def test_main_writes_both_files(repo):
     assert gc.main(["v0.3.14", "--repo-root", str(repo)]) == 0
-    changelog = (repo / "CHANGELOG.md").read_text(encoding="utf-8", newline="")
-    assert changelog == HEADER + SECTION + "\n" + RELEASED
-    assert "VERSION 0.3.14" in (repo / "CMakeLists.txt").read_text(encoding="utf-8")
+    assert gc.read_file(repo / "CHANGELOG.md") == HEADER + SECTION + "\n" + RELEASED
+    assert "VERSION 0.3.14" in gc.read_file(repo / "CMakeLists.txt")
 
 
 def test_main_dry_run_writes_nothing(repo, capsys):

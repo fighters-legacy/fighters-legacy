@@ -58,6 +58,26 @@ class GenError(Exception):
     """A guard tripped. The message is written for whoever is cutting the release."""
 
 
+# ---- file I/O ------------------------------------------------------------------------------------
+
+
+def read_file(path: Path) -> str:
+    """Read with the newlines the file actually has, so a CRLF checkout survives a round trip.
+
+    `open(..., newline="")` rather than `Path.read_text(newline=...)`: that keyword only exists in
+    Python 3.13, and `ubuntu-latest` runs 3.12.3. It went green on a Fedora box (3.14) and failed in
+    CI with a bare `TypeError`. `Path.write_text` grew the keyword in 3.10 and would have worked --
+    which is the trap, since read and write look symmetric and are not.
+    """
+    with open(path, encoding="utf-8", newline="") as handle:
+        return handle.read()
+
+
+def write_file(path: Path, text: str) -> None:
+    with open(path, "w", encoding="utf-8", newline="") as handle:
+        handle.write(text)
+
+
 # ---- pure text operations (unit-tested; no git, no filesystem) ----------------------------------
 
 
@@ -250,17 +270,16 @@ def main(argv: list[str] | None = None) -> int:
             print(section.rstrip("\r\n"))
             return 0
 
-        original = changelog.read_text(encoding="utf-8", newline="")
+        original = read_file(changelog)
         updated = splice_section(original, section, semver)
         assert_preserved(original, updated, semver)
 
-        changelog.write_text(updated, encoding="utf-8", newline="")
+        write_file(changelog, updated)
         # Again, on what is actually on disk: the write itself is where encoding and newline
         # translation would corrupt the history we just checked in memory.
-        assert_preserved(original, changelog.read_text(encoding="utf-8", newline=""), semver)
+        assert_preserved(original, read_file(changelog), semver)
 
-        cmake_text = cmakelists.read_text(encoding="utf-8", newline="")
-        cmakelists.write_text(bump_cmake_version(cmake_text, semver), encoding="utf-8", newline="")
+        write_file(cmakelists, bump_cmake_version(read_file(cmakelists), semver))
 
         entries = sum(1 for line in section.splitlines() if line.startswith("- "))
         print(f"CHANGELOG.md: wrote [{semver}] - {today} ({entries} entries)")
