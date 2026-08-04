@@ -29,6 +29,11 @@ struct SwarmConfig {
     // A "gns" run in an enet6-only build (FL_ENABLE_GNS=OFF) is a hard error, never a silent
     // downgrade — a GNS gate that quietly measured enet6 would be worse than no gate.
     std::string transport{"enet"};
+    // The aircraft each bot asks to fly (#1089). Empty = the server's [world] player_entity_type,
+    // which is what every pre-#1089 run did. "builtin:sensor-fighter" carries an eyeball and an
+    // intercept radar, so contact tables populate and datalink team fusion is actually exercised —
+    // without it the gate measures a HOLLOW world in which fusion merges nothing and costs nothing.
+    std::string entityType;
     std::string jsonPath;            // empty = no JSON output
     std::string serverMetricsPath;   // empty = no server-side tick block; fl-server --metrics-json file
     double assertMinTickHz{0.0};     // 0 = disabled
@@ -130,6 +135,10 @@ inline SwarmParseResult parseSwarmArgs(int argc, char** argv) {
             if (!detail::needValue(i, argc, a, r))
                 return r;
             r.cfg.transport = argv[++i];
+        } else if (std::strcmp(a, "--entity-type") == 0) {
+            if (!detail::needValue(i, argc, a, r))
+                return r;
+            r.cfg.entityType = argv[++i];
         } else if (std::strcmp(a, "--json") == 0) {
             if (!detail::needValue(i, argc, a, r))
                 return r;

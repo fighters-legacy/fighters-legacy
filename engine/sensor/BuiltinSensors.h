@@ -140,6 +140,45 @@ struct BuiltinSensors {
         return s;
     }
 
+    // The builtin AIRBORNE INTERCEPT radar (#1089) — a fighter's own nose radar, `sensor_id =
+    // "builtin:ai-radar"`. It exists so a sensor-carrying aircraft can be assembled with NO content
+    // pack mounted: the scale gate needs bots whose contact tables actually populate, and waiting on
+    // pack sensor defs would have left the gate measuring a hollow world for another release.
+    //
+    // A forward scan cone with a track lobe, so contacts reach Locked and firing quality and the
+    // datalink fusion path is exercised for real rather than at Detected-only. An EMITTER, so the RWR
+    // and EMCON seams (#529) see it the way they see any airborne radar. Range sits between the SAM
+    // radar and the seekers: a fighter radar reaches further than a missile's and less far than a
+    // ground battery's.
+    [[nodiscard]] static const SensorDef& interceptRadar() {
+        static const SensorDef s = [] {
+            SensorDef d;
+            d.id = "builtin:ai-radar";
+            d.name = "Airborne Intercept Radar";
+            d.type = SensorType::Radar;
+            d.omnidirectional = false;
+            d.emitter = true;
+
+            d.search.azHalfAngleDeg = 60.f; // a nose-mounted scan volume, not a turret
+            d.search.elHalfAngleDeg = 30.f;
+            d.search.minRangeM = 200.f;
+            d.search.maxRangeM = 74080.f; // 40 nm against a baseline (rcs 1.0) fighter
+            d.search.pod = 0.45f;
+
+            SensorLobe track;
+            track.azHalfAngleDeg = 60.f;
+            track.elHalfAngleDeg = 30.f;
+            track.minRangeM = 200.f;
+            track.maxRangeM = 83400.f; // 45 nm
+            track.pod = 0.8f;
+            d.track = track;
+            d.lockHoldS = 2.5f;
+
+            return d;
+        }();
+        return s;
+    }
+
     // The builtin ground air-defense search radar (#863) — the SAM site's eyes, `sensor_id =
     // "builtin:sam-radar"`. A long-range EMITTER (the RWR/EMCON seam #529 reads it as "a SAM is
     // painting me"), omnidirectional in azimuth so a fixed emplacement covers the whole sky, not just

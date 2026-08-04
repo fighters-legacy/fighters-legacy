@@ -674,6 +674,9 @@ int main(int argc, char** argv) {
     // The builtin multi-crew bomber (#966/#977): a pilot + a bot tail-gunner turret, so the whole
     // crew/turret fire path is provable zero-pack (the crewed counterpart to the debug entity).
     entityRegistry.registerType(fl::builtinBomberDef());
+    // The sensor-carrying fighter (#1089): the debug entity plus an eyeball and an intercept radar.
+    // The scale gate flies this so contact tables populate and datalink fusion is actually measured.
+    entityRegistry.registerType(fl::builtinSensorFighterDef());
     // The ejection parachute (#672): a replicating Effect entity spawned when a pilot ejects. The
     // broadcaster is pointed at it after construction (setParachuteType), below.
     entityRegistry.registerType(fl::builtinParachuteDef());
@@ -1028,6 +1031,7 @@ int main(int argc, char** argv) {
             def.radioEffect = n.radioEffect;
             def.gain = static_cast<float>(n.gain);
             def.defaultNet = n.defaultNet;
+            def.maxTalkers = static_cast<uint8_t>(n.maxTalkers); // #1090: concurrent-speaker cap
             if (nets.add(std::move(def)) == kInvalidRadioNet) {
                 char buf[192];
                 std::snprintf(buf, sizeof(buf), "[voice] net '%s' rejected (duplicate id or table full); skipped",
@@ -2839,6 +2843,7 @@ int main(int argc, char** argv) {
                 ct.maxPacketLoss, wt.outKbs, wt.inKbs, wt.outPacketsPerSec, wt.peersAtSample, entityManager.softCap(),
                 entityManager.softCapRefusals());
             rep.peerThrottle = std::move(throttles);
+            rep.voiceRelaySends = broadcaster.voiceRelaySendCount(); // #1090: fan-out, not frame count
             fl::writeConfigFile(metricsPath, fl::toJson(rep) + "\n", *log);
             nextMetricsWrite = std::chrono::steady_clock::now() + metricsInterval;
         }

@@ -101,7 +101,30 @@ not a passed gate).
 
 128 clients @ 60 Hz with sim tick **≤ 16.6 ms p99** (observed tick-Hz ≈ 60) on a reference
 **8-core / 16 GB** instance, sustained **≤ ~150 KB/s/client** downstream after Epic B
-quantization + budgeting, soak-stable for 2 h. The thresholds live in
+quantization + budgeting, soak-stable for 2 h.
+
+### The gate measures a populated world (#1089)
+
+`pr`, `reference`, `reference-enet` and `soak` are **sensor-loaded**: their bots request
+`builtin:sensor-fighter` (`entity_type`) and the world carries AI entities to detect
+(`entity_spawn_counts`), so every bot builds a real `ContactTable`.
+
+This is load-bearing, not a detail. Before #1089 the bots flew `builtin:debug-entity`, which carries
+no sensors, so:
+
+- every `ContactTable` was empty, and **datalink team fusion — the largest `O(P²)` cost in the
+  server — merged nothing and cost nothing**;
+- the voice relay fan-out never ran, because nobody transmitted;
+- the sensing pass had no contacts to maintain.
+
+The committed 128-client numbers therefore described a **hollow battlespace**, and the two systems
+most likely to break at 128 players were precisely the two the gate could not see. **A gate that
+cannot fail on the bug it exists to catch is not evidence** — the same principle that made
+`reference` GNS-primary under #773: the headline numbers must describe what ships.
+
+`entity-scale` deliberately keeps its hollow sweep. It measures entity-pool and spatial-index cost
+against entity count, which is a different question, and loading sensors onto it would confound the
+variable it exists to isolate. The thresholds live in
 [`tools/bot_swarm/scale-gate.json`](https://github.com/fighters-legacy/fighters-legacy/blob/main/tools/bot_swarm/scale-gate.json) and are enforced by the
 [CI scale gate](#ci-scale-gate); `bot_swarm` provides the measurement plus the `--assert-*` hooks
 the gate forwards.

@@ -145,7 +145,7 @@ SensorDefResolver makeSensorDefResolver(AssetManager& assets, const ContentIndex
         for (const sensor::SensorDef* builtin :
              {&sensor::BuiltinSensors::eyeball(), &sensor::BuiltinSensors::irSeeker(),
               &sensor::BuiltinSensors::radarSeeker(), &sensor::BuiltinSensors::sarhSeeker(),
-              &sensor::BuiltinSensors::groundRadar()}) {
+              &sensor::BuiltinSensors::groundRadar(), &sensor::BuiltinSensors::interceptRadar()}) {
             if (id == builtin->id) {
                 std::shared_ptr<const sensor::SensorDef> def(std::shared_ptr<const sensor::SensorDef>{}, builtin);
                 (*cache)[id] = def;
@@ -292,6 +292,28 @@ EntityDef builtinDebugEntityDef() {
         hp(4, BuiltinWeapon::bomb().id.c_str()),         hp(5, BuiltinWeapon::rocketPod().id.c_str()),
         hp(6, BuiltinWeapon::dropTank().id.c_str()),     hp(7, BuiltinWeapon::pod().id.c_str()),
     };
+    return def;
+}
+
+EntityDef builtinSensorFighterDef() {
+    // The compiled-in SENSOR-CARRYING fighter (#1089). Identical to the debug entity except that it
+    // mounts an eyeball and an airborne intercept radar, so an aircraft flying it actually BUILDS A
+    // CONTACT TABLE.
+    //
+    // It exists because the 128-client scale gate measured a hollow world: bot_swarm bots flew
+    // builtin:debug-entity, which carries no sensors, so every ContactTable was empty, datalink team
+    // fusion merged nothing and cost nothing, and the two systems most likely to break at 128 players
+    // were the two the gate could not see. A gate that cannot fail on the bug it exists to catch is
+    // not evidence.
+    //
+    // A SEPARATE type rather than sensors bolted onto the debug entity: the entity-scale profile
+    // deliberately keeps its hollow sweep (it measures pool and spatial-index cost, a different
+    // thing), and every existing test and tool that spawns the debug entity should keep getting
+    // exactly what it got before.
+    EntityDef def = builtinDebugEntityDef();
+    def.id = "builtin:sensor-fighter";
+    def.name = "Sensor Fighter";
+    def.sensorIds = {"builtin:eyeball", "builtin:ai-radar"};
     return def;
 }
 

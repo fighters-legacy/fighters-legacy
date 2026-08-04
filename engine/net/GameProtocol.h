@@ -1307,8 +1307,10 @@ static_assert(offsetof(MsgRadioTransmission, text) == 64u, "MsgRadioTransmission
 // Three messages, and the server understands exactly one thing about the audio: how many bytes it
 // is. Frames are relayed OPAQUE to a recipient set derived from the net's kind (see
 // engine/voice/RadioNet.h and engine/net/VoiceRouter.h). No decode, no mix, no transcode - which
-// is what makes 128 players on voice cost the server almost nothing, and what keeps the codec a
-// client-to-client contract that can change without a protocol change.
+// is what makes DECODING voice for 128 players cost the server nothing, and what keeps the codec a
+// client-to-client contract that can change without a protocol change. The FAN-OUT is a separate
+// cost and is bounded separately (#1090): a frame is relayed to every listener, so a net costs
+// (talkers x listeners), which is why RadioNetDef carries a concurrent-speaker cap.
 
 // Hard cap on a relayed voice payload, mirrored from engine/voice/VoiceCodec.h's
 // kMaxVoicePayloadBytes. Duplicated as a literal here on purpose: engine-protocol is the

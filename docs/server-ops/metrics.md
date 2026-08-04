@@ -91,10 +91,18 @@ worth reporting.
 | `entities` | Live world entities |
 | `entity_soft_cap` | The `[world] entity_soft_cap` ceiling in force; `0` = unlimited |
 | `entity_cap_refusals` | Spawns the cap has refused since startup (monotonic) |
+| `voice_relay_sends` | Voice frames **fanned out** since startup (monotonic) — one per recipient, not per frame |
 | `rss_kb` / `rss_startup_kb` | Resident memory now, and at startup |
 
 `rss_kb` against `rss_startup_kb` is the leak signal over a soak run. A working set that grows and
 plateaus is normal; one that grows without plateauing is not.
+
+`voice_relay_sends` is the number that says what voice actually costs (#1090). The server never
+decodes audio, but it does relay each frame to every listener on the net, so a net costs
+*(talkers × listeners)* — with every mic open at 128 players that is roughly 810,000 sends a second
+against ~32,000 for a realistic five-talker session. Divide the delta by the sampling window to get
+sends/s; if it tracks *(talkers × listeners)* rather than *(cap × listeners)*, a net's `max_talkers`
+is set higher than the traffic warrants.
 
 `entity_cap_refusals` rising means the world is at its ceiling and spawns are being dropped —
 projectiles that never appear, AI that never launches, players held out. Read it alongside

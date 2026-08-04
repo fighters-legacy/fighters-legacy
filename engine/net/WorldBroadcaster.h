@@ -1043,6 +1043,12 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         return m_tickRate;
     }
 
+    // How many times the scoreboard packet set has been BUILT (#1091). Before the broadcast built
+    // once, this rose by one per connected peer per dirty window; now it rises by one per window.
+    [[nodiscard]] uint64_t scoreboardBuildCount() const noexcept {
+        return m_scoreboardBuilds;
+    }
+
     // Session-scoped mute for a peer (admin mute/unmute). Sim-thread. Returns false if the peer is
     // unknown. A muted peer's chat lines are dropped silently (no rate-limit warning).
     bool setPeerMuted(uint32_t peerId, bool muted);
@@ -1067,10 +1073,17 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     [[nodiscard]] bool voiceEnabled() const noexcept {
         return m_voiceEnabled;
     }
-    // Per-peer frame cap per second. 50 frames/s is one continuous 20 ms transmission; the default
-    // leaves headroom for jitter without letting one client fan out an unbounded stream.
+    // Per-peer frame cap per second. 50 frames/s is one continuous 20 ms transmission, so the default
+    // 52 sits just above the codec rate and binds; the previous 60 sat above what a well-behaved
+    // client could even produce and therefore capped nothing (#1090).
     void setVoiceFrameRateLimit(int framesPerSecond) noexcept {
         m_voiceFrameRateLimit = framesPerSecond < 1 ? 1 : framesPerSecond;
+    }
+
+    // Total sendChannel calls the voice relay has made (#1090). The fan-out — not the frame count —
+    // is what voice actually costs the server, so this is the number a worst-case bound asserts on.
+    [[nodiscard]] uint64_t voiceRelaySendCount() const noexcept {
+        return m_voiceRelaySends;
     }
     // Session-scoped transmit mute (admin voice_mute/voice_unmute). Returns false if peer unknown.
     bool setPeerVoiceMuted(uint32_t peerId, bool muted);
@@ -1623,14 +1636,34 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // at 60: physics, prediction, lag compensation and the scale gate all assume it. It is a value
     // rather than a literal so the wire field is honest and every tick<->ms conversion has one source.
     TickRate m_tickRate{kServerTickRate};
-    std::string m_buildVersion;    // #1074: advertised in MsgHello / the beacon / the query reply
+    std::string m_buildVersion; // #1074: advertised in MsgHello / the beacon / the query reply
+    // Scoreboard build scratch + a build counter (#1091). The counter is what a test asserts on: the
+    // defect was the NUMBER of builds, so "one per window" is the property, not the bytes.
+    std::vector<std::vector<uint8_t>> m_scoreboardScratch;
+    uint64_t m_scoreboardBuilds{0};
     int m_seatRequestRateLimit{2}; // seat requests per second per peer
     int m_teamSwitchCooldownS{5};  // seconds between accepted team switches per peer; 0 = no cooldown
     int m_heartbeatRateLimit{4};   // heartbeats per second per peer that draw a reply
     // Voice comms (#532). The table is server-authoritative and replicated at admit time.
     RadioNetTable m_radioNets;
     bool m_voiceEnabled{true};
-    int m_voiceFrameRateLimit{60}; // frames/s/peer; 50 = one continuous transmission
+    // frames/s/peer. 52, not 60 (#1090): the codec produces 50 frames/s, so a 60/s limit sat ABOVE
+    // the rate a well-behaved client can reach and therefore capped nothing at all. 52 leaves two
+    // frames of jitter headroom and actually binds.
+    int m_voiceFrameRateLimit{52};
+    // Per-tick voice peer views (#1090). buildVoicePeerViews is an O(P) walk and it ran on EVERY
+    // RECEIVED FRAME — at 50 frames/s per talker that is the same list rebuilt tens of thousands of
+    // times a second for a picture that changes once per tick. Rebuilt at most once per tick now,
+    // plus whenever membership changes within a tick (a join/leave/mute must not be missed).
+    uint64_t m_voiceViewsTick{0};
+    bool m_voiceViewsValid{false};
+    // Per-net active-talker tracking for the concurrent-speaker cap (D20). Keyed netId -> (peerId ->
+    // last frame time). A talker keeps its slot through a brief gap (kVoiceTalkerHoldMs) so a pause
+    // for breath does not drop it mid-sentence and hand the slot to someone else.
+    std::unordered_map<uint8_t, std::unordered_map<uint32_t, std::chrono::steady_clock::time_point>> m_voiceTalkers;
+    // Relay fan-out counter (#1090): sendChannel calls made by the voice relay. Name-keyed additive
+    // metric; ServerTickReport's schema version stays frozen at 6 (D18 / #686).
+    uint64_t m_voiceRelaySends{0};
     // Scratch reused by the relay path so a 50 Hz hot path does not allocate per frame.
     mutable std::vector<VoicePeerView> m_voicePeerScratch;
     mutable std::vector<uint32_t> m_voiceRecipientScratch;
@@ -1735,8 +1768,11 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     void broadcastGmWorldState();               // #861: chunked GM-map feed to peers holding GmMap
     void broadcastMatchState();                 // send m_matchState to every handshake-complete peer
     void sendMatchStateTo(uint32_t peerId);     // unicast to one peer (late joiner)
-    void broadcastScoreboard();                 // build + send MsgScoreboard (chunked) to all peers
+    void broadcastScoreboard();                 // build ONCE + send MsgScoreboard (chunked) to all peers
     void sendScoreboardTo(uint32_t peerId);     // unicast to one peer (on admit)
+    // The receiver-independent scoreboard packet set. Split out so the broadcast builds it once
+    // rather than once per peer (#1091).
+    void buildScoreboardPackets(std::vector<std::vector<uint8_t>>& out);
     void appendScoreboardRows(std::vector<uint8_t>& pkt, std::size_t begin, std::size_t count,
                               const std::vector<uint32_t>& order) const;
 
@@ -2092,6 +2128,27 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         std::unordered_map<uint32_t, uint8_t>* pending{nullptr};
         std::vector<uint8_t> buf;
         std::vector<uint8_t> compressScratch; // zstd output scratch (#775); reused across ticks
+
+        // Per-peer snapshot scratch, REUSED across ticks (#1092). These ten were locals inside the
+        // per-peer pass, so the pass allocated ten fresh vectors per peer per tick — roughly 77,000
+        // allocations/second at 128 peers and 60 Hz, inside the PARALLEL region, which makes it
+        // allocator contention across worker threads as well as raw allocation cost. `buf` and
+        // `compressScratch` above already demonstrated the fix; these simply never got it.
+        //
+        // Every one is cleared before use, never read across ticks. That matters: buffer reuse that
+        // leaks stale contents would change the wire, which the serial-equivalence byte-compare
+        // exists to catch.
+        std::vector<uint32_t> visible;                  // interest-query hits, exact-gated
+        std::vector<uint32_t> selected;                 // budget-scheduled subset of `visible`
+        std::vector<SnapshotCandidate> cands;           // priority ranking input
+        std::vector<std::array<double, 3>> originTable; // shared quantization origins, deduped
+        std::vector<uint8_t> recordStream;              // stitched entity records
+        std::vector<uint8_t> ownBlob;                   // the own-entity re-encode
+        std::vector<uint32_t> despawnIds;               // SnapshotDespawn TLV payload
+        std::vector<uint8_t> effectsBlob;               // SnapshotEffects TLV payload
+        std::vector<uint8_t> articulationBlob;          // SnapshotArticulation TLV payload
+        std::vector<uint8_t> crewBlob;                  // SnapshotCrew TLV body
+        std::vector<uint8_t> payload;                   // assembled (possibly compressed) payload
     };
     std::vector<PeerSnapWork> m_peerWork;
 

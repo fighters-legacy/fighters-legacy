@@ -3,7 +3,7 @@
   "kbs_baseline_tolerance_pct": 10,
   "profiles": {
     "pr": {
-      "_comment": "Deterministic PR tier: only machine-independent metrics are hard-gated (bandwidth + admission + KB/s baseline). tick-Hz is a total-collapse tripwire; tick-ms is advisory (0 = disabled) because the client-side proxy and CPU timing are noisy on shared runners. Deliberately enet6 (bot_swarm's default): it is the enet6 regression instrument, and an enet6-only build keeps the PR leg lean (no protobuf/OpenSSL).",
+      "_comment": "Deterministic PR tier: only machine-independent metrics are hard-gated (bandwidth + admission + KB/s baseline). tick-Hz is a total-collapse tripwire; tick-ms is advisory (0 = disabled) because the client-side proxy and CPU timing are noisy on shared runners. Deliberately enet6 (bot_swarm's default): it is the enet6 regression instrument, and an enet6-only build keeps the PR leg lean (no protobuf/OpenSSL). SENSOR-LOADED since #1089: bots fly builtin:sensor-fighter against ai_entity_count hostiles, so ContactTables populate and datalink team fusion actually runs. Before that every table was empty, fusion merged nothing, and the headline numbers described a hollow battlespace -- the two systems most likely to break at 128 players were the two this gate could not see.",
       "clients": 64,
       "duration_s": 30,
       "patterns": [
@@ -13,10 +13,12 @@
       "assert_max_kbs": 0,
       "assert_min_tick_hz": 30,
       "assert_max_tick_ms": 0,
-      "assert_max_wire_kbs": 150
+      "assert_max_wire_kbs": 150,
+      "entity_type": "builtin:sensor-fighter",
+      "ai_entity_count": 64
     },
     "reference": {
-      "_comment": "The PRIMARY reference profile (#773): 128 clients with BOTH ends on GNS (FL_LOADTEST_TRANSPORT=gns -> fl-server --transport gns + bot_swarm --transport gns) — the default internet transport is the one the headline numbers describe. Strict tick-ms p99 on the 8-core/16GB reference instance (or a self-hosted runner via --strict); advisory on hosted runners. REQUIRES an FL_ENABLE_GNS=ON build: bot_swarm hard-fails rather than silently falling back to enet6, and the gate cross-checks the report's `transport` key, so a downgraded run fails instead of passing as a GNS validation. Baselined per-profile; the wire KB/s baseline is the one that tracks what the transport actually costs (#772 — enet6 range-coder-compresses, GNS encrypts and does not compress).",
+      "_comment": "The PRIMARY reference profile (#773): 128 clients with BOTH ends on GNS (FL_LOADTEST_TRANSPORT=gns -> fl-server --transport gns + bot_swarm --transport gns) — the default internet transport is the one the headline numbers describe. Strict tick-ms p99 on the 8-core/16GB reference instance (or a self-hosted runner via --strict); advisory on hosted runners. REQUIRES an FL_ENABLE_GNS=ON build: bot_swarm hard-fails rather than silently falling back to enet6, and the gate cross-checks the report's `transport` key, so a downgraded run fails instead of passing as a GNS validation. Baselined per-profile; the wire KB/s baseline is the one that tracks what the transport actually costs (#772 — enet6 range-coder-compresses, GNS encrypts and does not compress). SENSOR-LOADED since #1089: bots fly builtin:sensor-fighter against ai_entity_count hostiles, so ContactTables populate and datalink team fusion actually runs. Before that every table was empty, fusion merged nothing, and the headline numbers described a hollow battlespace -- the two systems most likely to break at 128 players were the two this gate could not see.",
       "clients": 128,
       "duration_s": 60,
       "patterns": [
@@ -29,10 +31,12 @@
       "assert_max_kbs": 0,
       "assert_min_tick_hz": 58,
       "assert_max_tick_ms": 16.6,
-      "assert_max_wire_kbs": 150
+      "assert_max_wire_kbs": 150,
+      "entity_type": "builtin:sensor-fighter",
+      "ai_entity_count": 64
     },
     "reference-enet": {
-      "_comment": "enet6 regression leg at full reference scale (#773; this was the pre-#773 `reference` profile). enet6 is the LAN/single-player backend and a genuine regression instrument (net_check, bot_swarm's default), so it keeps a 128-client strict-tier gate — but its figures are NOT the headline capacity numbers; those come from `reference` (GNS, what ships).",
+      "_comment": "enet6 regression leg at full reference scale (#773; this was the pre-#773 `reference` profile). enet6 is the LAN/single-player backend and a genuine regression instrument (net_check, bot_swarm's default), so it keeps a 128-client strict-tier gate — but its figures are NOT the headline capacity numbers; those come from `reference` (GNS, what ships). SENSOR-LOADED since #1089: bots fly builtin:sensor-fighter against ai_entity_count hostiles, so ContactTables populate and datalink team fusion actually runs. Before that every table was empty, fusion merged nothing, and the headline numbers described a hollow battlespace -- the two systems most likely to break at 128 players were the two this gate could not see.",
       "clients": 128,
       "duration_s": 60,
       "patterns": [
@@ -44,10 +48,12 @@
       "assert_max_kbs": 0,
       "assert_min_tick_hz": 58,
       "assert_max_tick_ms": 16.6,
-      "assert_max_wire_kbs": 150
+      "assert_max_wire_kbs": 150,
+      "entity_type": "builtin:sensor-fighter",
+      "ai_entity_count": 64
     },
     "soak": {
-      "_comment": "2 h soak-stability run on the shipping transport (GNS, #773). Same strict thresholds as `reference`; the server self-reports RSS in the tick metrics (#707). The leak gate hard-fails if endpoint growth exceeds assert_max_rss_growth_kb (~256 MiB over 2 h) OR if the RSS growth TREND fitted over the run's tail exceeds assert_max_rss_slope_kb_per_min (#789) — the trend catches a slow leak that stayed under the endpoint bound. bot_swarm samples RSS every 30 s (240 points over 2 h) and fits the final half.",
+      "_comment": "2 h soak-stability run on the shipping transport (GNS, #773). Same strict thresholds as `reference`; the server self-reports RSS in the tick metrics (#707). The leak gate hard-fails if endpoint growth exceeds assert_max_rss_growth_kb (~256 MiB over 2 h) OR if the RSS growth TREND fitted over the run's tail exceeds assert_max_rss_slope_kb_per_min (#789) — the trend catches a slow leak that stayed under the endpoint bound. bot_swarm samples RSS every 30 s (240 points over 2 h) and fits the final half. SENSOR-LOADED since #1089: bots fly builtin:sensor-fighter against ai_entity_count hostiles, so ContactTables populate and datalink team fusion actually runs. Before that every table was empty, fusion merged nothing, and the headline numbers described a hollow battlespace -- the two systems most likely to break at 128 players were the two this gate could not see.",
       "clients": 128,
       "duration_s": 7200,
       "patterns": [
@@ -60,7 +66,9 @@
       "assert_max_tick_ms": 16.6,
       "assert_max_rss_growth_kb": 262144,
       "assert_max_rss_slope_kb_per_min": 128,
-      "assert_max_wire_kbs": 150
+      "assert_max_wire_kbs": 150,
+      "entity_type": "builtin:sensor-fighter",
+      "ai_entity_count": 64
     },
     "entity-scale": {
       "_comment": "Entity-pool + SpatialIndex scaling characterisation (#573), re-derived on GNS (#773). Sweeps entity count x sim worker count via FL_TEST_SPAWN_AI / FL_SIM_WORKER_THREADS, driven from the [world] load-spawn affordance. Advisory only (baselined=false): reads server_tick.entities + tick p99 into the summary but never gates the committed KB/s baseline. assert_max_tick_ms is DELIBERATELY 0 (#773): the reference-runner workflow leg always passes --strict, which would turn a tick-ms threshold into a hard bot_swarm assert and fail the sweep's deliberately-collapsing single-worker cells — which ARE the characterisation, not a regression (the advisory summary still records per-cell tick p99). Reference-tier (workflow_dispatch) — needs the 8-core reference box for meaningful CPU timing.",

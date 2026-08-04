@@ -12229,3 +12229,200 @@ TEST_CASE("EntityTypeRegistry: generation distinguishes a cleared table from an 
     CHECK(registry.typeCount() == countBefore); // same count...
     CHECK(registry.generation() != afterOne);   // ...different table, and the generation says so
 }
+
+// ---------------------------------------------------------------------------
+// #1091: the scoreboard is built once per window, not once per peer
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WorldBroadcaster: the scoreboard broadcast builds once and sends identical bytes (#1091)",
+          "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    constexpr int kPeers = 6;
+    for (uint32_t p = 0; p < kPeers; ++p)
+        connectPilotPeer(broadcaster, net, p);
+
+    // Give the board rows to carry: a scoreboard row appears when a peer actually scores, so drive
+    // the same ScoreAwarded event the kill path does.
+    broadcaster.forEachPeer([&](const fl::PeerInfo& p) {
+        fl::EntityEvent ev{};
+        ev.type = fl::EntityEventType::ScoreAwarded;
+        ev.instigator = p.eid; // the scoring entity resolves back to its owning peer
+        ev.score = 10 + static_cast<int>(p.peerId);
+        broadcaster.onEntityEvent(ev);
+    });
+
+    const uint64_t buildsBefore = broadcaster.scoreboardBuildCount();
+    net.perPeerSends.clear();
+
+    // Drive ticks until the ~2 s dirty window fires.
+    for (uint64_t tick = 1; tick <= 130; ++tick)
+        broadcaster.onTick(1.0 / 60.0, tick);
+
+    const uint64_t builds = broadcaster.scoreboardBuildCount() - buildsBefore;
+    REQUIRE(builds >= 1u);
+    // ONE build per window regardless of peer count. Before this it was one per peer, so six peers
+    // meant six identical builds — and 128 peers meant 128.
+    CHECK(builds < static_cast<uint64_t>(kPeers));
+
+    // Every peer received byte-identical scoreboard bytes: this is a computation fix, not a wire
+    // change, so the payload must be unchanged.
+    std::unordered_map<uint32_t, std::vector<std::vector<uint8_t>>> perPeer;
+    for (const auto& [pid, pkt] : net.perPeerSends)
+        if (!pkt.empty() && pkt[0] == static_cast<uint8_t>(fl::MsgId::Scoreboard))
+            perPeer[pid].push_back(pkt);
+
+    REQUIRE(perPeer.size() == static_cast<std::size_t>(kPeers));
+    const auto& reference = perPeer.begin()->second;
+    REQUIRE_FALSE(reference.empty());
+    for (const auto& [pid, packets] : perPeer) {
+        INFO("peer " << pid);
+        REQUIRE(packets.size() == reference.size());
+        for (std::size_t i = 0; i < packets.size(); ++i)
+            CHECK(packets[i] == reference[i]);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// #1090: the voice relay fan-out is bounded without touching a realistic session
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// One 20 ms voice frame on `netId` with an opaque payload the server never decodes.
+static std::vector<uint8_t> makeVoiceFrame(uint8_t netId, uint16_t seq, std::size_t payloadBytes = 40) {
+    fl::MsgVoiceFrameHeader hdr{};
+    hdr.netId = netId;
+    hdr.seq = seq;
+    hdr.payloadBytes = static_cast<uint16_t>(payloadBytes);
+    std::vector<uint8_t> pkt;
+    fl::appendMsg(pkt, hdr);
+    pkt.insert(pkt.end(), payloadBytes, uint8_t{0xA5});
+    return pkt;
+}
+
+} // namespace
+
+TEST_CASE("WorldBroadcaster: voice routing is unchanged at or below the talker cap (#1090)",
+          "[world_broadcaster][voice]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    fl::ManualClock clock;
+    broadcaster.setClock(clock);
+    broadcaster.setVoiceEnabled(true);
+
+    constexpr int kPeers = 8;
+    for (uint32_t p = 0; p < kPeers; ++p)
+        connectPilotPeer(broadcaster, net, p);
+    broadcaster.onTick(1.0 / 60.0, 1);
+
+    const uint8_t net0 = 0;
+    const fl::RadioNetDef* def = broadcaster.radioNets().byIndex(net0);
+    REQUIRE(def != nullptr);
+    REQUIRE(def->maxTalkers == 4); // the D20 default
+
+    // Four talkers — at the cap, so every frame must still relay exactly as before.
+    const uint64_t before = broadcaster.voiceRelaySendCount();
+    for (uint32_t talker = 0; talker < 4; ++talker) {
+        const auto frame = makeVoiceFrame(net0, 1);
+        broadcaster.onReceive(talker, frame.data(), frame.size());
+    }
+    const uint64_t relayed = broadcaster.voiceRelaySendCount() - before;
+    CHECK(relayed > 0u); // routing happened: nothing at or below the cap is dropped
+
+    // A fifth talker on the same net, in the same moment, is over the cap.
+    const uint64_t beforeFifth = broadcaster.voiceRelaySendCount();
+    const auto fifth = makeVoiceFrame(net0, 1);
+    broadcaster.onReceive(4u, fifth.data(), fifth.size());
+    CHECK(broadcaster.voiceRelaySendCount() == beforeFifth); // dropped, and dropped silently
+
+    // ...but a talker that already holds a slot keeps relaying.
+    const uint64_t beforeRepeat = broadcaster.voiceRelaySendCount();
+    const auto repeat = makeVoiceFrame(net0, 2);
+    broadcaster.onReceive(0u, repeat.data(), repeat.size());
+    CHECK(broadcaster.voiceRelaySendCount() > beforeRepeat);
+
+    // After the hold window, an idle talker's slot frees and the fifth peer can take it.
+    clock.advance(std::chrono::milliseconds(400));
+    const uint64_t beforeTakeover = broadcaster.voiceRelaySendCount();
+    const auto retry = makeVoiceFrame(net0, 2);
+    broadcaster.onReceive(4u, retry.data(), retry.size());
+    CHECK(broadcaster.voiceRelaySendCount() > beforeTakeover);
+}
+
+TEST_CASE("WorldBroadcaster: an all-mics-open session cannot fan out without bound (#1090)",
+          "[world_broadcaster][voice]") {
+    // The abuse case the issue exists for: EVERY peer transmitting continuously. Without the talker
+    // cap this is (talkers x listeners) — at 128 players roughly 975,000 sendChannel calls a second.
+    // With it, only maxTalkers peers per net relay at any moment, so the fan-out is bounded by
+    // (cap x listeners) no matter how many mics are open.
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    fl::ManualClock clock;
+    broadcaster.setClock(clock);
+    broadcaster.setVoiceEnabled(true);
+
+    constexpr int kPeers = 16;
+    for (uint32_t p = 0; p < kPeers; ++p)
+        connectPilotPeer(broadcaster, net, p);
+    broadcaster.onTick(1.0 / 60.0, 1);
+
+    const fl::RadioNetDef* def = broadcaster.radioNets().byIndex(0);
+    REQUIRE(def != nullptr);
+    const uint32_t cap = def->maxTalkers;
+    REQUIRE(cap > 0u);
+
+    const uint64_t before = broadcaster.voiceRelaySendCount();
+    // One frame from every peer, all in the same instant — 16 open mics.
+    for (uint32_t p = 0; p < kPeers; ++p) {
+        const auto frame = makeVoiceFrame(0, 1);
+        broadcaster.onReceive(p, frame.data(), frame.size());
+    }
+    const uint64_t sends = broadcaster.voiceRelaySendCount() - before;
+
+    // At most cap talkers relayed, each to at most every other peer. Without the cap this bound is
+    // kPeers x (kPeers - 1) = 240; with it, 4 x 15 = 60.
+    CHECK(sends <= static_cast<uint64_t>(cap) * static_cast<uint64_t>(kPeers - 1));
+    CHECK(sends < static_cast<uint64_t>(kPeers) * static_cast<uint64_t>(kPeers - 1));
+}
+
+TEST_CASE("WorldBroadcaster: the voice frame limit sits below the codec rate (#1090)", "[world_broadcaster][voice]") {
+    // The shipped limit was 60/s while the codec produces 50/s, so it capped nothing a well-behaved
+    // client could even reach. 52 leaves jitter headroom and actually binds.
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    fl::ManualClock clock;
+    broadcaster.setClock(clock);
+    broadcaster.setVoiceEnabled(true);
+
+    connectPilotPeer(broadcaster, net, 0u);
+    connectPilotPeer(broadcaster, net, 1u);
+    broadcaster.onTick(1.0 / 60.0, 1);
+
+    // 200 frames in one window from a single peer: the limiter must stop it well short.
+    const uint64_t before = broadcaster.voiceRelaySendCount();
+    for (int i = 0; i < 200; ++i) {
+        const auto frame = makeVoiceFrame(0, static_cast<uint16_t>(i));
+        broadcaster.onReceive(0u, frame.data(), frame.size());
+    }
+    const uint64_t sends = broadcaster.voiceRelaySendCount() - before;
+    CHECK(sends <= 52u * 1u); // one recipient, at most the per-second frame budget
+    CHECK(sends < 60u);       // and strictly below the old limit, which never bound at all
+}

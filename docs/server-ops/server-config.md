@@ -76,9 +76,9 @@ autosave_interval_s = 300
 time_scale         = 10.0        # game seconds per real second; 10 = full day/night ≈ 2.4 real hours
 # planet_radius_m         = 6371000  # planet sphere radius (m); Earth default
 # earth_rotation          = true     # Coriolis + centrifugal in the Earth-fixed world frame (#482)
-# draw_distance_km        = 200.0    # per-peer interest management radius (km); [1, 100000]
+# draw_distance_km        = 100.0    # per-peer interest management radius (km); [1, 100000]
 # sensor_check_hz         = 10.0     # sensor geometry checks/sec; the reference cadence pods are tuned to; [1, 60]
-# spatial_cell_size_km    = 10.0     # SpatialIndex cell size (km); 0 = auto from draw distance; [0, 1000]; restart
+# spatial_cell_size_km    = 0.0      # SpatialIndex cell size (km); 0 = auto (the default); [0, 1000]; restart
 # snapshot_budget_bytes   = 1200     # per-client snapshot byte budget; 0 = unlimited; [0, 65535]
 # jitter_buffer_depth           = 4    # per-peer input queue depth (ticks); global cap for adaptive sizing; [1, 32]
 # jitter_buffer_adapt_window    = 60   # EWMA smoothing window in ticks; alpha = 1/window; [10, 3600]
@@ -614,9 +614,13 @@ switchable mid-session with the `set_role <peerId> <pilot|observer>` admin comma
 
 | Type | Default | Range |
 |---|---|---|
-| float | `200.0` | `[1, 100000]` |
+| float | `100.0` | `[1, 100000]` |
 
-Per-peer interest management radius in kilometres. Only entities within this XZ-plane radius of a peer's own entity are included in that peer's `MsgWorldSnapshot`. The default of 200 km covers any current Phase 2 theater. Out-of-range values are rejected with a Warn and the default is used. **Hot-reloadable** via `reload_config`.
+Per-peer interest management radius in kilometres. Only entities within this XZ-plane radius of a peer's own entity are included in that peer's `MsgWorldSnapshot`. Out-of-range values are rejected with a Warn and the default is used. **Hot-reloadable** via `reload_config`.
+
+**This is presentation relevance, not sensor truth** (#1093, D19). What a player *knows* reaches them through the datalink (`MsgDatalink`, #528), which is bounded by sensor range and not by this radius, so a shorter draw distance does not blind anyone — it only decides which entities are worth streaming positions for.
+
+The default was 200 km, which culled essentially nothing: 128 fighters are never 200 km apart, so the exact-distance gate rejected almost no candidate while a full-radius query still visited a 41×41 cell bounding box per peer per tick (~1,681 cell lookups, ~12.9 M/s at 128 players). The real limiter at scale is `snapshot_budget_bytes`, which admits roughly 47 records — the budget scheduler was doing all the actual relevance work while the radius paid to cull nothing. **100 km is the 128-client validated envelope**: generous for visual and BVR presentation, and roughly a fourfold cut in candidate volume.
 
 ### `spectate_delay_s`
 
@@ -658,11 +662,13 @@ cadence does not make locks flicker — and a coast still runs out in real secon
 
 | Type | Default | Range |
 |---|---|---|
-| float | `10.0` | `[0, 1000]` |
+| float | `0.0` (auto) | `[0, 1000]` |
 
-`SpatialIndex` cell size in kilometres for per-peer interest queries and AI range queries. `0` selects
-an auto heuristic derived from the draw distance (`clamp(draw_distance / 32, 500 m, 10 km)`) so a
-full-radius query spans a bounded number of cells rather than degenerating toward O(N) at high density.
+`SpatialIndex` cell size in kilometres for per-peer interest queries and AI range queries. `0` — **the
+default since #1093** — selects an auto heuristic derived from the draw distance
+(`clamp(draw_distance / 32, 500 m, 10 km)`) so a full-radius query spans a bounded number of cells
+rather than degenerating toward O(N) at high density. The heuristic has existed since #573; it simply
+was not what shipped, so a fixed 10 km cell sized the query box for a radius nobody was using.
 A cell much smaller than the draw distance is counter-productive — the query then iterates many
 mostly-empty cells (see [entity-scale-characterization.md](../developer/decisions/entity-scale-characterization.md)).
 Out-of-range values are rejected with a Warn and the default is used. **Restart-only** (reassigns the
@@ -1206,18 +1212,29 @@ off (so the HUD says so rather than a mic that silently does nothing).
 
 ### `frame_rate_limit`
 
-Default `60`, range `[1, 200]`. Voice frames accepted per second per peer. 50 frames/s is one
-continuous transmission at the 20 ms frame size, so the default leaves headroom for jitter.
+Default `52`, range `[1, 200]`. Voice frames accepted per second per peer. 50 frames/s is one
+continuous transmission at the 20 ms frame size, so the default sits just above it with two frames of
+jitter headroom.
 
 This is a **bandwidth bound, not anti-spam**: a frame is fanned out to every recipient on the net, so
 an unbounded sender costs the server *(recipients × bytes)*, not *(1 × bytes)*. Over-rate frames are
 dropped **silently** — a reply to a flood is amplification.
+
+The default was `60` until #1090, which capped nothing at all: the codec produces 50 frames/s, so the
+limit sat *above* the rate a well-behaved client could even reach. A limit that cannot bind is not a
+limit.
 
 ### `[[voice.nets]]`
 
 An array of net definitions. **Omit it entirely** and the compiled-in stack is used: `team` (the
 default PTT net), `flight`, `atc`, and a positional `proximity` net at 3 km — so voice works with
 zero configuration. Defining **any** net replaces that stack wholesale.
+
+Each row may set **`max_talkers`** (default `4`, `0` = unlimited): how many people may transmit on
+that net *at once* (#1090). The relay cost of a net is *(talkers × listeners)* and only the listener
+side was ever bounded — with every mic open at 128 players that is roughly 810,000 `sendChannel`
+calls a second. First come keeps its slot, and a talker holds it through a ~250 ms gap so a pause for
+breath does not hand the slot away mid-sentence. Frames over the cap are dropped silently.
 
 | Key | Type | Default | Notes |
 |---|---|---|---|

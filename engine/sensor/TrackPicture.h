@@ -42,13 +42,27 @@ class TrackFuser {
 
     // Merge one observer's table. `ownSensor` marks it as the requesting peer's OWN table, so the
     // fused entry can distinguish "I see this myself" from "only the datalink shows me this".
+    //
+    // Since #1088 a team's picture is fused ONCE per faction with ownSensor=false throughout, and the
+    // per-peer "I hold this myself" bit is overlaid afterwards from the peer's own contact table —
+    // fusing is a property of the faction, marking is a property of the peer.
     void add(const ContactTable& table, bool ownSensor) {
         for (const Contact& c : table) {
             FusedTrack& t = m_byTarget[c.id.index];
             const bool first = (t.id.generation == 0);
 
-            // Pool-slot reuse guard: if a stale target index maps to a new generation, restart.
+            // Pool-slot reuse guard: a stale target index may map to a different generation, meaning
+            // two observers hold contacts on two DIFFERENT entities that happen to share a pool slot.
+            // The NEWER generation wins, and an older one is dropped outright.
+            //
+            // This used to be "whichever was merged last resets the entry", which made the fused
+            // result depend on the order tables were added — quietly contradicting this class's own
+            // order-independence contract, and only invisible because the per-peer caller always
+            // merged in the same order. Per-faction fusion (#1088) merges once for a whole team, so
+            // the tie has to be decided by the data rather than by arrival order.
             if (!first && t.id.generation != c.id.generation) {
+                if (c.id.generation < t.id.generation)
+                    continue; // stale slot: a newer entity already owns this index
                 t = FusedTrack{};
             }
 

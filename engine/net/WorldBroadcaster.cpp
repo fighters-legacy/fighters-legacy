@@ -1763,7 +1763,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             // The dead-pilot header-only blackout was lifted by #403 so a dead peer spectates the world
             // around its center instead of going black between death and respawn.
             const double* const center = w.center;
-            std::vector<uint32_t> visible;
+            std::vector<uint32_t>& visible = w.visible; // reused across ticks (#1092)
+            visible.clear();
             if (govInterestRadiusM > 0.0) {
                 const double r2 = govInterestRadiusM * govInterestRadiusM;
                 const double px = center[0], py = center[1], pz = center[2];
@@ -1782,7 +1783,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             // entities by relevance (distance / closing-speed / recency / player-owned) and keep only the
             // highest-priority set that fits; the rest are deferred to a later tick. budget == 0 keeps the
             // legacy behaviour (every visible entity, ascending idx). The own entity is always admitted.
-            std::vector<uint32_t> selected;
+            std::vector<uint32_t>& selected = w.selected;
+            selected.clear();
             // Congestion response (#518): scale the static byte budget by this peer's congestion throttle.
             // A static budget of 0 (unlimited) stays 0 here — under congestion only the send-rate lever
             // applies for unlimited-budget servers.
@@ -1800,7 +1802,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                 const double pvx = peerState ? static_cast<double>(peerState->transform.vel[0]) : 0.0;
                 const double pvy = peerState ? static_cast<double>(peerState->transform.vel[1]) : 0.0;
                 const double pvz = peerState ? static_cast<double>(peerState->transform.vel[2]) : 0.0;
-                std::vector<SnapshotCandidate> cands;
+                std::vector<SnapshotCandidate>& cands = w.cands;
+                cands.clear();
                 cands.reserve(visible.size());
                 for (uint32_t idx : visible) {
                     const EntitySnap& snap = snapMap.at(idx);
@@ -1851,8 +1854,10 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             // — re-encoded here with omega. Records are byte-aligned, so the stitch is a memcpy, not a
             // re-quantization. Deterministic (selected is sorted; origin table is first-seen order) so the
             // per-peer buffer is byte-identical across worker counts (serial-equivalence, #512).
-            std::vector<std::array<double, 3>> originTable;
-            std::vector<uint8_t> recordStream;
+            std::vector<std::array<double, 3>>& originTable = w.originTable;
+            originTable.clear();
+            std::vector<uint8_t>& recordStream = w.recordStream;
+            recordStream.clear();
             auto originIndexOf = [&originTable](const double o[3]) -> uint32_t {
                 for (uint32_t i = 0; i < originTable.size(); ++i)
                     if (originTable[i][0] == o[0] && originTable[i][1] == o[1] && originTable[i][2] == o[2])
@@ -1861,7 +1866,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                 return static_cast<uint32_t>(originTable.size() - 1u);
             };
 
-            std::vector<uint8_t> ownBlob; // scratch for the (single) own-entity re-encode
+            std::vector<uint8_t>& ownBlob = w.ownBlob; // scratch for the (single) own-entity re-encode
+            ownBlob.clear();
             for (uint32_t idx : selected) {
                 const EntitySnap& snap = snapMap.at(idx);
                 const EntityState& state = *snap.state;
@@ -1975,7 +1981,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             // Explicit despawn TLV (#516): indices the peer knew that left the sim. Repeated for a few
             // ticks (drop tolerance on the unreliable channel), decrementing each entry's remaining count.
             if (auto& pendingDespawn = *w.pending; !pendingDespawn.empty()) {
-                std::vector<uint32_t> ids;
+                std::vector<uint32_t>& ids = w.despawnIds;
+                ids.clear();
                 ids.reserve(pendingDespawn.size());
                 for (auto it = pendingDespawn.begin(); it != pendingDespawn.end();) {
                     ids.push_back(it->first);
@@ -1991,7 +1998,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             // capped. Read-only over the shared m_tickEffects (built serially in the weapons pass),
             // packed byte-serially into the unaligned TLV payload — parallel-safe, worker owns buf.
             if (!m_tickEffects.empty() && peerState && !peerState->dead) {
-                std::vector<uint8_t> fx;
+                std::vector<uint8_t>& fx = w.effectsBlob;
+                fx.clear();
                 fx.reserve(std::min(m_tickEffects.size(), kMaxEffectsPerSnapshot) * kEffectRecordBytes);
                 const double er2 = govInterestRadiusM * govInterestRadiusM;
                 std::size_t emitted = 0;
@@ -2022,7 +2030,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             // serially-built crewSnap — worker owns buf, so byte-identical across worker counts (#512).
             // Absent for a single-seat-only interest set → no TLV → byte-identical to pre-#972.
             if (!crewSnap.empty()) {
-                std::vector<uint8_t> cb;
+                std::vector<uint8_t>& cb = w.crewBlob;
+                cb.clear();
                 uint8_t count = 0;
                 for (uint32_t idx : selected) {
                     if (count == 255u)
@@ -2045,7 +2054,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                     ++count;
                 }
                 if (count > 0u) {
-                    std::vector<uint8_t> payload;
+                    std::vector<uint8_t>& payload = w.payload;
+                    payload.clear();
                     payload.reserve(cb.size() + 1u);
                     payload.push_back(count);
                     payload.insert(payload.end(), cb.begin(), cb.end());
@@ -2059,7 +2069,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             // stays byte-identical across worker counts (#512). Absent for an unarticulated interest
             // set, which is what keeps a world of static meshes at pre-#843 bytes.
             if (!artSnap.empty()) {
-                std::vector<uint8_t> ab;
+                std::vector<uint8_t>& ab = w.articulationBlob;
+                ab.clear();
                 for (uint32_t idx : selected) {
                     const auto ait = artSnap.find(idx);
                     if (ait == artSnap.end())
@@ -2823,6 +2834,8 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
         m_disconnectGrace.erase(reconnectGuid);
     }
 
+    m_voiceViewsValid = false; // #1090: a new admitted peer changes the voice recipient set
+
     // Match state + scoreboard for the late joiner (#523): the current phase/scores + everyone's row.
     sendMatchStateTo(peerId);
     sendScoreboardTo(peerId);
@@ -3010,6 +3023,7 @@ uint16_t WorldBroadcaster::factionForPeer(uint32_t peerId) const noexcept {
 }
 
 void WorldBroadcaster::setPeerFaction(uint32_t peerId, uint16_t faction) {
+    m_voiceViewsValid = false; // #1090: a team change alters team-net membership
     const auto rit = m_roster.find(peerId);
     if (rit == m_roster.end())
         return; // not an admitted peer
@@ -3126,6 +3140,9 @@ void WorldBroadcaster::onDisconnect(uint32_t peerId) {
     despawnPeerEntity(peerId); // a pilot's own aircraft is torn down (no-op for observer/gunner)
     removeRoster(peerId);      // broadcast the leave + drop the roster record (#996; before m_peerInputs erase)
     m_peerInputs.erase(peerId);
+    m_voiceViewsValid = false; // #1090: a departing peer changes the voice recipient set
+    for (auto& [netId, talkers] : m_voiceTalkers)
+        talkers.erase(peerId); // free its talker slot immediately rather than after the hold window
     m_peerFloodState.erase(peerId);
     m_peerKnownGens.erase(peerId);
     m_peerPendingDespawn.erase(peerId);
@@ -4252,31 +4269,60 @@ void WorldBroadcaster::broadcastDatalink(uint64_t tickIndex) {
         return dx * dx + dy * dy + dz * dz;
     };
 
+    // Fuse ONCE PER FACTION (#1088, D21), not once per pilot. The fused picture is a property of the
+    // TEAM: every same-faction peer was re-merging the identical set of teammate tables and then
+    // applying its own-sensor marking on top. At 128 players that was roughly
+    // 128 pilots x 64 teammates x <=32 contacts ~= 262,000 merges inside a single tick, six times a
+    // second, serial on the sim thread with no JobSystem dispatch and no governor lever to shed it —
+    // the highest-risk O(P^2) cost in the codebase. Fusing per faction makes it O(P*C + F*C).
+    //
+    // Faction 0 is neutral: it fuses with no one, so it gets no cache and falls back to its own table
+    // alone below — a lone neutral still sees its own picture but shares nothing.
+    std::unordered_map<uint16_t, std::vector<sensor::FusedTrack>> factionPicture;
+    factionPicture.reserve(factionObservers.size());
+    for (const auto& [faction, observers] : factionObservers) {
+        if (faction == 0)
+            continue;
+        sensor::TrackFuser fuser;
+        for (uint32_t obsIdx : observers)
+            if (const sensor::ContactTable* t = m_sensorSystem.contactsFor(obsIdx))
+                fuser.add(*t, /*ownSensor=*/false); // the per-peer bit is overlaid below
+        factionPicture.emplace(faction, fuser.tracks());
+    }
+
     std::vector<uint8_t> buf;
+    std::unordered_map<uint32_t, uint32_t> ownTargets; // target index -> generation, for the overlay
+    std::vector<sensor::FusedTrack> tracks;
     for (const auto& [peerId, eid] : m_peerEntities) {
         const EntityState* self = m_entityManager.get(eid);
         if (!self || self->dead)
             continue;
         const uint16_t faction = self->factionIndex;
 
-        // Fuse the peer's own contacts (marked ownSensor) with every same-faction teammate's. Faction
-        // 0 is neutral: it fuses with no one, so a lone neutral still sees its own picture but shares
-        // nothing — there is no "team" to share with.
-        sensor::TrackFuser fuser;
-        if (const sensor::ContactTable* own = m_sensorSystem.contactsFor(eid.index))
-            fuser.add(*own, /*ownSensor=*/true);
-        if (faction != 0) {
-            if (auto it = factionObservers.find(faction); it != factionObservers.end()) {
-                for (uint32_t obsIdx : it->second) {
-                    if (obsIdx == eid.index)
-                        continue; // own table already added
-                    if (const sensor::ContactTable* t = m_sensorSystem.contactsFor(obsIdx))
-                        fuser.add(*t, /*ownSensor=*/false);
-                }
-            }
-        }
+        // The peer's OWN contacts, as an index->generation lookup for the ownSensor overlay. A peer
+        // holding a contact itself must be told so: "my radar has this" and "only the datalink shows
+        // me this" drive different HUD treatment. contactsFor is non-null only for an observer, and
+        // every live observer is in its faction's group above, so the cache already contains this
+        // peer's contributions — only the MARKING is per-peer.
+        ownTargets.clear();
+        const sensor::ContactTable* own = m_sensorSystem.contactsFor(eid.index);
+        if (own)
+            for (const sensor::Contact& c : *own)
+                ownTargets[c.id.index] = c.id.generation;
 
-        std::vector<sensor::FusedTrack> tracks = fuser.tracks();
+        tracks.clear();
+        if (const auto pit = factionPicture.find(faction); faction != 0 && pit != factionPicture.end()) {
+            tracks = pit->second; // the team's fused picture, already sorted by target index
+            for (sensor::FusedTrack& t : tracks) {
+                const auto oit = ownTargets.find(t.id.index);
+                t.ownSensor = oit != ownTargets.end() && oit->second == t.id.generation;
+            }
+        } else if (own) {
+            // Neutral (faction 0), or a faction with no observer group: the peer's own picture only.
+            sensor::TrackFuser fuser;
+            fuser.add(*own, /*ownSensor=*/true);
+            tracks = fuser.tracks();
+        }
         if (tracks.size() > kMaxDatalinkTracks) {
             std::sort(tracks.begin(), tracks.end(), [&](const sensor::FusedTrack& a, const sensor::FusedTrack& b) {
                 const int pa =
@@ -5387,6 +5433,7 @@ bool WorldBroadcaster::setPeerVoiceMuted(uint32_t peerId, bool muted) {
     if (it == m_peerInputs.end())
         return false;
     it->second.voiceMuted = muted;
+    m_voiceViewsValid = false; // #1090: mute state is part of the recipient set
     return true;
 }
 
@@ -5506,8 +5553,38 @@ void WorldBroadcaster::handleVoiceFrame(uint32_t peerId, const void* data, std::
             return;
     }
 
+    // Concurrent-speaker cap (#1090, D20). The relay cost of a net is (talkers x listeners) and only
+    // the listener side was ever bounded: 128 open mics at 128 players is ~975,000 sendChannel calls
+    // a second, roughly 78 MB/s, against ~32k/s for a realistic five-talker session. First come
+    // keeps its slot; a talker holds the slot through a brief gap so a pause for breath does not drop
+    // it mid-sentence. Over the cap the frame is dropped silently — answering would amplify.
+    {
+        const RadioNetDef* net = m_radioNets.byIndex(hdr.netId);
+        if (net && net->maxTalkers > 0) {
+            constexpr auto kVoiceTalkerHoldMs = std::chrono::milliseconds(250);
+            const auto now = m_clock->now();
+            auto& talkers = m_voiceTalkers[hdr.netId];
+            for (auto it = talkers.begin(); it != talkers.end();)
+                it = (now - it->second >= kVoiceTalkerHoldMs) ? talkers.erase(it) : std::next(it);
+            const auto mine = talkers.find(peerId);
+            if (mine != talkers.end()) {
+                mine->second = now; // already holding a slot: refresh it
+            } else {
+                if (talkers.size() >= static_cast<std::size_t>(net->maxTalkers))
+                    return; // the net is at capacity this moment
+                talkers.emplace(peerId, now);
+            }
+        }
+    }
+
     const VoicePeerView sender = voicePeerView(peerId);
-    buildVoicePeerViews(m_voicePeerScratch);
+    // Rebuild the peer views at most ONCE PER TICK (#1090) rather than on every received frame. The
+    // list is an O(P) walk and the picture it describes changes per tick, not per 20 ms frame.
+    if (!m_voiceViewsValid || m_voiceViewsTick != m_currentTick) {
+        buildVoicePeerViews(m_voicePeerScratch);
+        m_voiceViewsTick = m_currentTick;
+        m_voiceViewsValid = true;
+    }
     if (!selectVoiceRecipients(m_radioNets, hdr.netId, sender, m_voicePeerScratch, m_voiceRecipientScratch))
         return; // unknown net, muted, or no membership on this net
     if (m_voiceRecipientScratch.empty())
@@ -5535,6 +5612,7 @@ void WorldBroadcaster::handleVoiceFrame(uint32_t peerId, const void* data, std::
     // other (see kNetChVoice).
     for (const uint32_t rid : m_voiceRecipientScratch)
         m_net.sendChannel(rid, m_voiceRelayScratch.data(), m_voiceRelayScratch.size(), /*reliable=*/false, kNetChVoice);
+    m_voiceRelaySends += m_voiceRecipientScratch.size(); // #1090: fan-out is what voice actually costs
 }
 
 std::vector<uint32_t> WorldBroadcaster::mutedPeers() const {
@@ -6632,7 +6710,8 @@ void WorldBroadcaster::appendScoreboardRows(std::vector<uint8_t>& pkt, std::size
     }
 }
 
-void WorldBroadcaster::sendScoreboardTo(uint32_t peerId) {
+void WorldBroadcaster::buildScoreboardPackets(std::vector<std::vector<uint8_t>>& out) {
+    out.clear();
     if (m_scores.empty())
         return;
     std::vector<uint32_t> order;
@@ -6650,14 +6729,31 @@ void WorldBroadcaster::sendScoreboardTo(uint32_t peerId) {
         pkt.reserve(sizeof(hdr) + n * sizeof(ScoreboardRow));
         appendMsg(pkt, hdr);
         appendScoreboardRows(pkt, i, n, order);
-        m_net.send(peerId, pkt.data(), pkt.size(), /*reliable=*/false);
+        out.push_back(std::move(pkt));
     }
+    ++m_scoreboardBuilds; // instrumentation: one build per dirty window, not one per peer
+}
+
+void WorldBroadcaster::sendScoreboardTo(uint32_t peerId) {
+    // Unicast path (a late joiner on admit): one peer, so building for it is the whole job.
+    buildScoreboardPackets(m_scoreboardScratch);
+    for (const std::vector<uint8_t>& pkt : m_scoreboardScratch)
+        m_net.send(peerId, pkt.data(), pkt.size(), /*reliable=*/false);
 }
 
 void WorldBroadcaster::broadcastScoreboard() {
+    // Build ONCE, then send (#1091). The rows are receiver-independent — every peer was handed
+    // byte-identical content built 128 separate times, re-sorting every participant each pass: about
+    // 90,000 appends and 640 sends every two seconds for work with exactly one correct result.
+    // flushCombatEvents already had this shape for the kill feed; the scoreboard simply never got it.
+    buildScoreboardPackets(m_scoreboardScratch);
+    if (m_scoreboardScratch.empty())
+        return;
     for (const auto& [pid, pin] : m_peerInputs) {
-        if (pin.handshakeComplete)
-            sendScoreboardTo(pid);
+        if (!pin.handshakeComplete)
+            continue;
+        for (const std::vector<uint8_t>& pkt : m_scoreboardScratch)
+            m_net.send(pid, pkt.data(), pkt.size(), /*reliable=*/false);
     }
 }
 
