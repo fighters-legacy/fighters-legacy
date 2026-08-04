@@ -257,6 +257,128 @@ void mintServerMsgSeeds() {
     writeSeed("fuzz_server_msg", "seed-seat.bin", seat);
 }
 
+// --- #1073: the connect path + everything behind the handshake gate ---
+
+void mintConnectPathSeeds() {
+    printf("fuzz_connect_path:\n");
+
+    // seed-connect: a well-formed MsgConnectRequest with two trailing PackManifestEntry records. This
+    // is the shape the harness's first frame takes, and it walks the record loop the parser computes
+    // its TLV offset from (extOff = sizeof(MsgConnectRequest) + packCount * 128).
+    {
+        std::vector<uint8_t> body;
+        fl::MsgConnectRequest req{};
+        req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Pilot);
+        req.packCount = 2;
+        setField(req.requestedEntityType, "builtin:debug-entity");
+        setField(req.callsign, "Fuzz");
+        const auto reqBytes = wireBytes(req);
+        body.insert(body.end(), reqBytes.begin(), reqBytes.end());
+        for (int i = 0; i < 2; ++i) {
+            fl::PackManifestEntry pack{};
+            setField(pack.id, i == 0 ? "fl-base" : "extra-pack");
+            setField(pack.version, "0.3.14");
+            const auto packBytes = wireBytes(pack);
+            body.insert(body.end(), packBytes.begin(), packBytes.end());
+        }
+        std::vector<uint8_t> seed;
+        appendFrame(seed, body);
+        writeSeed("fuzz_connect_path", "seed-connect.bin", seed);
+    }
+
+    // seed-connect-tlv: the same request plus the three TLVs the connect path parses at that
+    // attacker-controlled offset -- the seat claim (#974), the reconnect identity (#524) and the join
+    // password (#998). packCount is 1, so the offset arithmetic is exercised with a non-zero record
+    // count rather than the degenerate zero case.
+    {
+        std::vector<uint8_t> body;
+        fl::MsgConnectRequest req{};
+        req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Pilot);
+        req.packCount = 1;
+        setField(req.callsign, "Claimer");
+        const auto reqBytes = wireBytes(req);
+        body.insert(body.end(), reqBytes.begin(), reqBytes.end());
+        fl::PackManifestEntry pack{};
+        setField(pack.id, "fl-base");
+        setField(pack.version, "0.3.14");
+        const auto packBytes = wireBytes(pack);
+        body.insert(body.end(), packBytes.begin(), packBytes.end());
+
+        uint8_t seatClaim[9]{};
+        const uint32_t entityIdx = 1, entityGen = 1;
+        std::memcpy(seatClaim, &entityIdx, 4);
+        std::memcpy(seatClaim + 4, &entityGen, 4);
+        seatClaim[8] = 1; // seatIndex
+        fl::appendExtRaw(body, static_cast<uint16_t>(fl::ExtTag::ConnectSeatClaim), seatClaim, sizeof(seatClaim));
+
+        const char guid[] = "0123456789abcdef0123456789abcdef";
+        fl::appendExtRaw(body, static_cast<uint16_t>(fl::ExtTag::ConnectIdentity), guid,
+                         static_cast<uint16_t>(sizeof(guid) - 1));
+
+        const char pw[] = "hunter2";
+        fl::appendExtRaw(body, static_cast<uint16_t>(fl::ExtTag::ConnectJoinPassword), pw,
+                         static_cast<uint16_t>(sizeof(pw) - 1));
+
+        std::vector<uint8_t> seed;
+        appendFrame(seed, body);
+        writeSeed("fuzz_connect_path", "seed-connect-tlv.bin", seed);
+    }
+
+    // seed-gated: a connect request, then one frame per handler that lives BEHIND the handshake gate
+    // -- chat, voice, seat and team. None of these were reachable from fuzz_server_msg, which never
+    // completed a handshake.
+    {
+        std::vector<uint8_t> seed;
+        fl::MsgConnectRequest req{};
+        req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Pilot);
+        setField(req.callsign, "Gate");
+        appendFrame(seed, wireBytes(req));
+
+        // Chat: header + NUL-terminated text.
+        {
+            std::vector<uint8_t> chat;
+            fl::MsgChatHeader hdr{};
+            hdr.channel = static_cast<uint8_t>(fl::ChatChannel::All);
+            const auto h = wireBytes(hdr);
+            chat.insert(chat.end(), h.begin(), h.end());
+            const char text[] = "hello";
+            chat.insert(chat.end(), text, text + sizeof(text));
+            appendFrame(seed, chat);
+        }
+        // Voice: header + an opaque payload the server never decodes, on the default net.
+        {
+            std::vector<uint8_t> voice;
+            fl::MsgVoiceFrameHeader hdr{};
+            hdr.netId = 0;
+            hdr.seq = 1;
+            hdr.payloadBytes = 16;
+            hdr.flags = fl::kVoiceFlagStart;
+            const auto h = wireBytes(hdr);
+            voice.insert(voice.end(), h.begin(), h.end());
+            voice.insert(voice.end(), 16, uint8_t{0xA5});
+            appendFrame(seed, voice);
+        }
+        // Seat: a join and a leave.
+        {
+            fl::MsgSeatRequest join{};
+            join.seatIndex = 1;
+            join.entityIdx = 1;
+            join.entityGen = 1;
+            appendFrame(seed, wireBytes(join));
+            fl::MsgSeatRequest leave{};
+            leave.flags = fl::kSeatRequestFlagLeave;
+            appendFrame(seed, wireBytes(leave));
+        }
+        // Team switch.
+        {
+            fl::MsgTeamRequest team{};
+            team.factionIndex = 1;
+            appendFrame(seed, wireBytes(team));
+        }
+        writeSeed("fuzz_connect_path", "seed-gated.bin", seed);
+    }
+}
+
 void mintClientMsgSeeds() {
     printf("fuzz_client_msg:\n");
     const double origin[3] = {1000.0, 500.0, -2000.0};
@@ -621,6 +743,7 @@ int main() {
     mintWireTlvSeeds();
     mintRconSeeds();
     mintServerMsgSeeds();
+    mintConnectPathSeeds();
     mintClientMsgSeeds();
     mintAssetValidatorSeeds();
     mintTerrainPngSeeds();
