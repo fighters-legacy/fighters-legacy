@@ -169,6 +169,11 @@ struct ServerConfig {
     int adminAuthMaxFailures = 5;        // consecutive wrong-password attempts before per-IP lockout [1,100]
     int adminAuthLockoutSeconds = 300;   // per-IP lockout duration in seconds [1,86400]
     int idleTimeoutS = 0;                // disconnect peers with no activity for N seconds; 0 = disabled [0,86400]
+    // World-mutating request limits (#1069). A seat or team grant despawns and respawns an entity and
+    // re-sends the whole ConnectAck type table; a heartbeat draws a MsgPeerDelay reply.
+    int seatRequestRateLimitPerS = 2; // seat requests per second per peer [1,60]
+    int teamSwitchCooldownS = 5;      // seconds between accepted team switches per peer; 0 = none [0,3600]
+    int heartbeatRateLimitPerS = 4;   // heartbeats per second per peer that draw a reply [1,60]
 
     // [rcon]
     struct RconConfig {

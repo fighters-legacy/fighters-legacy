@@ -220,6 +220,15 @@ TEST_CASE("Human gunner: masked-input gun fire lands on the target via the gunne
     // masked-input fire path (#972) plus the gunner-keyed lag-comp rewind (#979) must land rounds.
     GunnerFixture fx(/*skill=*/0.9f);
     constexpr uint32_t kGunnerPeer = 3;
+    // A human gunner is an ADMITTED peer: onConnect then its MsgConnectRequest (#853). Since #1069
+    // the dispatch preamble drops client->server messages from a peer that never completed the
+    // handshake, so binding a seat to a peer id that never connected no longer feeds it input.
+    fx.wb->onConnect(kGunnerPeer);
+    {
+        fl::MsgConnectRequest req{};
+        req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Observer); // spawns no aircraft of its own
+        fx.wb->onReceive(kGunnerPeer, &req, sizeof(req));
+    }
     REQUIRE(fx.wb->setSeatOccupant(fx.bomberId, /*seat=*/1, kGunnerPeer));
 
     fl::MsgClientInput inp{};

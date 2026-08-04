@@ -982,6 +982,12 @@ int main(int argc, char** argv) {
     broadcaster.setPlayerFaction(cfg.playerFaction);
     broadcaster.setFlightCommandRateLimit(cfg.flight.commandRateLimitPerS);
 
+    // World-mutating request limits (#1069): seat/team grants cost a despawn+respawn and a full
+    // ConnectAck; heartbeats cost a reply. These bound how often a peer may ask for each.
+    broadcaster.setSeatRequestRateLimit(cfg.seatRequestRateLimitPerS);
+    broadcaster.setTeamSwitchCooldownSeconds(cfg.teamSwitchCooldownS);
+    broadcaster.setHeartbeatRateLimit(cfg.heartbeatRateLimitPerS);
+
     // In-match text chat (#646). The moderation hook default logs an audit line and allows every message;
     // an operator replaces it with a filter. Rate limit + enable come from [chat].
     broadcaster.setChatEnabled(cfg.chat.enabled);

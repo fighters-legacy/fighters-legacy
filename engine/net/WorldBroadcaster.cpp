@@ -472,8 +472,12 @@ EjectionOutcome WorldBroadcaster::ejectPilot(EntityId eid) {
 void WorldBroadcaster::banAddress(std::string ip) {
     ip = fl::normalizeIp(ip);
     m_bannedAddresses.insert(ip);
-    for (const auto& [peerId, eid] : m_peerEntities) {
-        if (extractIp(m_net.getPeerAddress(peerId)) == ip)
+    // Walks m_peerInputs — EVERY connected peer — not m_peerEntities (#1069). Keying the kick on
+    // "has an entity" meant a ban did not reach an observer or a peer that had connected but not yet
+    // sent its MsgConnectRequest, so the one thing an operator expects a ban to do it did not do for
+    // exactly the peers with the least to lose. Reads the cached ip rather than re-extracting.
+    for (const auto& [peerId, pin] : m_peerInputs) {
+        if (pin.peerIp == ip)
             m_net.disconnectPeer(peerId);
     }
 }
@@ -2281,10 +2285,13 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
 
     // Per-IP concurrent connection limit. Count all connected peers (m_peerInputs), including observers
     // and not-yet-admitted peers, not just spawned pilots (#853 defers the spawn past onConnect).
+    // Reads each peer's CACHED ip (#1069): this walk previously called
+    // extractIp(getPeerAddress(pid)) per connected peer per connect attempt, building a std::string
+    // every time — an O(P) allocation storm on the sim thread that an attacker triggers by connecting.
     if (m_maxConnectionsPerIp > 0 && !ip.empty()) {
         int count = 0;
         for (const auto& [pid, pin] : m_peerInputs)
-            if (extractIp(m_net.getPeerAddress(pid)) == ip)
+            if (pin.peerIp == ip)
                 ++count;
         if (count >= m_maxConnectionsPerIp) {
             rejectConnection(peerId, ip, ConnectRefusalCode::TooManyConnections);
@@ -2312,6 +2319,10 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
     // when the request arrives, replacing the old "server unilaterally spawns on connect" flow.
     m_peerInputs[peerId] = {};
     m_peerInputs[peerId].lastActivityTick = m_currentTick;
+    // Resolve the source IP once (#1069). Every later per-IP question — the concurrent-connection
+    // count above, and anything that follows it — reads this instead of re-extracting from the
+    // transport. Empty when the address is unknown, which the IP checks already treat as "skip".
+    m_peerInputs[peerId].peerIp = ip;
 
     m_activePeerCount.fetch_add(1, std::memory_order_relaxed);
 }
@@ -2463,9 +2474,13 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
     std::memcpy(&req, data, sizeof(req));
     req.requestedEntityType[sizeof(req.requestedEntityType) - 1] = '\0'; // untrusted char[]: force-terminate
 
+    // The peer's source IP, resolved once at connect (#1069). Every refusal below reports it; before
+    // the cache each of those seven sites re-extracted and re-normalized the same string.
+    const std::string& peerIp = m_peerInputs[peerId].peerIp;
+
     if (req.protocolVersion != kProtocolVersion) {
         // The client also checks MsgHello and disconnects; refuse here as a backstop.
-        rejectConnection(peerId, extractIp(m_net.getPeerAddress(peerId)), ConnectRefusalCode::Generic);
+        rejectConnection(peerId, peerIp, ConnectRefusalCode::Generic);
         return;
     }
 
@@ -2503,7 +2518,7 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
         for (std::size_t i = sizeof(supplied); i < pw.size(); ++i)
             diff |= static_cast<uint8_t>(pw[i]);
         if (diff != 0u) {
-            rejectConnection(peerId, extractIp(m_net.getPeerAddress(peerId)), ConnectRefusalCode::BadPassword);
+            rejectConnection(peerId, peerIp, ConnectRefusalCode::BadPassword);
             return;
         }
     }
@@ -2532,7 +2547,7 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
                     list += ", ";
                 list += id;
             }
-            const std::string ip = extractIp(m_net.getPeerAddress(peerId));
+            const std::string& ip = peerIp;
             switch (m_requiredPackPolicy) {
             case RequiredPackPolicy::Refuse: {
                 char logmsg[256];
@@ -2570,12 +2585,12 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
     // Grant a role (#857). An out-of-grammar role byte is refused; an observer is refused when the
     // server disallows the role. (The required-pack policy #872 has already run above.)
     if (!isPeerRoleOrdinal(req.requestedRole)) {
-        rejectConnection(peerId, extractIp(m_net.getPeerAddress(peerId)), ConnectRefusalCode::Generic);
+        rejectConnection(peerId, peerIp, ConnectRefusalCode::Generic);
         return;
     }
     const PeerRole grantedRole = static_cast<PeerRole>(req.requestedRole);
     if (grantedRole == PeerRole::Observer && !m_allowObservers) {
-        rejectConnection(peerId, extractIp(m_net.getPeerAddress(peerId)), ConnectRefusalCode::RoleDenied);
+        rejectConnection(peerId, peerIp, ConnectRefusalCode::RoleDenied);
         return;
     }
 
@@ -2641,7 +2656,7 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
     if (grantedRole == PeerRole::Pilot && m_teamAssigner) {
         std::optional<uint16_t> team = m_teamAssigner(peerId);
         if (!team.has_value()) {
-            rejectConnection(peerId, extractIp(m_net.getPeerAddress(peerId)), ConnectRefusalCode::MatchFull);
+            rejectConnection(peerId, peerIp, ConnectRefusalCode::MatchFull);
             return;
         }
         assignedFaction = *team;
@@ -2698,7 +2713,7 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
         if (!assigned.valid()) {
             releaseMissionSlot(peerId);
             const bool capBound = m_entityManager.softCapRefusals() > capRefusalsBefore;
-            rejectConnection(peerId, extractIp(m_net.getPeerAddress(peerId)),
+            rejectConnection(peerId, peerIp,
                              capBound ? ConnectRefusalCode::ServerFull : ConnectRefusalCode::NoAirframe);
             return;
         }
@@ -4342,6 +4357,18 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
     if (size < info->minBytes)
         return;
 
+    // Handshake gate (#1069), also from the table. MsgConnectRequest IS the handshake and is the only
+    // message legal before it completes; everything else from an unadmitted peer is dropped with NO
+    // reply, because a reply to an unauthenticated request is an amplifier. Chat, voice, seat and team
+    // each carried their own copy of this check while MsgClientInput carried none — so an unadmitted
+    // peer could drive the jitter buffer, the EWMA delay/jitter estimators and the FLIT trace writer.
+    // One gate, stated once, covering every branch below.
+    if (!info->preHandshake) {
+        const auto pit = m_peerInputs.find(peerId);
+        if (pit == m_peerInputs.end() || !pit->second.handshakeComplete)
+            return;
+    }
+
     if (msgId == static_cast<uint8_t>(MsgId::ConnectRequest)) {
         handleConnectRequest(peerId, data, size);
         return;
@@ -4506,8 +4533,9 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         if (!m_adminDispatch)
             return;
 
-        // Extract IP once — used for both failure and success tracking below.
-        std::string adminIp = extractIp(m_net.getPeerAddress(peerId));
+        // The peer's IP — used for both failure and success tracking below. Resolved once at connect
+        // (#1069) rather than re-extracted per admin packet.
+        const std::string& adminIp = m_peerInputs[peerId].peerIp;
 
         MsgAdminCommand msg;
         std::memcpy(&msg, data, sizeof(msg));
@@ -4652,17 +4680,44 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
             }
         }
 
-        // Reply with the current delay estimate so the client can display "Ping: N ms".
-        MsgPeerDelay pd;
-        pd.delayTicks = static_cast<uint16_t>(std::min(ps.estimatedDelayTicks, 65535u));
-        m_net.send(peerId, &pd, sizeof(pd), /*reliable=*/false);
+        // Reply with the current delay estimate so the client can display "Ping: N ms" — but only
+        // within the rate limit (#1069). An unlimited heartbeat is a 1:1 reflector: every 16-byte
+        // packet drew a reply, and nothing capped the rate. The packet above is still accounted
+        // (liveness, delay estimate, ack) so a flooding peer cannot time itself out; only the REPLY
+        // is suppressed, which is the half that costs the server bandwidth.
+        {
+            const auto now = m_clock->now();
+            if (now - ps.heartbeatWindowStart >= std::chrono::seconds(1)) {
+                ps.heartbeatWindowStart = now;
+                ps.heartbeatCount = 0;
+            }
+            ++ps.heartbeatCount;
+            if (ps.heartbeatCount <= static_cast<uint32_t>(m_heartbeatRateLimit)) {
+                MsgPeerDelay pd;
+                pd.delayTicks = static_cast<uint16_t>(std::min(ps.estimatedDelayTicks, 65535u));
+                m_net.send(peerId, &pd, sizeof(pd), /*reliable=*/false);
+            }
+        }
 
     } else if (msgId == static_cast<uint8_t>(MsgId::WingmanCommand)) {
         handleWingmanCommand(peerId, data, size);
     } else if (msgId == static_cast<uint8_t>(MsgId::SeatRequest)) {
         MsgSeatRequest req;
-        if (readMsg(data, size, req))
-            handleSeatRequest(peerId, req);
+        if (readMsg(data, size, req)) {
+            // Per-peer budget (#1069). A grant runs despawnPeerEntity + setSeatOccupant +
+            // broadcastCrewRoster + a full sendConnectAck, so an unlimited seat request was ~23 KB of
+            // reliable traffic and a world mutation for 12 bytes. Over the limit: drop silently — a
+            // MsgSeatResult per rejected packet would keep the amplifier this removes.
+            auto& ps = m_peerInputs[peerId];
+            const auto now = m_clock->now();
+            if (now - ps.seatWindowStart >= std::chrono::seconds(1)) {
+                ps.seatWindowStart = now;
+                ps.seatCount = 0;
+            }
+            ++ps.seatCount;
+            if (ps.seatCount <= static_cast<uint32_t>(m_seatRequestRateLimit))
+                handleSeatRequest(peerId, req);
+        }
     } else if (msgId == static_cast<uint8_t>(MsgId::RadioCommand)) {
         handleRadioCommand(peerId, data, size);
     } else if (msgId == static_cast<uint8_t>(MsgId::Chat)) {
@@ -4671,11 +4726,21 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         handleVoiceFrame(peerId, data, size);
     } else if (msgId == static_cast<uint8_t>(MsgId::TeamRequest)) {
         // Mid-match team switch request (#522). Guard it against unbalancing, then despawn+respawn on
-        // the new team. An unadmitted peer or a guard denial is answered with a MsgServerNotice.
+        // the new team. A guard denial is answered with a MsgServerNotice; an unadmitted peer never
+        // reaches here (the handshake gate in the preamble).
         MsgTeamRequest req;
         if (readMsg(data, size, req)) {
-            const auto pit = m_peerInputs.find(peerId);
-            if (pit != m_peerInputs.end() && pit->second.handshakeComplete) {
+            auto& ps = m_peerInputs[peerId];
+            // Cooldown, not a per-second budget (#1069): a grant despawns and respawns the pilot and
+            // re-sends the full ConnectAck, so the honest bound is how OFTEN a player may switch. The
+            // cooldown starts at the last ACCEPTED request, so a peer cannot hold itself in cooldown
+            // by spamming; a rejected request is dropped silently, with no notice to amplify.
+            const auto now = m_clock->now();
+            const bool cooling = m_teamSwitchCooldownS > 0 && ps.hasTeamRequest &&
+                                 now - ps.lastTeamRequest < std::chrono::seconds(m_teamSwitchCooldownS);
+            if (!cooling) {
+                ps.lastTeamRequest = now;
+                ps.hasTeamRequest = true;
                 const bool allowed = !m_teamSwitchGuard || m_teamSwitchGuard(peerId, req.factionIndex);
                 if (allowed) {
                     setPeerFaction(peerId, req.factionIndex);

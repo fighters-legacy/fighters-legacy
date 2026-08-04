@@ -115,6 +115,9 @@ pre_handshake_window_ms        = 1000 # sliding window in milliseconds
 admin_auth_max_failures        = 5    # wrong operator passwords before per-IP lockout [1,100]
 admin_auth_lockout_s           = 300  # per-IP lockout duration in seconds [1,86400]
 idle_timeout_s                 = 0    # disconnect inactive peers after N seconds; 0 = disabled [0,86400]
+seat_request_rate_limit_per_s  = 2    # seat requests per second per player [1,60]
+team_switch_cooldown_s         = 5    # seconds between accepted team switches; 0 = none [0,3600]
+heartbeat_rate_limit_per_s     = 4    # heartbeats per second that draw a ping reply [1,60]
 
 [rcon]
 enabled           = false
@@ -1410,6 +1413,42 @@ immediately if the count would reach or exceed the limit.
 Set to `0` (default) to disable this check. This is distinct from `connect_rate_limit_count`,
 which limits connection *attempts* per time window; `max_connections_per_ip` limits *held*
 connections. Both can be active simultaneously.
+
+### `seat_request_rate_limit_per_s`
+
+| Type | Default | Valid range |
+|---|---|---|
+| integer | `2` | 1–60 |
+
+Seat requests (`MsgSeatRequest`, #974) accepted per second from one peer. A *granted* seat
+request is expensive: it despawns the peer's aircraft, rebinds the seat, re-broadcasts the crew
+roster and re-sends the entire `MsgConnectAck` type table. Requests over the limit are dropped
+**silently** — replying to each rejected packet would preserve the amplification the limit exists
+to remove. 2/s is far above any human seat-menu interaction.
+
+### `team_switch_cooldown_s`
+
+| Type | Default | Valid range |
+|---|---|---|
+| integer | `5` | 0–3600 |
+
+Minimum seconds between *accepted* team-switch requests (`MsgTeamRequest`, #522) from one peer.
+A cooldown rather than a per-second budget, because the cost is the despawn-and-respawn on the new
+team: the honest bound is how often a player may change teams. The cooldown starts at the last
+accepted request, so a peer cannot hold itself in cooldown by spamming. Set to `0` to disable it and
+let every request reach the team-balance guard.
+
+### `heartbeat_rate_limit_per_s`
+
+| Type | Default | Valid range |
+|---|---|---|
+| integer | `4` | 1–60 |
+
+Heartbeats (`MsgHeartbeat`, ~1/s from a healthy client) per second per peer that draw a
+`MsgPeerDelay` reply. Without a limit the heartbeat is a 1:1 reflector — every 16-byte packet
+produced a reply. Excess heartbeats are still **accounted**: they refresh liveness, the delay
+estimate and the snapshot ack, so a flooding peer cannot time itself out in a way a well-behaved one
+cannot. Only the reply is suppressed.
 
 ### `banlist_path`
 
