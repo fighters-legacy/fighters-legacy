@@ -2105,6 +2105,27 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         std::unordered_map<uint32_t, uint8_t>* pending{nullptr};
         std::vector<uint8_t> buf;
         std::vector<uint8_t> compressScratch; // zstd output scratch (#775); reused across ticks
+
+        // Per-peer snapshot scratch, REUSED across ticks (#1092). These ten were locals inside the
+        // per-peer pass, so the pass allocated ten fresh vectors per peer per tick — roughly 77,000
+        // allocations/second at 128 peers and 60 Hz, inside the PARALLEL region, which makes it
+        // allocator contention across worker threads as well as raw allocation cost. `buf` and
+        // `compressScratch` above already demonstrated the fix; these simply never got it.
+        //
+        // Every one is cleared before use, never read across ticks. That matters: buffer reuse that
+        // leaks stale contents would change the wire, which the serial-equivalence byte-compare
+        // exists to catch.
+        std::vector<uint32_t> visible;                  // interest-query hits, exact-gated
+        std::vector<uint32_t> selected;                 // budget-scheduled subset of `visible`
+        std::vector<SnapshotCandidate> cands;           // priority ranking input
+        std::vector<std::array<double, 3>> originTable; // shared quantization origins, deduped
+        std::vector<uint8_t> recordStream;              // stitched entity records
+        std::vector<uint8_t> ownBlob;                   // the own-entity re-encode
+        std::vector<uint32_t> despawnIds;               // SnapshotDespawn TLV payload
+        std::vector<uint8_t> effectsBlob;               // SnapshotEffects TLV payload
+        std::vector<uint8_t> articulationBlob;          // SnapshotArticulation TLV payload
+        std::vector<uint8_t> crewBlob;                  // SnapshotCrew TLV body
+        std::vector<uint8_t> payload;                   // assembled (possibly compressed) payload
     };
     std::vector<PeerSnapWork> m_peerWork;
 

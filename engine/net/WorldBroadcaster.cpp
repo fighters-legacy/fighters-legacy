@@ -1763,7 +1763,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             // The dead-pilot header-only blackout was lifted by #403 so a dead peer spectates the world
             // around its center instead of going black between death and respawn.
             const double* const center = w.center;
-            std::vector<uint32_t> visible;
+            std::vector<uint32_t>& visible = w.visible; // reused across ticks (#1092)
+            visible.clear();
             if (govInterestRadiusM > 0.0) {
                 const double r2 = govInterestRadiusM * govInterestRadiusM;
                 const double px = center[0], py = center[1], pz = center[2];
@@ -1782,7 +1783,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             // entities by relevance (distance / closing-speed / recency / player-owned) and keep only the
             // highest-priority set that fits; the rest are deferred to a later tick. budget == 0 keeps the
             // legacy behaviour (every visible entity, ascending idx). The own entity is always admitted.
-            std::vector<uint32_t> selected;
+            std::vector<uint32_t>& selected = w.selected;
+            selected.clear();
             // Congestion response (#518): scale the static byte budget by this peer's congestion throttle.
             // A static budget of 0 (unlimited) stays 0 here — under congestion only the send-rate lever
             // applies for unlimited-budget servers.
@@ -1800,7 +1802,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                 const double pvx = peerState ? static_cast<double>(peerState->transform.vel[0]) : 0.0;
                 const double pvy = peerState ? static_cast<double>(peerState->transform.vel[1]) : 0.0;
                 const double pvz = peerState ? static_cast<double>(peerState->transform.vel[2]) : 0.0;
-                std::vector<SnapshotCandidate> cands;
+                std::vector<SnapshotCandidate>& cands = w.cands;
+                cands.clear();
                 cands.reserve(visible.size());
                 for (uint32_t idx : visible) {
                     const EntitySnap& snap = snapMap.at(idx);
@@ -1851,8 +1854,10 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             // — re-encoded here with omega. Records are byte-aligned, so the stitch is a memcpy, not a
             // re-quantization. Deterministic (selected is sorted; origin table is first-seen order) so the
             // per-peer buffer is byte-identical across worker counts (serial-equivalence, #512).
-            std::vector<std::array<double, 3>> originTable;
-            std::vector<uint8_t> recordStream;
+            std::vector<std::array<double, 3>>& originTable = w.originTable;
+            originTable.clear();
+            std::vector<uint8_t>& recordStream = w.recordStream;
+            recordStream.clear();
             auto originIndexOf = [&originTable](const double o[3]) -> uint32_t {
                 for (uint32_t i = 0; i < originTable.size(); ++i)
                     if (originTable[i][0] == o[0] && originTable[i][1] == o[1] && originTable[i][2] == o[2])
@@ -1861,7 +1866,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                 return static_cast<uint32_t>(originTable.size() - 1u);
             };
 
-            std::vector<uint8_t> ownBlob; // scratch for the (single) own-entity re-encode
+            std::vector<uint8_t>& ownBlob = w.ownBlob; // scratch for the (single) own-entity re-encode
+            ownBlob.clear();
             for (uint32_t idx : selected) {
                 const EntitySnap& snap = snapMap.at(idx);
                 const EntityState& state = *snap.state;
@@ -1975,7 +1981,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             // Explicit despawn TLV (#516): indices the peer knew that left the sim. Repeated for a few
             // ticks (drop tolerance on the unreliable channel), decrementing each entry's remaining count.
             if (auto& pendingDespawn = *w.pending; !pendingDespawn.empty()) {
-                std::vector<uint32_t> ids;
+                std::vector<uint32_t>& ids = w.despawnIds;
+                ids.clear();
                 ids.reserve(pendingDespawn.size());
                 for (auto it = pendingDespawn.begin(); it != pendingDespawn.end();) {
                     ids.push_back(it->first);
@@ -1991,7 +1998,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             // capped. Read-only over the shared m_tickEffects (built serially in the weapons pass),
             // packed byte-serially into the unaligned TLV payload — parallel-safe, worker owns buf.
             if (!m_tickEffects.empty() && peerState && !peerState->dead) {
-                std::vector<uint8_t> fx;
+                std::vector<uint8_t>& fx = w.effectsBlob;
+                fx.clear();
                 fx.reserve(std::min(m_tickEffects.size(), kMaxEffectsPerSnapshot) * kEffectRecordBytes);
                 const double er2 = govInterestRadiusM * govInterestRadiusM;
                 std::size_t emitted = 0;
@@ -2022,7 +2030,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             // serially-built crewSnap — worker owns buf, so byte-identical across worker counts (#512).
             // Absent for a single-seat-only interest set → no TLV → byte-identical to pre-#972.
             if (!crewSnap.empty()) {
-                std::vector<uint8_t> cb;
+                std::vector<uint8_t>& cb = w.crewBlob;
+                cb.clear();
                 uint8_t count = 0;
                 for (uint32_t idx : selected) {
                     if (count == 255u)
@@ -2045,7 +2054,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                     ++count;
                 }
                 if (count > 0u) {
-                    std::vector<uint8_t> payload;
+                    std::vector<uint8_t>& payload = w.payload;
+                    payload.clear();
                     payload.reserve(cb.size() + 1u);
                     payload.push_back(count);
                     payload.insert(payload.end(), cb.begin(), cb.end());
@@ -2059,7 +2069,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             // stays byte-identical across worker counts (#512). Absent for an unarticulated interest
             // set, which is what keeps a world of static meshes at pre-#843 bytes.
             if (!artSnap.empty()) {
-                std::vector<uint8_t> ab;
+                std::vector<uint8_t>& ab = w.articulationBlob;
+                ab.clear();
                 for (uint32_t idx : selected) {
                     const auto ait = artSnap.find(idx);
                     if (ait == artSnap.end())
