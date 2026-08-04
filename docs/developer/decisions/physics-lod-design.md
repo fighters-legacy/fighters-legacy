@@ -324,8 +324,8 @@ Title: `feat(engine): reduced-rate physics integration for distant AI under over
 - Tests: governor mapping; eligibility gates; dt_eff across stride changes; cross-worker-count
   bit-equivalence with LOD pinned; zero-gravity time-conservation; loiter trajectory-error bound.
 - Measurement: overrun-profile before/after on the 8-core reference env demonstrating
-  `integrate_ms` reduction and `load_factor` recovery at the trigger workload; CHANGELOG + this
-  document's status updated.
+  `integrate_ms` reduction and `load_factor` recovery at the trigger workload; this document's
+  status updated.
 [#649]: https://github.com/fighters-legacy/fighters-legacy/issues/649
 [#773]: https://github.com/fighters-legacy/fighters-legacy/issues/773
 [#507]: https://github.com/fighters-legacy/fighters-legacy/issues/507

@@ -6,12 +6,15 @@ Please read the [Code of Conduct](https://github.com/fighters-legacy/.github/blo
 ## Commit Messages
 
 This project uses [Conventional Commits](https://www.conventionalcommits.org/). The scope and type
-drive the PR title lint and the release workflow's fallback notes.
+drive the PR title lint, the changelog and the release notes.
 
-**`CHANGELOG.md` is hand-curated, not generated.** Every PR adds its own entry under `[Unreleased]`
-— one per issue closed, with its own rationale — because a generated line collapses a multi-issue PR
-to a single subject and loses the *why*. See [project-management.md](docs/developer/project-management.md) for
-the entry convention and the release procedure.
+**Your commit subject is the changelog entry.** `CHANGELOG.md` is generated from conventional-commit
+subjects by [git-cliff](https://git-cliff.org) when a release is cut — **do not edit it in a PR**.
+Write the subject as a statement to a player or an operator, not a note to yourself; the full
+explanation belongs in the commit body and the PR description, which is where it still lives. See
+[development.md](docs/developer/development.md#your-commit-subject-is-the-changelog-entry) for
+subjects that read well and subjects that do not, and [project-management.md](docs/developer/project-management.md) for the
+release procedure.
 
 ### Format
 
@@ -151,8 +154,9 @@ and platform-specific HAL shims are excluded from the threshold.
 3. Install prerequisites and build: see [docs/developer/development.md](docs/developer/development.md)
 4. Install the DCO hook: `cp scripts/hooks/commit-msg .git/hooks/ && chmod +x .git/hooks/commit-msg`
 5. Make your changes and add tests
-6. Update `CHANGELOG.md` under `[Unreleased]`
-7. Sign off and commit: `git commit -s -m "feat(scope): description"`
-8. Open a pull request against `main` and fill in the PR template
+6. Sign off and commit: `git commit -s -m "feat(scope): description"` — the subject is published
+   verbatim as the changelog entry, so write it for a reader of the release notes. Do not edit
+   `CHANGELOG.md`
+7. Open a pull request against `main` and fill in the PR template
 
 For full build workflow, IDE setup, and the release process, see [docs/developer/development.md](docs/developer/development.md). For upstream documentation on every technology used in the engine, see [docs/developer/references.md](docs/developer/references.md).

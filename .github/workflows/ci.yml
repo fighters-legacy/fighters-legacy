@@ -418,6 +418,13 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: python3 -m pytest tests/test_fl_ports.py -v
 
+      # The splice + its guards only (#1123). git-cliff is NOT invoked here and is not a CI
+      # dependency: generation runs on the release branch, and the guards -- not the generator --
+      # are what stand between a release cut and a thousand lines of released history.
+      - name: Unit test scripts/gen_changelog.py (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 -m pytest tests/test_gen_changelog.py -v
+
       # Pure assertion logic only; the full harness run against fl-server is the mission_harness_ci_smoke
       # ctest (#856).
       - name: Unit test mission_test/mission_test.py (Ubuntu)

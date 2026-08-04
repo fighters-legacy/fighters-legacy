@@ -105,7 +105,8 @@ Prerequisites, every preset, sanitizers, coverage, fuzzing and the CI workflow s
 - **Do not edit `CHANGELOG.md` in a feature PR.** It is generated from conventional-commit subjects
   by `git-cliff` at release time (#1123) — a hand-written entry means every concurrent PR conflicts
   on the same list. **Your commit subject is the changelog entry**, so write it as a statement to a
-  player or an operator, not a note to yourself.
+  player or an operator, not a note to yourself. Worked examples and which types are skipped:
+  [development.md](docs/developer/development.md#your-commit-subject-is-the-changelog-entry).
 
 ## Layering — enforced at configure time
 

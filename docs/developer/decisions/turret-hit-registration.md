@@ -433,8 +433,8 @@ Title: `feat(netcode): lag-compensated turret hit registration for human gunners
 - **Tests**: `test_world_broadcaster` — gunner-keyed rewind (human gunner at fixed delay hits the
   rewound crosser; bot gunner rewinds 0); cross-worker-count bit-equivalence with a human-occupied
   turret seat (`workerCount ∈ {1,4}`, TSan); generation-check on a recycled target slot.
-- **Docs + CHANGELOG**: this document's status, `docs/developer/network-protocol.md` TLV table, an
-  `[Unreleased]` entry.
+- **Docs**: this document's status and the `docs/developer/network-protocol.md` TLV table. No
+  changelog entry — the commit subject is the entry (#1123).
 
 Escalation (client-asserted bore + `validateFireBore` replay) is a *separate* follow-on filed only
 on the trigger above, from the escalation pseudocode in this document.
