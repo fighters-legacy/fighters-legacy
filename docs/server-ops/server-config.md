@@ -1004,9 +1004,21 @@ survivable-arrival threshold). Ordinary landings are never affected.
 ## [discovery] — LAN server discovery
 
 Configures the UDP broadcast beacon that lets players on the same LAN find this server
-automatically. The beacon is a raw UDP packet sent on `255.255.255.255:<port>` (IPv4 broadcast)
-and `[ff02::1]:<port>` (IPv6 link-local multicast) every `interval_ms` milliseconds. It is
+automatically. The beacon is a raw UDP packet sent on `255.255.255.255:4780` (IPv4 broadcast)
+and `[ff02::1]:4780` (IPv6 link-local multicast) every `interval_ms` milliseconds. It is
 independent of ENet and requires no router configuration.
+
+**Discovery has its own port (4780), separate from the game port** (#1071). It is a LAN-wide
+constant rather than a setting: every server broadcasts to it and every browser binds it, so the two
+ends must agree the way they agree on a message id. The beacon carries this server's *connect* port
+in `MsgLanBeacon::gamePort`, so a browser learns where to connect from the packet, never from the
+port it heard the packet on.
+
+Before this the beacon was broadcast to the **game** port, which meant a client could not run its
+server browser while a dedicated `fl-server` ran on the same machine — enet6 sets no `SO_REUSEADDR`,
+so whoever bound second failed outright, and single-player died with "Port already in use" (#1054).
+Only the browser's listener ever binds 4780, and it does so with `SO_REUSEADDR`, so several clients
+on one host coexist; a beacon only sends and needs no bind at all.
 
 Client-side parsing and the server browser UI are tracked in issue #143.
 

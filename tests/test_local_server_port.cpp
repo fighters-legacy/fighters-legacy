@@ -13,6 +13,7 @@
 
 #include "LocalServer.h"
 #include "net/DiscoveryBeacon.h"
+#include "net/GameProtocol.h" // kDiscoveryPort (#1071)
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
@@ -20,13 +21,11 @@
 using namespace fl;
 
 TEST_CASE("embedded single-player server does not share the standard game port", "[localserver][1054]") {
-    // The port the LAN discovery beacon/listener use -- which is the game port, by design: the
-    // beacon broadcasts *to* it, so the browser's listener binds it.
-    const uint16_t gamePort = DiscoveryBeacon::Config{}.port;
+    const uint16_t gamePort = DiscoveryBeacon::Config{}.gamePort;
     REQUIRE(gamePort == 4778);
 
-    // The embedded server must not sit on the game port. This is the regression: it used to default
-    // to exactly this port, so the browser's listener and the embedded server fought over it.
+    // The embedded server must not sit on the game port: a dedicated fl-server on the same machine
+    // may already hold it, and enet6 sets no SO_REUSEADDR.
     CHECK(LocalServer::kLocalServerPort != gamePort);
 
     // Nor on the server-query responder's port. fl-server auto-assigns that as game port + 1, so
@@ -34,12 +33,26 @@ TEST_CASE("embedded single-player server does not share the standard game port",
     // embedded server would collide with its query socket instead of its game socket.
     CHECK(LocalServer::kLocalServerPort != static_cast<uint16_t>(gamePort + 1));
 
-    // And the embedded server's OWN derived query port must not land back on the game port. This is
-    // what rules out 4777: fl-server derives an unconfigured query port as game port + 1, so an
-    // embedded server on 4777 would bind 4778 for queries and reintroduce #1054 through the other
-    // socket. The server is spawned with --no-discovery so no responder exists today, but the port
-    // choice must survive that flag being dropped rather than depend on it.
+    // And the embedded server's OWN derived query port must not land on anything claimed.
     CHECK(static_cast<uint16_t>(LocalServer::kLocalServerPort + 1) != gamePort);
+    CHECK(static_cast<uint16_t>(LocalServer::kLocalServerPort + 1) != fl::kDiscoveryPort);
+}
+
+TEST_CASE("LAN discovery no longer aliases the game port (#1071)", "[localserver][1071]") {
+    // The #1054 root cause: the beacon broadcast TO the game port, so the browser's listener had to
+    // bind the game port, so it fought the embedded server for it. Discovery now has its own port and
+    // the beacon advertises the connect port in the packet instead.
+    DiscoveryBeacon::Config cfg;
+    CHECK(cfg.discoveryPort == fl::kDiscoveryPort);
+    CHECK(cfg.discoveryPort != cfg.gamePort);
+
+    // Nothing derives the discovery port from another port in use, in either direction. This is the
+    // property the old 4776 rationale spent fifteen lines establishing for the game port's
+    // neighbours; the fix is that the question no longer needs asking.
+    CHECK(fl::kDiscoveryPort != cfg.gamePort);
+    CHECK(fl::kDiscoveryPort != static_cast<uint16_t>(cfg.gamePort + 1)); // the derived query port
+    CHECK(fl::kDiscoveryPort != LocalServer::kLocalServerPort);
+    CHECK(fl::kDiscoveryPort != static_cast<uint16_t>(LocalServer::kLocalServerPort + 1));
 }
 
 // ---------------------------------------------------------------------------
@@ -120,6 +133,28 @@ bool bindPlainLoopback(SockGuard& g, uint16_t port) {
 }
 
 } // namespace
+
+TEST_CASE("a browser listener and a dedicated server coexist on one host (#1071)", "[localserver][1071]") {
+    // The user-visible #1054 regression, as a socket test: the client's server browser must be able
+    // to listen for beacons while a dedicated fl-server holds the game port on the same machine, and
+    // the embedded single-player server must still be able to bind its own port with both running.
+    // Before the de-alias the first two contended for one port and the second one lost.
+    SockGuard browser;
+    uint16_t discovery = 0;
+    REQUIRE(openWildcardReuse(browser, discovery)); // stands in for the DiscoveryListener
+
+    // A dedicated server's ENet host on a DIFFERENT port: no SO_REUSEADDR, exactly like enet6.
+    SockGuard dedicated;
+    CHECK(bindPlainLoopback(dedicated, 0));
+
+    // And the embedded single-player server, likewise plain. All three sockets live at once.
+    SockGuard embedded;
+    CHECK(bindPlainLoopback(embedded, 0));
+
+    CHECK(browser.valid());
+    CHECK(dedicated.valid());
+    CHECK(embedded.valid());
+}
 
 TEST_CASE("a wildcard REUSEADDR holder blocks an enet-style bind on the same port", "[localserver][1054]") {
     // This is the mechanism behind #1054 on the platform it was reported on. If this ever stops

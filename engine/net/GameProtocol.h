@@ -1428,6 +1428,25 @@ static_assert(offsetof(MsgLanBeacon, shutdownSeconds) == 10u, "MsgLanBeacon::shu
 static_assert(offsetof(MsgLanBeacon, queryPort) == 12u, "MsgLanBeacon::queryPort offset changed");
 static_assert(offsetof(MsgLanBeacon, name) == 14u, "MsgLanBeacon::name offset changed");
 
+// The LAN discovery port (#1071). A protocol constant, not deployment config: every server on a
+// segment broadcasts MsgLanBeacon TO it and every browser binds it, so the two ends must agree the
+// way they agree on a message id.
+//
+// It is DELIBERATELY NOT THE GAME PORT. Discovery used to alias the game port — the beacon
+// broadcast to 4778 and the browser's listener bound 4778 — which meant a client could not run its
+// server browser while a dedicated fl-server ran on the same machine: enet6's enet_host_create sets
+// no SO_REUSEADDR, so whoever bound second failed outright. That is the whole of #1054, and it cost
+// a hardcoded embedded-server port, a lazily-created listener and fifteen lines of rationale about
+// which neighbouring ports were safe. The alias bought nothing, because MsgLanBeacon::gamePort
+// already carries the connect port explicitly: a browser learns where to connect from the PACKET,
+// never from the port it heard the packet on.
+//
+// Only the browser's listener ever binds this, and it does so with SO_REUSEADDR, so several clients
+// on one host coexist; a beacon only ever sends, and needs no bind at all. 4780 is chosen so it is
+// not derived from any other port in use — the game port (4778) and the query port it derives
+// (game + 1 = 4779) are both clear of it, and nothing derives 4780 from anything.
+static constexpr uint16_t kDiscoveryPort = 4780;
+
 // Bitmask constants for MsgLanBeacon::gameModeFlags.
 static constexpr uint8_t kGameModeCampaign = 0x01u;
 static constexpr uint8_t kGameModeMission = 0x02u;

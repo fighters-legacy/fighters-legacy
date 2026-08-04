@@ -201,7 +201,8 @@ TEST_CASE("DiscoveryBeacon opens at least one socket", "[lan_discovery]") {
     const uint16_t port = freeUdpPort(); // #787: never a shared constant
     DiscoveryBeacon::Config cfg;
     cfg.name = "test-server";
-    cfg.port = port;
+    cfg.gamePort = port;
+    cfg.discoveryPort = port; // loopback test: broadcast to the same ephemeral port it advertises
     cfg.broadcastAddr = "127.0.0.1";
     cfg.intervalMs = 30000;
 
@@ -226,7 +227,8 @@ TEST_CASE("DiscoveryBeacon first tick fires immediately", "[lan_discovery][integ
 
     DiscoveryBeacon::Config cfg;
     cfg.name = "my-server";
-    cfg.port = port;
+    cfg.gamePort = port;
+    cfg.discoveryPort = port; // loopback test: broadcast to the same ephemeral port it advertises
     cfg.broadcastAddr = "127.0.0.1";
     cfg.intervalMs = 30000;
     cfg.maxPlayers = 16;
@@ -252,7 +254,8 @@ TEST_CASE("DiscoveryBeacon advertises shutdown state (#226)", "[lan_discovery][i
     DiscoveryListener listener(port, log);
     DiscoveryBeacon::Config cfg;
     cfg.name = "closing-server";
-    cfg.port = port;
+    cfg.gamePort = port;
+    cfg.discoveryPort = port; // loopback test: broadcast to the same ephemeral port it advertises
     cfg.broadcastAddr = "127.0.0.1";
     cfg.intervalMs = 30000;
     cfg.gameModeFlags = fl::kGameModeSandbox;
@@ -277,7 +280,8 @@ TEST_CASE("DiscoveryBeacon second immediate tick does not resend", "[lan_discove
 
     DiscoveryBeacon::Config cfg;
     cfg.name = "dedup-server";
-    cfg.port = port;
+    cfg.gamePort = port;
+    cfg.discoveryPort = port; // loopback test: broadcast to the same ephemeral port it advertises
     cfg.broadcastAddr = "127.0.0.1";
     cfg.intervalMs = 30000;
 
@@ -373,7 +377,8 @@ TEST_CASE("DiscoveryBeacon: setName updates the server name for future broadcast
 
     DiscoveryBeacon::Config cfg;
     cfg.name = "original";
-    cfg.port = 0;            // don't actually bind/broadcast — we're testing the config mutation
+    cfg.gamePort = 0;        // don't actually bind/broadcast — we're testing the config mutation
+    cfg.discoveryPort = 0;   //
     cfg.intervalMs = 100000; // suppress automatic ticking
 
     DiscoveryBeacon beacon(cfg, log);

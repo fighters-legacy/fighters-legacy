@@ -853,11 +853,17 @@ Header:
 
 ### MsgLanBeacon — 78 bytes
 
-Broadcast by `fl-server` on `255.255.255.255:<port>` (IPv4) and `[ff02::1]:<port>` (IPv6
+Broadcast by `fl-server` on `255.255.255.255:4780` (IPv4) and `[ff02::1]:4780` (IPv6
 link-local multicast) every `discovery.interval_ms` milliseconds (default: 2000 ms) using a
 **raw UDP socket separate from ENet**. Clients on the same LAN receive this packet without
 establishing a connection. See issue #91 for the server-side implementation; client-side server
 browser is issue #143.
+
+`fl::kDiscoveryPort` (4780) is a protocol constant, **not the game port** (#1071). The `gamePort`
+field below carries the connect port explicitly, so a browser learns where to connect from the
+packet rather than from the port it heard the packet on. Discovery previously aliased the game port,
+which stopped a browser and a dedicated server coexisting on one host (#1054); only the browser's
+listener binds 4780, and it does so with `SO_REUSEADDR`.
 
 This packet is **not** sent over ENet and must not be injected into an ENet connection.
 `MsgId::LanBeacon = 0x40` is outside the ENet message range (`0x00`–`0x3F`).

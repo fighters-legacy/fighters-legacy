@@ -486,7 +486,10 @@ int main(int argc, char** argv) {
     if (cfg.discoveryEnabled && !flagNoDiscovery) {
         DiscoveryBeacon::Config dcfg;
         dcfg.name = cfg.name;
-        dcfg.port = cfg.port;
+        dcfg.gamePort = cfg.port; // advertised as MsgLanBeacon::gamePort — where clients connect
+        // Broadcast to the dedicated discovery port (#1071), never to the game port. The old alias is
+        // why a client could not run its browser while a dedicated server held the game port.
+        dcfg.discoveryPort = fl::kDiscoveryPort;
         dcfg.maxPlayers = static_cast<uint8_t>(cfg.maxPeers > 255 ? 255 : cfg.maxPeers);
         dcfg.gameModeFlags = discoveryGameModeFlags;
         dcfg.queryPort = queryResponder ? queryPort : 0; // #997: advertise the query port to browsers
