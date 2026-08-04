@@ -727,3 +727,94 @@ TEST_CASE("SensorSystem: ECCM extends the burn-through range", "[sensor_system][
     REQUIRE(c != nullptr);
     CHECK(c->locked()); // the good radar burns through the jamming at this range
 }
+
+// ---------------------------------------------------------------------------
+// #1088: per-faction fusion must produce the same picture as per-peer fusion
+// ---------------------------------------------------------------------------
+// The cost fix rests entirely on the fused set being a property of the FACTION, with only the
+// ownSensor bit being per-peer. If that is not exactly true, this is a behaviour change wearing a
+// performance change's clothes — so it is asserted directly rather than inferred.
+
+TEST_CASE("TrackFuser: one team-wide fusion plus an own-sensor overlay equals per-peer fusion (#1088)",
+          "[track_fuser]") {
+    // Three same-faction observers with overlapping pictures, the shape the datalink actually sees.
+    ContactTable a, b, c;
+    a.contacts.push_back(makeContact(10, 1, ContactState::Detected, Identification::Unknown, 0x4, false, 5, 100.0));
+    a.contacts.push_back(makeContact(20, 1, ContactState::Coasting, Identification::Unknown, 0x4, false, 3, 210.0));
+    b.contacts.push_back(makeContact(20, 1, ContactState::Locked, Identification::Foe, 0x1, true, 9, 200.0));
+    b.contacts.push_back(makeContact(30, 2, ContactState::Detected, Identification::Friend, 0x2, false, 7, 300.0));
+    c.contacts.push_back(makeContact(10, 1, ContactState::Locked, Identification::Foe, 0x1, true, 8, 110.0));
+    c.contacts.push_back(makeContact(40, 1, ContactState::Detected, Identification::Unknown, 0x4, false, 4, 400.0));
+
+    const std::vector<const ContactTable*> tables{&a, &b, &c};
+
+    // The team picture, fused once with no own-sensor marking (what broadcastDatalink now caches).
+    TrackFuser team;
+    for (const ContactTable* t : tables)
+        team.add(*t, /*ownSensor=*/false);
+    const auto teamTracks = team.tracks();
+
+    // For each observer in turn: the OLD path (its own table marked own, then every teammate) must
+    // equal the team picture with the ownSensor bit overlaid from that observer's own table.
+    for (std::size_t self = 0; self < tables.size(); ++self) {
+        TrackFuser perPeer;
+        perPeer.add(*tables[self], /*ownSensor=*/true);
+        for (std::size_t other = 0; other < tables.size(); ++other)
+            if (other != self)
+                perPeer.add(*tables[other], /*ownSensor=*/false);
+        const auto expected = perPeer.tracks();
+
+        // The new path: copy the team picture, set ownSensor from this observer's own contacts.
+        std::vector<FusedTrack> actual = teamTracks;
+        for (FusedTrack& t : actual) {
+            bool held = false;
+            for (const Contact& own : *tables[self])
+                if (own.id.index == t.id.index && own.id.generation == t.id.generation)
+                    held = true;
+            t.ownSensor = held;
+        }
+
+        REQUIRE(actual.size() == expected.size());
+        for (std::size_t i = 0; i < actual.size(); ++i) {
+            INFO("observer " << self << ", track " << i);
+            CHECK(actual[i].id.index == expected[i].id.index);
+            CHECK(actual[i].id.generation == expected[i].id.generation);
+            CHECK(actual[i].state == expected[i].state);
+            CHECK(actual[i].ident == expected[i].ident);
+            CHECK(actual[i].sensorTypeMask == expected[i].sensorTypeMask);
+            CHECK(actual[i].firingQuality == expected[i].firingQuality);
+            CHECK(actual[i].ownSensor == expected[i].ownSensor);
+            CHECK(actual[i].lastSeenTick == expected[i].lastSeenTick);
+            CHECK(actual[i].lastKnownPos[0] == expected[i].lastKnownPos[0]);
+        }
+    }
+}
+
+TEST_CASE("TrackFuser: a pool-slot generation conflict resolves by data, not arrival order (#1088)", "[track_fuser]") {
+    // Two observers hold contacts on two DIFFERENT entities that share a pool slot. Fusing per faction
+    // merges tables in a single fixed order for the whole team instead of per-peer with the requester
+    // first, so this tie must be decided by the data. The newer generation wins either way round.
+    ContactTable stale, fresh;
+    stale.contacts.push_back(makeContact(50, 1, ContactState::Locked, Identification::Foe, 0x1, true, 9, 111.0));
+    fresh.contacts.push_back(makeContact(50, 2, ContactState::Detected, Identification::Unknown, 0x4, false, 4, 222.0));
+
+    TrackFuser staleFirst;
+    staleFirst.add(stale, false);
+    staleFirst.add(fresh, false);
+
+    TrackFuser freshFirst;
+    freshFirst.add(fresh, false);
+    freshFirst.add(stale, false);
+
+    const auto x = staleFirst.tracks();
+    const auto y = freshFirst.tracks();
+    REQUIRE(x.size() == 1u);
+    REQUIRE(y.size() == 1u);
+    CHECK(x[0].id.generation == 2u); // the newer entity owns the slot...
+    CHECK(y[0].id.generation == 2u); // ...whichever order the tables arrived in
+    CHECK(x[0].lastKnownPos[0] == 222.0);
+    CHECK(y[0].lastKnownPos[0] == 222.0);
+    // ...and the stale entity's flags must not leak onto the new one.
+    CHECK_FALSE(x[0].firingQuality);
+    CHECK_FALSE(y[0].firingQuality);
+}

@@ -4252,31 +4252,60 @@ void WorldBroadcaster::broadcastDatalink(uint64_t tickIndex) {
         return dx * dx + dy * dy + dz * dz;
     };
 
+    // Fuse ONCE PER FACTION (#1088, D21), not once per pilot. The fused picture is a property of the
+    // TEAM: every same-faction peer was re-merging the identical set of teammate tables and then
+    // applying its own-sensor marking on top. At 128 players that was roughly
+    // 128 pilots x 64 teammates x <=32 contacts ~= 262,000 merges inside a single tick, six times a
+    // second, serial on the sim thread with no JobSystem dispatch and no governor lever to shed it —
+    // the highest-risk O(P^2) cost in the codebase. Fusing per faction makes it O(P*C + F*C).
+    //
+    // Faction 0 is neutral: it fuses with no one, so it gets no cache and falls back to its own table
+    // alone below — a lone neutral still sees its own picture but shares nothing.
+    std::unordered_map<uint16_t, std::vector<sensor::FusedTrack>> factionPicture;
+    factionPicture.reserve(factionObservers.size());
+    for (const auto& [faction, observers] : factionObservers) {
+        if (faction == 0)
+            continue;
+        sensor::TrackFuser fuser;
+        for (uint32_t obsIdx : observers)
+            if (const sensor::ContactTable* t = m_sensorSystem.contactsFor(obsIdx))
+                fuser.add(*t, /*ownSensor=*/false); // the per-peer bit is overlaid below
+        factionPicture.emplace(faction, fuser.tracks());
+    }
+
     std::vector<uint8_t> buf;
+    std::unordered_map<uint32_t, uint32_t> ownTargets; // target index -> generation, for the overlay
+    std::vector<sensor::FusedTrack> tracks;
     for (const auto& [peerId, eid] : m_peerEntities) {
         const EntityState* self = m_entityManager.get(eid);
         if (!self || self->dead)
             continue;
         const uint16_t faction = self->factionIndex;
 
-        // Fuse the peer's own contacts (marked ownSensor) with every same-faction teammate's. Faction
-        // 0 is neutral: it fuses with no one, so a lone neutral still sees its own picture but shares
-        // nothing — there is no "team" to share with.
-        sensor::TrackFuser fuser;
-        if (const sensor::ContactTable* own = m_sensorSystem.contactsFor(eid.index))
-            fuser.add(*own, /*ownSensor=*/true);
-        if (faction != 0) {
-            if (auto it = factionObservers.find(faction); it != factionObservers.end()) {
-                for (uint32_t obsIdx : it->second) {
-                    if (obsIdx == eid.index)
-                        continue; // own table already added
-                    if (const sensor::ContactTable* t = m_sensorSystem.contactsFor(obsIdx))
-                        fuser.add(*t, /*ownSensor=*/false);
-                }
-            }
-        }
+        // The peer's OWN contacts, as an index->generation lookup for the ownSensor overlay. A peer
+        // holding a contact itself must be told so: "my radar has this" and "only the datalink shows
+        // me this" drive different HUD treatment. contactsFor is non-null only for an observer, and
+        // every live observer is in its faction's group above, so the cache already contains this
+        // peer's contributions — only the MARKING is per-peer.
+        ownTargets.clear();
+        const sensor::ContactTable* own = m_sensorSystem.contactsFor(eid.index);
+        if (own)
+            for (const sensor::Contact& c : *own)
+                ownTargets[c.id.index] = c.id.generation;
 
-        std::vector<sensor::FusedTrack> tracks = fuser.tracks();
+        tracks.clear();
+        if (const auto pit = factionPicture.find(faction); faction != 0 && pit != factionPicture.end()) {
+            tracks = pit->second; // the team's fused picture, already sorted by target index
+            for (sensor::FusedTrack& t : tracks) {
+                const auto oit = ownTargets.find(t.id.index);
+                t.ownSensor = oit != ownTargets.end() && oit->second == t.id.generation;
+            }
+        } else if (own) {
+            // Neutral (faction 0), or a faction with no observer group: the peer's own picture only.
+            sensor::TrackFuser fuser;
+            fuser.add(*own, /*ownSensor=*/true);
+            tracks = fuser.tracks();
+        }
         if (tracks.size() > kMaxDatalinkTracks) {
             std::sort(tracks.begin(), tracks.end(), [&](const sensor::FusedTrack& a, const sensor::FusedTrack& b) {
                 const int pa =
