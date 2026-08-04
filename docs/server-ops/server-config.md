@@ -1212,18 +1212,29 @@ off (so the HUD says so rather than a mic that silently does nothing).
 
 ### `frame_rate_limit`
 
-Default `60`, range `[1, 200]`. Voice frames accepted per second per peer. 50 frames/s is one
-continuous transmission at the 20 ms frame size, so the default leaves headroom for jitter.
+Default `52`, range `[1, 200]`. Voice frames accepted per second per peer. 50 frames/s is one
+continuous transmission at the 20 ms frame size, so the default sits just above it with two frames of
+jitter headroom.
 
 This is a **bandwidth bound, not anti-spam**: a frame is fanned out to every recipient on the net, so
 an unbounded sender costs the server *(recipients × bytes)*, not *(1 × bytes)*. Over-rate frames are
 dropped **silently** — a reply to a flood is amplification.
+
+The default was `60` until #1090, which capped nothing at all: the codec produces 50 frames/s, so the
+limit sat *above* the rate a well-behaved client could even reach. A limit that cannot bind is not a
+limit.
 
 ### `[[voice.nets]]`
 
 An array of net definitions. **Omit it entirely** and the compiled-in stack is used: `team` (the
 default PTT net), `flight`, `atc`, and a positional `proximity` net at 3 km — so voice works with
 zero configuration. Defining **any** net replaces that stack wholesale.
+
+Each row may set **`max_talkers`** (default `4`, `0` = unlimited): how many people may transmit on
+that net *at once* (#1090). The relay cost of a net is *(talkers × listeners)* and only the listener
+side was ever bounded — with every mic open at 128 players that is roughly 810,000 `sendChannel`
+calls a second. First come keeps its slot, and a talker holds it through a ~250 ms gap so a pause for
+breath does not hand the slot away mid-sentence. Frames over the cap are dropped silently.
 
 | Key | Type | Default | Notes |
 |---|---|---|---|

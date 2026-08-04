@@ -1073,10 +1073,17 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     [[nodiscard]] bool voiceEnabled() const noexcept {
         return m_voiceEnabled;
     }
-    // Per-peer frame cap per second. 50 frames/s is one continuous 20 ms transmission; the default
-    // leaves headroom for jitter without letting one client fan out an unbounded stream.
+    // Per-peer frame cap per second. 50 frames/s is one continuous 20 ms transmission, so the default
+    // 52 sits just above the codec rate and binds; the previous 60 sat above what a well-behaved
+    // client could even produce and therefore capped nothing (#1090).
     void setVoiceFrameRateLimit(int framesPerSecond) noexcept {
         m_voiceFrameRateLimit = framesPerSecond < 1 ? 1 : framesPerSecond;
+    }
+
+    // Total sendChannel calls the voice relay has made (#1090). The fan-out — not the frame count —
+    // is what voice actually costs the server, so this is the number a worst-case bound asserts on.
+    [[nodiscard]] uint64_t voiceRelaySendCount() const noexcept {
+        return m_voiceRelaySends;
     }
     // Session-scoped transmit mute (admin voice_mute/voice_unmute). Returns false if peer unknown.
     bool setPeerVoiceMuted(uint32_t peerId, bool muted);
@@ -1640,7 +1647,23 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Voice comms (#532). The table is server-authoritative and replicated at admit time.
     RadioNetTable m_radioNets;
     bool m_voiceEnabled{true};
-    int m_voiceFrameRateLimit{60}; // frames/s/peer; 50 = one continuous transmission
+    // frames/s/peer. 52, not 60 (#1090): the codec produces 50 frames/s, so a 60/s limit sat ABOVE
+    // the rate a well-behaved client can reach and therefore capped nothing at all. 52 leaves two
+    // frames of jitter headroom and actually binds.
+    int m_voiceFrameRateLimit{52};
+    // Per-tick voice peer views (#1090). buildVoicePeerViews is an O(P) walk and it ran on EVERY
+    // RECEIVED FRAME — at 50 frames/s per talker that is the same list rebuilt tens of thousands of
+    // times a second for a picture that changes once per tick. Rebuilt at most once per tick now,
+    // plus whenever membership changes within a tick (a join/leave/mute must not be missed).
+    uint64_t m_voiceViewsTick{0};
+    bool m_voiceViewsValid{false};
+    // Per-net active-talker tracking for the concurrent-speaker cap (D20). Keyed netId -> (peerId ->
+    // last frame time). A talker keeps its slot through a brief gap (kVoiceTalkerHoldMs) so a pause
+    // for breath does not drop it mid-sentence and hand the slot to someone else.
+    std::unordered_map<uint8_t, std::unordered_map<uint32_t, std::chrono::steady_clock::time_point>> m_voiceTalkers;
+    // Relay fan-out counter (#1090): sendChannel calls made by the voice relay. Name-keyed additive
+    // metric; ServerTickReport's schema version stays frozen at 6 (D18 / #686).
+    uint64_t m_voiceRelaySends{0};
     // Scratch reused by the relay path so a 50 Hz hot path does not allocate per frame.
     mutable std::vector<VoicePeerView> m_voicePeerScratch;
     mutable std::vector<uint32_t> m_voiceRecipientScratch;

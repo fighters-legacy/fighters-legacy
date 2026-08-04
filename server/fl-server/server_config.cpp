@@ -394,7 +394,12 @@ static const char* kDefaultToml =
     "# In-game voice comms (Epic J): PTT-keyed radio NETS, Opus relayed without server-side decode.\n"
     "# There is deliberately no frequency dial - nets are named channels.\n"
     "enabled = true\n"
-    "# frame_rate_limit = 60    # frames/s per player; [1, 200]. 50 = one continuous transmission.\n"
+    "# frame_rate_limit = 52    # frames/s per player; [1, 200]. The codec produces 50/s, so this\n"
+    "#                          # sits just above it and actually binds; 60 did not.\n"
+    "#\n"
+    "# Each [[voice.nets]] row may set max_talkers (default 4, 0 = unlimited): the number of people\n"
+    "# who may transmit on that net AT ONCE. Relay cost is (talkers x listeners), and only the\n"
+    "# listener side was ever bounded -- 128 open mics at 128 players is ~78 MB/s of fan-out.\n"
     "#\n"
     "# Omit [[voice.nets]] entirely to use the compiled-in stack: team (default PTT), flight, atc,\n"
     "# and a positional proximity net at 3 km. Defining ANY net replaces that stack wholesale.\n"
@@ -1388,7 +1393,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 cfg.voice.frameRateLimit = static_cast<int>(*v);
             else
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "voice.frame_rate_limit out of range [1, 200]; using default 60");
+                         "voice.frame_rate_limit out of range [1, 200]; using default 52");
         }
         if (auto* arr = tbl["voice"]["nets"].as_array()) {
             for (auto& node : *arr) {
@@ -1408,6 +1413,14 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 n.radioEffect = (*nt)["radio_effect"].value_or(true);
                 n.gain = (*nt)["gain"].value_or(1.0);
                 n.defaultNet = (*nt)["default"].value_or(false);
+                if (auto mt = tomlIntNarrow((*nt)["max_talkers"])) {
+                    if (*mt < 0 || *mt > 128) {
+                        log->log(LogLevel::Warn, __FILE__, __LINE__,
+                                 "voice.nets max_talkers out of range [0, 128]; using default");
+                    } else {
+                        n.maxTalkers = *mt;
+                    }
+                }
                 cfg.voice.nets.push_back(std::move(n));
             }
         }

@@ -79,8 +79,16 @@ decode, no mix, no transcode.
 
 Two consequences, both deliberate:
 
-1. Voice at 128 players costs the server almost nothing — the reason the epic could be pulled
+1. **Decoding** voice at 128 players costs the server nothing — the reason the epic could be pulled
    forward into the 128+ re-target at all.
+
+    This claim used to read "voice at 128 players costs the server almost nothing", which was true of
+    the decode and false of the **fan-out** (#1090). A frame is relayed to every listener on the net,
+    so a net costs *(talkers × listeners)*. With every mic open at 128 players that is roughly
+    128 talkers × 50 frames/s × 127 recipients ≈ **810,000 `sendChannel` calls per second**. Realistic
+    push-to-talk — about five simultaneous talkers — is ~32,000/s and entirely fine. The bound comes
+    from `max_talkers` (default 4 per net) plus a `frame_rate_limit` that actually binds; a realistic
+    session is byte-identical to before, and only the open-mic case changes.
 2. The codec is a **client-to-client contract**. The 48 kHz / 20 ms / VOIP operating point can
    change without a protocol change, because nothing on the server has an opinion about it.
 

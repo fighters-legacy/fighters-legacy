@@ -72,6 +72,13 @@ struct RadioNetDef {
     bool radioEffect{true}; // apply the radio DSP (bandpass + compression + squelch); false = "in the room"
     float gain{1.f};        // per-net trim, on top of the client's own per-net slider
     bool defaultNet{false}; // pre-selected under the primary PTT key when a client first connects
+
+    // Concurrent-speaker cap (#1090, D20). The server relays a frame to every listener on the net, so
+    // the cost of a net is (talkers x listeners), and NOTHING bounded the talker side: 128 open mics
+    // at 128 players is ~975,000 sendChannel calls/second, about 78 MB/s. A realistic
+    // push-to-talk session has a handful of simultaneous talkers, so a cap of 4 bounds the abuse case
+    // without touching normal play. 0 = unlimited (a net that genuinely wants a free-for-all).
+    uint8_t maxTalkers{4};
 };
 
 // The ordered net table. The index of a def IS its wire netId, so order is significant and stable

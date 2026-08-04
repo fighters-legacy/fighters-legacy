@@ -380,11 +380,16 @@ struct ServerConfig {
         bool radioEffect = true;   // apply the radio DSP (#925)
         double gain = 1.0;         // per-net trim; [0, 4]
         bool defaultNet = false;   // pre-selected under the client's primary PTT key
+        // Concurrent-speaker cap (#1090, D20); 0 = unlimited. Relay cost is (talkers x listeners),
+        // and only the listener side was ever bounded.
+        int maxTalkers = 4;
     };
     struct VoiceConfig {
-        bool enabled = true;              // false = the server relays no audio and tells clients voice is off
-        int frameRateLimit = 60;          // frames/s/peer; [1, 200]. A BANDWIDTH bound, not anti-spam: a frame
-                                          // is fanned out to every recipient, so the cost is recipients x bytes
+        bool enabled = true; // false = the server relays no audio and tells clients voice is off
+        // frames/s/peer; [1, 200]. A BANDWIDTH bound, not anti-spam: a frame is fanned out to every
+        // recipient, so the cost is recipients x bytes. 52, not 60 (#1090): the codec produces 50/s,
+        // so the old default sat ABOVE what a well-behaved client could reach and bound nothing.
+        int frameRateLimit = 52;
         std::vector<VoiceNetConfig> nets; // empty = builtinRadioNets()
     };
     VoiceConfig voice;

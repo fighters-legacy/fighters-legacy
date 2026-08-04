@@ -76,6 +76,11 @@ struct ServerTickReport {
     // see at all while the key was parsed but unwired.
     uint32_t entitySoftCap{0};
     uint64_t entityCapRefusals{0};
+    // Voice relay fan-out (#1090). ADDITIVE and name-keyed, so no schema bump (D18 / the freeze note
+    // above). The FAN-OUT, not the frame count, is what voice costs the server: a frame is relayed to
+    // every listener on the net, so a net costs (talkers x listeners). This is the number that makes
+    // the concurrent-speaker cap's effect visible to an operator instead of a claim in a doc.
+    uint64_t voiceRelaySends{0};
     std::array<Stats, kTickPhaseCount> phases{}; // indexed by TickPhase
     Stats total{};
     Stats other{};
@@ -183,6 +188,7 @@ inline std::string toJson(const ServerTickReport& r, int indentSpaces = 0) {
                   "%s\"ticks_sampled\": %llu, \"ticks_total\": %llu,\n"
                   "%s\"window_s\": %.4f,\n"
                   "%s\"peers\": %d, \"entities\": %u, \"entity_soft_cap\": %u, \"entity_cap_refusals\": %llu,\n"
+                  "%s\"voice_relay_sends\": %llu,\n"
                   "%s\"load_factor\": %.4f, \"interest_scale\": %.4f, \"dropped_ticks\": %llu,\n"
                   "%s\"rss_kb\": %llu, \"rss_startup_kb\": %llu,\n"
                   "%s\"congestion_min_send_hz\": %.4f, \"congestion_recovered_send_hz\": %.4f, "
@@ -192,7 +198,8 @@ inline std::string toJson(const ServerTickReport& r, int indentSpaces = 0) {
                   pad.c_str(), in.c_str(), r.schemaVersion, in.c_str(), r.tickHz, in.c_str(),
                   static_cast<unsigned long long>(r.ticksSampled), static_cast<unsigned long long>(r.ticksTotal),
                   in.c_str(), r.windowSeconds, in.c_str(), r.peers, r.entities, r.entitySoftCap,
-                  static_cast<unsigned long long>(r.entityCapRefusals), in.c_str(), r.loadFactor, r.interestScale,
+                  static_cast<unsigned long long>(r.entityCapRefusals), in.c_str(),
+                  static_cast<unsigned long long>(r.voiceRelaySends), in.c_str(), r.loadFactor, r.interestScale,
                   static_cast<unsigned long long>(r.droppedTicks), in.c_str(), static_cast<unsigned long long>(r.rssKb),
                   static_cast<unsigned long long>(r.rssStartupKb), in.c_str(), r.congestionMinSendHz,
                   r.congestionRecoveredSendHz, r.congestionMaxLoss, in.c_str(), r.wireOutKbs, r.wireInKbs,
@@ -254,6 +261,8 @@ inline bool fromJson(std::string_view json, ServerTickReport& out) {
         out.peers = static_cast<int>(*v);
         any = true;
     }
+    if (auto v = detail::findNumber(json, "voice_relay_sends"))
+        out.voiceRelaySends = static_cast<uint64_t>(*v);
     if (auto v = detail::findNumber(json, "entities")) {
         out.entities = static_cast<uint32_t>(*v);
         any = true;

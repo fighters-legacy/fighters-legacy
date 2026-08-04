@@ -1028,6 +1028,7 @@ int main(int argc, char** argv) {
             def.radioEffect = n.radioEffect;
             def.gain = static_cast<float>(n.gain);
             def.defaultNet = n.defaultNet;
+            def.maxTalkers = static_cast<uint8_t>(n.maxTalkers); // #1090: concurrent-speaker cap
             if (nets.add(std::move(def)) == kInvalidRadioNet) {
                 char buf[192];
                 std::snprintf(buf, sizeof(buf), "[voice] net '%s' rejected (duplicate id or table full); skipped",
@@ -2839,6 +2840,7 @@ int main(int argc, char** argv) {
                 ct.maxPacketLoss, wt.outKbs, wt.inKbs, wt.outPacketsPerSec, wt.peersAtSample, entityManager.softCap(),
                 entityManager.softCapRefusals());
             rep.peerThrottle = std::move(throttles);
+            rep.voiceRelaySends = broadcaster.voiceRelaySendCount(); // #1090: fan-out, not frame count
             fl::writeConfigFile(metricsPath, fl::toJson(rep) + "\n", *log);
             nextMetricsWrite = std::chrono::steady_clock::now() + metricsInterval;
         }

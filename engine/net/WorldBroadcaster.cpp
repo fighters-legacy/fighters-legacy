@@ -2834,6 +2834,8 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
         m_disconnectGrace.erase(reconnectGuid);
     }
 
+    m_voiceViewsValid = false; // #1090: a new admitted peer changes the voice recipient set
+
     // Match state + scoreboard for the late joiner (#523): the current phase/scores + everyone's row.
     sendMatchStateTo(peerId);
     sendScoreboardTo(peerId);
@@ -3021,6 +3023,7 @@ uint16_t WorldBroadcaster::factionForPeer(uint32_t peerId) const noexcept {
 }
 
 void WorldBroadcaster::setPeerFaction(uint32_t peerId, uint16_t faction) {
+    m_voiceViewsValid = false; // #1090: a team change alters team-net membership
     const auto rit = m_roster.find(peerId);
     if (rit == m_roster.end())
         return; // not an admitted peer
@@ -3137,6 +3140,9 @@ void WorldBroadcaster::onDisconnect(uint32_t peerId) {
     despawnPeerEntity(peerId); // a pilot's own aircraft is torn down (no-op for observer/gunner)
     removeRoster(peerId);      // broadcast the leave + drop the roster record (#996; before m_peerInputs erase)
     m_peerInputs.erase(peerId);
+    m_voiceViewsValid = false; // #1090: a departing peer changes the voice recipient set
+    for (auto& [netId, talkers] : m_voiceTalkers)
+        talkers.erase(peerId); // free its talker slot immediately rather than after the hold window
     m_peerFloodState.erase(peerId);
     m_peerKnownGens.erase(peerId);
     m_peerPendingDespawn.erase(peerId);
@@ -5427,6 +5433,7 @@ bool WorldBroadcaster::setPeerVoiceMuted(uint32_t peerId, bool muted) {
     if (it == m_peerInputs.end())
         return false;
     it->second.voiceMuted = muted;
+    m_voiceViewsValid = false; // #1090: mute state is part of the recipient set
     return true;
 }
 
@@ -5546,8 +5553,38 @@ void WorldBroadcaster::handleVoiceFrame(uint32_t peerId, const void* data, std::
             return;
     }
 
+    // Concurrent-speaker cap (#1090, D20). The relay cost of a net is (talkers x listeners) and only
+    // the listener side was ever bounded: 128 open mics at 128 players is ~975,000 sendChannel calls
+    // a second, roughly 78 MB/s, against ~32k/s for a realistic five-talker session. First come
+    // keeps its slot; a talker holds the slot through a brief gap so a pause for breath does not drop
+    // it mid-sentence. Over the cap the frame is dropped silently — answering would amplify.
+    {
+        const RadioNetDef* net = m_radioNets.byIndex(hdr.netId);
+        if (net && net->maxTalkers > 0) {
+            constexpr auto kVoiceTalkerHoldMs = std::chrono::milliseconds(250);
+            const auto now = m_clock->now();
+            auto& talkers = m_voiceTalkers[hdr.netId];
+            for (auto it = talkers.begin(); it != talkers.end();)
+                it = (now - it->second >= kVoiceTalkerHoldMs) ? talkers.erase(it) : std::next(it);
+            const auto mine = talkers.find(peerId);
+            if (mine != talkers.end()) {
+                mine->second = now; // already holding a slot: refresh it
+            } else {
+                if (talkers.size() >= static_cast<std::size_t>(net->maxTalkers))
+                    return; // the net is at capacity this moment
+                talkers.emplace(peerId, now);
+            }
+        }
+    }
+
     const VoicePeerView sender = voicePeerView(peerId);
-    buildVoicePeerViews(m_voicePeerScratch);
+    // Rebuild the peer views at most ONCE PER TICK (#1090) rather than on every received frame. The
+    // list is an O(P) walk and the picture it describes changes per tick, not per 20 ms frame.
+    if (!m_voiceViewsValid || m_voiceViewsTick != m_currentTick) {
+        buildVoicePeerViews(m_voicePeerScratch);
+        m_voiceViewsTick = m_currentTick;
+        m_voiceViewsValid = true;
+    }
     if (!selectVoiceRecipients(m_radioNets, hdr.netId, sender, m_voicePeerScratch, m_voiceRecipientScratch))
         return; // unknown net, muted, or no membership on this net
     if (m_voiceRecipientScratch.empty())
@@ -5575,6 +5612,7 @@ void WorldBroadcaster::handleVoiceFrame(uint32_t peerId, const void* data, std::
     // other (see kNetChVoice).
     for (const uint32_t rid : m_voiceRecipientScratch)
         m_net.sendChannel(rid, m_voiceRelayScratch.data(), m_voiceRelayScratch.size(), /*reliable=*/false, kNetChVoice);
+    m_voiceRelaySends += m_voiceRecipientScratch.size(); // #1090: fan-out is what voice actually costs
 }
 
 std::vector<uint32_t> WorldBroadcaster::mutedPeers() const {
