@@ -18,8 +18,9 @@
 // building, and at ~1 Hz that is deliberately not the sim thread.
 //
 // The format is ADDITIVE and NAME-KEYED. New fields append; consumers look up by name and ignore
-// what they do not know. There is deliberately no schema_version here — nothing gates on one, and
-// ServerTickReport.h's own comment explains why a version nobody checks is a ritual, not a contract.
+// what they do not know. There is deliberately no schema_version here — nothing gates on one, and a
+// version nobody checks is a ritual, not a contract (decision record D18,
+// docs/developer/architecture.md: this format crosses no machine or build boundary).
 //
 // UNLIKE MissionReport.h, this escapes strings. It carries chat lines, admin command text and
 // faction names, which are attacker-controlled or mod-controlled; emitting them raw would let a chat

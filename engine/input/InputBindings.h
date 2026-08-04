@@ -54,7 +54,9 @@ class InputBindings {
     // restore the very collisions #1050 removed — for every player who never customised anything.
     // Version 1 = the pre-#1050 `[primary]`/`[alt]` map; version 2 = the three-slot, conflict-free
     // map; version 3 = per-action binding LISTS with device identity, plus the joystick sources
-    // (#1061).
+    // (#1061). The version is CHECKED (with migration, never a silent reset) because a stored
+    // bindings.toml crosses a build boundary — the user's file outlives every install that reads it
+    // (decision record D18, docs/developer/architecture.md).
     static constexpr int kFormatVersion = 3;
 
     // The `version` value of a stored file, or 0 when it predates versioning. Callers regenerate

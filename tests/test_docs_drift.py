@@ -167,6 +167,46 @@ def test_enum_entries_returns_empty_for_a_missing_enum():
     assert dd._enum_entries(PROTOCOL_SRC, "NoSuchEnum") == {}
 
 
+# ---- kMsgTable metadata extraction (#1068) -----------------------------------------------------
+
+# The second row wraps the way clang-format wraps the real table; the extractor must not require a
+# row to fit on one line.
+MSG_TABLE_SRC = """\
+inline constexpr MsgInfo kMsgTable[] = {
+    {MsgId::Hello, "Hello", MsgDir::ServerToClient, MsgReliability::Reliable, kNetChReliable, 4, false},
+    {MsgId::WorldSnapshot, "WorldSnapshot", MsgDir::ServerToClient, MsgReliability::Unreliable, kNetChUnreliable, 24,
+     false},
+    {MsgId::ConnectRequest, "ConnectRequest", MsgDir::ClientToServer, MsgReliability::Reliable, kNetChReliable, 104,
+     true},
+    {MsgId::VoiceFrame, "VoiceFrame", MsgDir::ClientToServer, MsgReliability::Unreliable, kNetChVoice, 8, false},
+    {MsgId::LanBeacon, "LanBeacon", MsgDir::ServerToClient, MsgReliability::Datagram, kNoNetChannel, 78, false},
+};
+"""
+
+
+def test_msg_table_rows_read_all_columns_including_wrapped_rows():
+    rows = dd._msg_table_rows(MSG_TABLE_SRC)
+    assert rows == {
+        "Hello": ("server→client", "reliable", "4"),
+        "WorldSnapshot": ("server→client", "unreliable", "24"),
+        "ConnectRequest": ("client→server", "reliable", "104"),
+        "VoiceFrame": ("client→server", "voice", "8"),
+        "LanBeacon": ("server→client", "raw-udp", "78"),
+    }
+
+
+def test_msg_table_rows_returns_empty_when_the_table_is_absent():
+    assert dd._msg_table_rows(PROTOCOL_SRC) == {}
+
+
+def test_doc_delivery_normalizes_the_channel_cell_vocabulary():
+    assert dd._doc_delivery("reliable") == "reliable"
+    assert dd._doc_delivery("unreliable") == "unreliable"
+    assert dd._doc_delivery("unreliable (voice channel)") == "voice"
+    assert dd._doc_delivery("raw UDP (not ENet)") == "raw-udp"
+    assert dd._doc_delivery("raw UDP") == "raw-udp"
+
+
 # ---- lua binding extraction --------------------------------------------------------------------
 
 LUA_SRC = """\

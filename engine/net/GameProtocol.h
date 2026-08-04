@@ -50,13 +50,19 @@ static constexpr uint8_t kNetChVoice = 2;
 
 // Incremented only at the Phase 6 public release when the wire format freezes (see compatibility
 // model above). Stays at 1 throughout primary development. Clients that receive a MsgHello with a
-// different protocolVersion must disconnect.
+// different protocolVersion must disconnect. The wire crosses a machine boundary, so it carries a
+// CHECKED version — decision record D18 (docs/developer/architecture.md, "Decision Records") is why
+// this field exists while in-repo formats freeze their version instead.
 static constexpr uint16_t kProtocolVersion = 1;
 
 // Server-enforced maximum byte length of the MsgMotd text payload (NUL terminator excluded).
 // Client enforces the same cap on receive to guard against oversized packets.
 static constexpr std::size_t kMaxMotdBytes = 65535;
 
+// Per-message metadata (direction, reliability, channel, dispatch size floor, handshake gate) lives
+// in kMsgTable at the END of this header (#1068) — the single machine-checked authority; the `//`
+// comments here are prose only. A new id needs a table row (the static asserts below the table
+// insist) and a docs/developer/network-protocol.md row (tools/docs_drift.py diffs the two).
 enum class MsgId : uint8_t {
     Hello = 0x00,              // server->client, reliable: first message sent on every new connection
     ConnectAck = 0x01,         // server->client, reliable: sent once on connect
@@ -1500,27 +1506,27 @@ enum class ExtTag : uint16_t {
                               // kMaxEffectsPerSnapshot. Unreliable by design — a dropped packet loses cosmetics,
                               // never state. pos is float32 world position (particles do not need 0.125 m).
     SnapshotLastAckedSeqNum =
-        0x0105, // uint32_t: seqNum of the last MsgClientInput the server drained + APPLIED for the receiving
-                // peer (#427). Lets client prediction replay EXACTLY the inputs the server has not yet
-                // reflected (history seqNum > this), instead of approximating the replay depth from
-                // estimatedDelayTicks. Omitted until the first input is applied (a peer's first snapshots).
-    SnapshotArticulation = 0x0107, // #843: actuator positions for the ARTICULATED entities in the peer's
-                                   // interest set, so a remote aircraft's gear and flaps move. Payload:
-                                   // repeated { uint32 entityIdx (LE), uint16 channelMask (LE), uint8
-                                   // value[popcount(mask)] } — unsigned channel = round(v*255), signed =
-                                   // round(v*127)+128 (offset binary). QUANTIZATION IS COSMETIC-GRADE ON
-                                   // PURPOSE: 1/255 on a 0..1 actuator is 0.4%, visually exact, and it
-                                   // cannot affect flight because A PEER NEVER READS ITS OWN ENTITY'S
-                                   // CHANNELS FROM THE WIRE — ClientPrediction overwrites them with its
-                                   // own full-precision integration. An entity with all-default channels
-                                   // costs ZERO bytes, so a world of unarticulated meshes emits no TLV.
-    SnapshotCrew = 0x0106,         // #972: live turret orientation for CREWED aircraft in the peer's interest set.
-                                   // Payload: uint8 entryCount, then entryCount x { uint32 entityIdx (LE), uint8
-                                   // turretCount, turretCount x { int16 azQ (LE), int16 elQ (LE) } }. az quantized
-                                   // over [-pi,pi], el over [-pi/2,pi/2] to int16. Single-seat aircraft NEVER appear
-                                   // (occupancy lives in the reliable MsgCrewRoster), so a world of only single-seat
-                                   // entities emits no SnapshotCrew TLV and its snapshot is byte-identical to pre-#972.
-                                   // Unreliable/interest-filtered: a dropped packet loses one tick of turret aim.
+        0x0105,            // uint32_t: seqNum of the last MsgClientInput the server drained + APPLIED for the receiving
+                           // peer (#427). Lets client prediction replay EXACTLY the inputs the server has not yet
+                           // reflected (history seqNum > this), instead of approximating the replay depth from
+                           // estimatedDelayTicks. Omitted until the first input is applied (a peer's first snapshots).
+    SnapshotCrew = 0x0106, // #972: live turret orientation for CREWED aircraft in the peer's interest set.
+                           // Payload: uint8 entryCount, then entryCount x { uint32 entityIdx (LE), uint8
+                           // turretCount, turretCount x { int16 azQ (LE), int16 elQ (LE) } }. az quantized
+                           // over [-pi,pi], el over [-pi/2,pi/2] to int16. Single-seat aircraft NEVER appear
+                           // (occupancy lives in the reliable MsgCrewRoster), so a world of only single-seat
+                           // entities emits no SnapshotCrew TLV and its snapshot is byte-identical to pre-#972.
+                           // Unreliable/interest-filtered: a dropped packet loses one tick of turret aim.
+    SnapshotArticulation = 0x0107,   // #843: actuator positions for the ARTICULATED entities in the peer's
+                                     // interest set, so a remote aircraft's gear and flaps move. Payload:
+                                     // repeated { uint32 entityIdx (LE), uint16 channelMask (LE), uint8
+                                     // value[popcount(mask)] } — unsigned channel = round(v*255), signed =
+                                     // round(v*127)+128 (offset binary). QUANTIZATION IS COSMETIC-GRADE ON
+                                     // PURPOSE: 1/255 on a 0..1 actuator is 0.4%, visually exact, and it
+                                     // cannot affect flight because A PEER NEVER READS ITS OWN ENTITY'S
+                                     // CHANNELS FROM THE WIRE — ClientPrediction overwrites them with its
+                                     // own full-precision integration. An entity with all-default channels
+                                     // costs ZERO bytes, so a world of unarticulated meshes emits no TLV.
     SnapshotServerThrottle = 0x0108, // #576: the SERVER is intentionally decimating this peer's snapshots because the
                                      // tick-overrun governor (#514) is shedding work — as distinct from the peer's own
                                      // link being congested (#518), which the client already infers from RTT and loss.
@@ -1556,5 +1562,229 @@ enum class ExtTag : uint16_t {
                                   // little-endian, unaligned). Ascending altitude. Old clients ignore it and
                                   // keep the datum-level windX/windZ scalar; omitted when no profile is set.
 };
+
+// ---------------------------------------------------------------------------------------------
+// Message metadata table (#1068)
+// ---------------------------------------------------------------------------------------------
+// THE single authority for per-message direction, reliability, channel, dispatch size floor and
+// handshake gating. Before this table those five facts lived in `//` comments on the MsgId
+// enumerators plus a hand-maintained docs table, and dispatch re-derived its own size checks per
+// branch — nothing machine-checked that the three agreed, and four documented sizes had already
+// drifted. Now:
+//   * the static_asserts below pin every row's minBytes to the sizeof of its wire struct,
+//   * both dispatchers (WorldBroadcaster::onReceive, ClientNetEventHandler::onReceive) take their
+//     preconditions from msgInfo() instead of hand-rolling them, and
+//   * tools/docs_drift.py diffs every column against docs/developer/network-protocol.md BOTH ways.
+//
+// A once-reserved id is carried as an explicit row (MsgDir::Reserved) rather than as prose, so
+// claiming it is a table edit the drift gate sees — 0x0D/0x0E were "reserved" in a comment once and
+// got claimed by another feature anyway. There are no Reserved rows today; the mechanism outlives
+// the lesson. Lookup treats a Reserved row as undispatchable in BOTH directions automatically,
+// because its direction matches neither dispatcher.
+
+// Who legitimately SENDS a message. A dispatcher drops anything whose direction is not "toward
+// itself" — a server->client id arriving at the server is an attack or a bug, never valid traffic.
+enum class MsgDir : uint8_t {
+    ClientToServer = 0,
+    ServerToClient = 1,
+    Reserved = 2, // an id held in reserve: no direction, no dispatch, minBytes 0
+};
+
+// Delivery contract. Reliable/Unreliable ride ENet channels; Datagram is raw UDP OUTSIDE ENet
+// (discovery + server query) and must never be dispatched through an ENet onReceive path.
+enum class MsgReliability : uint8_t {
+    Reliable = 0,
+    Unreliable = 1,
+    Datagram = 2,
+};
+
+// Channel value for messages that ride no ENet channel (raw-UDP datagrams, Reserved rows).
+inline constexpr uint8_t kNoNetChannel = 0xFF;
+
+struct MsgInfo {
+    MsgId id;
+    const char* name; // enumerator name — logs, tooling, and the docs-drift diff key on it
+    MsgDir dir;
+    MsgReliability reliability;
+    uint8_t channel;   // kNetCh* for ENet ids; kNoNetChannel otherwise
+    uint16_t minBytes; // dispatch size floor = sizeof of the fixed struct/header (records/
+                       // text/TLV follow for the variable messages; branches validate those)
+    bool preHandshake; // client->server only: the server may accept it from a peer that has
+                       // NOT completed the ConnectRequest handshake. ConnectRequest alone —
+                       // it IS the handshake. Enforcement is the dispatch preamble's job.
+};
+
+// Sorted so index == id for the dense ENet range [0x00, 0x27), then the raw-UDP trio [0x40, 0x43).
+// minBytes are literals ON PURPOSE: tools/docs_drift.py parses this table and cannot evaluate a
+// sizeof — the static_assert block below pins every literal to its struct so they cannot drift.
+inline constexpr MsgInfo kMsgTable[] = {
+    {MsgId::Hello, "Hello", MsgDir::ServerToClient, MsgReliability::Reliable, kNetChReliable, 4, false},
+    {MsgId::ConnectAck, "ConnectAck", MsgDir::ServerToClient, MsgReliability::Reliable, kNetChReliable, 24, false},
+    {MsgId::WorldSnapshot, "WorldSnapshot", MsgDir::ServerToClient, MsgReliability::Unreliable, kNetChUnreliable, 24,
+     false},
+    {MsgId::ClientInput, "ClientInput", MsgDir::ClientToServer, MsgReliability::Unreliable, kNetChUnreliable, 80,
+     false},
+    {MsgId::WeatherState, "WeatherState", MsgDir::ServerToClient, MsgReliability::Unreliable, kNetChUnreliable, 32,
+     false},
+    {MsgId::ServerNotice, "ServerNotice", MsgDir::ServerToClient, MsgReliability::Reliable, kNetChReliable, 64, false},
+    {MsgId::AdminCommand, "AdminCommand", MsgDir::ClientToServer, MsgReliability::Reliable, kNetChReliable, 128, false},
+    {MsgId::AdminResponse, "AdminResponse", MsgDir::ServerToClient, MsgReliability::Reliable, kNetChReliable, 128,
+     false},
+    {MsgId::Motd, "Motd", MsgDir::ServerToClient, MsgReliability::Reliable, kNetChReliable, 4, false},
+    {MsgId::ConnectRefusal, "ConnectRefusal", MsgDir::ServerToClient, MsgReliability::Reliable, kNetChReliable, 64,
+     false},
+    {MsgId::AdminResponseChunk, "AdminResponseChunk", MsgDir::ServerToClient, MsgReliability::Reliable, kNetChReliable,
+     512, false},
+    {MsgId::Heartbeat, "Heartbeat", MsgDir::ClientToServer, MsgReliability::Unreliable, kNetChUnreliable, 16, false},
+    {MsgId::PeerDelay, "PeerDelay", MsgDir::ServerToClient, MsgReliability::Unreliable, kNetChUnreliable, 4, false},
+    {MsgId::WingmanCommand, "WingmanCommand", MsgDir::ClientToServer, MsgReliability::Reliable, kNetChReliable, 16,
+     false},
+    {MsgId::WingmanAck, "WingmanAck", MsgDir::ServerToClient, MsgReliability::Reliable, kNetChReliable, 16, false},
+    {MsgId::CombatEvent, "CombatEvent", MsgDir::ServerToClient, MsgReliability::Reliable, kNetChReliable, 4, false},
+    {MsgId::FactionDef, "FactionDef", MsgDir::ServerToClient, MsgReliability::Reliable, kNetChReliable, 132, false},
+    {MsgId::ConnectRequest, "ConnectRequest", MsgDir::ClientToServer, MsgReliability::Reliable, kNetChReliable, 104,
+     true},
+    {MsgId::Datalink, "Datalink", MsgDir::ServerToClient, MsgReliability::Unreliable, kNetChUnreliable, 40, false},
+    {MsgId::CrewRoster, "CrewRoster", MsgDir::ServerToClient, MsgReliability::Reliable, kNetChReliable, 12, false},
+    {MsgId::SeatRequest, "SeatRequest", MsgDir::ClientToServer, MsgReliability::Reliable, kNetChReliable, 12, false},
+    {MsgId::SeatResult, "SeatResult", MsgDir::ServerToClient, MsgReliability::Reliable, kNetChReliable, 12, false},
+    {MsgId::MusicState, "MusicState", MsgDir::ServerToClient, MsgReliability::Reliable, kNetChReliable, 4, false},
+    {MsgId::Haptic, "Haptic", MsgDir::ServerToClient, MsgReliability::Reliable, kNetChReliable, 12, false},
+    {MsgId::MissionOutcome, "MissionOutcome", MsgDir::ServerToClient, MsgReliability::Reliable, kNetChReliable, 8,
+     false},
+    {MsgId::RadioCommand, "RadioCommand", MsgDir::ClientToServer, MsgReliability::Reliable, kNetChReliable, 64, false},
+    {MsgId::RadioTransmission, "RadioTransmission", MsgDir::ServerToClient, MsgReliability::Reliable, kNetChReliable,
+     224, false},
+    {MsgId::MissionRoster, "MissionRoster", MsgDir::ServerToClient, MsgReliability::Reliable, kNetChReliable, 72,
+     false},
+    {MsgId::PlayerRoster, "PlayerRoster", MsgDir::ServerToClient, MsgReliability::Reliable, kNetChReliable, 4, false},
+    {MsgId::MatchState, "MatchState", MsgDir::ServerToClient, MsgReliability::Reliable, kNetChReliable, 80, false},
+    {MsgId::Scoreboard, "Scoreboard", MsgDir::ServerToClient, MsgReliability::Unreliable, kNetChUnreliable, 8, false},
+    {MsgId::TeamRequest, "TeamRequest", MsgDir::ClientToServer, MsgReliability::Reliable, kNetChReliable, 4, false},
+    {MsgId::Chat, "Chat", MsgDir::ClientToServer, MsgReliability::Reliable, kNetChReliable, 4, false},
+    {MsgId::ChatEvent, "ChatEvent", MsgDir::ServerToClient, MsgReliability::Reliable, kNetChReliable, 8, false},
+    {MsgId::GmWorldState, "GmWorldState", MsgDir::ServerToClient, MsgReliability::Reliable, kNetChReliable, 16, false},
+    {MsgId::VoiceNetDef, "VoiceNetDef", MsgDir::ServerToClient, MsgReliability::Reliable, kNetChReliable, 4, false},
+    {MsgId::VoiceFrame, "VoiceFrame", MsgDir::ClientToServer, MsgReliability::Unreliable, kNetChVoice, 8, false},
+    {MsgId::VoiceRelay, "VoiceRelay", MsgDir::ServerToClient, MsgReliability::Unreliable, kNetChVoice, 16, false},
+    {MsgId::AlertLevelChange, "AlertLevelChange", MsgDir::ServerToClient, MsgReliability::Reliable, kNetChReliable, 4,
+     false},
+    {MsgId::LanBeacon, "LanBeacon", MsgDir::ServerToClient, MsgReliability::Datagram, kNoNetChannel, 78, false},
+    {MsgId::ServerQuery, "ServerQuery", MsgDir::ClientToServer, MsgReliability::Datagram, kNoNetChannel, 192, false},
+    {MsgId::ServerInfo, "ServerInfo", MsgDir::ServerToClient, MsgReliability::Datagram, kNoNetChannel, 184, false},
+};
+
+// The dense ENet id range is [0x00, kEnetMsgIdCount); raw-UDP ids are [0x40, 0x40 + kRawUdpMsgIdCount).
+inline constexpr std::size_t kEnetMsgIdCount = 0x27;
+inline constexpr std::size_t kRawUdpMsgIdCount = 3;
+
+// O(1) metadata lookup for an untrusted id byte. nullptr = unknown/unassigned id — dispatch drops it.
+[[nodiscard]] constexpr const MsgInfo* msgInfo(uint8_t id) noexcept {
+    if (id < kEnetMsgIdCount)
+        return &kMsgTable[id];
+    if (id >= 0x40u && id < 0x40u + kRawUdpMsgIdCount)
+        return &kMsgTable[kEnetMsgIdCount + (id - 0x40u)];
+    return nullptr;
+}
+[[nodiscard]] constexpr const MsgInfo* msgInfo(MsgId id) noexcept {
+    return msgInfo(static_cast<uint8_t>(id));
+}
+
+namespace detail {
+// Completeness: every id in both ranges has exactly one row, at the index the lookup expects.
+constexpr bool msgTableIndexedById() {
+    for (std::size_t i = 0; i < kEnetMsgIdCount; ++i)
+        if (static_cast<std::size_t>(kMsgTable[i].id) != i)
+            return false;
+    for (std::size_t i = 0; i < kRawUdpMsgIdCount; ++i)
+        if (static_cast<std::size_t>(kMsgTable[kEnetMsgIdCount + i].id) != 0x40u + i)
+            return false;
+    return true;
+}
+} // namespace detail
+
+static_assert(sizeof(kMsgTable) / sizeof(kMsgTable[0]) == kEnetMsgIdCount + kRawUdpMsgIdCount,
+              "kMsgTable must have one row per MsgId enumerator — add the row for the id you just claimed");
+static_assert(detail::msgTableIndexedById(), "kMsgTable rows must be ordered so table index == MsgId");
+
+// Every minBytes literal is pinned to the sizeof of its wire struct (fixed struct, or the fixed
+// header of a variable message). A new message needs a row above AND a line here.
+static_assert(msgInfo(MsgId::Hello)->minBytes == sizeof(MsgHello), "kMsgTable: Hello size drifted");
+static_assert(msgInfo(MsgId::ConnectAck)->minBytes == sizeof(MsgConnectAck), "kMsgTable: ConnectAck size drifted");
+static_assert(msgInfo(MsgId::WorldSnapshot)->minBytes == sizeof(MsgWorldSnapshotHeader),
+              "kMsgTable: WorldSnapshot size drifted");
+static_assert(msgInfo(MsgId::ClientInput)->minBytes == sizeof(MsgClientInput), "kMsgTable: ClientInput size drifted");
+static_assert(msgInfo(MsgId::WeatherState)->minBytes == sizeof(MsgWeatherState),
+              "kMsgTable: WeatherState size drifted");
+static_assert(msgInfo(MsgId::ServerNotice)->minBytes == sizeof(MsgServerNotice),
+              "kMsgTable: ServerNotice size drifted");
+static_assert(msgInfo(MsgId::AdminCommand)->minBytes == sizeof(MsgAdminCommand),
+              "kMsgTable: AdminCommand size drifted");
+static_assert(msgInfo(MsgId::AdminResponse)->minBytes == sizeof(MsgAdminResponse),
+              "kMsgTable: AdminResponse size drifted");
+static_assert(msgInfo(MsgId::Motd)->minBytes == sizeof(MsgMotdHeader), "kMsgTable: Motd size drifted");
+static_assert(msgInfo(MsgId::ConnectRefusal)->minBytes == sizeof(MsgConnectRefusal),
+              "kMsgTable: ConnectRefusal size drifted");
+static_assert(msgInfo(MsgId::AdminResponseChunk)->minBytes == sizeof(MsgAdminResponseChunk),
+              "kMsgTable: AdminResponseChunk size drifted");
+static_assert(msgInfo(MsgId::Heartbeat)->minBytes == sizeof(MsgHeartbeat), "kMsgTable: Heartbeat size drifted");
+static_assert(msgInfo(MsgId::PeerDelay)->minBytes == sizeof(MsgPeerDelay), "kMsgTable: PeerDelay size drifted");
+static_assert(msgInfo(MsgId::WingmanCommand)->minBytes == sizeof(MsgWingmanCommand),
+              "kMsgTable: WingmanCommand size drifted");
+static_assert(msgInfo(MsgId::WingmanAck)->minBytes == sizeof(MsgWingmanAck), "kMsgTable: WingmanAck size drifted");
+static_assert(msgInfo(MsgId::CombatEvent)->minBytes == sizeof(MsgCombatEventHeader),
+              "kMsgTable: CombatEvent size drifted");
+static_assert(msgInfo(MsgId::FactionDef)->minBytes == sizeof(MsgFactionDef), "kMsgTable: FactionDef size drifted");
+static_assert(msgInfo(MsgId::ConnectRequest)->minBytes == sizeof(MsgConnectRequest),
+              "kMsgTable: ConnectRequest size drifted");
+static_assert(msgInfo(MsgId::Datalink)->minBytes == sizeof(MsgDatalinkHeader), "kMsgTable: Datalink size drifted");
+static_assert(msgInfo(MsgId::CrewRoster)->minBytes == sizeof(MsgCrewRosterHeader),
+              "kMsgTable: CrewRoster size drifted");
+static_assert(msgInfo(MsgId::SeatRequest)->minBytes == sizeof(MsgSeatRequest), "kMsgTable: SeatRequest size drifted");
+static_assert(msgInfo(MsgId::SeatResult)->minBytes == sizeof(MsgSeatResult), "kMsgTable: SeatResult size drifted");
+static_assert(msgInfo(MsgId::MusicState)->minBytes == sizeof(MsgMusicState), "kMsgTable: MusicState size drifted");
+static_assert(msgInfo(MsgId::Haptic)->minBytes == sizeof(MsgHaptic), "kMsgTable: Haptic size drifted");
+static_assert(msgInfo(MsgId::MissionOutcome)->minBytes == sizeof(MsgMissionOutcome),
+              "kMsgTable: MissionOutcome size drifted");
+static_assert(msgInfo(MsgId::RadioCommand)->minBytes == sizeof(MsgRadioCommand),
+              "kMsgTable: RadioCommand size drifted");
+static_assert(msgInfo(MsgId::RadioTransmission)->minBytes == sizeof(MsgRadioTransmission),
+              "kMsgTable: RadioTransmission size drifted");
+static_assert(msgInfo(MsgId::MissionRoster)->minBytes == sizeof(MsgMissionRoster),
+              "kMsgTable: MissionRoster size drifted");
+static_assert(msgInfo(MsgId::PlayerRoster)->minBytes == sizeof(MsgPlayerRosterHeader),
+              "kMsgTable: PlayerRoster size drifted");
+static_assert(msgInfo(MsgId::MatchState)->minBytes == sizeof(MsgMatchState), "kMsgTable: MatchState size drifted");
+static_assert(msgInfo(MsgId::Scoreboard)->minBytes == sizeof(MsgScoreboardHeader),
+              "kMsgTable: Scoreboard size drifted");
+static_assert(msgInfo(MsgId::TeamRequest)->minBytes == sizeof(MsgTeamRequest), "kMsgTable: TeamRequest size drifted");
+static_assert(msgInfo(MsgId::Chat)->minBytes == sizeof(MsgChatHeader), "kMsgTable: Chat size drifted");
+static_assert(msgInfo(MsgId::ChatEvent)->minBytes == sizeof(MsgChatEventHeader), "kMsgTable: ChatEvent size drifted");
+static_assert(msgInfo(MsgId::GmWorldState)->minBytes == sizeof(MsgGmWorldStateHeader),
+              "kMsgTable: GmWorldState size drifted");
+static_assert(msgInfo(MsgId::VoiceNetDef)->minBytes == sizeof(MsgVoiceNetDefHeader),
+              "kMsgTable: VoiceNetDef size drifted");
+static_assert(msgInfo(MsgId::VoiceFrame)->minBytes == sizeof(MsgVoiceFrameHeader),
+              "kMsgTable: VoiceFrame size drifted");
+static_assert(msgInfo(MsgId::VoiceRelay)->minBytes == sizeof(MsgVoiceRelayHeader),
+              "kMsgTable: VoiceRelay size drifted");
+static_assert(msgInfo(MsgId::AlertLevelChange)->minBytes == sizeof(MsgAlertLevelChange),
+              "kMsgTable: AlertLevelChange size drifted");
+static_assert(msgInfo(MsgId::LanBeacon)->minBytes == sizeof(MsgLanBeacon), "kMsgTable: LanBeacon size drifted");
+static_assert(msgInfo(MsgId::ServerQuery)->minBytes == sizeof(MsgServerQuery), "kMsgTable: ServerQuery size drifted");
+static_assert(msgInfo(MsgId::ServerInfo)->minBytes == sizeof(MsgServerInfo), "kMsgTable: ServerInfo size drifted");
+
+// The one pre-handshake-legal message is the handshake itself.
+static_assert(msgInfo(MsgId::ConnectRequest)->preHandshake, "ConnectRequest must be legal pre-handshake");
+namespace detail {
+constexpr bool onlyConnectRequestPreHandshake() {
+    for (const MsgInfo& row : kMsgTable)
+        if (row.preHandshake && row.id != MsgId::ConnectRequest)
+            return false;
+    return true;
+}
+} // namespace detail
+static_assert(detail::onlyConnectRequestPreHandshake(),
+              "a second pre-handshake message needs an explicit design decision, not a table edit");
 
 } // namespace fl

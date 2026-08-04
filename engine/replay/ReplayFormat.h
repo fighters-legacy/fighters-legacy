@@ -10,7 +10,9 @@
 //
 // The one rule to keep in mind while editing this file: additive changes bump the MINOR version and
 // a reader skips what it does not know via each section's declared length; anything that changes the
-// meaning of an existing field bumps the MAJOR, and a reader refuses a newer major outright.
+// meaning of an existing field bumps the MAJOR, and a reader refuses a newer major outright. The
+// version is CHECKED because .flrep crosses a build boundary — a player downloads a stranger's file
+// written by a build that no longer exists (decision record D18, docs/developer/architecture.md).
 
 #include "net/MatchEventLog.h" // MatchEvent -- the ONE event record (#600 D1), not a second vocabulary
 

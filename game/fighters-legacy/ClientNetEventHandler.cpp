@@ -117,6 +117,16 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         return;
     const uint8_t msgId = *static_cast<const uint8_t*>(data);
 
+    // Table-driven dispatch preconditions (#1068), mirroring the server: the id must be known, must
+    // be a server->client message (a client->server id echoed back at us is a bug or an attack), must
+    // not be a raw-UDP datagram id, and the packet must reach the fixed-struct size floor. The
+    // branches below still parse via readMsg, which re-validates layout.
+    const fl::MsgInfo* info = fl::msgInfo(msgId);
+    if (!info || info->dir != fl::MsgDir::ServerToClient || info->reliability == fl::MsgReliability::Datagram)
+        return;
+    if (size < info->minBytes)
+        return;
+
     if (msgId == static_cast<uint8_t>(fl::MsgId::Hello)) {
         fl::MsgHello hello;
         if (!fl::readMsg(data, size, hello))

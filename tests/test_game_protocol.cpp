@@ -72,6 +72,60 @@ TEST_CASE("GameProtocol: MsgId space reserves 0x00-0x3F for ENet, 0x40+ for raw 
     CHECK(static_cast<uint8_t>(fl::MsgId::MissionRoster) == 0x1Bu);
 }
 
+TEST_CASE("GameProtocol: kMsgTable metadata lookup covers exactly the assigned id space (#1068)", "[game_protocol]") {
+    // Every assigned id resolves to its own row (index == id — the static asserts in the header
+    // enforce completeness at compile time; this pins the runtime lookup to the same contract).
+    for (std::size_t i = 0; i < fl::kEnetMsgIdCount; ++i) {
+        const fl::MsgInfo* info = fl::msgInfo(static_cast<uint8_t>(i));
+        REQUIRE(info != nullptr);
+        CHECK(static_cast<std::size_t>(info->id) == i);
+    }
+    for (std::size_t i = 0; i < fl::kRawUdpMsgIdCount; ++i) {
+        const fl::MsgInfo* info = fl::msgInfo(static_cast<uint8_t>(0x40u + i));
+        REQUIRE(info != nullptr);
+        CHECK(static_cast<std::size_t>(info->id) == 0x40u + i);
+        CHECK(info->reliability == fl::MsgReliability::Datagram); // raw UDP, never valid inside ENet
+        CHECK(info->channel == fl::kNoNetChannel);
+    }
+
+    // Unassigned ids resolve to nothing: the free ENet range, the free raw-UDP range, and beyond.
+    CHECK(fl::msgInfo(static_cast<uint8_t>(0x27u)) == nullptr);
+    CHECK(fl::msgInfo(static_cast<uint8_t>(0x3Fu)) == nullptr);
+    CHECK(fl::msgInfo(static_cast<uint8_t>(0x43u)) == nullptr);
+    CHECK(fl::msgInfo(static_cast<uint8_t>(0xFFu)) == nullptr);
+}
+
+TEST_CASE("GameProtocol: kMsgTable spot checks against the wire contract (#1068)", "[game_protocol]") {
+    // Spot-check the columns the dispatch preambles act on. The size floors are pinned struct-by-
+    // struct by static_asserts in the header; these rows exercise the semantic columns.
+    const fl::MsgInfo* input = fl::msgInfo(fl::MsgId::ClientInput);
+    REQUIRE(input != nullptr);
+    CHECK(input->dir == fl::MsgDir::ClientToServer);
+    CHECK(input->reliability == fl::MsgReliability::Unreliable);
+    CHECK(input->channel == fl::kNetChUnreliable);
+    CHECK(input->minBytes == sizeof(fl::MsgClientInput));
+    CHECK_FALSE(input->preHandshake);
+
+    const fl::MsgInfo* connect = fl::msgInfo(fl::MsgId::ConnectRequest);
+    REQUIRE(connect != nullptr);
+    CHECK(connect->dir == fl::MsgDir::ClientToServer);
+    CHECK(connect->preHandshake); // the handshake itself — the ONLY pre-handshake-legal message
+
+    const fl::MsgInfo* voice = fl::msgInfo(fl::MsgId::VoiceFrame);
+    REQUIRE(voice != nullptr);
+    CHECK(voice->channel == fl::kNetChVoice); // #532: voice rides its own unreliable channel
+    CHECK(std::string(voice->name) == "VoiceFrame");
+
+    const fl::MsgInfo* snapshot = fl::msgInfo(fl::MsgId::WorldSnapshot);
+    REQUIRE(snapshot != nullptr);
+    CHECK(snapshot->dir == fl::MsgDir::ServerToClient);
+    CHECK(snapshot->minBytes == sizeof(fl::MsgWorldSnapshotHeader)); // records + TLV follow
+
+    for (const fl::MsgInfo& row : fl::kMsgTable)
+        if (row.preHandshake)
+            CHECK(row.id == fl::MsgId::ConnectRequest);
+}
+
 TEST_CASE("GameProtocol: participant id space separates humans from bots (#996)", "[game_protocol]") {
     CHECK(fl::kBotParticipantBase == 0x40000000u);
     CHECK_FALSE(fl::isBotParticipant(0u));    // peer 0 is a real player

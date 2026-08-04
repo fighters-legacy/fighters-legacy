@@ -40,7 +40,9 @@ constexpr std::size_t kInputTraceRecordBytes = 32;
 // replay that dropped them would fly a different aeroplane from the session it recorded, and a
 // determinism replay that silently differs is worse than none. `kInputTraceVersion` deliberately
 // stays 1 — producer and consumer live in this repo and land together, so a version bump would be a
-// compatibility promise to a party that does not exist.
+// compatibility promise to a party that does not exist (decision record D18,
+// docs/developer/architecture.md: a format carries a checked version iff it crosses a machine or
+// build boundary).
 struct InputTraceRecord {
     uint64_t serverTick{0};
     float throttle{0.f};

@@ -57,7 +57,9 @@ namespace fl {
 // MEANING changes under an unchanged name, or one is removed — the cases where a reader would
 // silently misinterpret a file rather than merely miss something. Near release, when metrics files
 // start outliving the binary that wrote them, this becomes a real compatibility contract again and
-// the bumping discipline comes back with it.
+// the bumping discipline comes back with it. This reasoning is now decision record D18
+// (docs/developer/architecture.md): a format carries a CHECKED version iff it crosses a machine or
+// build boundary; an in-repo producer/consumer pair freezes the number instead.
 inline constexpr int kServerTickSchemaVersion = 6;
 
 struct ServerTickReport {
