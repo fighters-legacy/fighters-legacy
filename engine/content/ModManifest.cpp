@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "content/ModManifest.h"
 
+#include "config/TomlNumeric.h"
+
 #include <cctype>
-#include <cstdint>
 #include <string>
 #include <toml++/toml.hpp>
 
@@ -70,7 +71,14 @@ ModManifestParseResult parseModManifest(std::string_view tomlContent) {
     auto id = mod["id"].value<std::string>();
     auto version = mod["version"].value<std::string>();
     auto engineApi = mod["engine-api"].value<std::string>();
-    auto priority = mod["priority"].value<int64_t>();
+    // tomlIntNarrow, not value<int64_t>(): a float node (`priority = 1e40`) fed to toml++'s
+    // integer conversion is UB when out of range — the #824 class, refound here by fuzzing (#1125).
+    auto priority = tomlIntNarrow(mod["priority"]);
+    if (mod["priority"] && !priority) {
+        r.errors.push_back("priority must be a whole number that fits in a 32-bit integer");
+        r.ok = false;
+        return r;
+    }
     if (!name || !id || !version || !engineApi || !priority) {
         r.errors.push_back("missing required field(s) (name, id, version, engine-api, priority)");
         r.ok = false;
@@ -82,7 +90,7 @@ ModManifestParseResult parseModManifest(std::string_view tomlContent) {
     m.id = std::move(*id);
     m.version = std::move(*version);
     m.engineApi = std::move(*engineApi);
-    m.priority = static_cast<int>(*priority);
+    m.priority = *priority;
 
     if (!isValidIdentifier(m.id))
         r.errors.push_back("invalid id field '" + m.id + "'");

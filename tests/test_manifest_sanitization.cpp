@@ -214,6 +214,54 @@ TEST_CASE("ModLoader rejects manifest name containing path separator") {
 }
 
 // ---------------------------------------------------------------------------
+// priority field — numeric validation
+// ---------------------------------------------------------------------------
+
+TEST_CASE("ModLoader rejects manifest with out-of-range float priority") {
+    MockFilesystem fs;
+    MockLogger logger;
+    // The minimized #1125 fuzz reproducer: a float too large for int64. Before tomlIntNarrow,
+    // toml++'s own float->int guard performed the undefined cast it was guarding against.
+    addModDir(fs, "test-mod",
+              "[mod]\nname = \"Test Mod\"\nid = \"test-mod\"\n"
+              "version = \"1.0.0\"\n\"engine-api\" = \"1.0\"\npriority = 77777777777777777770e3\n");
+
+    ModLoader loader(fs, logger);
+    auto packs = loader.load();
+
+    REQUIRE(packs.empty());
+    REQUIRE(logger.hasMessage(LogLevel::Error, "priority must be a whole number"));
+}
+
+TEST_CASE("ModLoader rejects manifest with integer priority wider than 32 bits") {
+    MockFilesystem fs;
+    MockLogger logger;
+    addModDir(fs, "test-mod",
+              "[mod]\nname = \"Test Mod\"\nid = \"test-mod\"\n"
+              "version = \"1.0.0\"\n\"engine-api\" = \"1.0\"\npriority = 1099511627776\n");
+
+    ModLoader loader(fs, logger);
+    auto packs = loader.load();
+
+    REQUIRE(packs.empty());
+    REQUIRE(logger.hasMessage(LogLevel::Error, "priority must be a whole number"));
+}
+
+TEST_CASE("ModLoader accepts manifest with whole-number float priority") {
+    MockFilesystem fs;
+    MockLogger logger;
+    addModDir(fs, "test-mod",
+              "[mod]\nname = \"Test Mod\"\nid = \"test-mod\"\n"
+              "version = \"1.0.0\"\n\"engine-api\" = \"1.0\"\npriority = 10.0\n");
+
+    ModLoader loader(fs, logger);
+    auto packs = loader.load();
+
+    REQUIRE(packs.size() == 1);
+    CHECK(packs[0]->priority() == 10);
+}
+
+// ---------------------------------------------------------------------------
 // Valid manifests
 // ---------------------------------------------------------------------------
 
