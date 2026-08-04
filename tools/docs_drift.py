@@ -245,11 +245,60 @@ def _enum_entries(src: str, enum_name: str) -> dict[str, str]:
     }
 
 
+# kMsgTable row -> the doc's Channel-column vocabulary. The pair (reliability, channel) collapses
+# to one word because that is what a reader needs: which delivery contract the message rides.
+_MSG_DELIVERY = {
+    ("Reliable", "kNetChReliable"): "reliable",
+    ("Unreliable", "kNetChUnreliable"): "unreliable",
+    ("Unreliable", "kNetChVoice"): "voice",
+    ("Datagram", "kNoNetChannel"): "raw-udp",
+}
+
+_MSG_DIR = {
+    "ClientToServer": "client→server",
+    "ServerToClient": "server→client",
+    "Reserved": "reserved",
+}
+
+# One kMsgTable row. clang-format wraps long rows, so whitespace matches across newlines (re.S at
+# the call site is not enough on its own -- \s already spans lines, but keep the pattern tolerant).
+_MSG_TABLE_ROW = re.compile(
+    r"\{MsgId::(\w+),\s*\"(\w+)\",\s*MsgDir::(\w+),\s*MsgReliability::(\w+),\s*"
+    r"(kNetChReliable|kNetChUnreliable|kNetChVoice|kNoNetChannel),\s*(\d+),\s*(?:true|false)\}"
+)
+
+
+def _msg_table_rows(src: str) -> dict[str, tuple[str, str, str]]:
+    """Name -> (direction, delivery, min-bytes) from kMsgTable, the message-metadata authority."""
+    block = re.search(r"constexpr MsgInfo kMsgTable\[\] = \{(.*?)\n\};", src, re.S)
+    if not block:
+        return {}
+    rows: dict[str, tuple[str, str, str]] = {}
+    for _, name, direction, reliability, channel, min_bytes in _MSG_TABLE_ROW.findall(block.group(1)):
+        rows[name] = (
+            _MSG_DIR.get(direction, f"?{direction}"),
+            _MSG_DELIVERY.get((reliability, channel), f"?{reliability}/{channel}"),
+            min_bytes,
+        )
+    return rows
+
+
+def _doc_delivery(cell: str) -> str:
+    """Normalize the doc's Channel cell to the delivery vocabulary."""
+    cell = cell.strip()
+    if cell.startswith("raw UDP"):
+        return "raw-udp"
+    if "voice" in cell:
+        return "voice"
+    return cell
+
+
 def check_msg_ids() -> CheckResult:
     result = CheckResult("msg-ids: GameProtocol.h vs docs/developer/network-protocol.md")
     src = read("engine/net/GameProtocol.h")
     doc = read("docs/developer/network-protocol.md")
 
+    # --- id/name presence, both registries (MsgId + ExtTag), diffed both ways -------------------
     code: set[str] = set()
     for enum_name in ("MsgId", "ExtTag"):
         for name, value in _enum_entries(src, enum_name).items():
@@ -261,11 +310,35 @@ def check_msg_ids() -> CheckResult:
         for name, value in re.findall(r"^\|\s*`(\w+)`\s*\|\s*`(0x[0-9A-Fa-f]+)`\s*\|", doc, re.M)
     }
 
+    # --- per-message metadata columns: kMsgTable vs the ## Messages summary table ---------------
+    # Doc row: | `Name` | `0xNN` | direction | channel | size | purpose |. The size cell must START
+    # with the message's minimum byte count (the fixed struct/header); the formula tail is prose.
+    table_rows = _msg_table_rows(src)
+    for name, (direction, delivery, min_bytes) in table_rows.items():
+        code.add(f"{name} direction={direction}")
+        code.add(f"{name} delivery={delivery}")
+        code.add(f"{name} min-bytes={min_bytes}")
+
+    doc_msg_row = re.compile(
+        r"^\|\s*`(\w+)`\s*\|\s*`0x[0-9A-Fa-f]+`\s*\|\s*([^|]+)\|\s*([^|]+)\|\s*([^|]+)\|", re.M
+    )
+    doc_meta_count = 0
+    for name, direction, channel, size in doc_msg_row.findall(doc):
+        if name not in table_rows:
+            continue  # an ExtTag row, or a ghost the presence diff above already reports
+        doc_meta_count += 1
+        documented.add(f"{name} direction={direction.strip()}")
+        documented.add(f"{name} delivery={_doc_delivery(channel)}")
+        size_lead = re.match(r"(\d+)", size.strip())
+        documented.add(f"{name} min-bytes={size_lead.group(1) if size_lead else size.strip()}")
+
     result.code_count = len(code)
     result.doc_count = len(documented)
-    if not floor_check(result, "GameProtocol.h enum rows", len(code), 30):
+    if not floor_check(result, "GameProtocol.h enum rows", len(_enum_entries(src, 'MsgId')), 30):
         return result
-    if not floor_check(result, "network-protocol.md table rows", len(documented), 30):
+    if not floor_check(result, "GameProtocol.h kMsgTable rows", len(table_rows), 30):
+        return result
+    if not floor_check(result, "network-protocol.md message rows", doc_meta_count, 30):
         return result
 
     result.code_only = code - documented

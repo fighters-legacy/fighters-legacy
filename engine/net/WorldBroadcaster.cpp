@@ -4330,15 +4330,24 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
     uint8_t msgId;
     std::memcpy(&msgId, data, 1);
 
+    // Table-driven dispatch preconditions (#1068): the id must be known, must be a client->server
+    // message, must not be a raw-UDP datagram id (LanBeacon/ServerQuery/ServerInfo are never valid
+    // inside the ENet stream), and the packet must reach the message's fixed-struct size floor.
+    // Unknown ids are silently discarded — future protocol versions may add new ones. The branches
+    // below still parse defensively (readMsg re-validates layout); what they no longer do is each
+    // hand-roll their own copy of these four checks.
+    const MsgInfo* info = msgInfo(msgId);
+    if (!info || info->dir != MsgDir::ClientToServer || info->reliability == MsgReliability::Datagram)
+        return;
+    if (size < info->minBytes)
+        return;
+
     if (msgId == static_cast<uint8_t>(MsgId::ConnectRequest)) {
         handleConnectRequest(peerId, data, size);
         return;
     }
 
     if (msgId == static_cast<uint8_t>(MsgId::ClientInput)) {
-        if (size < sizeof(MsgClientInput))
-            return; // truncated; silently discard
-
         MsgClientInput msg;
         std::memcpy(&msg, data, sizeof(msg));
 
@@ -4495,8 +4504,6 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         // empty-token peer is authenticated by its GRANTED caps (the grant channel). With neither a
         // password set nor any peer granted caps, the channel is effectively off.
         if (!m_adminDispatch)
-            return;
-        if (size < sizeof(MsgAdminCommand))
             return;
 
         // Extract IP once — used for both failure and success tracking below.
@@ -4678,7 +4685,9 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
             }
         }
     }
-    // Unknown msgIds: silently discard (no log spam; future protocol versions may add new IDs)
+    // Unknown/undirected/undersized ids never reach this chain — the kMsgTable preamble above drops
+    // them — so every client->server MsgId has a branch here, and falling off the end means a new
+    // table row landed without its handler.
 }
 
 void WorldBroadcaster::sendNoticeTo(uint32_t peerId, const char* text) {

@@ -266,6 +266,30 @@ artifacts move forward, and the scale gate is made honest (plan #1036 Stages 5�
 Architecture decisions D10–D23 arising from this review are recorded in #1036 and mirrored here
 individually by the stage PRs that implement them.
 
+**2026-08-04 — D18: a format carries a checked version iff it crosses a machine or build boundary
+(#1068).** Six on-disk/on-wire formats each argued their versioning policy individually in a header
+comment, reaching three different answers by three different routes. The rule they were all
+circling: what makes a version field *load-bearing* is the possibility of the producer and consumer
+disagreeing — which happens exactly when the format crosses a **machine boundary** (two independently
+built peers meet at runtime) or a **build boundary** (the artifact outlives the build that wrote it).
+A format whose producer and consumer always ship in the same tree cannot disagree with itself; its
+version field would be a door nobody checks, so it freezes the number (or carries none) and relies on
+additive-only evolution. Concretely:
+
+| Format | Boundary crossed | Policy |
+|---|---|---|
+| Wire protocol (`kProtocolVersion`) | machine | checked; mismatch disconnects (frozen at 1 until the Phase 6 freeze) |
+| `.flrep` replay (`kReplayFormatMajor/Minor`) | build — players download strangers' files | checked; newer major refused, minor skipped |
+| `bindings.toml` (`InputBindings::kFormatVersion`) | build — a user file outlives installs | checked; older versions migrated, never silently reset |
+| FLIT input trace (`InputTraceFormat.h`) | none — producer + consumer land together | frozen at 1 |
+| `ServerTickReport` JSON (`kServerTickSchemaVersion`) | none — consumed by same-tree tooling | frozen at 6 |
+| `WorldStateJson` | none — in-process consumers | deliberately versionless |
+
+The six headers cite this record instead of re-deriving the argument. A NEW format answers one
+question — who consumes this, built from what — and takes the row that falls out; it does not get a
+version field "to be safe" (an unchecked version is how the pre-#932 release audit found tags whose
+notes described a different version's contents: ritual metadata rots).
+
 **2026-07-27 — player-facing AI content policy, RATIFIED (#932, RFC resolved).** Player sentiment
 toward generative AI in games is strongly negative (mid-2026 surveys ~85 % below neutral). A project
 that ships an agentic-AI initiative into that without a stated position invites every player to

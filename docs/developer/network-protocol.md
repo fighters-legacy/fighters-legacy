@@ -77,8 +77,8 @@ lanes are not configured). Callers must not assume ordering *between* channels.
 | MsgId | Value | Direction | Channel | Size | Purpose |
 |-------|-------|-----------|---------|------|---------|
 | `Hello` | `0x00` | server→client | reliable | 4 bytes | Protocol version handshake; first message the **server** sends on every new connection |
-| `ConnectRequest` | `0x11` | client→server | reliable | 72 + N×128 bytes | The **client**'s join request (#853): role, requested entity type, and mounted-pack manifest. Sent first on connect; the server replies `ConnectAck` or `ConnectRefusal`. |
-| `ConnectAck` | `0x01` | server→client | reliable | 20 + N×336 bytes | Reply to `ConnectRequest`: granted role + assigned entity slot, then the type registry |
+| `ConnectRequest` | `0x11` | client→server | reliable | 104 + N×128 bytes | The **client**'s join request (#853): role, requested entity type, and mounted-pack manifest. Sent first on connect; the server replies `ConnectAck` or `ConnectRefusal`. |
+| `ConnectAck` | `0x01` | server→client | reliable | 24 + N×380 bytes | Reply to `ConnectRequest`: granted role + assigned entity slot, then the type registry |
 | `WorldSnapshot` | `0x02` | server→client | unreliable | 24 + origin table + record stream + TLV | Per-tick entity state, unicast per peer; 24-byte header + shared-origin table + a byte-aligned stitched record stream (each record: origin index + a `full` bit) + TLV extension block — see *Quantized entity record* below |
 | `ClientInput` | `0x03` | client→server | unreliable | 80 bytes | Per-frame flight inputs + fire intents + selected weapon station + camera eye (observer interest) |
 | `WeatherState` | `0x04` | server→client | unreliable | 32 bytes | Weather and time-of-day (+ turbulence amplitude #426, + UTC Julian Day for the geographic sun #481); broadcast every 10 ticks (~6 Hz). Additive ID — old clients silently discard. |
@@ -93,7 +93,7 @@ lanes are not configured). Callers must not assume ordering *between* channels.
 | `WingmanCommand` | `0x0D` | client→server | reliable | 16 bytes | Order a formation (#610). Authorized by **commanding the formation**, never by anything in the packet. Additive ID — old servers silently discard. |
 | `WingmanAck` | `0x0E` | server→client | reliable | 16 bytes | Outcome of an order, the on-connect flight check-in, or a radio call **relayed** to a human member of someone's flight. Carries a result **code**, never server-authored text. Additive ID. |
 | `CombatEvent` | `0x0F` | server→client | reliable | 4 + n×32 bytes | Kill feed (broadcast) + the receiving peer's own combat stats (unicast). A multiplexed record stream — this took the **last free ENet id**, so future gameplay events extend the record vocabulary, not the id space. Additive ID. |
-| `FactionDef` | `0x10` | server→client | reliable | n×132 bytes | Faction index→id/name table, sent once after `MsgConnectAck`. Lets the client name the faction behind each entity's snapshot `factionIndex` (observer picker; future friend/foe colouring). Additive ID. |
+| `FactionDef` | `0x10` | server→client | reliable | 132 × n bytes | Faction index→id/name table, sent once after `MsgConnectAck`. Lets the client name the faction behind each entity's snapshot `factionIndex` (observer picker; future friend/foe colouring). Additive ID. |
 | `Datalink` | `0x12` | server→client | unreliable | 40 + t×40 + s×28 bytes | The peer's **fused team track picture + RWR** (#528), sent per-peer at ~6 Hz. Fuses the peer's own sensor contacts with every same-faction teammate's, deduplicated by target; carries each track's `Identification` (the display-safe IFF fact, not the raw faction) and RWR strobes. Positions are float, relative to a header origin. Loss-tolerant — refreshed every send. Additive ID. |
 | `CrewRoster` | `0x13` | server→client | reliable | 12 + s×44 bytes | One **crewed aircraft's seat roster** (#972): per seat the role name, capability mask, turret index, per-instance skill, and occupant (`Empty` / `Bot` / `Human(peerId)`). Sent after `MsgFactionDef` for every crewed aircraft in the world, and re-broadcast on any occupancy change. A single-seat aircraft (the implicit-single-pilot fast path) sends none. Additive ID. |
 | `SeatRequest` | `0x14` | client→server | reliable | 12 bytes | Claim a non-fly crew seat, or leave the current seat (#974). A join names `{entityIdx, entityGen, seatIndex}`; the `leave` flag (bit 0) vacates whatever seat the peer holds. Free-form policy — any peer may request any non-human-held seat, including hopping aircraft mid-flight. Additive ID. |
@@ -103,21 +103,21 @@ lanes are not configured). Callers must not assume ordering *between* channels.
 | `MissionOutcome` | `0x18` | server→client | reliable | 8 bytes | The mission's terminal outcome (#584). Broadcast once when the objective evaluator drives the mission to Complete/Failed; carries a `MissionResultCode` (`Incomplete`/`Success`/`Failure`) + `triggersFired` + `elapsedSeconds`, so the client debrief reports the real result instead of a hardcoded success. Additive ID, old clients discard. |
 | `RadioCommand` | `0x19` | client→server | reliable | 64 bytes | A player radio command (#703). Verb-routed like the admin channel — `atc request_takeoff\|request_landing\|inbound\|cancel [facility]` — never a direct state mutation; the server dispatches to the ATC service (#702) and replies with `RadioTransmission`(s), rate-limited per peer. The `wing` verb namespace is reserved for #610. **Note:** `0x0D`/`0x0E` (the ids #703 originally reserved) were already taken by the wingman channel, so the radio channel took the next free ENet ids `0x19`/`0x1A`. Additive ID, old servers discard. |
 | `RadioTransmission` | `0x1A` | server→client | reliable | 224 bytes | One spoken radio line (#703): `speaker` (28), `voiceKey` (32, a stable TTS/pack-OGG key — empty = subtitle only), `text` (160, server-rendered + localizable), `displaySeconds`. Unicast to the addressed pilot, or broadcast (an AI flight's clearance / an undirected line). The client prints `[radio] speaker: text` to the console and feeds the comms-menu subtitle/voice pipeline (#704). Additive ID, old clients discard. |
-| `MissionRoster` | `0x1B` | server→client | reliable | n×72 bytes | Entity idx/gen → mission object id table (#914). Concatenated self-describing records sent once after `MsgConnectAck` (with the current spawned mission objects + bound player slots), plus single-record deltas as a player slot binds. Lets the cinematic recorder (#909) resolve an entity-relative camera shot's `target`/`look_at` (a mission object id) to a live network entity. Additive ID, old clients discard. |
+| `MissionRoster` | `0x1B` | server→client | reliable | 72 × n bytes | Entity idx/gen → mission object id table (#914). Concatenated self-describing records sent once after `MsgConnectAck` (with the current spawned mission objects + bound player slots), plus single-record deltas as a player slot binds. Lets the cinematic recorder (#909) resolve an entity-relative camera shot's `target`/`look_at` (a mission object id) to a live network entity. Additive ID, old clients discard. |
 | `PlayerRoster` | `0x1C` | server→client | reliable | 4 + n×40 bytes | Match roster upsert/leave stream (#996): participant id → callsign / faction / role. Broadcast on join / role change / leave; the full roster is chunked to a late joiner after `MsgConnectAck`. The single name source for chat, kill feed and scoreboard. Establishes the participant-id model (humans = peerId, bots = `kBotParticipantBase + n`). Additive ID. |
 | `MatchState` | `0x1D` | server→client | reliable | 80 + n×8 bytes | Match phase + per-team scores + limits + phase clock (#523). Broadcast on change and unicast to a late joiner. Client renders remaining = `phaseEndTick − tickIndex`. Additive ID. |
 | `Scoreboard` | `0x1E` | server→client | unreliable | 8 + n×16 bytes | Per-participant kills/deaths/score/ping (#523), every ~2 s + on admit. Self-describing; a dropped one is replaced. Additive ID. |
 | `TeamRequest` | `0x1F` | client→server | reliable | 4 bytes | Request a mid-match team switch (#522). Guarded against unbalancing server-side. Additive ID. |
 | `AlertLevelChange` | `0x26` | server→client | reliable | 4 bytes | A faction's airspace readiness posture changed (#162). Sent once per faction after `MsgConnectAck` and again on every change, so a late joiner starts from the live value. Carries an `AlertLevel` ordinal (`Peacetime`/`Elevated`/`Conflict`/`WarState`) — gate it with `isAlertLevelOrdinal()` before casting. Additive ID, old clients discard. |
-| `GmWorldState` | `0x22` | server→client | reliable | variable | The game-master overview-map aggregate (#861): the whole-world picture a `gm`-granted peer sees, independent of their own interest set. Sent only to peers holding the capability. Additive ID. |
+| `GmWorldState` | `0x22` | server→client | reliable | 16 + n×44 bytes (chunked) | The game-master overview-map aggregate (#861): the whole-world picture a `gm`-granted peer sees, independent of their own interest set. Sent only to peers holding the capability. Additive ID. |
 | `VoiceNetDef` | `0x23` | server→client | reliable | 4 + n×68 bytes | The server's radio-net table (id / name / kind / profile), Epic J (#532). Sent once so the client can label which net a push-to-talk key transmits on. Field table [below](#msgvoicenetdef--4--n68-bytes). Additive ID. |
 | `VoiceFrame` | `0x24` | client→server | unreliable (voice channel) | 8 + payload | One 20 ms Opus frame from a transmitting client (#532). The server never decodes it. Field table [below](#msgvoiceframe--8--payload-bytes). Additive ID. |
 | `VoiceRelay` | `0x25` | server→client | unreliable (voice channel) | 16 + payload | The same opaque payload relayed to listeners on the net, plus who sent it (#532). Field table [below](#msgvoicerelay--16--payload-bytes). Additive ID. |
 | `Chat` | `0x20` | client→server | reliable | 4-byte `MsgChatHeader` + NUL-terminated UTF-8 text (≤ `kMaxChatBytes` = 240) | In-match chat line (#646). Header: `channel` @1 (`ChatChannel` All/Team). The server sanitizes (BMP UTF-8, control chars stripped, codepoint-boundary truncation), per-peer rate-limits, applies mute + a moderation hook, then routes a `ChatEvent`. Additive ID. |
 | `ChatEvent` | `0x21` | server→client | reliable | 8-byte `MsgChatEventHeader` + NUL-terminated UTF-8 text | Routed chat line (#646). Header: `channel` @1, `senderPeerId` @4 (participant id; `kNoOwningPeer` = a system line with no sender name). All-channel lines reach every handshake-complete peer incl. the sender's own echo; Team-channel lines reach only the sender's faction. Additive ID. |
-| `LanBeacon` | `0x40` | server→LAN | raw UDP (not ENet) | 76 bytes | LAN server presence broadcast. The ENet id space is `0x00–0x3F`; `0x40+` is reserved for raw-UDP/non-ENet ids (the boundary was raised from `0x20` in #996 to free ENet ids for the Epic E messages). Carries `gameModeFlags` (incl. `kGameModeShuttingDown` #226 and `kGameModePassworded` #998) + `shutdownSeconds`. |
+| `LanBeacon` | `0x40` | server→client | raw UDP (not ENet) | 78 bytes | LAN server presence broadcast. The ENet id space is `0x00–0x3F`; `0x40+` is reserved for raw-UDP/non-ENet ids (the boundary was raised from `0x20` in #996 to free ENet ids for the Epic E messages). Carries `gameModeFlags` (incl. `kGameModeShuttingDown` #226 and `kGameModePassworded` #998) + `shutdownSeconds`. |
 | `ServerQuery` | `0x41` | client→server | raw UDP | 192 bytes | A2S-style server-info request (#997), sent to the query port rather than the game port. Answered by the query responder, which runs by default (`[discovery] query_enabled`); the port is advertised in `MsgLanBeacon`, and defaults to game port + 1. |
-| `ServerInfo` | `0x42` | server→client | raw UDP | variable | Reply to `MsgServerQuery` (#997): live name, player count and mode flags for a browser's details and ping columns. |
+| `ServerInfo` | `0x42` | server→client | raw UDP | 184 bytes | Reply to `MsgServerQuery` (#997): live name, player count and mode flags for a browser's details and ping columns. |
 
 ## Struct Definitions
 
@@ -151,12 +151,13 @@ mismatch.
 | 1 | 1 | `reserved` | `uint8_t` | Reserved, always 0 |
 | 2 | 2 | `protocolVersion` | `uint16_t` | Server's `kProtocolVersion`; client disconnects if this != its own `kProtocolVersion` |
 
-### MsgConnectRequest — 72 bytes (+ N×128-byte manifest records)
+### MsgConnectRequest — 104 bytes (+ N×128-byte manifest records)
 
 The client's first packet on connect (reliable channel 0). Followed by `packCount` ×
-`PackManifestEntry` records, then an optional TLV extension block (ExtTag `0x0500–0x05FF`, reserved
-for the RFC #871 entitlement token). `requestedEntityType` empty = let the server pick its
-`[world] player_entity_type` default (server-clamped to a registered type).
+`PackManifestEntry` records, then an optional TLV extension block (`ConnectSeatClaim` #974,
+`ConnectIdentity` #524, `ConnectJoinPassword` #998; the RFC #871 entitlement token stays reserved).
+`requestedEntityType` empty = let the server pick its `[world] player_entity_type` default
+(server-clamped to a registered type).
 
 | Offset | Size | Field | Type | Notes |
 |--------|------|-------|------|-------|
@@ -166,6 +167,7 @@ for the RFC #871 entitlement token). `requestedEntityType` empty = let the serve
 | 4 | 2 | `packCount` | `uint16_t` | Number of trailing `PackManifestEntry` records |
 | 6 | 2 | `reserved` | `uint16_t` | Reserved, always 0 |
 | 8 | 64 | `requestedEntityType[64]` | `char[64]` | Null-terminated type id to fly; empty = server default |
+| 72 | 32 | `callsign[32]` | `char[32]` | Null-terminated display callsign (#996); a fixed field, not a TLV, because every client has one (`PilotProfile::callsign`). Server-sanitized; empty → `Pilot-<peerId>` |
 
 #### PackManifestEntry — 128 bytes
 
@@ -178,7 +180,7 @@ reserved (zero-filled) until a pack-hashing pass lands.
 | 64 | 32 | `version[32]` | `char[32]` | Null-terminated version string |
 | 96 | 32 | `contentHash[32]` | `uint8_t[32]` | Reserved; all-zero = not computed |
 
-### MsgConnectAck — 20 bytes
+### MsgConnectAck — 24 bytes
 
 Reply to `MsgConnectRequest` (reliable channel 0), immediately followed by `typeCount` ×
 `MsgEntityTypeDef` records. Also re-sent on a mid-session role change (#857). `grantedRole` may
@@ -196,8 +198,9 @@ ConnectAck arrived**, not on `assignedEntityIdx == 0`.
 | 12 | 4 | `planetRadiusKm` | `float32` | Planet sphere radius in km; Earth default = 6371.0 |
 | 16 | 1 | `grantedRole` | `uint8_t` | `PeerRole` granted by the server (0 = Pilot, 1 = Observer) |
 | 17 | 3 | `reserved2[3]` | `uint8_t[3]` | Padding to keep trailing records 4-aligned |
+| 20 | 4 | `peerId` | `uint32_t` | This peer's own transport peer id (#996), matching `PlayerRosterEntry::participantId` — the roster "you" highlight and the chat self-echo need it. Tail-appended; prior offsets unchanged |
 
-### MsgEntityTypeDef — 348 bytes
+### MsgEntityTypeDef — 380 bytes
 
 Appended N times after `MsgConnectAck` (one per registered entity type).
 
@@ -217,6 +220,7 @@ Appended N times after `MsgConnectAck` (one per registered entity type).
 | 336 | 4 | `deckLengthM` | `float32` | Flight-deck footprint along the keel (m); 0 = the type has no deck (#38) |
 | 340 | 4 | `deckWidthM` | `float32` | Flight-deck footprint abeam (m) |
 | 344 | 4 | `deckHeightM` | `float32` | Deck plane height above the ship origin (m) |
+| 348 | 32 | `meshVariant[32]` | `char[32]` | Variant node-set selector (`EntityDef::meshVariant`, #882): which tagged node-set of the shared family mesh this type draws; empty = the untagged set. A render selection resolved client-side at mesh upload |
 
 `flightModel` (#811) exists because the client must integrate the **same** aircraft the server does.
 Without it the client had no way to learn an entity type's flight model, silently fell back to the
@@ -847,7 +851,7 @@ Header:
 | 24 | 4 | `b` | `uint32_t` | Kill: subject's owning peer id. Stats: losses |
 | 28 | 4 | `c` | `int32_t` | Stats: score |
 
-### MsgLanBeacon — 74 bytes
+### MsgLanBeacon — 78 bytes
 
 Broadcast by `fl-server` on `255.255.255.255:<port>` (IPv4) and `[ff02::1]:<port>` (IPv6
 link-local multicast) every `discovery.interval_ms` milliseconds (default: 2000 ms) using a
@@ -856,19 +860,21 @@ establishing a connection. See issue #91 for the server-side implementation; cli
 browser is issue #143.
 
 This packet is **not** sent over ENet and must not be injected into an ENet connection.
-`MsgId::LanBeacon = 0x10` is outside the ENet message range (`0x00`–`0x03`).
+`MsgId::LanBeacon = 0x40` is outside the ENet message range (`0x00`–`0x3F`).
 
 | Offset | Size | Field | Type | Notes |
 |--------|------|-------|------|-------|
-| 0 | 1 | `msgId` | `uint8_t` | `0x10` |
+| 0 | 1 | `msgId` | `uint8_t` | `0x40` |
 | 1 | 1 | `reserved` | `uint8_t` | Reserved, always 0 |
 | 2 | 2 | `protocolVersion` | `uint16_t` | Server's `kProtocolVersion`; clients may filter on this |
 | 4 | 2 | `gamePort` | `uint16_t` | ENet game port to connect to |
 | 6 | 1 | `playerCount` | `uint8_t` | Current connected player count |
 | 7 | 1 | `maxPlayers` | `uint8_t` | Maximum allowed peers |
-| 8 | 1 | `gameModeFlags` | `uint8_t` | Bit 0 = campaign (`kGameModeCampaign`), bit 1 = mission (`kGameModeMission`), bit 2 = sandbox (`kGameModeSandbox`) |
+| 8 | 1 | `gameModeFlags` | `uint8_t` | Bit 0 = campaign (`kGameModeCampaign`), bit 1 = mission (`kGameModeMission`), bit 2 = sandbox (`kGameModeSandbox`), bit 3 = shutting down (`kGameModeShuttingDown` #226), bit 4 = passworded (`kGameModePassworded` #998) |
 | 9 | 1 | `reserved2` | `uint8_t` | Reserved, always 0 |
-| 10 | 64 | `name[64]` | `char[64]` | Null-terminated server name (UTF-8) |
+| 10 | 2 | `shutdownSeconds` | `uint16_t` | Seconds until shutdown when `kGameModeShuttingDown` is set (#226); 0 = n/a |
+| 12 | 2 | `queryPort` | `uint16_t` | The server's info-query port (#997); 0 = query disabled |
+| 14 | 64 | `name[64]` | `char[64]` | Null-terminated server name (UTF-8) |
 
 **IPv6 multicast:** The sender broadcasts to `ff02::1` (all-nodes link-local); receivers join
 via `IPV6_JOIN_GROUP`. No join is required by the sender. `IPV6_MULTICAST_HOPS` is set to 1
