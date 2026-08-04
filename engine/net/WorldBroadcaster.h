@@ -1043,6 +1043,12 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         return m_tickRate;
     }
 
+    // How many times the scoreboard packet set has been BUILT (#1091). Before the broadcast built
+    // once, this rose by one per connected peer per dirty window; now it rises by one per window.
+    [[nodiscard]] uint64_t scoreboardBuildCount() const noexcept {
+        return m_scoreboardBuilds;
+    }
+
     // Session-scoped mute for a peer (admin mute/unmute). Sim-thread. Returns false if the peer is
     // unknown. A muted peer's chat lines are dropped silently (no rate-limit warning).
     bool setPeerMuted(uint32_t peerId, bool muted);
@@ -1623,7 +1629,11 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // at 60: physics, prediction, lag compensation and the scale gate all assume it. It is a value
     // rather than a literal so the wire field is honest and every tick<->ms conversion has one source.
     TickRate m_tickRate{kServerTickRate};
-    std::string m_buildVersion;    // #1074: advertised in MsgHello / the beacon / the query reply
+    std::string m_buildVersion; // #1074: advertised in MsgHello / the beacon / the query reply
+    // Scoreboard build scratch + a build counter (#1091). The counter is what a test asserts on: the
+    // defect was the NUMBER of builds, so "one per window" is the property, not the bytes.
+    std::vector<std::vector<uint8_t>> m_scoreboardScratch;
+    uint64_t m_scoreboardBuilds{0};
     int m_seatRequestRateLimit{2}; // seat requests per second per peer
     int m_teamSwitchCooldownS{5};  // seconds between accepted team switches per peer; 0 = no cooldown
     int m_heartbeatRateLimit{4};   // heartbeats per second per peer that draw a reply
@@ -1735,8 +1745,11 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     void broadcastGmWorldState();               // #861: chunked GM-map feed to peers holding GmMap
     void broadcastMatchState();                 // send m_matchState to every handshake-complete peer
     void sendMatchStateTo(uint32_t peerId);     // unicast to one peer (late joiner)
-    void broadcastScoreboard();                 // build + send MsgScoreboard (chunked) to all peers
+    void broadcastScoreboard();                 // build ONCE + send MsgScoreboard (chunked) to all peers
     void sendScoreboardTo(uint32_t peerId);     // unicast to one peer (on admit)
+    // The receiver-independent scoreboard packet set. Split out so the broadcast builds it once
+    // rather than once per peer (#1091).
+    void buildScoreboardPackets(std::vector<std::vector<uint8_t>>& out);
     void appendScoreboardRows(std::vector<uint8_t>& pkt, std::size_t begin, std::size_t count,
                               const std::vector<uint32_t>& order) const;
 

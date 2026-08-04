@@ -12229,3 +12229,61 @@ TEST_CASE("EntityTypeRegistry: generation distinguishes a cleared table from an 
     CHECK(registry.typeCount() == countBefore); // same count...
     CHECK(registry.generation() != afterOne);   // ...different table, and the generation says so
 }
+
+// ---------------------------------------------------------------------------
+// #1091: the scoreboard is built once per window, not once per peer
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WorldBroadcaster: the scoreboard broadcast builds once and sends identical bytes (#1091)",
+          "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    constexpr int kPeers = 6;
+    for (uint32_t p = 0; p < kPeers; ++p)
+        connectPilotPeer(broadcaster, net, p);
+
+    // Give the board rows to carry: a scoreboard row appears when a peer actually scores, so drive
+    // the same ScoreAwarded event the kill path does.
+    broadcaster.forEachPeer([&](const fl::PeerInfo& p) {
+        fl::EntityEvent ev{};
+        ev.type = fl::EntityEventType::ScoreAwarded;
+        ev.instigator = p.eid; // the scoring entity resolves back to its owning peer
+        ev.score = 10 + static_cast<int>(p.peerId);
+        broadcaster.onEntityEvent(ev);
+    });
+
+    const uint64_t buildsBefore = broadcaster.scoreboardBuildCount();
+    net.perPeerSends.clear();
+
+    // Drive ticks until the ~2 s dirty window fires.
+    for (uint64_t tick = 1; tick <= 130; ++tick)
+        broadcaster.onTick(1.0 / 60.0, tick);
+
+    const uint64_t builds = broadcaster.scoreboardBuildCount() - buildsBefore;
+    REQUIRE(builds >= 1u);
+    // ONE build per window regardless of peer count. Before this it was one per peer, so six peers
+    // meant six identical builds — and 128 peers meant 128.
+    CHECK(builds < static_cast<uint64_t>(kPeers));
+
+    // Every peer received byte-identical scoreboard bytes: this is a computation fix, not a wire
+    // change, so the payload must be unchanged.
+    std::unordered_map<uint32_t, std::vector<std::vector<uint8_t>>> perPeer;
+    for (const auto& [pid, pkt] : net.perPeerSends)
+        if (!pkt.empty() && pkt[0] == static_cast<uint8_t>(fl::MsgId::Scoreboard))
+            perPeer[pid].push_back(pkt);
+
+    REQUIRE(perPeer.size() == static_cast<std::size_t>(kPeers));
+    const auto& reference = perPeer.begin()->second;
+    REQUIRE_FALSE(reference.empty());
+    for (const auto& [pid, packets] : perPeer) {
+        INFO("peer " << pid);
+        REQUIRE(packets.size() == reference.size());
+        for (std::size_t i = 0; i < packets.size(); ++i)
+            CHECK(packets[i] == reference[i]);
+    }
+}

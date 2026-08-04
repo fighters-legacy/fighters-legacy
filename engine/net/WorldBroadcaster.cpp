@@ -6661,7 +6661,8 @@ void WorldBroadcaster::appendScoreboardRows(std::vector<uint8_t>& pkt, std::size
     }
 }
 
-void WorldBroadcaster::sendScoreboardTo(uint32_t peerId) {
+void WorldBroadcaster::buildScoreboardPackets(std::vector<std::vector<uint8_t>>& out) {
+    out.clear();
     if (m_scores.empty())
         return;
     std::vector<uint32_t> order;
@@ -6679,14 +6680,31 @@ void WorldBroadcaster::sendScoreboardTo(uint32_t peerId) {
         pkt.reserve(sizeof(hdr) + n * sizeof(ScoreboardRow));
         appendMsg(pkt, hdr);
         appendScoreboardRows(pkt, i, n, order);
-        m_net.send(peerId, pkt.data(), pkt.size(), /*reliable=*/false);
+        out.push_back(std::move(pkt));
     }
+    ++m_scoreboardBuilds; // instrumentation: one build per dirty window, not one per peer
+}
+
+void WorldBroadcaster::sendScoreboardTo(uint32_t peerId) {
+    // Unicast path (a late joiner on admit): one peer, so building for it is the whole job.
+    buildScoreboardPackets(m_scoreboardScratch);
+    for (const std::vector<uint8_t>& pkt : m_scoreboardScratch)
+        m_net.send(peerId, pkt.data(), pkt.size(), /*reliable=*/false);
 }
 
 void WorldBroadcaster::broadcastScoreboard() {
+    // Build ONCE, then send (#1091). The rows are receiver-independent — every peer was handed
+    // byte-identical content built 128 separate times, re-sorting every participant each pass: about
+    // 90,000 appends and 640 sends every two seconds for work with exactly one correct result.
+    // flushCombatEvents already had this shape for the kill feed; the scoreboard simply never got it.
+    buildScoreboardPackets(m_scoreboardScratch);
+    if (m_scoreboardScratch.empty())
+        return;
     for (const auto& [pid, pin] : m_peerInputs) {
-        if (pin.handshakeComplete)
-            sendScoreboardTo(pid);
+        if (!pin.handshakeComplete)
+            continue;
+        for (const std::vector<uint8_t>& pkt : m_scoreboardScratch)
+            m_net.send(pid, pkt.data(), pkt.size(), /*reliable=*/false);
     }
 }
 
