@@ -12,6 +12,7 @@ uint32_t EntityTypeRegistry::registerType(EntityDef def) {
     uint32_t index = static_cast<uint32_t>(m_defs.size());
     m_index.emplace(def.id, index);
     m_defs.push_back(std::move(def));
+    ++m_generation; // the replicated-table check (#1070) keys on this, not on the count
     return index;
 }
 
@@ -38,6 +39,7 @@ const EntityDef* EntityTypeRegistry::byIndex(uint32_t index) const noexcept {
 void EntityTypeRegistry::clear() {
     m_defs.clear();
     m_index.clear();
+    ++m_generation; // a cleared table is a CHANGED table even when the count comes back the same
 }
 
 } // namespace fl

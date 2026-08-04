@@ -11972,10 +11972,12 @@ TEST_CASE("WorldBroadcaster: a seat-request flood cannot amplify past the limite
     }
     const std::size_t bytesOut = bytesSentTo(net, 1u);
 
-    // With the limiter, only 2 of the 50 are served in this window. The bound is generous — the point
-    // is that it is a BOUND: without the limiter this grows linearly with the flood and this fails.
+    // With the limiter only 2 of the 50 are served in this window, and since #1070 a re-ack no longer
+    // drags the entity-type table along, so the served ones are small too. Both halves of the fix show
+    // up here: without the limiter the output grows linearly with the flood, and without the type-table
+    // skip each served request alone would blow this bound at a realistic registry.
     CHECK(bytesIn == 50u * sizeof(fl::MsgSeatRequest));
-    CHECK(bytesOut < 40u * bytesIn);
+    CHECK(bytesOut < 4u * bytesIn);
 }
 
 TEST_CASE("WorldBroadcaster: team switches are on a cooldown, and a rejected one is silent (#1069)",
@@ -12091,4 +12093,139 @@ TEST_CASE("WorldBroadcaster: banning an IP disconnects observers and unadmitted 
     CHECK(std::count(net.disconnectedPeers.begin(), net.disconnectedPeers.end(), 0u) == 1);
     CHECK(std::count(net.disconnectedPeers.begin(), net.disconnectedPeers.end(), 1u) == 1);
     CHECK(std::count(net.disconnectedPeers.begin(), net.disconnectedPeers.end(), 2u) == 1);
+}
+
+// ---------------------------------------------------------------------------
+// #1070: the connect-ack entity-type table is sent once, not on every re-ack
+// ---------------------------------------------------------------------------
+
+// Every MsgConnectAck sent to this peer, in order.
+static std::vector<std::vector<uint8_t>> connectAcksFor(const MockNetwork& net, uint32_t peerId) {
+    std::vector<std::vector<uint8_t>> out;
+    for (const auto& [pid, pkt] : net.perPeerSends)
+        if (pid == peerId && !pkt.empty() && pkt[0] == static_cast<uint8_t>(fl::MsgId::ConnectAck))
+            out.push_back(pkt);
+    return out;
+}
+
+static bool ackSkipsTypes(const std::vector<uint8_t>& ack) {
+    fl::MsgConnectAck hdr{};
+    REQUIRE(fl::readMsg(ack.data(), ack.size(), hdr));
+    const std::size_t off = sizeof(hdr) + static_cast<std::size_t>(hdr.typeCount) * sizeof(fl::MsgEntityTypeDef);
+    if (off > ack.size())
+        return false;
+    uint16_t len = 0;
+    return fl::findExt(ack.data() + off, ack.size() - off, static_cast<uint16_t>(fl::ExtTag::ConnectAckTypesUnchanged),
+                       len) != nullptr;
+}
+
+TEST_CASE("WorldBroadcaster: a re-ack omits the unchanged entity-type table (#1070)", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    registry.registerType(makeCrewBomberDef());
+    fl::WeaponRegistry weapons;
+    weapons.registerWeapon(makeRktWeapon());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster wb(em, registry, net, logger);
+    fl::ManualClock clock;
+    wb.setClock(clock);
+    wb.setWeaponRegistry(&weapons);
+    wb.setGroundElevation(0.f);
+    wb.setSeatControllerFactory(
+        [](const fl::SeatDef&, uint8_t,
+           const fl::WorldBroadcaster::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> { return nullptr; });
+
+    fl::EntityTransform t{};
+    t.pos[1] = 800.0;
+    t.quat[3] = 1.f;
+    const fl::EntityId bomber = em.spawn("test:crewbomber", t);
+    wb.registerController(bomber, std::make_unique<StillCtl>(), nullptr, 0.f);
+
+    connectPilotPeer(wb, net, 1u);
+
+    // The FIRST ack always carries the table — a fresh peer has nothing cached.
+    auto acks = connectAcksFor(net, 1u);
+    REQUIRE(acks.size() == 1u);
+    fl::MsgConnectAck first{};
+    REQUIRE(fl::readMsg(acks[0].data(), acks[0].size(), first));
+    CHECK(first.typeCount == registry.typeCount());
+    CHECK_FALSE(ackSkipsTypes(acks[0]));
+    const std::size_t firstAckBytes = acks[0].size();
+
+    // A seat hop re-acks. The table is unchanged, so this one carries no records.
+    net.perPeerSends.clear();
+    const fl::MsgSeatRequest join = joinReq(bomber, 1);
+    wb.onReceive(1u, &join, sizeof(join));
+
+    acks = connectAcksFor(net, 1u);
+    REQUIRE(acks.size() == 1u);
+    fl::MsgConnectAck second{};
+    REQUIRE(fl::readMsg(acks[0].data(), acks[0].size(), second));
+    CHECK(second.typeCount == 0u);
+    CHECK(ackSkipsTypes(acks[0]));
+    // The re-ack is a fixed header plus one 4-byte tag, not ~23 KB of records.
+    CHECK(acks[0].size() < firstAckBytes);
+    CHECK(acks[0].size() <= sizeof(fl::MsgConnectAck) + 8u);
+
+    // Everything that identifies the peer still travels on the skipped ack: this is a payload
+    // omission, not a degraded ack.
+    CHECK(second.peerId == 1u);
+    CHECK(second.planetRadiusKm == first.planetRadiusKm);
+}
+
+TEST_CASE("WorldBroadcaster: a changed type table is re-sent even to a peer that had one (#1070)",
+          "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster wb(em, registry, net, logger);
+
+    connectPilotPeer(wb, net, 1u);
+    REQUIRE(connectAcksFor(net, 1u).size() == 1u);
+
+    // Register a new type, then force a re-ack via an authority grant.
+    fl::EntityDef extra;
+    extra.id = "test:late-arrival";
+    extra.name = "Late";
+    extra.category = fl::ObjectCategory::AirVehicle;
+    extra.maxHp = 50.f;
+    registry.registerType(std::move(extra));
+
+    net.perPeerSends.clear();
+    fl::PeerAuthority auth;
+    auth.caps = fl::kAllCaps;
+    wb.setPeerAuthority(1u, auth);
+
+    auto acks = connectAcksFor(net, 1u);
+    REQUIRE(acks.size() == 1u);
+    fl::MsgConnectAck ack{};
+    REQUIRE(fl::readMsg(acks[0].data(), acks[0].size(), ack));
+    CHECK(ack.typeCount == registry.typeCount()); // the new type must reach the client
+    CHECK_FALSE(ackSkipsTypes(acks[0]));
+}
+
+TEST_CASE("EntityTypeRegistry: generation distinguishes a cleared table from an unchanged one (#1070)",
+          "[world_broadcaster]") {
+    // typeCount() cannot answer "has this table changed" — clear() then re-register the same number of
+    // types leaves the count identical. The connect-ack skip keys on generation() for exactly this.
+    fl::EntityTypeRegistry registry;
+    CHECK(registry.generation() == 0u);
+
+    registry.registerType(makeDebugDef());
+    const uint32_t afterOne = registry.generation();
+    CHECK(afterOne != 0u);
+
+    // A duplicate id registers nothing, so it must not move the generation.
+    registry.registerType(makeDebugDef());
+    CHECK(registry.generation() == afterOne);
+
+    const uint32_t countBefore = registry.typeCount();
+    registry.clear();
+    registry.registerType(makeDebugDef());
+    CHECK(registry.typeCount() == countBefore); // same count...
+    CHECK(registry.generation() != afterOne);   // ...different table, and the generation says so
 }

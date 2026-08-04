@@ -3104,3 +3104,106 @@ TEST_CASE("ClientNetEventHandler: GmWorldState reassembles chunks into one tick 
     REQUIRE(handler.gmWorldState().entities.size() == 1u);
     CHECK(handler.gmWorldState().entities[0].entityIdx == 9u);
 }
+
+// ---------------------------------------------------------------------------
+// #1070: the client keeps its cached entity-type table across a skipped re-ack
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// A MsgConnectAck carrying `typeIds` as entity-type records, optionally followed by the
+// ConnectAckTypesUnchanged tag (which a real server only ever sets with zero records).
+static std::vector<uint8_t> makeConnectAck(const std::vector<std::string>& typeIds, bool typesUnchangedTag,
+                                           uint32_t peerId = 7u) {
+    fl::MsgConnectAck ack{};
+    ack.typeCount = static_cast<uint16_t>(typeIds.size());
+    ack.peerId = peerId;
+    ack.planetRadiusKm = 6371.f;
+    ack.grantedRole = static_cast<uint8_t>(fl::PeerRole::Pilot);
+    std::vector<uint8_t> pkt;
+    fl::appendMsg(pkt, ack);
+    for (const std::string& id : typeIds) {
+        fl::MsgEntityTypeDef td{};
+        std::snprintf(td.id, sizeof(td.id), "%s", id.c_str());
+        std::snprintf(td.name, sizeof(td.name), "%s", id.c_str());
+        fl::appendMsg(pkt, td);
+    }
+    if (typesUnchangedTag)
+        fl::appendExtRaw(pkt, static_cast<uint16_t>(fl::ExtTag::ConnectAckTypesUnchanged), nullptr, 0);
+    return pkt;
+}
+
+} // namespace
+
+TEST_CASE("ClientNetEventHandler: a skipped type table keeps the cached types (#1070)", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    // First ack: the full table.
+    const auto full = makeConnectAck({"pack:f16", "pack:mig29"}, /*typesUnchangedTag=*/false);
+    handler.onReceive(0u, full.data(), full.size());
+    REQUIRE(registry.typeCount() == 2u);
+    CHECK(registry.findById("pack:f16") != nullptr);
+    CHECK_FALSE(handler.typeTableSkipped());
+
+    // Re-ack after a seat hop: zero records plus the tag. The cached table must survive — before
+    // #1070 the server re-sent all ~23 KB of it to say exactly this.
+    const auto skipped = makeConnectAck({}, /*typesUnchangedTag=*/true);
+    handler.onReceive(0u, skipped.data(), skipped.size());
+    CHECK(handler.typeTableSkipped());
+    CHECK(registry.typeCount() == 2u);
+    CHECK(registry.findById("pack:f16") != nullptr);
+    CHECK(registry.findById("pack:mig29") != nullptr);
+    // The rest of the ack still applies.
+    CHECK(handler.gotConnectAck());
+    CHECK(handler.selfPeerId() == 7u);
+}
+
+TEST_CASE("ClientNetEventHandler: a client that ignores the skip tag still keeps its types (#1070)",
+          "[client_net_event_handler]") {
+    // The old-client compatibility case the additive-TLV rule promises: a receiver that never looks
+    // for ConnectAckTypesUnchanged sees typeCount == 0 and must be unharmed, because the record loop
+    // only ever ADDS types. Modelled by feeding a zero-record ack with NO tag at all — byte-for-byte
+    // what an unaware client effectively processes.
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    const auto full = makeConnectAck({"pack:f16"}, false);
+    handler.onReceive(0u, full.data(), full.size());
+    REQUIRE(registry.typeCount() == 1u);
+
+    const auto bare = makeConnectAck({}, /*typesUnchangedTag=*/false);
+    handler.onReceive(0u, bare.data(), bare.size());
+    CHECK(registry.typeCount() == 1u);
+    CHECK(registry.findById("pack:f16") != nullptr);
+    CHECK_FALSE(handler.typeTableSkipped()); // no tag present, so nothing claims a skip
+}
+
+TEST_CASE("ClientNetEventHandler: a re-ack that does carry types still merges them (#1070)",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    const auto first = makeConnectAck({"pack:f16"}, false);
+    handler.onReceive(0u, first.data(), first.size());
+    REQUIRE(registry.typeCount() == 1u);
+
+    // The registry changed server-side, so the re-ack carries the whole table again; the client must
+    // pick up the new type and not duplicate the one it has.
+    const auto second = makeConnectAck({"pack:f16", "pack:su27"}, false);
+    handler.onReceive(0u, second.data(), second.size());
+    CHECK(registry.typeCount() == 2u);
+    CHECK(registry.findById("pack:su27") != nullptr);
+}

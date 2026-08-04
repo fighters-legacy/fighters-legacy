@@ -93,6 +93,13 @@ struct ClientNetEventHandler : INetworkEventHandler {
         return m_gotConnectAck;
     }
 
+    // #1070: whether the last MsgConnectAck omitted the entity-type table (ConnectAckTypesUnchanged),
+    // meaning the server knew this peer already had it. Exposed for tests and diagnostics; nothing in
+    // the client needs to branch on it, because the cache is kept either way.
+    bool typeTableSkipped() const noexcept {
+        return m_typeTableSkipped;
+    }
+
     // Granted authority (#949), from the MsgConnectAck ConnectAckAuthority TLV. Zero caps until a
     // granted ack arrives; re-parsed on every ConnectAck (a mid-session grant/revoke re-sends one), so
     // this reflects the current grant. UI-gating only — the server is the enforcement point.
@@ -473,10 +480,14 @@ struct ClientNetEventHandler : INetworkEventHandler {
     void signalFailure(SessionFailure f);
 
     bool m_connected{false};
-    PeerRole m_grantedRole{PeerRole::Pilot};            // role granted by MsgConnectAck (#857)
-    fl::CapabilityMask m_grantedCaps{0};                // granted authority from the ConnectAck TLV (#949)
-    uint16_t m_grantedFactionIndex{0xFFFFu};            // faction binding for a faction-scoped grant (#949)
-    bool m_gotConnectAck{false};                        // true once a MsgConnectAck arrives; "was I admitted?" (#853)
+    PeerRole m_grantedRole{PeerRole::Pilot}; // role granted by MsgConnectAck (#857)
+    fl::CapabilityMask m_grantedCaps{0};     // granted authority from the ConnectAck TLV (#949)
+    uint16_t m_grantedFactionIndex{0xFFFFu}; // faction binding for a faction-scoped grant (#949)
+    bool m_gotConnectAck{false};             // true once a MsgConnectAck arrives; "was I admitted?" (#853)
+    // #1070: the last MsgConnectAck carried ConnectAckTypesUnchanged, i.e. the server omitted the
+    // entity-type table because this peer already had it. Diagnostic — the cache is kept regardless,
+    // since the record loop only ever adds types.
+    bool m_typeTableSkipped{false};
     uint32_t m_selfPeerId{0};                           // this client's own participant id, from MsgConnectAck (#996)
     bool m_awaitingRespawn{false};                      // #403: own aircraft dead, awaiting respawn ack
     std::unordered_map<uint32_t, RosterEntry> m_roster; // participant id -> display record (#996)

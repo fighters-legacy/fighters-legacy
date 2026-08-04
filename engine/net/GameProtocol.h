@@ -1546,6 +1546,19 @@ enum class ExtTag : uint16_t {
                                   // point. Old clients skip the unknown tag. First tag in the reserved
                                   // 0x0200-0x02FF MsgConnectAck range.
 
+    ConnectAckTypesUnchanged = 0x0202, // #1070: this MsgConnectAck carries NO MsgEntityTypeDef records
+                                       // (typeCount == 0) because the server's entity-type table has
+                                       // not changed since the last ack it sent this peer — keep the
+                                       // cached one. Zero-length payload; the presence of the tag IS
+                                       // the signal. sendConnectAck is re-sent on every seat change,
+                                       // role change, team change and authority grant, and the table
+                                       // is typeCount x 380 B (~23 KB at a realistic 60-type
+                                       // registry), so re-sending it was the amplification factor
+                                       // behind the un-rate-limited seat/team requests (#1069).
+                                       // Additive: a client that ignores the tag sees typeCount == 0
+                                       // and keeps its table anyway, because the record loop only
+                                       // ever ADDS types it does not already have.
+
     ConnectSeatClaim = 0x0500,    // #974: join-at-connect seat claim in MsgConnectRequest's TLV block.
                                   // Payload = { uint32 entityIdx (LE), uint32 entityGen (LE), uint8 seatIndex }
                                   // (9 bytes, unaligned). Present = the client asks to occupy that non-fly seat

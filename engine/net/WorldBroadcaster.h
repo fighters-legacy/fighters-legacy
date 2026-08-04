@@ -173,6 +173,15 @@ struct PeerInputState {
     std::chrono::steady_clock::time_point heartbeatWindowStart{};
     uint32_t heartbeatCount{0};
 
+    // Entity-type table replication state (#1070). sendConnectAck is re-sent on every seat change,
+    // role change, team change and authority grant, and it shipped the whole typeCount x 380 B table
+    // each time — ~23 KB the client already had. This records the EntityTypeRegistry generation this
+    // peer was last sent, so a re-ack whose table is unchanged carries zero records and the
+    // ConnectAckTypesUnchanged tag instead. hasTypeTable distinguishes "never sent" from "sent
+    // generation 0", which matters because a fresh peer must always receive the full table.
+    uint32_t sentTypeTableGen{0};
+    bool hasTypeTable{false};
+
     // Normalized source IP, resolved ONCE at onConnect (#1069). The per-IP concurrent-connection check
     // walks every connected peer, and reading each one's address through
     // extractIp(getPeerAddress(pid)) built a std::string per peer per connect attempt — an O(P) string

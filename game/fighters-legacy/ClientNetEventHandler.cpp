@@ -223,6 +223,18 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
                 std::memcpy(&m_grantedFactionIndex, p + sizeof(caps), sizeof(m_grantedFactionIndex));
                 m_grantedCaps = caps & fl::kAllCaps; // sanitize unknown bits
             }
+            // Type-table skip (#1070): the server omitted the entity-type records because this peer
+            // already has them. The cache needs no action — the record loop above only ever ADDS
+            // types, so it is kept by construction — but the tag arriving against an EMPTY registry
+            // means the two sides disagree about what was replicated, and every entity would then
+            // draw as a placeholder with no other symptom. Say so once, loudly, rather than let it
+            // present as a mysteriously untextured world.
+            if (fl::findExt(ext, extSize, static_cast<uint16_t>(fl::ExtTag::ConnectAckTypesUnchanged), valueLen)) {
+                m_typeTableSkipped = true;
+                if (registry.typeCount() == 0)
+                    logger.log(LogLevel::Warn, __FILE__, __LINE__,
+                               "server skipped the entity-type table but this client has none cached");
+            }
         }
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::WorldSnapshot)) {
         fl::MsgWorldSnapshotHeader hdr;

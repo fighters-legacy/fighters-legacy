@@ -6396,7 +6396,17 @@ void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, c
 }
 
 void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned, PeerRole grantedRole) {
-    const uint32_t typeCount = m_registry.typeCount();
+    // Type-table skip (#1070). This function is re-sent on every seat change, role change, team change
+    // and authority grant — not only at connect — and the table is typeCount x 380 B, about 23 KB at a
+    // realistic 60-type registry. The client already has it; re-sending was pure amplification, and it
+    // is what made the un-rate-limited seat/team requests (#1069) worth attacking. When the registry's
+    // generation is the one this peer was last sent, the records are omitted and a
+    // ConnectAckTypesUnchanged tag says so. A peer that has never been sent the table always gets it.
+    const uint32_t tableGen = m_registry.generation();
+    bool sendTypes = true;
+    if (auto pit = m_peerInputs.find(peerId); pit != m_peerInputs.end())
+        sendTypes = !pit->second.hasTypeTable || pit->second.sentTypeTableGen != tableGen;
+    const uint32_t typeCount = sendTypes ? m_registry.typeCount() : 0u;
 
     std::vector<uint8_t> buf;
     buf.reserve(sizeof(MsgConnectAck) + typeCount * sizeof(MsgEntityTypeDef));
@@ -6447,6 +6457,16 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned, PeerRo
         std::snprintf(typeDef.meshVariant, sizeof(typeDef.meshVariant), "%s", def->meshVariant.c_str());
 
         appendMsg(buf, typeDef);
+    }
+
+    // Type-table skip marker (#1070): zero-length tag, present exactly when the records above were
+    // omitted. Written BEFORE the authority TLV so the block stays in ascending tag order. Record the
+    // generation this peer now holds, so the next re-ack can compare against it.
+    if (!sendTypes) {
+        appendExtRaw(buf, static_cast<uint16_t>(ExtTag::ConnectAckTypesUnchanged), nullptr, 0);
+    } else if (auto pit = m_peerInputs.find(peerId); pit != m_peerInputs.end()) {
+        pit->second.sentTypeTableGen = tableGen;
+        pit->second.hasTypeTable = true;
     }
 
     // Granted-authority TLV (#949): appended after the entity-type records when this peer holds caps,
