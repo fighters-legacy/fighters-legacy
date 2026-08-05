@@ -92,6 +92,31 @@ container↔VM difference is shared‑kernel vs own‑kernel.
   *relative* scaling (knee location, pattern decomposition) but are not directly comparable to
   an x86 cloud instance. Don't use x86 emulation (Rosetta/qemu) for perf — it distorts results.
 
+## GNS legs on Fedora (container + VM)
+
+`vm-provision.sh` installs `openssl-devel protobuf-devel protobuf-compiler`, and the `Containerfile`
+installs neither — so **the container cannot build the GNS profiles as shipped**, and on Fedora the
+VM's package list is not sufficient either. `cmake/dependencies.cmake` sets
+`Protobuf_USE_STATIC_LIBS ON` (a release must not link `libprotobuf.so` dynamically, #905) and
+**Fedora ships no `libprotobuf.a`** — so `find_package(Protobuf)` fails, GNS is *silently*
+force-disabled, and the build warns that the packages are missing when they are in fact installed.
+
+Until that is resolved, a local GNS build here needs the shared library pointed at explicitly. This
+is fine for a measurement binary that never leaves the machine, and is exactly what the static
+preference exists to prevent for a *shipped* one:
+
+    cmake -S . -B /tmp/fl-ref-build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON -DFL_ENABLE_GNS=ON \
+        -DProtobuf_LIBRARY=/usr/lib64/libprotobuf.so \
+        -DProtobuf_LIBRARY_RELEASE=/usr/lib64/libprotobuf.so \
+        -DProtobuf_INCLUDE_DIR=/usr/include -DProtobuf_PROTOC_EXECUTABLE=/usr/bin/protoc
+    # Then ALWAYS assert it stuck, exactly as scale-gate.yml does — a GNS leg that measured enet6
+    # would pass and mean nothing:
+    grep -qx 'FL_ENABLE_GNS:BOOL=ON' /tmp/fl-ref-build/CMakeCache.txt
+
+The container also needs the protobuf **runtime** present at run time, not just at build time — a
+`--rm` container that built the binary is gone by the time the binary runs.
+
 ## Tuning knobs (env vars)
 
 | Var | Default | Meaning |
