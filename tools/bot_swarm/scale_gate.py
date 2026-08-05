@@ -610,7 +610,14 @@ def main(argv=None):
     for idx, run in enumerate(runs):
         pattern, label = run["pattern"], run["label"]
         # Distinct port per run dodges the UDP rebind race between back-to-back servers.
-        port = base_port + idx
+        #
+        # STRIDE OF 2, not 1: fl-server also binds a server-query responder, and an unconfigured
+        # query port is derived as GAME PORT + 1 (server/fl-server/main.cpp). With a stride of 1,
+        # run n+1's game port IS run n's query port, so the second pattern of every multi-pattern
+        # profile raced the previous server's still-open query socket and died with
+        # "bind failed: CreateListenSocketIP failed" — which the gate reports as `no report (exit 1)`,
+        # not as a port clash. It cost the `reference` profile its `weave` leg every run.
+        port = base_port + idx * 2
         report_path = RESULTS_DIR / f"loadtest_{profile['clients']}c_{label}_{args.profile}.json"
         code, report_path = run_pattern(args.build_dir, profile["clients"], profile["duration_s"],
                                         pattern, flags + run["flags"], runner, port, report_path,
