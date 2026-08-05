@@ -254,6 +254,15 @@ structures (the `EntityManager` pool + `SpatialIndex`) at **thousands** of entit
 load-spawn affordance — `[world] test_spawn_ai_count = N` pre-spawns N cheap loiter-AI entities over
 `test_spawn_spread_km` at `test_spawn_agl_m`. **A testing affordance, not a capacity guarantee.**
 
+> ⚠ **`test_spawn_agl_m` is measured above the ORIGIN's ground elevation, not above each entity's own
+> local terrain.** Spread over 50 km, anything spawned at the old 500 m runner default that lands over
+> higher ground starts *inside* a hill and dies on contact. Measured with 64 loiter entities and **no
+> clients connected**: the population decayed 64 → 56 → 52 → 49 within 90 s at 500 m, and held a flat
+> 64 at 4000 m. A world that shrinks while you measure it makes every number a function of run
+> duration and luck — it was worth ±13% on the `idle` baseline, and over a 2 h soak it would drain the
+> world the sensor-loaded profiles exist to populate. `run_loadtest.sh` therefore defaults
+> `FL_TEST_SPAWN_AGL_M=4000`; override it only if you know the terrain under your spread.
+
 The runner exposes it (and the worker sweep) via env, so you can sweep entity count × worker count and
 read the authoritative `server_tick` per-phase budget:
 
