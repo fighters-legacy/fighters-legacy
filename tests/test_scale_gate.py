@@ -85,7 +85,7 @@ def test_assert_flags_tick_ms_only_when_strict():
 def _report(kbs_max=66.0, tick_hz_min=60.0, tick_p99=10.0, connected=64, requested=64,
             disconnected=0, with_server=True, rss_kb=200000, rss_startup_kb=200000,
             load_factor=1.0, dropped_ticks=0, congestion_min_hz=60.0, congestion_recovered_hz=60.0,
-            sensing=None, rss_slope="omit"):
+            sensing=None, rss_slope="omit", rss_step_kb=None, rss_step_at_s=None):
     r = {
         "clients_requested": requested,
         "clients_connected": connected,
@@ -97,6 +97,10 @@ def _report(kbs_max=66.0, tick_hz_min=60.0, tick_p99=10.0, connected=64, request
     # number emits the fitted tail slope (#789).
     if rss_slope != "omit":
         r["rss_slope_kb_per_min"] = rss_slope
+    # The isolated step the slope ignores by design, surfaced alongside it (#1095).
+    if rss_step_kb is not None:
+        r["rss_step_max_kb"] = rss_step_kb
+        r["rss_step_at_s"] = rss_step_at_s
     if with_server:
         r["server_tick"] = {"tick_ms": {"p99": tick_p99}, "rss_kb": rss_kb, "rss_startup_kb": rss_startup_kb,
                             "load_factor": load_factor, "dropped_ticks": dropped_ticks,
@@ -199,6 +203,24 @@ def test_evaluate_fail_on_rss_slope_over_cap():
     assert not ev["passed"]
     check = next(c for c in ev["checks"] if c["name"] == "rss_slope_kb_per_min")
     assert not check["ok"]
+
+
+def test_rss_slope_check_names_the_step_it_ignored():
+    # The slope ignores one isolated step by design (#1095), so a passing gate must still SAY a
+    # multi-MB allocation happened — otherwise the step disappears behind a green check.
+    prof = _profile(assert_max_rss_slope_kb_per_min=128)
+    ev = sg.evaluate_report(_report(rss_slope=8.8, rss_step_kb=6100, rss_step_at_s=5250.0), prof, strict=True)
+    assert ev["passed"]
+    check = next(c for c in ev["checks"] if c["name"] == "rss_slope_kb_per_min")
+    assert "6.0 MB" in check["detail"] and "t=5250s" in check["detail"]
+
+    # No step in the tail -> nothing appended, and a zero step is not "a step".
+    plain = sg.evaluate_report(_report(rss_slope=8.8), prof, strict=True)
+    assert "largest tail step" not in next(
+        c for c in plain["checks"] if c["name"] == "rss_slope_kb_per_min")["detail"]
+    zero = sg.evaluate_report(_report(rss_slope=8.8, rss_step_kb=0, rss_step_at_s=0.0), prof, strict=True)
+    assert "largest tail step" not in next(
+        c for c in zero["checks"] if c["name"] == "rss_slope_kb_per_min")["detail"]
 
 
 def test_evaluate_fail_on_missing_rss_slope_when_enabled():

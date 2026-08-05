@@ -424,6 +424,76 @@ TEST_CASE("rssSlopeKbPerMin fits the tail and flags a slow leak (#789)", "[bot_s
     CHECK_FALSE(fl::rssSlopeKbPerMin({{0.0, 16000}}, 0.5).has_value());
 }
 
+// The shape of a real 2 h soak: 30 s cadence, 241 samples, so the tail half is 121 samples — enough
+// to fill all six buckets. `stepAtS`/`stepKb` inject one discrete allocation; `leakKbPerMin` a
+// genuine sustained climb. Both live on top of a 128-client plateau reached in the first 600 s.
+static std::vector<fl::RssSample> soakShape(double leakKbPerMin, double stepAtS, int64_t stepKb) {
+    std::vector<fl::RssSample> s;
+    const int64_t plateau = 85700;
+    for (int t = 0; t <= 7200; t += 30) {
+        int64_t rss = t < 600 ? 56400 + static_cast<int64_t>(t) * 49 : plateau;
+        if (t >= 600)
+            rss += static_cast<int64_t>(leakKbPerMin * (t - 600) / 60.0);
+        if (stepKb > 0 && t >= stepAtS)
+            rss += stepKb;
+        s.push_back({static_cast<double>(t), rss});
+    }
+    return s;
+}
+
+TEST_CASE("rssSlopeKbPerMin is not fooled by a single RSS step (#1095)", "[bot_swarm][metrics]") {
+    // The #1095 soak: flat, ONE +6.1 MB allocation an hour in, flat again. Not a leak. A plain
+    // least-squares fit through that step reported 190.7 KB/min against a 128 KB/min gate.
+    const auto stepped = soakShape(0.0, 5250.0, 6100);
+    const auto slope = fl::rssSlopeKbPerMin(stepped, fl::kRssSlopeTailFraction);
+    REQUIRE(slope.has_value());
+    CHECK(std::abs(*slope) < 1.0); // the median bucket is flat, because the server was flat
+
+    // And the step is REPORTED rather than silently eaten — this is the whole bargain.
+    const auto step = fl::rssMaxStep(stepped, fl::kRssSlopeTailFraction);
+    REQUIRE(step.has_value());
+    CHECK(step->deltaKb == 6100);
+    CHECK(step->atS == Catch::Approx(5250.0));
+
+    // A step in the HEAD (the connect ramp) is outside the tail window and reported as no step.
+    CHECK_FALSE(fl::rssMaxStep(soakShape(0.0, 1200.0, 6100), fl::kRssSlopeTailFraction).has_value());
+    CHECK_FALSE(fl::rssMaxStep(soakShape(0.0, 0.0, 0), fl::kRssSlopeTailFraction).has_value());
+}
+
+TEST_CASE("rssSlopeKbPerMin still catches a real leak and a staircase (#1095)", "[bot_swarm][metrics]") {
+    // A genuine sustained leak must survive the bucketing at full magnitude — the robustness must
+    // not have been bought by under-reporting the thing the gate exists to catch.
+    const auto leakSlope = fl::rssSlopeKbPerMin(soakShape(200.0, 0.0, 0), fl::kRssSlopeTailFraction);
+    REQUIRE(leakSlope.has_value());
+    CHECK(*leakSlope == Catch::Approx(200.0).margin(2.0));
+
+    // Even with an isolated step laid on top of it, the leak is still reported at its true rate.
+    const auto both = fl::rssSlopeKbPerMin(soakShape(200.0, 5250.0, 6100), fl::kRssSlopeTailFraction);
+    REQUIRE(both.has_value());
+    CHECK(*both == Catch::Approx(200.0).margin(2.0));
+
+    // A RECURRING staircase IS a leak, and this is the adversarial case for the estimator: the step
+    // period equals the bucket width AND the steps land on the bucket boundaries, so every bucket is
+    // internally FLAT. A median of per-bucket least-squares fits reports 0.0 KB/min here and hides a
+    // real 205 KB/min leak; taking each bucket's rate from its endpoints cannot lose the step.
+    std::vector<fl::RssSample> staircase;
+    for (int t = 0; t <= 7200; t += 30) {
+        const int64_t base = t < 600 ? 56400 + static_cast<int64_t>(t) * 49 : 85700;
+        staircase.push_back({static_cast<double>(t), base + static_cast<int64_t>(t / 600) * 2048});
+    }
+    const auto stairSlope = fl::rssSlopeKbPerMin(staircase, fl::kRssSlopeTailFraction);
+    REQUIRE(stairSlope.has_value());
+    CHECK(*stairSlope > 128.0); // 2 MB per 10 min ≈ 205 KB/min — over the soak gate, correctly
+
+    // Short runs cannot fill the buckets and fall back to the plain whole-tail fit, unchanged.
+    std::vector<fl::RssSample> shortRun;
+    for (int t = 0; t <= 1200; t += 30)
+        shortRun.push_back({static_cast<double>(t), 49000 + static_cast<int64_t>(t) * 100 / 60});
+    const auto shortSlope = fl::rssSlopeKbPerMin(shortRun, fl::kRssSlopeTailFraction);
+    REQUIRE(shortSlope.has_value());
+    CHECK(*shortSlope == Catch::Approx(100.0).margin(2.0));
+}
+
 TEST_CASE("parseSwarmArgs parses the governor asserts with negative-disabled sentinels (#574)", "[bot_swarm][config]") {
     // Defaults are disabled (negative), since 0 is a real value for both.
     const SwarmParseResult d = parse({});
@@ -580,7 +650,7 @@ TEST_CASE("reportToJson emits the versioned schema and key fields", "[bot_swarm]
     clients.push_back(makeClient(40000, 0, 600, 0.0, 10.0));
     const std::string json = reportToJson(buildReport(cfg, clients, 10.0, {16.6}, 1));
 
-    CHECK(json.find("\"schema_version\": 4") != std::string::npos); // v4 adds "rss_series" (#789)
+    CHECK(json.find("\"schema_version\": 5") != std::string::npos); // v5 adds "rss_step_max_kb" (#1095)
     CHECK(json.find("\"observed_server_tick_hz\"") != std::string::npos);
     CHECK(json.find("\"downstream_kbs_per_client\"") != std::string::npos);
     CHECK(json.find("\"clients_connected\": 1") != std::string::npos);

@@ -294,6 +294,11 @@ def evaluate_report(report, profile, strict):
         else:
             ok = slope <= profile["assert_max_rss_slope_kb_per_min"]
             detail = f"{slope:.2f} <= {profile['assert_max_rss_slope_kb_per_min']:.2f} KB/min tail slope"
+            # The slope deliberately ignores ONE isolated step (#1095), so name the step here rather
+            # than let a multi-MB allocation vanish behind a passing number.
+            step_kb = report.get("rss_step_max_kb")
+            if step_kb:
+                detail += f" (largest tail step {step_kb / 1024:.1f} MB at t={report.get('rss_step_at_s', 0):.0f}s)"
         checks.append({
             "name": "rss_slope_kb_per_min",
             "ok": ok,
