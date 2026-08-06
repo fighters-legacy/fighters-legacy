@@ -177,8 +177,15 @@ jobs:
         # transport, so the published numbers describe what ships. The enet6 legs (`reference-enet`
         # here, `pr` on hosted runners) run fine in a GNS-enabled build: bot_swarm's default
         # transport is enet6 and the profile does not set FL_LOADTEST_TRANSPORT.
+        #
+        # FL_ALLOW_SHARED_PROTOBUF=ON (#1136): the reference runner is the Fedora VM, and Fedora
+        # ships no static libprotobuf, so the static-only preference in dependencies.cmake would
+        # fail the find with every package correctly installed — force-disabling GNS on the one
+        # runner whose whole job is measuring it. This binary is a measurement binary that never
+        # leaves the runner; the static preference exists for artefacts that ship (#905).
         run: |
-          cmake --preset release -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON -DFL_ENABLE_GNS=ON
+          cmake --preset release -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON -DFL_ENABLE_GNS=ON \
+                -DFL_ALLOW_SHARED_PROTOBUF=ON
           # KEY GUARD (same trap as #653): cmake/dependencies.cmake *silently* force-disables GNS
           # when OpenSSL/protobuf are missing, so a misprovisioned runner would build enet6-only and
           # every GNS leg would happily measure enet6 and pass. Fail the leg instead. (bot_swarm

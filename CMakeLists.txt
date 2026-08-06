@@ -26,6 +26,12 @@ endif()
 # (system) into the game/fl-server build. OFF yields an enet6-only build for lean tool/CI configs.
 # Auto-disabled in dependencies.cmake if OpenSSL is not found.
 option(FL_ENABLE_GNS "Build the GameNetworkingSockets transport backend (protobuf + OpenSSL)" ON)
+# #1136: allow GNS to link the SHARED libprotobuf when the distribution ships no static archive
+# (Fedora, among others). OFF by default because a shipped artefact must link protobuf statically —
+# a release fl-server dynamically linked against libprotobuf.so.32 will not load on a machine
+# without that exact private build (#905). ON is for a binary that never leaves the machine that
+# built it: the bot_swarm reference environment, whose GNS legs could not build at all without it.
+option(FL_ALLOW_SHARED_PROTOBUF "Permit linking the shared libprotobuf when no static archive exists (local measurement builds only — never a shipped artefact)" OFF)
 # #935: the whisper.cpp speech-to-text backend for the deterministic voice-command tier.
 # OFF by default — it is a sizeable dependency and the feature also needs a model file the project
 # does not ship, so a default-on build would cost every contributor build time for something they

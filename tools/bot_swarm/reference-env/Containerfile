@@ -13,8 +13,16 @@ FROM registry.fedoraproject.org/fedora:44
 # Just the build toolchain: the harness builds only fl-server (SDL-free platform-stdfs) + bot_swarm
 # (enet6) headless — neither links SDL3, so no SDL3 build dependencies are needed (dropped after
 # #711/#716 moved fl-server off platform-sdl3; #718).
+#
+# openssl-devel + protobuf-devel/-compiler are the GameNetworkingSockets dependencies (#649/#773).
+# They were missing until #1136, which meant this image could not build the GNS profiles at all —
+# and GNS is what the primary `reference` profile and every characterisation profile measure. The
+# runtime library matters too, not just the headers: with FL_ALLOW_SHARED_PROTOBUF the binary links
+# libprotobuf.so, and the container that runs it is a `--rm` container that must still have it.
+# Fedora ships protobuf 3.19.x, which is the pre-abseil line GNS v1.6.0 needs.
 RUN dnf -y install \
         gcc-c++ cmake ninja-build git libzstd-devel \
+        openssl-devel protobuf-devel protobuf-compiler \
         glibc-langpack-en findutils procps-ng iproute \
     && dnf clean all
 

@@ -94,28 +94,38 @@ container↔VM difference is shared‑kernel vs own‑kernel.
 
 ## GNS legs on Fedora (container + VM)
 
-`vm-provision.sh` installs `openssl-devel protobuf-devel protobuf-compiler`, and the `Containerfile`
-installs neither — so **the container cannot build the GNS profiles as shipped**, and on Fedora the
-VM's package list is not sufficient either. `cmake/dependencies.cmake` sets
-`Protobuf_USE_STATIC_LIBS ON` (a release must not link `libprotobuf.so` dynamically, #905) and
-**Fedora ships no `libprotobuf.a`** — so `find_package(Protobuf)` fails, GNS is *silently*
-force-disabled, and the build warns that the packages are missing when they are in fact installed.
+The `reference` and `soak` profiles — and every characterisation profile — pin `transport: gns`, so
+an environment that cannot build GameNetworkingSockets cannot run them. Both the container and the
+VM handle this out of the box since #1136; what follows is why it needs handling at all, because the
+failure mode is worth recognising if it ever comes back.
 
-Until that is resolved, a local GNS build here needs the shared library pointed at explicitly. This
-is fine for a measurement binary that never leaves the machine, and is exactly what the static
-preference exists to prevent for a *shipped* one:
+`cmake/dependencies.cmake` sets `Protobuf_USE_STATIC_LIBS ON` — a *release* must not link
+`libprotobuf.so` dynamically, or it will not load on a machine without that exact private build
+(#905). **Fedora ships no `libprotobuf.a`.** So on Fedora the static-only find fails with every
+package correctly installed, GNS is force-disabled, and the build used to blame missing packages
+that were right there.
+
+Two things resolve it, and both are already applied here:
+
+- The `Containerfile` installs `openssl-devel protobuf-devel protobuf-compiler` (the VM's
+  `vm-provision.sh` always did). The **runtime** library matters as much as the headers: a `--rm`
+  build container is gone by the time the binary runs.
+- `run-benchmark.sh` configures with `-DFL_ENABLE_GNS=ON -DFL_ALLOW_SHARED_PROTOBUF=ON`. The second
+  flag permits the shared `libprotobuf` *only* when no static archive exists, prints a loud warning
+  every configure, and defaults OFF — a measurement binary never leaves the machine that built it,
+  which is precisely the case the static preference is not protecting against.
+
+`run-benchmark.sh` then asserts `FL_ENABLE_GNS:BOOL=ON` in the CMake cache and stops if it is not,
+exactly as `scale-gate.yml` does. A force-disabled GNS is a *silent substitution* — the build
+succeeds, the runs complete, and the report describes enet6 under a gns profile's name.
+
+For a deliberate enet6-only sweep, `GNS=0 run-benchmark.sh` skips both the flags and the assertion.
+Building by hand rather than through `run-benchmark.sh`:
 
     cmake -S . -B /tmp/fl-ref-build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON -DFL_ENABLE_GNS=ON \
-        -DProtobuf_LIBRARY=/usr/lib64/libprotobuf.so \
-        -DProtobuf_LIBRARY_RELEASE=/usr/lib64/libprotobuf.so \
-        -DProtobuf_INCLUDE_DIR=/usr/include -DProtobuf_PROTOC_EXECUTABLE=/usr/bin/protoc
-    # Then ALWAYS assert it stuck, exactly as scale-gate.yml does — a GNS leg that measured enet6
-    # would pass and mean nothing:
+        -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON -DFL_ENABLE_GNS=ON -DFL_ALLOW_SHARED_PROTOBUF=ON
+    # ALWAYS assert it stuck — a GNS leg that measured enet6 would pass and mean nothing:
     grep -qx 'FL_ENABLE_GNS:BOOL=ON' /tmp/fl-ref-build/CMakeCache.txt
-
-The container also needs the protobuf **runtime** present at run time, not just at build time — a
-`--rm` container that built the binary is gone by the time the binary runs.
 
 ## Tuning knobs (env vars)
 

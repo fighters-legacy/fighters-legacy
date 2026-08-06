@@ -518,9 +518,13 @@ things prevent it:
    `createNetwork`'s convenience fallback.
 2. The report records the backend actually spoken (`"transport"`, schema v3), and `scale_gate.py`
    fails the run if it does not match the profile.
-3. The workflow asserts `FL_ENABLE_GNS:BOOL=ON` in `CMakeCache.txt` after configure — because
-   `cmake/dependencies.cmake` *silently* force-disables GNS when OpenSSL/protobuf are missing (the
-   same trap [#653] hit). The reference runner installs them via `reference-env/vm-provision.sh`.
+3. The workflow **and `run-benchmark.sh`** assert `FL_ENABLE_GNS:BOOL=ON` in `CMakeCache.txt` after
+   configure — because `cmake/dependencies.cmake` *silently* force-disables GNS when
+   OpenSSL/protobuf are missing (the same trap [#653] hit). The reference runner installs them via
+   `reference-env/vm-provision.sh`, and both environments configure with
+   `-DFL_ALLOW_SHARED_PROTOBUF=ON`: Fedora ships protobuf shared-only, so the static-only
+   preference would otherwise disable GNS on a fully provisioned box ([#1136]). Run
+   `GNS=0 run-benchmark.sh` for a deliberate enet6-only sweep.
 
 Baselines are keyed **per profile** (`reference/*` = GNS, `reference-enet/*` = enet6), so each
 transport diffs only against itself — which the wire-byte baseline needs, because the two transports
@@ -579,6 +583,7 @@ lossy proxy's +50 ms one-way delay, GNS correctly reports 100 ms.
 [#649]: https://github.com/fighters-legacy/fighters-legacy/issues/649
 [#653]: https://github.com/fighters-legacy/fighters-legacy/issues/653
 [#507]: https://github.com/fighters-legacy/fighters-legacy/issues/507
+[#1136]: https://github.com/fighters-legacy/fighters-legacy/issues/1136
 
 ## Wire bytes vs payload bytes (#772) — read this before quoting a bandwidth number
 

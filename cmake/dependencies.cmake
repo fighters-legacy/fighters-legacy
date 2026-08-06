@@ -104,6 +104,8 @@ FetchContent_Declare(enet6
 # mixed module/config double-find — "some but not all targets already defined"/libupb), Windows =
 # the repo-root vcpkg.json manifest pinning protobuf 3.21.12 under the vcpkg toolchain. The CI legs
 # assert FL_ENABLE_GNS stayed ON post-configure, so this graceful fallback can't mask a broken leg.
+# On a distribution that ships protobuf shared-only (Fedora), the static preference below is itself
+# what fails the find — see FL_ALLOW_SHARED_PROTOBUF and #1136.
 # No WebRTC/ICE (dedicated-server) ⇒ no abseil.
 # ---------------------------------------------------------------------------
 if(FL_ENABLE_GNS)
@@ -116,13 +118,58 @@ if(FL_ENABLE_GNS)
     set(Protobuf_USE_STATIC_LIBS ON)
     find_package(OpenSSL 1.1.1 QUIET) # 1.1.1+ for GNS's EVP_PKEY 25519 raw-key API
     find_package(Protobuf QUIET)      # module mode; seeds Protobuf_* cache for GNS's find_package (static)
+
+    # No static archive? Say WHICH of the two things is missing (#1136). Fedora ships protobuf as a
+    # shared library only, so the find above fails with every package correctly installed, and the
+    # old message sent the reader off to install packages they already had — while GNS was silently
+    # force-disabled and the measurement environment quietly stopped measuring the transport it
+    # exists to measure. A plain find_library probe answers "installed, but not static" without
+    # touching the Protobuf_* cache the static find just seeded.
+    if(NOT Protobuf_FOUND)
+        find_library(FL_PROTOBUF_SHARED_PROBE NAMES protobuf)
+        mark_as_advanced(FL_PROTOBUF_SHARED_PROBE)
+    endif()
+
+    if(NOT Protobuf_FOUND AND FL_PROTOBUF_SHARED_PROBE AND FL_ALLOW_SHARED_PROTOBUF)
+        # Retry against the shared library. FindProtobuf short-circuits on its cache — including the
+        # *-NOTFOUND entries the failed static find just wrote — so those must be dropped first, or
+        # the second find_package is a no-op that reports failure again.
+        foreach(_fl_pb_var IN ITEMS Protobuf_INCLUDE_DIR Protobuf_PROTOC_EXECUTABLE
+                                    Protobuf_LIBRARY Protobuf_LIBRARY_DEBUG Protobuf_LIBRARY_RELEASE
+                                    Protobuf_LITE_LIBRARY Protobuf_LITE_LIBRARY_DEBUG Protobuf_LITE_LIBRARY_RELEASE
+                                    Protobuf_PROTOC_LIBRARY Protobuf_PROTOC_LIBRARY_DEBUG
+                                    Protobuf_PROTOC_LIBRARY_RELEASE)
+            unset(${_fl_pb_var} CACHE)
+        endforeach()
+        unset(_fl_pb_var)
+        set(Protobuf_USE_STATIC_LIBS OFF)
+        find_package(Protobuf QUIET)
+    endif()
+
     if(OpenSSL_FOUND AND Protobuf_FOUND)
+        if(NOT Protobuf_USE_STATIC_LIBS)
+            # Loud, every configure, and it names the consequence rather than the flag: this is the
+            # one state in which a binary from this tree must not be published.
+            message(WARNING
+                "GameNetworkingSockets is linking the SHARED libprotobuf (${Protobuf_LIBRARY}) because "
+                "FL_ALLOW_SHARED_PROTOBUF=ON and no static libprotobuf.a was found. This binary is for "
+                "LOCAL MEASUREMENT ONLY — do not ship or distribute it: it will not load on a machine "
+                "without this exact libprotobuf build (#905).")
+        endif()
         message(STATUS "GameNetworkingSockets: enabled (OpenSSL ${OPENSSL_VERSION}, "
                        "system protobuf ${Protobuf_VERSION})")
     else()
-        message(WARNING "FL_ENABLE_GNS=ON but OpenSSL>=1.1.1 + system protobuf were not both found — "
-                        "building enet6-only. Install libssl-dev + libprotobuf-dev + protobuf-compiler "
-                        "(Linux) to enable GNS.")
+        if(NOT Protobuf_FOUND AND FL_PROTOBUF_SHARED_PROBE)
+            message(WARNING
+                "FL_ENABLE_GNS=ON and protobuf IS installed (${FL_PROTOBUF_SHARED_PROBE}), but only as a "
+                "shared library — no static libprotobuf.a exists, and a shipped artefact must not link "
+                "protobuf dynamically (#905). Building enet6-only. For a build that never leaves this "
+                "machine (a measurement or dev binary), configure with -DFL_ALLOW_SHARED_PROTOBUF=ON.")
+        else()
+            message(WARNING "FL_ENABLE_GNS=ON but OpenSSL>=1.1.1 + system protobuf were not both found — "
+                            "building enet6-only. Install libssl-dev + libprotobuf-dev + protobuf-compiler "
+                            "(Linux) to enable GNS.")
+        endif()
         set(FL_ENABLE_GNS OFF CACHE BOOL "" FORCE)
     endif()
 endif()
