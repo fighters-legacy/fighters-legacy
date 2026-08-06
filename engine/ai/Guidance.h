@@ -195,6 +195,15 @@ inline float aileronFromBankError(float bankErrorRad, float maxAileron = 1.f) {
     return std::clamp(bankErrorRad * kGain, -maxAileron, maxAileron);
 }
 
+// Bank limits by role (#1143). A turn law with attitude feedback needs a ceiling, and the right
+// ceiling is not the same for a wingman holding station and a fighter tracking guns. Manoeuvre
+// controllers (break turn, yo-yos, evade) deliberately use NO limit — rolling past knife-edge is the
+// manoeuvre, and tests/test_ai_turn_law.cpp pins that they still can.
+inline constexpr float kNavBankRad = 0.785f;       // 45 deg — waypoint navigation, swarming
+inline constexpr float kFormationBankRad = 1.047f; // 60 deg — following a manoeuvring lead
+inline constexpr float kCombatBankRad = 1.396f;    // 80 deg — pursuit and gun tracking
+inline constexpr float kApproachBankRad = 0.436f;  // 25 deg — approach and climbout, close to the ground
+
 // Heading error -> aileron, closed on the entity's CURRENT bank relative to the local horizon.
 // This is the attitude feedback the rate-only form above is missing: the roll stops at the
 // commanded bank instead of continuing to wind up for as long as the heading error survives.

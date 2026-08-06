@@ -46,8 +46,12 @@ fl::ControlInput WaypointController::sample(const fl::EntityState& state, uint64
     float pitchErr = pitchErrorFromAlt(state.transform.quat, state.transform.pos, altErr, m_planetRadiusM);
 
     ctrl.throttle = m_throttle;
-    ctrl.aileron = bankToTurnAileron(headErr);
-    ctrl.rudder = coordinatedRudder(ctrl.aileron);
+    // Bank-ANGLE command closed on the current bank, and a rudder that nulls the SIDESLIP (#1143).
+    // 45 deg is plenty for navigating between waypoints.
+    // The rate-only aileron law wound this controller to 179.8 deg of bank and 89 deg of sideslip
+    // within 90 s of a heading error it could not null, and flew it into the ground.
+    ctrl.aileron = bankToTurnAileron(state.transform.quat, state.transform.pos, headErr, m_planetRadiusM, kNavBankRad);
+    ctrl.rudder = rudderToCoordinate(sideslipOf(state.transform.quat, state.transform.vel));
     ctrl.elevator = elevatorFromPitchError(pitchErr);
 
     return ctrl;

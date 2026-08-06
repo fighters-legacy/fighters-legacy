@@ -45,8 +45,13 @@ fl::ControlInput GunsEmploymentController::sample(const fl::EntityState& state, 
     const float pitchErr = pitchErrorFromAlt(state.transform.quat, state.transform.pos, altErr, m_planetRadiusM);
 
     ctrl.throttle = m_throttle;
-    ctrl.aileron = bankToTurnAileron(headErr);
-    ctrl.rudder = coordinatedRudder(ctrl.aileron);
+    // Bank-ANGLE command closed on the current bank, and a rudder that nulls the SIDESLIP (#1143).
+    // 80 deg: tracking for guns is the hardest turn a controller makes.
+    // The rate-only aileron law wound this controller to 179.8 deg of bank and 89 deg of sideslip
+    // within 90 s of a heading error it could not null, and flew it into the ground.
+    ctrl.aileron =
+        bankToTurnAileron(state.transform.quat, state.transform.pos, headErr, m_planetRadiusM, kCombatBankRad);
+    ctrl.rudder = rudderToCoordinate(sideslipOf(state.transform.quat, state.transform.vel));
     ctrl.elevator = elevatorFromPitchError(pitchErr);
 
     // Trigger discipline: predicted miss = the angle between the nose and the lead direction,

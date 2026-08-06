@@ -61,8 +61,13 @@ fl::ControlInput LeadPursuitController::sample(const fl::EntityState& state, uin
 
     ctrl.throttle = m_throttle;
     ctrl.afterburner = m_useAfterburner;
-    ctrl.aileron = bankToTurnAileron(headErr);
-    ctrl.rudder = coordinatedRudder(ctrl.aileron);
+    // Bank-ANGLE command closed on the current bank, and a rudder that nulls the SIDESLIP (#1143).
+    // 80 deg, as PursuitController.
+    // The rate-only aileron law wound this controller to 179.8 deg of bank and 89 deg of sideslip
+    // within 90 s of a heading error it could not null, and flew it into the ground.
+    ctrl.aileron =
+        bankToTurnAileron(state.transform.quat, state.transform.pos, headErr, m_planetRadiusM, kCombatBankRad);
+    ctrl.rudder = rudderToCoordinate(sideslipOf(state.transform.quat, state.transform.vel));
     ctrl.elevator = elevatorFromPitchError(pitchErr);
 
     return ctrl;

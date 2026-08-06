@@ -47,11 +47,12 @@ function compute_control(state, tick, dt)
     local tx   = pos.x + nx * math.min(dist, 1000) + nz * 1000
     local tz   = pos.z + nz * math.min(dist, 1000) - nx * 1000
     local herr = guidance.heading_error(quat, pos, {x = tx, y = pos.y, z = tz})
-    local perr = guidance.pitch_error_from_alt(quat, pos, alt - pos.y)
     return {
-        aileron  = guidance.bank_to_turn_aileron(herr),
-        rudder   = guidance.coordinated_rudder(guidance.bank_to_turn_aileron(herr)),
-        elevator = guidance.elevator_from_pitch_error(perr),
+        -- turn_aileron closes on the aircraft's own bank; bank_to_turn_aileron does not, and an
+        -- orbit never runs out of heading error, so it would roll you onto your back. See below.
+        aileron  = guidance.turn_aileron(quat, pos, herr),
+        rudder   = guidance.rudder_to_coordinate(guidance.sideslip(quat, state.vel)),
+        elevator = guidance.elevator_for_altitude_hold(quat, pos, state.vel, alt),
         throttle = 0.65,
     }
 end
@@ -165,9 +166,47 @@ to Earth.
 
 Maps heading error to an aileron command. Gain: `2/π` (90° error → full deflection).
 
+!!! warning "Attitude-free — use `turn_aileron` for anything that holds a turn"
+    Aileron commands a roll **rate**, not a bank angle, and this function has no feedback on the
+    bank you already have. A heading error that persists — which is the normal condition on an
+    orbit, where the target bearing keeps moving — keeps the aileron deflected and rolls you
+    steadily onto your back. Every engine controller that flew a sustained turn on this law reached
+    **179.7–180.0° of bank within 90 s** and then flew into the ground (#1141, #1143). It is still
+    exported because it is the right tool for a *transient* error, or a deliberate roll past
+    knife-edge.
+
+### `guidance.turn_aileron(quat, own_pos, heading_error_rad[, radius_m[, max_bank_rad]]) → number`
+
+The same job, closed on your **current bank**: commands a bank *angle* for the heading error and
+stops there. `max_bank_rad` defaults to 45° — raise it for a fighter (80° is what the engine's
+pursuit controllers use), lower it near the ground (25° for an approach). Correct anywhere on the
+sphere; `own_pos` is required for the same reason as in `pitch_error_from_alt`.
+
 ### `guidance.coordinated_rudder(aileron) → number`
 
-Rudder command proportional to aileron (gain 0.3). Keeps the ball centred in a coordinated turn.
+Rudder command proportional to aileron (gain 0.3).
+
+!!! warning "Does nothing in a steady turn"
+    Once the bank is established the aileron returns to ~0, so this commands ~0 rudder — and
+    nothing is left pointing the nose along the flight path. Measured on a loitering aircraft:
+    **30° of sideslip**, flying half sideways with the wing at −2° AoA and sinking (#1141). Use
+    `rudder_to_coordinate(sideslip(...))`.
+
+### `guidance.sideslip(quat, vel) → number`
+
+The angle (rad) between where you are pointing and where you are going: positive = the airflow is
+coming from your right. `vel` is `state.vel`.
+
+### `guidance.rudder_to_coordinate(sideslip_rad) → number`
+
+Rudder that nulls a skid. This is turn coordination.
+
+### `guidance.elevator_for_altitude_hold(quat, own_pos, vel, target_alt_m[, radius_m]) → number`
+
+Altitude hold closed on **climb rate**, through a bounded angle of attack: altitude → climb rate →
+AoA → pitch, each stage clamped. Prefer it to `pitch_error_from_alt` + `elevator_from_pitch_error`,
+which command a pitch *attitude* and cannot tell "nose up" from "climbing" — an aircraft mushing
+nose-high at 30° while descending 11 m/s satisfies them completely (#1141).
 
 ### `guidance.elevator_from_pitch_error(pitch_error_rad) → number`
 
@@ -209,7 +248,7 @@ function compute_control(state, tick, dt)
             -- Steer at the LAST-KNOWN position. If the contact is coasting, this is a guess —
             -- age_s tells you how old a guess it is.
             local herr = guidance.heading_error(state.quat, state.pos, c.pos)
-            return { aileron = guidance.bank_to_turn_aileron(herr), throttle = 1.0 }
+            return { aileron = guidance.turn_aileron(quat, pos, herr), throttle = 1.0 }
         end
     end
     return { throttle = 0.6 }   -- nothing detected: no target to chase

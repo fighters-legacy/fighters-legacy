@@ -108,8 +108,12 @@ fl::ControlInput SwarmController::sample(const fl::EntityState& state, uint64_t 
         static_cast<float>(fl::localAltitude(aim, m_planetRadiusM) - fl::localAltitude(ownPos, m_planetRadiusM));
     const float pitchErr = pitchErrorFromAlt(state.transform.quat, state.transform.pos, altErr, m_planetRadiusM);
 
-    ctrl.aileron = bankToTurnAileron(headErr);
-    ctrl.rudder = coordinatedRudder(ctrl.aileron);
+    // Bank-ANGLE command closed on the current bank, and a rudder that nulls the SIDESLIP (#1143).
+    // 45 deg, same as navigation — a swarm mills about, it does not dogfight.
+    // The rate-only aileron law wound this controller to 179.8 deg of bank and 89 deg of sideslip
+    // within 90 s of a heading error it could not null, and flew it into the ground.
+    ctrl.aileron = bankToTurnAileron(state.transform.quat, state.transform.pos, headErr, m_planetRadiusM, kNavBankRad);
+    ctrl.rudder = rudderToCoordinate(sideslipOf(state.transform.quat, state.transform.vel));
     ctrl.elevator = elevatorFromPitchError(pitchErr);
 
     // Loose speed matching: a flock that cannot match speeds cannot hold together. Around the

@@ -107,6 +107,14 @@ target_include_directories(test_autopilot PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy" ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_autopilot)
 
+# Turn-law audit (#1143): every controller that commands a roll, flown through the real integrator
+# in a scenario that keeps its heading error alive. Station-keeping controllers must stay upright;
+# manoeuvre controllers must still be able to roll hard, pinned so nobody "consistency"-fixes them.
+add_executable(test_ai_turn_law test_ai_turn_law.cpp)
+target_link_libraries(test_ai_turn_law PRIVATE Catch2::Catch2WithMain engine-flight engine-ai engine-entity
+    engine-spatial engine-sensor)
+catch_discover_tests(test_ai_turn_law)
+
 # AI altitude hold (#1141): a LoiterController flown through the real integrator. Nothing asserted
 # that an AI aircraft asked to hold an altitude actually does, which is how a several-hundred-metre
 # oscillation went unnoticed until it started flying the load-spawn world into the ground.

@@ -38,6 +38,11 @@ fl::ControlInput HighYoYoController::sample(const fl::EntityState& state, uint64
         const double tgtPos[3] = {tv.pos[0], tv.pos[1], tv.pos[2]};
         float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, tgtPos, m_planetRadiusM);
         // Bank away from target at half authority; pull hard up to bleed speed and gain altitude.
+        // Deliberately the RATE-only turn law (#1143): rolling past knife-edge IS this manoeuvre, so an
+        // attitude-closed bank limit would be the regression. It is safe here for the reason the loiter
+        // controllers were not — this runs for a couple of seconds under a state machine, not
+        // indefinitely, so the heading error cannot outlive the manoeuvre. tests/test_ai_turn_law.cpp
+        // pins that it still rolls hard.
         ctrl.aileron = -bankToTurnAileron(headErr) * 0.5f;
         ctrl.rudder = coordinatedRudder(ctrl.aileron);
         ctrl.elevator = 1.f;
