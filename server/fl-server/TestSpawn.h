@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -16,16 +17,32 @@
 
 namespace fl {
 
+// Places a planar (x, z) column at `aglM` above the terrain AT THAT COLUMN, returning the world
+// position. The caller owns the terrain query, so this header stays free of the renderer: fl-server
+// passes a lambda over TerrainStreamer::heightAt mapped onto the near side of the sphere.
+using TestSpawnSurfaceFn = std::function<std::array<double, 3>(double x, double z, double aglM)>;
+
+// A flat world at a fixed datum elevation. This is the PRE-#1137 behaviour and exists for tests and
+// for callers with no terrain at all — never for the load spawn, whose whole problem was that the
+// origin's ground elevation says nothing about the ground 25 km away.
+inline TestSpawnSurfaceFn flatTestSpawnSurface(double baseElevM) {
+    return [baseElevM](double x, double z, double aglM) -> std::array<double, 3> { return {x, baseElevM + aglM, z}; };
+}
+
 // Returns `count` world positions {x, y, z} spread over a disk of radius `spreadM` (metres) around
 // the origin via a phyllotaxis (sunflower) pattern — an even, deterministic fill that populates many
-// SpatialIndex cells rather than clustering into one. All entities share the fixed altitude
-// `baseElevM + aglM` (loiter AI at altitude; avoids per-entity terrain queries across an un-primed
-// spread). Deterministic: identical input yields identical output on every platform.
+// SpatialIndex cells rather than clustering into one. Each entity is placed at `aglM` above ITS OWN
+// local terrain via `surfaceFn`. Deterministic: identical input (and a deterministic surfaceFn)
+// yields identical output on every platform.
+//
+// ⚠ The altitude used to be measured above the ORIGIN's ground for every entity (#1137). Over a wide
+// spread anything above higher ground started INSIDE a hill and died on contact — silently, as a
+// slowly shrinking population rather than an error. A 64-entity spread over 50 km at 500 m drained
+// to 49 within 90 s, which made the scale-gate baseline a function of run duration and luck.
 inline std::vector<std::array<double, 3>> testSpawnPositions(uint32_t count, double spreadM, double aglM,
-                                                             double baseElevM) {
+                                                             const TestSpawnSurfaceFn& surfaceFn) {
     std::vector<std::array<double, 3>> out;
     out.reserve(count);
-    const double y = baseElevM + aglM;
     // Golden angle in radians (pi * (3 - sqrt(5))).
     constexpr double kGoldenAngle = 2.399963229728653;
     const double denom = count > 0u ? static_cast<double>(count) : 1.0;
@@ -34,7 +51,7 @@ inline std::vector<std::array<double, 3>> testSpawnPositions(uint32_t count, dou
         // exact centre (radius 0 would collapse onto the origin / the peer spawn).
         const double r = spreadM * std::sqrt((static_cast<double>(i) + 0.5) / denom);
         const double theta = static_cast<double>(i) * kGoldenAngle;
-        out.push_back({r * std::cos(theta), y, r * std::sin(theta)});
+        out.push_back(surfaceFn(r * std::cos(theta), r * std::sin(theta), aglM));
     }
     return out;
 }
@@ -138,13 +155,16 @@ inline uint32_t churnSpawnCount(double& accum, double ratePerSecond, double dtSe
 // Position for the k-th projectile ever spawned: the same phyllotaxis fill as testSpawnPositions,
 // walked by a monotonically increasing counter modulo a fixed ring so churned entities keep landing
 // in *different* SpatialIndex cells (fresh cell traffic, not one hot cell). Deterministic.
-inline std::array<double, 3> testProjectilePosition(uint64_t counter, double spreadM, double y) {
+// Terrain-relative per position for the same reason as testSpawnPositions (#1137) — it walks the
+// same 50 km spread off the same test_spawn_agl_m knob, so it had the same trap.
+inline std::array<double, 3> testProjectilePosition(uint64_t counter, double spreadM, double aglM,
+                                                    const TestSpawnSurfaceFn& surfaceFn) {
     constexpr double kGoldenAngle = 2.399963229728653;
     constexpr uint64_t kRing = 4096; // radius pattern repeats; angle keeps walking the golden spiral
     const double frac = (static_cast<double>(counter % kRing) + 0.5) / static_cast<double>(kRing);
     const double r = spreadM * std::sqrt(frac);
     const double theta = static_cast<double>(counter) * kGoldenAngle;
-    return {r * std::cos(theta), y, r * std::sin(theta)};
+    return surfaceFn(r * std::cos(theta), r * std::sin(theta), aglM);
 }
 
 } // namespace fl

@@ -7,35 +7,47 @@
 #include <cmath>
 #include <set>
 
+using fl::flatTestSpawnSurface;
 using fl::testSpawnPositions;
 
 namespace {
 double radiusM(const std::array<double, 3>& p) {
     return std::sqrt(p[0] * p[0] + p[2] * p[2]);
 }
+
+// A synthetic ridge running along +x: ground rises 40 m per km eastward, so a point 25 km out sits
+// 1000 m above the origin's ground. This is the shape that broke the load spawn (#1137) — at the
+// old fixed 500 m "AGL" every entity east of ~12.5 km was underground.
+double ridgeHeight(double x, double z) {
+    return 0.04 * x + 20.0 * std::sin(z / 5000.0);
+}
+
+fl::TestSpawnSurfaceFn ridgeSurface() {
+    return [](double x, double z, double aglM) -> std::array<double, 3> { return {x, ridgeHeight(x, z) + aglM, z}; };
+}
 } // namespace
 
 TEST_CASE("testSpawnPositions: count is exact", "[load_spawn]") {
-    CHECK(testSpawnPositions(0u, 50'000.0, 500.0, 100.0).empty());
-    CHECK(testSpawnPositions(1u, 50'000.0, 500.0, 100.0).size() == 1u);
-    CHECK(testSpawnPositions(5000u, 50'000.0, 500.0, 100.0).size() == 5000u);
+    CHECK(testSpawnPositions(0u, 50'000.0, 500.0, flatTestSpawnSurface(100.0)).empty());
+    CHECK(testSpawnPositions(1u, 50'000.0, 500.0, flatTestSpawnSurface(100.0)).size() == 1u);
+    CHECK(testSpawnPositions(5000u, 50'000.0, 500.0, flatTestSpawnSurface(100.0)).size() == 5000u);
 }
 
 TEST_CASE("testSpawnPositions: all points within the spread radius", "[load_spawn]") {
     const double spread = 50'000.0;
-    for (const auto& p : testSpawnPositions(5000u, spread, 500.0, 0.0))
+    for (const auto& p : testSpawnPositions(5000u, spread, 500.0, flatTestSpawnSurface(0.0)))
         CHECK(radiusM(p) <= spread + 1e-6);
 }
 
-TEST_CASE("testSpawnPositions: altitude is baseElev + agl for every entity", "[load_spawn]") {
-    const auto pts = testSpawnPositions(1000u, 50'000.0, 500.0, 120.0);
+TEST_CASE("testSpawnPositions: altitude is the flat surface + agl for every entity", "[load_spawn]") {
+    const auto pts = testSpawnPositions(1000u, 50'000.0, 500.0, flatTestSpawnSurface(120.0));
     for (const auto& p : pts)
         CHECK(p[1] == Catch::Approx(620.0));
 }
 
 TEST_CASE("testSpawnPositions: deterministic across calls", "[load_spawn]") {
-    const auto a = testSpawnPositions(2000u, 40'000.0, 500.0, 50.0);
-    const auto b = testSpawnPositions(2000u, 40'000.0, 500.0, 50.0);
+    const auto a = testSpawnPositions(2000u, 40'000.0, 500.0, flatTestSpawnSurface(50.0));
+    const auto b = testSpawnPositions(2000u, 40'000.0, 500.0, flatTestSpawnSurface(50.0));
     REQUIRE(a.size() == b.size());
     for (size_t i = 0; i < a.size(); ++i) {
         CHECK(a[i][0] == b[i][0]);
@@ -47,13 +59,59 @@ TEST_CASE("testSpawnPositions: deterministic across calls", "[load_spawn]") {
 TEST_CASE("testSpawnPositions: distributes across many spatial cells (not clustered)", "[load_spawn]") {
     // With a 10 km cell over a 50 km spread, the fill should occupy many distinct cells rather than
     // collapsing into one — the whole point of the phyllotaxis spread for #573.
-    const auto pts = testSpawnPositions(4000u, 50'000.0, 500.0, 0.0);
+    const auto pts = testSpawnPositions(4000u, 50'000.0, 500.0, flatTestSpawnSurface(0.0));
     std::set<std::pair<int64_t, int64_t>> cells;
     for (const auto& p : pts) {
         cells.insert(
             {static_cast<int64_t>(std::floor(p[0] / 10'000.0)), static_cast<int64_t>(std::floor(p[2] / 10'000.0))});
     }
     CHECK(cells.size() > 20u);
+}
+
+TEST_CASE("testSpawnPositions: altitude is AGL above each entity's OWN terrain (#1137)", "[load_spawn]") {
+    const double agl = 500.0;
+    const auto pts = testSpawnPositions(2000u, 50'000.0, agl, ridgeSurface());
+    REQUIRE(pts.size() == 2000u);
+    for (const auto& p : pts) {
+        const double ground = ridgeHeight(p[0], p[2]);
+        // The assertion the old code could not make: clearance is the SAME everywhere, rather than
+        // the altitude being the same everywhere.
+        CHECK(p[1] - ground == Catch::Approx(agl));
+    }
+}
+
+TEST_CASE("testSpawnPositions: no entity starts below its local ground over varied terrain (#1137)", "[load_spawn]") {
+    // The failure mode was invisible precisely because nothing asserted it: entities over higher
+    // ground spawned inside a hill and died on contact, so the population drained silently
+    // (64 -> 49 in 90 s at 500 m over a 50 km spread).
+    const auto pts = testSpawnPositions(4000u, 50'000.0, 500.0, ridgeSurface());
+    uint32_t underground = 0;
+    for (const auto& p : pts) {
+        if (p[1] <= ridgeHeight(p[0], p[2]))
+            ++underground;
+    }
+    CHECK(underground == 0u);
+
+    // ...and the same spread placed at a FIXED altitude above the origin's ground — the pre-#1137
+    // behaviour — buries a large fraction of them, which is what this test is here to notice.
+    const auto flat = testSpawnPositions(4000u, 50'000.0, 500.0, flatTestSpawnSurface(ridgeHeight(0.0, 0.0)));
+    uint32_t buried = 0;
+    for (const auto& p : flat) {
+        if (p[1] <= ridgeHeight(p[0], p[2]))
+            ++buried;
+    }
+    CHECK(buried > 1000u);
+}
+
+TEST_CASE("testSpawnPositions: deterministic with a terrain-relative surface (#1137)", "[load_spawn]") {
+    const auto a = testSpawnPositions(1000u, 50'000.0, 500.0, ridgeSurface());
+    const auto b = testSpawnPositions(1000u, 50'000.0, 500.0, ridgeSurface());
+    REQUIRE(a.size() == b.size());
+    for (size_t i = 0; i < a.size(); ++i) {
+        CHECK(a[i][0] == b[i][0]);
+        CHECK(a[i][1] == b[i][1]);
+        CHECK(a[i][2] == b[i][2]);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -133,17 +191,21 @@ TEST_CASE("churnSpawnCount paces spawns with a fractional accumulator", "[load_s
 TEST_CASE("testProjectilePosition walks the spread deterministically", "[load_spawn][churn]") {
     const double spread = 50'000.0;
     // Deterministic per counter value.
-    const auto a = fl::testProjectilePosition(7u, spread, 600.0);
-    const auto b = fl::testProjectilePosition(7u, spread, 600.0);
+    const auto a = fl::testProjectilePosition(7u, spread, 600.0, flatTestSpawnSurface(0.0));
+    const auto b = fl::testProjectilePosition(7u, spread, 600.0, flatTestSpawnSurface(0.0));
     CHECK(a[0] == b[0]);
     CHECK(a[2] == b[2]);
     CHECK(a[1] == Catch::Approx(600.0));
+
+    // Terrain-relative like the load spawn (#1137): same knob, same spread, same trap.
+    const auto onRidge = fl::testProjectilePosition(7u, spread, 600.0, ridgeSurface());
+    CHECK(onRidge[1] - ridgeHeight(onRidge[0], onRidge[2]) == Catch::Approx(600.0));
 
     // All positions stay within the spread radius, and consecutive spawns land in many distinct
     // 10 km cells (fresh SpatialIndex traffic, not one hot cell).
     std::set<std::pair<int64_t, int64_t>> cells;
     for (uint64_t k = 0; k < 2000; ++k) {
-        const auto p = fl::testProjectilePosition(k, spread, 600.0);
+        const auto p = fl::testProjectilePosition(k, spread, 600.0, flatTestSpawnSurface(0.0));
         CHECK(radiusM(p) <= spread + 1e-6);
         cells.insert(
             {static_cast<int64_t>(std::floor(p[0] / 10'000.0)), static_cast<int64_t>(std::floor(p[2] / 10'000.0))});

@@ -62,13 +62,15 @@ METRICS="$WORKDIR/server_tick.json"
 # All default to "off"/unset so a normal run is byte-identical to before.
 TEST_SPAWN_AI="${FL_TEST_SPAWN_AI:-0}"
 TEST_SPAWN_SPREAD_KM="${FL_TEST_SPAWN_SPREAD_KM:-50}"
-# Spawn/loiter altitude for the pre-spawned AI (#1095). MUST clear the terrain across the whole
-# spread: `test_spawn_agl_m` is measured above the ORIGIN's ground elevation, not above each
-# entity's own local terrain, so over a 50 km spread anything spawned at the 500 m default that
-# lands over higher ground starts inside a hill and dies on contact. Measured with 64 loiter
-# entities and NO clients connected: at 500 m the population decays 64 -> 56 -> 52 -> 49 within
-# 90 s; at 4000 m it holds 64 indefinitely. A world that shrinks while you measure it makes the
-# baseline a function of run duration and luck -- which is exactly what a baseline must not be.
+# Spawn/loiter altitude for the pre-spawned AI (#1095). MUST leave generous margin over the terrain.
+# `test_spawn_agl_m` is now measured above each entity's OWN local terrain (#1137) rather than above
+# the origin's ground, so nothing spawns inside a hill any more -- but that alone does not keep the
+# population alive at a low altitude: the loiter AI OSCILLATES vertically. Measured with 8
+# well-separated entities at an exact 500 m clearance and NO clients: altitude swings ~1050 m down to
+# ~519 m against 506-605 m of ground, and the population still decays 8 -> 6 -> 5 within 70 s. At
+# 4000 m the trough clears the ground and the population holds. A world that shrinks while you
+# measure it makes the baseline a function of run duration and luck -- exactly what a baseline must
+# not be. Keep 4000 unless you have measured the terrain AND the oscillation under your spread.
 TEST_SPAWN_AGL_M="${FL_TEST_SPAWN_AGL_M:-4000}"
 SNAPSHOT_BUDGET="${FL_SNAPSHOT_BUDGET:-}"
 
