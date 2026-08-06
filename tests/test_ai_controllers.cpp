@@ -927,9 +927,15 @@ TEST_CASE("StateMachineController: output on transition tick is from outgoing ch
     sm.setInitialState("a");
 
     fl::EntityState s = makeState(3000.0, 600.0, 0.0);
+    // The fingerprint is what state A's controller ITSELF produces for this state, not a literal:
+    // LoiterController's throttle is a speed hold trimmed around 0.65 (#1141), so a hardcoded 0.65
+    // would be asserting the old fixed-throttle behaviour rather than "the output came from A".
+    fl::ai::LoiterController reference(glm::dvec3{0.0, 600.0, 0.0}, 3000.f, 600.f, 0.65f);
+    const float aThrottle = reference.sample(s, 0, 1.0 / 60.0).throttle;
     fl::ControlInput inp = sm.sample(s, 0, 1.0 / 60.0); // transition fires, but output is A's
     CHECK(sm.currentState() == "b");
-    CHECK(inp.throttle == Catch::Approx(0.65f).margin(1e-4f)); // A's throttle, not B's 0.7
+    CHECK(inp.throttle == Catch::Approx(aThrottle).margin(1e-4f)); // A's output, not B's 0.7
+    CHECK(inp.throttle != Catch::Approx(0.7f).margin(1e-4f));
 }
 
 // ---------------------------------------------------------------------------

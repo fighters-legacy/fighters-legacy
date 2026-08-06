@@ -25,7 +25,7 @@ class DynamicLoiterController : public fl::IEntityController {
     DynamicLoiterController(const fl::EntityManager& entityManager, fl::EntityId targetId, float radiusM = 3000.f,
                             float throttle = 0.65f, LoiterDir dir = LoiterDir::Clockwise);
 
-    fl::ControlInput sample(const fl::EntityState& state, uint64_t /*tick*/, double /*dt*/,
+    fl::ControlInput sample(const fl::EntityState& state, uint64_t /*tick*/, double dt,
                             const fl::AiTickContext& /*ctx*/ = {}) override;
 
     void setTarget(fl::EntityId id) noexcept {
@@ -36,8 +36,11 @@ class DynamicLoiterController : public fl::IEntityController {
     const fl::EntityManager& m_entityManager;
     fl::EntityId m_targetId;
     float m_radiusM;
-    float m_throttle;
+    float m_throttle;       // trim throttle; the speed hold trims around it (#1141)
+    float m_targetSpeedMps; // airspeed the orbit is flyable at, from radius + bank limit
     LoiterDir m_dir;
+    float m_prevPitchRad{0.f}; // pitch differentiated for inner-loop damping (#1141)
+    bool m_havePrevPitch{false};
 };
 
 } // namespace fl::ai

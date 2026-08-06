@@ -107,6 +107,13 @@ target_include_directories(test_autopilot PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy" ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_autopilot)
 
+# AI altitude hold (#1141): a LoiterController flown through the real integrator. Nothing asserted
+# that an AI aircraft asked to hold an altitude actually does, which is how a several-hundred-metre
+# oscillation went unnoticed until it started flying the load-spawn world into the ground.
+add_executable(test_ai_altitude_hold test_ai_altitude_hold.cpp)
+target_link_libraries(test_ai_altitude_hold PRIVATE Catch2::Catch2WithMain engine-flight engine-ai engine-entity)
+catch_discover_tests(test_ai_altitude_hold)
+
 # Client-side target designation (#696): pure snapshot cycling / filtering / best-in-cone.
 add_executable(test_target_designation test_target_designation.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/TargetDesignation.cpp")
