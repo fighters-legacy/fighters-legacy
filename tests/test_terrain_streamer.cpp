@@ -371,6 +371,60 @@ TEST_CASE("TerrainStreamer desired leaves satisfy the 2:1 edge balance") {
     }
 }
 
+// update() skips rebuilding the desired tree while the refined leaf set is unchanged (#1135) — the
+// steady state on a client and the permanent state on fl-server, which pumps a fixed position. The
+// skip is only sound while the tree it is reusing still exists, so the cases that DROP the tree are
+// the ones worth pinning: a stale "nothing changed" verdict there would leave the streamer with an
+// empty desired tree and nothing would ever load again.
+TEST_CASE("TerrainStreamer reuses the desired tree at an unchanged camera and rebuilds when dropped (#1135)") {
+    StreamerFixture fx;
+    fl::TerrainStreamer ts{worldManifest(6), *fx.assets, fx.asyncFs, nullptr};
+    pump(ts, fx.asyncFs, kPoleCam, 20);
+
+    const auto first = ts.desiredLeaves();
+    REQUIRE(!first.empty());
+
+    // desiredLeaves() comes out of an unordered_set, so compare membership, not order.
+    const auto sameContent = [](const std::vector<TileKey>& a, const std::vector<TileKey>& b) {
+        if (a.size() != b.size())
+            return false;
+        for (const TileKey& k : a) {
+            if (std::find(b.begin(), b.end(), k) == b.end())
+                return false;
+        }
+        return true;
+    };
+
+    SECTION("an unchanged camera yields an unchanged desired tree") {
+        pump(ts, fx.asyncFs, kPoleCam, 5);
+        CHECK(sameContent(ts.desiredLeaves(), first));
+    }
+
+    SECTION("moving the camera rebuilds it") {
+        // The antipode refines an entirely different part of the sphere.
+        pump(ts, fx.asyncFs, glm::dvec3{0.0, -2.0 * kR - 550.0, 0.0}, 20);
+        const auto moved = ts.desiredLeaves();
+        REQUIRE(!moved.empty());
+        CHECK_FALSE(sameContent(moved, first));
+    }
+
+    SECTION("setPlanetRadius drops the tree, and the next update at the same camera rebuilds it") {
+        ts.setPlanetRadius(600'000.0);
+        CHECK(ts.desiredLeaves().empty());
+        pump(ts, fx.asyncFs, kPoleCam, 5);
+        CHECK(!ts.desiredLeaves().empty());
+        CHECK(ts.tileCount() > 0);
+    }
+
+    SECTION("setHeightModifier drops the tree, and the next update at the same camera rebuilds it") {
+        ts.setHeightModifier([](glm::dvec3, double raw) { return raw + 100.0; });
+        CHECK(ts.desiredLeaves().empty());
+        pump(ts, fx.asyncFs, kPoleCam, 5);
+        CHECK(!ts.desiredLeaves().empty());
+        CHECK(ts.tileCount() > 0);
+    }
+}
+
 TEST_CASE("TerrainStreamer LRU eviction drops fine tiles left behind by the camera") {
     StreamerFixture fx;
     fl::TerrainStreamer ts{worldManifest(6), *fx.assets, fx.asyncFs, nullptr};

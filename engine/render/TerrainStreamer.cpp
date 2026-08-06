@@ -150,12 +150,15 @@ void TerrainStreamer::refine(const TileKey& key, glm::dvec3 camPos, std::vector<
 
 // Restricted-quadtree pass: no leaf may border a leaf more than one level coarser
 // across a shared edge. Splits the too-coarse leaf and repeats until stable.
-void TerrainStreamer::balanceLeaves(TileSet& leaves) const {
+void TerrainStreamer::balanceLeaves(TileSet& leaves) {
     bool changed = true;
     while (changed) {
         changed = false;
-        const std::vector<TileKey> snapshot(leaves.begin(), leaves.end());
-        for (const TileKey& t : snapshot) {
+        // Member scratch rather than a fresh vector per pass (#1135) — this loop runs at least
+        // twice (the last pass is the one that proves stability), so it allocated at least twice
+        // per rebuild.
+        m_balanceSnapshot.assign(leaves.begin(), leaves.end());
+        for (const TileKey& t : m_balanceSnapshot) {
             if (t.level < 2 || leaves.find(t) == leaves.end())
                 continue;
             for (int e = 0; e < 4; ++e) {
@@ -191,27 +194,49 @@ void TerrainStreamer::update(glm::dvec3 cameraWorldPos) {
     ++m_frame;
     m_updated = true;
 
-    // 1. SSE-driven desired leaves from the six face roots.
-    std::vector<TileKey> leafVec;
+    // 1. SSE-driven desired leaves from the six face roots. `m_refinedLeaves` is a member scratch
+    //    reused every frame — this ran on a freshly constructed vector before (#1135), and update()
+    //    is called once per frame on the client AND on fl-server, which drives the streamer headless
+    //    for its height queries. The growth reallocations were pure churn: allocated and freed
+    //    within the frame, 0 B net.
+    m_refinedLeaves.clear();
     for (uint8_t f = 0; f < kCubeFaceCount; ++f)
-        refine(TileKey{f, 0, 0, 0}, cameraWorldPos, leafVec);
-    TileSet leaves(leafVec.begin(), leafVec.end());
+        refine(TileKey{f, 0, 0, 0}, cameraWorldPos, m_refinedLeaves);
 
-    // 2. 2:1 edge balance (crack rule).
-    balanceLeaves(leaves);
+    // 2+3. The desired tree is a pure function of the refined leaf set: balanceLeaves() and the
+    //      ancestor walk read nothing else. refine() is a deterministic DFS over the six roots, so
+    //      an unchanged leaf set arrives in an unchanged order and a plain vector compare settles
+    //      it. Skipping the rebuild is what removes the per-frame allocation rather than merely
+    //      moving it: an unordered_set frees every NODE on clear() and allocates them again on
+    //      refill, so reusing the container alone would only ever have saved the bucket array.
+    //
+    //      This is the steady state, not an edge case. The camera moves a few metres per frame at
+    //      60 Hz while a level-10 tile spans ~10 km, and fl-server pumps the same position over and
+    //      over — there the set effectively never changes after startup.
+    if (m_refinedLeaves != m_lastRefinedLeaves) {
+        m_scratchLeaves.clear();
+        m_scratchLeaves.insert(m_refinedLeaves.begin(), m_refinedLeaves.end());
 
-    // 3. Desired tree = leaves plus every ancestor (coarse fallbacks + walk chain).
-    m_desiredLeaves = std::move(leaves);
-    m_desiredAll.clear();
-    for (const TileKey& leaf : m_desiredLeaves) {
-        TileKey k = leaf;
-        while (true) {
-            if (!m_desiredAll.insert(k).second)
-                break; // ancestors above already inserted via another leaf
-            if (k.level == 0)
-                break;
-            k = parent(k);
+        // 2. 2:1 edge balance (crack rule).
+        balanceLeaves(m_scratchLeaves);
+
+        // 3. Desired tree = leaves plus every ancestor (coarse fallbacks + walk chain).
+        //    swap, not move-assign: a moved-from set surrenders its buckets, which is the
+        //    allocation this is avoiding. After the swap m_scratchLeaves holds the previous tree,
+        //    cleared above on the next rebuild.
+        m_desiredLeaves.swap(m_scratchLeaves);
+        m_desiredAll.clear();
+        for (const TileKey& leaf : m_desiredLeaves) {
+            TileKey k = leaf;
+            while (true) {
+                if (!m_desiredAll.insert(k).second)
+                    break; // ancestors above already inserted via another leaf
+                if (k.level == 0)
+                    break;
+                k = parent(k);
+            }
         }
+        m_lastRefinedLeaves = m_refinedLeaves; // assignment reuses the existing capacity
     }
 
     // 4. Touch resident desired tiles; queue loads for missing ones. Missing tiles are
@@ -219,7 +244,7 @@ void TerrainStreamer::update(glm::dvec3 cameraWorldPos) {
     //    ancestors load before detail, and the camera's covering chain (which
     //    heightReadyAt walks) becomes Ready within the first few pumps instead of
     //    waiting behind far-side tiles.
-    std::vector<std::pair<double, TileKey>> missing;
+    m_missingTiles.clear();
     for (const TileKey& k : m_desiredAll) {
         auto it = m_tiles.find(k);
         if (it != m_tiles.end()) {
@@ -228,26 +253,26 @@ void TerrainStreamer::update(glm::dvec3 cameraWorldPos) {
         }
         const glm::dvec3 centre = tileToWorld(k, 0.5, 0.5, 0.0, m_planetRadiusM);
         const glm::dvec3 dvec = cameraWorldPos - centre;
-        missing.emplace_back(glm::dot(dvec, dvec), k);
+        m_missingTiles.emplace_back(glm::dot(dvec, dvec), k);
     }
-    std::sort(missing.begin(), missing.end(), [](const auto& a, const auto& b) {
+    std::sort(m_missingTiles.begin(), m_missingTiles.end(), [](const auto& a, const auto& b) {
         if (a.second.level != b.second.level)
             return a.second.level < b.second.level;
         return a.first < b.first;
     });
     int proceduralCount = 0;
-    for (const auto& [d2, k] : missing)
+    for (const auto& [d2, k] : m_missingTiles)
         loadTile(k, proceduralCount);
 
     // 5. LRU eviction: tiles outside the desired tree are cached until the residency
     //    cap, then evicted least-recently-desired first.
     if (m_tiles.size() > m_maxResidentTiles) {
-        std::vector<std::pair<uint64_t, TileKey>> evictable;
+        m_evictable.clear();
         for (const auto& [key, tile] : m_tiles) {
             if (m_desiredAll.find(key) == m_desiredAll.end())
-                evictable.emplace_back(tile.lastDesiredFrame, key);
+                m_evictable.emplace_back(tile.lastDesiredFrame, key);
         }
-        std::sort(evictable.begin(), evictable.end(), [](const auto& a, const auto& b) {
+        std::sort(m_evictable.begin(), m_evictable.end(), [](const auto& a, const auto& b) {
             if (a.first != b.first)
                 return a.first < b.first;
             // Equal last-desired frame: evict deeper tiles first, so a covering chain
@@ -255,7 +280,7 @@ void TerrainStreamer::update(glm::dvec3 cameraWorldPos) {
             // (deepestReadyTile walks the chain contiguously from the root).
             return a.second.level > b.second.level;
         });
-        for (const auto& [frame, key] : evictable) {
+        for (const auto& [frame, key] : m_evictable) {
             if (m_tiles.size() <= m_maxResidentTiles)
                 break;
             evictTile(key);
@@ -765,6 +790,9 @@ void TerrainStreamer::setPlanetRadius(double radius_m) {
     m_tiles.clear();
     m_desiredLeaves.clear();
     m_desiredAll.clear();
+    // The desired tree is gone, so the rebuild-skip cache must go with it (#1135) — otherwise the
+    // next update() at an unchanged camera position would compare equal and leave it empty.
+    m_lastRefinedLeaves.clear();
     m_planetRadiusM = radius_m;
 }
 
@@ -785,6 +813,7 @@ void TerrainStreamer::setHeightModifier(HeightModifier pointFn, HeightModifierRe
     m_tiles.clear();
     m_desiredLeaves.clear();
     m_desiredAll.clear();
+    m_lastRefinedLeaves.clear(); // see setPlanetRadius (#1135)
     m_heightModifier = std::move(pointFn);
     m_heightModifierRegion = std::move(regionFn);
 }
