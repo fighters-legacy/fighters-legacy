@@ -140,9 +140,16 @@ chmod +x .git/hooks/commit-msg
 
 ## Code Coverage
 
-New code added in PRs should aim for ≥70% test coverage. Codecov posts an automated comment on
-every PR showing the coverage delta for changed files. Coverage is measured in CI automatically —
-no local setup required.
+New code added in PRs should aim for ≥70% test coverage. The `Coverage` workflow builds an
+instrumented tree and runs the full suite on every pull request, so coverage is measured in CI
+automatically — no local setup required. Codecov posts a comment showing the delta for the files
+you changed, and the run's job summary carries the measured `engine/` percentages against the
+gates (branch ≥ 80%, line ≥ 70%) plus the lowest-covered files when one is missed.
+
+The coverage run is **advisory**: it is not a required check, so a red one does not block a merge.
+Read it, and either add the tests or say in the PR why the drop is right. If it fails without a
+number — the message says "no coverage number was produced" — that is a broken measurement, not a
+verdict on your change; please flag it rather than working around it.
 
 The project targets meaningful coverage on logic-bearing code. Trivial getters, generated code,
 and platform-specific HAL shims are excluded from the threshold.

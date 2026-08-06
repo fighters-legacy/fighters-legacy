@@ -233,7 +233,7 @@ The `debug`, `release`, `debug-msvc` and `release-msvc` test presets set `execut
 
 Two presets stay **serial**, deliberately:
 
-- **`coverage`** — concurrent test processes writing the same `.gcda` counter files is a known way to corrupt coverage data, and the coverage leg is a post-merge metric, not a gate, so its wall-clock does not matter.
+- **`coverage`** — concurrent test processes writing the same `.gcda` counter files is a known way to corrupt coverage data, and the coverage leg is advisory rather than a required check, so its wall-clock does not hold up a merge.
 - **`tsan`** — see the warning above; it is not run through ctest at all.
 
 Because each `TEST_CASE` is registered as its own ctest test, parallel runs execute them as **concurrent processes**. A test may therefore not assume it is the only process on the machine (#787):
@@ -254,12 +254,19 @@ For running the test suite see [Building → Running tests](#running-tests).
 
 ### Code coverage
 
-CI enforces the following gates on every push and pull request:
+The `Coverage` workflow runs on every pull request and on every push to `main`, and applies these
+gates:
 
 | Scope | Metric | Threshold |
 |---|---|---|
 | `engine/` | Branch coverage | ≥ 80% (CI enforced) |
 | `engine/` | Line coverage | ≥ 70% (CI enforced) |
+
+It is **advisory** — it is not a required check, so a red coverage run does not block a merge; it
+tells a reviewer that the change lowered coverage. On `main` its verdict is carried by an
+automatically opened tracking issue that closes itself on the next green run, because a workflow
+that only reports through a red X in the Actions list can stay broken unnoticed. It did, for three
+weeks (#1128).
 
 `platform/` backends, `tools/`, and `game/` are excluded from coverage reporting. Branch
 coverage catches untested conditional paths and is the primary gate; line coverage is a
@@ -271,8 +278,25 @@ Gates use `--exclude-throw-branches` (gcovr 8.x): GCC instruments every non-`noe
 call site with an "exception throw" branch that is never taken in normal unit tests.
 Excluding these focuses the gate on meaningful decision branches (if/else, switch).
 
-An HTML coverage report is uploaded as a CI artifact on every run (retained 30 days).
-Access it from **Actions** → select a run → **Artifacts → coverage-report**.
+**A coverage failure always says which kind it is.** `tools/coverage_gate.py` runs `gcovr` once and
+distinguishes three outcomes, because conflating the last two is what hid a three-week outage
+(#1128) behind a step named after the threshold:
+
+| Exit | Meaning | What the message contains |
+|---|---|---|
+| 0 | Pass | The measured percentages and the thresholds they cleared |
+| 1 | Below threshold | The measured percentage, the limit, and the lowest-covered files |
+| 2 | **Not measured** | Why no number exists — and deliberately no percentage at all |
+
+"Not measured" covers a `gcovr` parse abort, a missing or unparseable summary, filters that matched
+nothing (`gcovr` reports that as 0.0% and exits 0), and a zero denominator. Each of those can
+produce a plausible-looking number that means nothing, so none of them is allowed to reach a
+threshold verdict.
+
+An HTML coverage report is uploaded as a CI artifact on every run (retained 30 days), alongside the
+machine-readable `coverage-summary.json` the gate ran against. Access them from **Actions** → select
+a run → **Artifacts**. Codecov is uploaded *before* the gate runs, so the numbers are available for
+exactly the run that failed.
 
 **Running coverage locally (Linux/macOS — requires GCC or Clang):**
 
@@ -289,16 +313,17 @@ lcov --remove coverage.raw '/usr/*' '*/tests/*' '*/vendor/*' '*/_deps/*' \
      --output-file coverage.info \
      --branch-coverage --ignore-errors empty,unused,source,gcov
 
-# Check gates (requires: pip install gcovr)
-gcovr --filter 'engine/' --exclude-throw-branches --fail-under-branch 80 --print-summary
-gcovr --filter 'engine/' --exclude-throw-branches --fail-under-line 70 --print-summary
+# Check the gates exactly as CI does (requires: pip install gcovr)
+python3 tools/coverage_gate.py --filter 'engine/' --gcov-exclude '.*/_deps/.*' \
+    --exclude-throw-branches --min-branch 80 --min-line 70
 
 # Generate HTML report
 genhtml coverage.info --output-directory coverage-report --branch-coverage
 # Open coverage-report/index.html
 ```
 
-Codecov also posts a PR coverage delta comment automatically.
+Codecov posts a coverage delta comment on each pull request, comparing against `main`'s most recent
+run.
 
 ---
 
@@ -557,7 +582,7 @@ build job.
 | Workflow | Trigger | What it is |
 |---|---|---|
 | `ci.yml` | every PR + push | The three-platform build/test matrix, the install-set assertion, the Python tool unit tests + GDAL smokes, and the fuzz chain below. |
-| `coverage.yml` | push to main only | Coverage trends are a post-merge metric, not a PR gate. |
+| `coverage.yml` | PR + push to main | The `engine/` coverage gates and the Codecov upload. Advisory (not a required check); a failing run on `main` opens a self-closing tracking issue. |
 | `asan.yml` | PR | ASan + UBSan. |
 | `tsan.yml` | PR | ThreadSanitizer, **Ubuntu only** (no MSVC support). Scoped to the data-parallel sim targets (`test_job_system`, `test_world_broadcaster`) which link no SDL3/OpenAL/ENet/Vulkan; `tools/tsan.supp` suppresses third-party threads. |
 | `scale-gate.yml` | PR + nightly | See below. |
