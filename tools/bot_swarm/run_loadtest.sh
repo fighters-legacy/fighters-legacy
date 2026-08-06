@@ -62,6 +62,14 @@ METRICS="$WORKDIR/server_tick.json"
 # All default to "off"/unset so a normal run is byte-identical to before.
 TEST_SPAWN_AI="${FL_TEST_SPAWN_AI:-0}"
 TEST_SPAWN_SPREAD_KM="${FL_TEST_SPAWN_SPREAD_KM:-50}"
+# Spawn/loiter altitude for the pre-spawned AI (#1095). MUST clear the terrain across the whole
+# spread: `test_spawn_agl_m` is measured above the ORIGIN's ground elevation, not above each
+# entity's own local terrain, so over a 50 km spread anything spawned at the 500 m default that
+# lands over higher ground starts inside a hill and dies on contact. Measured with 64 loiter
+# entities and NO clients connected: at 500 m the population decays 64 -> 56 -> 52 -> 49 within
+# 90 s; at 4000 m it holds 64 indefinitely. A world that shrinks while you measure it makes the
+# baseline a function of run duration and luck -- which is exactly what a baseline must not be.
+TEST_SPAWN_AGL_M="${FL_TEST_SPAWN_AGL_M:-4000}"
 SNAPSHOT_BUDGET="${FL_SNAPSHOT_BUDGET:-}"
 
 # #580 knobs: FL_TEST_SPAWN_MIX = weighted controller mix for the pre-spawned entities
@@ -113,6 +121,7 @@ overrun_governor_enabled = $GOVERNOR_ENABLED
 # Entity-scale load-spawn (#573). 0 = disabled (normal run).
 test_spawn_ai_count = $TEST_SPAWN_AI
 test_spawn_spread_km = $TEST_SPAWN_SPREAD_KM
+test_spawn_agl_m = $TEST_SPAWN_AGL_M
 EOF
 # Only emit snapshot_budget_bytes when explicitly requested (else keep the server default).
 if [[ -n "$SNAPSHOT_BUDGET" ]]; then
@@ -143,7 +152,7 @@ if [[ -n "${FL_SIM_WORKER_THREADS:-}" ]]; then
 fi
 
 echo "=== bot_swarm load test: $CLIENTS clients, pattern=$PATTERN, ${DURATION}s, port $PORT" \
-     "(test_spawn_ai=$TEST_SPAWN_AI mix=${TEST_SPAWN_MIX:-loiter} churn=${TEST_PROJECTILE_RATE:-0}/s" \
+     "(test_spawn_ai=$TEST_SPAWN_AI@${TEST_SPAWN_AGL_M}m mix=${TEST_SPAWN_MIX:-loiter} churn=${TEST_PROJECTILE_RATE:-0}/s" \
      "sim_workers=${FL_SIM_WORKER_THREADS:-default} governor=$GOVERNOR_ENABLED transport=$TRANSPORT" \
      "compression=$COMPRESSION_ENABLED) ==="
 # Both ends are pinned to the SAME transport explicitly, overriding the [network].transport default:

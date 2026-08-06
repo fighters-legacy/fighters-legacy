@@ -15,10 +15,13 @@
 // rather than an enet6 fallback. schema_version = 4 adds "rss_series" (a periodic RSS time
 // series) + the slope-based leak assert (#789) — one end-of-run RSS sample cannot tell a
 // 128-client working set held flat from a slow leak that stayed under the bound; the trend can.
+// schema_version = 5 adds "rss_step_max_kb"/"rss_step_at_s" and makes the tail slope robust to a
+// step (#1095) — see rssSlopeKbPerMin below for why a plain least-squares fit is not.
 
 #include "NetStats.h"
 #include "SwarmConfig.h"
 #include "perf/ServerTickReport.h"
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <optional>
@@ -27,7 +30,7 @@
 
 namespace fl {
 
-constexpr int kSwarmReportSchemaVersion = 4;
+constexpr int kSwarmReportSchemaVersion = 5;
 
 // One periodic RSS reading over the run: wall-seconds from measurement start + server RSS in KB.
 struct RssSample {
@@ -40,18 +43,16 @@ struct RssSample {
 // plateau; only the tail is the "still growing?" signal. Default: the final half.
 constexpr double kRssSlopeTailFraction = 0.5;
 
-// Least-squares RSS growth rate (KB/min) over the final `tailFraction` of the series. Returns
-// nullopt when the tail has fewer than two distinct-time points (cannot fit a line) — the caller
-// treats that as "not evaluable", distinct from a genuine flat (0 KB/min) fit. Positive = growing.
-inline std::optional<double> rssSlopeKbPerMin(const std::vector<RssSample>& series, double tailFraction) {
-    if (series.size() < 2)
-        return std::nullopt;
-    const double firstT = series.front().tS;
-    const double lastT = series.back().tS;
-    if (lastT <= firstT)
-        return std::nullopt;
-    const double tailStart = lastT - (lastT - firstT) * tailFraction;
+// Buckets the tail is split into for the robust slope below, and the sample density a tail needs
+// before bucketing is used at all. A single step can spoil at most ONE bucket, so a median over
+// >= 3 survives it; 6 keeps each bucket long enough to average out RSS jitter while leaving a
+// comfortable majority of buckets clean.
+constexpr int kRssSlopeBuckets = 6;
+constexpr int kRssSlopeMinSamplesPerBucket = 4;
 
+// Least-squares RSS growth rate (KB/min) over [tailStart, end] of the series. Returns nullopt when
+// that window has fewer than two distinct-time points.
+inline std::optional<double> rssOlsKbPerMin(const std::vector<RssSample>& series, double tailStart) {
     double n = 0.0, sx = 0.0, sy = 0.0, sxx = 0.0, sxy = 0.0;
     for (const auto& s : series) {
         if (s.tS < tailStart)
@@ -71,6 +72,123 @@ inline std::optional<double> rssSlopeKbPerMin(const std::vector<RssSample>& seri
         return std::nullopt;                                // all tail samples share one timestamp
     const double slopePerSec = (n * sxy - sx * sy) / denom; // KB/s
     return slopePerSec * 60.0;                              // KB/min
+}
+
+// RSS growth rate (KB/min) over the final `tailFraction` of the series. Returns nullopt when the
+// tail cannot be fitted at all — the caller treats that as "not evaluable", distinct from a genuine
+// flat (0 KB/min) fit. Positive = growing.
+//
+// ⚠ This is deliberately NOT a plain least-squares fit over the tail. A server that plateaus, takes
+// ONE discrete allocation (an arena block, a buffer that doubles), then plateaus again is not
+// leaking — but a straight line through that step reports the step height smeared over the window as
+// though it were a sustained rate. That is not hypothetical: the 2 h soak on #1095 held flat at
+// 85.7 MB, stepped +6.1 MB once, held flat at 93.3 MB for the final 29 min (0.4 MB of drift), and
+// the old fit called it 190.7 KB/min against a 128 KB/min gate — a fabricated leak. Theil-Sen does
+// not help either: with the step near mid-window the straddling pairs are the MAJORITY, so the
+// median lands on one of them.
+//
+// So: split the tail into `kRssSlopeBuckets` equal time buckets, take each bucket's AVERAGE rate
+// from its boundary samples, and report the MEDIAN of those. One step lands wholly inside one
+// bucket and the median ignores it, while a genuine leak — or a RECURRING staircase, which IS a
+// leak — moves every bucket and is reported at its true rate.
+//
+// The rate is deliberately taken from the bucket's endpoints rather than a per-bucket least-squares
+// fit. A within-bucket fit aliases: a staircase whose period matches the bucket width and whose
+// steps land on the boundaries is FLAT inside every bucket, so a median of fitted slopes calls a
+// real 205 KB/min leak 0.0 KB/min. Endpoint deltas cannot lose a step — whatever happens between
+// two boundaries is charged to that bucket. Checked against the real #1095 series plus synthetic
+// flat / one-step / two-step / sustained / staircase (aligned, offset and half-period) / jittered
+// cases: endpoint-median is correct on all of them, fitted-median is not.
+//
+// Short runs whose tail cannot give every bucket `kRssSlopeMinSamplesPerBucket` samples fall back to
+// the plain whole-tail fit, which is what they have always done.
+inline std::optional<double> rssSlopeKbPerMin(const std::vector<RssSample>& series, double tailFraction) {
+    if (series.size() < 2)
+        return std::nullopt;
+    const double firstT = series.front().tS;
+    const double lastT = series.back().tS;
+    if (lastT <= firstT)
+        return std::nullopt;
+    const double tailStart = lastT - (lastT - firstT) * tailFraction;
+
+    std::size_t tailCount = 0;
+    for (const auto& s : series)
+        if (s.tS >= tailStart)
+            ++tailCount;
+    if (tailCount < static_cast<std::size_t>(kRssSlopeBuckets) * kRssSlopeMinSamplesPerBucket)
+        return rssOlsKbPerMin(series, tailStart);
+
+    const double bucketS = (lastT - tailStart) / kRssSlopeBuckets;
+    if (!(bucketS > 0.0))
+        return rssOlsKbPerMin(series, tailStart);
+
+    // The tail's first sample is the opening boundary; each bucket then closes on its last sample.
+    const RssSample* prev = nullptr;
+    for (const auto& s : series) {
+        if (s.tS >= tailStart) {
+            prev = &s;
+            break;
+        }
+    }
+    if (prev == nullptr)
+        return rssOlsKbPerMin(series, tailStart);
+
+    std::vector<double> rates;
+    rates.reserve(kRssSlopeBuckets);
+    for (int b = 0; b < kRssSlopeBuckets; ++b) {
+        const double lo = tailStart + bucketS * b;
+        // The last bucket takes the final sample; earlier ones are half-open so none is counted twice.
+        const double hi = (b == kRssSlopeBuckets - 1) ? lastT : lo + bucketS;
+
+        const RssSample* last = nullptr;
+        for (const auto& s : series) {
+            if (s.tS < lo)
+                continue;
+            if (b == kRssSlopeBuckets - 1 ? s.tS > hi : s.tS >= hi)
+                break;
+            last = &s;
+        }
+        if (last == nullptr || last->tS <= prev->tS)
+            continue; // empty bucket — its growth is charged to the next one that closes
+        rates.push_back(static_cast<double>(last->rssKb - prev->rssKb) / ((last->tS - prev->tS) / 60.0));
+        prev = last;
+    }
+
+    // Too few closed buckets to take a meaningful median — fall back rather than invent a number.
+    if (rates.size() < 3)
+        return rssOlsKbPerMin(series, tailStart);
+
+    std::sort(rates.begin(), rates.end());
+    const std::size_t mid = rates.size() / 2;
+    return (rates.size() % 2 == 1) ? rates[mid] : (rates[mid - 1] + rates[mid]) / 2.0;
+}
+
+// The largest single-sample RSS JUMP within the same tail window, and when it happened. The robust
+// slope above deliberately ignores an isolated step; reporting it here keeps it visible instead of
+// silently eaten, so a 6 MB one-off is still something a human sees and can go attribute.
+struct RssStep {
+    int64_t deltaKb{0};
+    double atS{0.0};
+};
+
+inline std::optional<RssStep> rssMaxStep(const std::vector<RssSample>& series, double tailFraction) {
+    if (series.size() < 2)
+        return std::nullopt;
+    const double firstT = series.front().tS;
+    const double lastT = series.back().tS;
+    if (lastT <= firstT)
+        return std::nullopt;
+    const double tailStart = lastT - (lastT - firstT) * tailFraction;
+
+    std::optional<RssStep> best;
+    for (std::size_t i = 1; i < series.size(); ++i) {
+        if (series[i].tS < tailStart)
+            continue;
+        const int64_t delta = series[i].rssKb - series[i - 1].rssKb;
+        if (delta > 0 && (!best || delta > best->deltaKb))
+            best = RssStep{delta, series[i].tS};
+    }
+    return best;
 }
 
 // Written by one worker thread; read after the run.
@@ -138,6 +256,9 @@ struct SwarmReport {
     // present only when the tail had enough points to fit; nullopt = not evaluable (too few samples).
     std::vector<RssSample> rssSeries;
     std::optional<double> rssSlopeKbPerMin;
+    // The largest single-sample jump in the same tail window (#1095). The slope ignores an isolated
+    // step by design, so this is what keeps it visible; nullopt = no upward step in the tail.
+    std::optional<RssStep> rssMaxStep;
 
     // Authoritative server-side tick budget (from fl-server --metrics-json), when available.
     bool hasServer{false};
@@ -178,6 +299,7 @@ inline SwarmReport buildReport(const SwarmConfig& cfg, const std::vector<ClientM
     }
     r.rssSeries = std::move(rssSeries);
     r.rssSlopeKbPerMin = rssSlopeKbPerMin(r.rssSeries, kRssSlopeTailFraction);
+    r.rssMaxStep = rssMaxStep(r.rssSeries, kRssSlopeTailFraction);
 
     std::vector<double> kbs, rtt, connect, tick;
     uint64_t totalSnapshotBytes = 0;
@@ -288,10 +410,14 @@ inline void printReport(const SwarmReport& r) {
     if (r.hasServer && (r.assertCongestionEngagedHz > 0.0 || r.assertCongestionRecoveredHz > 0.0))
         std::printf("congestion: min send %.1f Hz, recovered to %.1f Hz, max loss %.3f\n", r.server.congestionMinSendHz,
                     r.server.congestionRecoveredSendHz, r.server.congestionMaxLoss);
-    if (!r.rssSeries.empty())
-        std::printf("RSS series: %zu samples, tail slope %s KB/min (final %.0f%% of run)\n", r.rssSeries.size(),
-                    r.rssSlopeKbPerMin ? std::to_string(*r.rssSlopeKbPerMin).c_str() : "n/a",
-                    kRssSlopeTailFraction * 100.0);
+    if (!r.rssSeries.empty()) {
+        std::printf("RSS series: %zu samples, tail slope %s KB/min (median of %d buckets over the final %.0f%%)\n",
+                    r.rssSeries.size(), r.rssSlopeKbPerMin ? std::to_string(*r.rssSlopeKbPerMin).c_str() : "n/a",
+                    kRssSlopeBuckets, kRssSlopeTailFraction * 100.0);
+        if (r.rssMaxStep)
+            std::printf("RSS largest tail step: %+.1f MB at t=%.0fs (excluded from the slope by design)\n",
+                        static_cast<double>(r.rssMaxStep->deltaKb) / 1024.0, r.rssMaxStep->atS);
+    }
     if (r.assertMinTickHz > 0.0 || r.assertMaxKbs > 0.0 || r.assertMaxTickMs > 0.0 || r.assertMinEntities > 0 ||
         r.assertMaxRssGrowthKb > 0 || r.assertMaxRssSlopeKbPerMin > 0.0 || r.assertMaxLoadFactor >= 0.0 ||
         r.assertMaxDroppedTicks >= 0 || r.assertCongestionEngagedHz > 0.0 || r.assertCongestionRecoveredHz > 0.0)
@@ -350,6 +476,13 @@ inline std::string reportToJson(const SwarmReport& r) {
             std::snprintf(sb, sizeof(sb), "  \"rss_slope_kb_per_min\": %.3f,\n", *r.rssSlopeKbPerMin);
         else
             std::snprintf(sb, sizeof(sb), "  \"rss_slope_kb_per_min\": null,\n");
+        out += sb;
+        // The step the slope deliberately ignores (#1095) — reported so it is never silently eaten.
+        if (r.rssMaxStep)
+            std::snprintf(sb, sizeof(sb), "  \"rss_step_max_kb\": %lld, \"rss_step_at_s\": %.1f,\n",
+                          static_cast<long long>(r.rssMaxStep->deltaKb), r.rssMaxStep->atS);
+        else
+            std::snprintf(sb, sizeof(sb), "  \"rss_step_max_kb\": null, \"rss_step_at_s\": null,\n");
         out += sb;
     }
     char tail[1024];

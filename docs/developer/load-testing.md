@@ -85,9 +85,9 @@ One end-of-run RSS sample cannot distinguish a 128-client working set that fille
 held flat (healthy) from a slow leak that grew all run but stayed under the endpoint bound — both
 land on the same final number. So `bot_swarm` also samples the server's RSS **periodically** (every
 `--rss-sample-interval-s`, default 30 s → 240 points over a 2 h soak) into a `rss_series` array in
-the report (schema_version `4`), and fits a least-squares line over the run's **tail** (the final
-half, past the connect ramp + working-set fill where RSS legitimately climbs to its plateau). The
-fitted growth rate is reported as `rss_slope_kb_per_min`.
+the report (schema_version `5`), and measures the growth rate over the run's **tail** (the final
+half, past the connect ramp + working-set fill where RSS legitimately climbs to its plateau). That
+rate is reported as `rss_slope_kb_per_min`.
 
 `--assert-max-rss-slope-kb-per-min X` fails the run if that sustained tail growth exceeds `X` KB/min.
 A flat tail is the real "no leak" signal; the endpoint bound (`--assert-max-rss-growth-kb`) stays as
@@ -96,6 +96,35 @@ the coarse backstop. Both need `--server-metrics`. The `soak` profile sets
 the plateau is now a falsifiable claim, not just "it ended under the bound". A series too short to
 fit reports `rss_slope_kb_per_min: null` and, if the assert is enabled, fails (an unevaluable gate is
 not a passed gate).
+
+#### Why the rate is a bucket median, not a least-squares fit (#1095)
+
+A server that plateaus, takes **one** discrete allocation (an arena block, a buffer that doubles),
+then plateaus again is not leaking. A straight line through that step smears the step height across
+the whole window and reports it as a sustained rate. That is not hypothetical: the 2 h soak on #1095
+held flat at 85.7 MB, stepped +6.1 MB once, then held flat at 93.3 MB for the final 29 minutes
+(0.4 MB of drift) — and the least-squares fit called it **190.7 KB/min against a 128 KB/min gate**.
+A fabricated leak is worse than no gate, because someone will go hunting for it.
+
+So the tail is split into `kRssSlopeBuckets` (6) equal time buckets, each bucket's average rate is
+taken **from its boundary samples**, and the reported figure is the **median** of those rates. An
+isolated step lands wholly inside one bucket and the median ignores it; a genuine leak — or a
+*recurring* staircase, which is a real leak — moves every bucket and is reported at its true rate.
+
+The endpoint deltas matter: a per-bucket least-squares fit **aliases**. A staircase whose period
+matches the bucket width and whose steps land on the boundaries is flat *inside* every bucket, so a
+median of fitted slopes reports `0.0` for a real 205 KB/min leak. Endpoint deltas cannot lose a step
+— whatever happens between two boundaries is charged to that bucket. Both estimators are covered by
+`tests/test_bot_swarm.cpp` against flat / one-step / two-step / sustained / staircase (aligned,
+offset, half-period) / jittered series.
+
+Tails too sparse to give every bucket `kRssSlopeMinSamplesPerBucket` (4) samples fall back to the
+plain whole-tail fit, so short runs behave exactly as they always have.
+
+Because the slope ignores an isolated step by design, the step itself is **reported** rather than
+silently eaten: `rss_step_max_kb` / `rss_step_at_s` carry the largest single-sample jump in the tail
+and when it happened, and `scale_gate.py` appends it to the check line. A multi-MB one-off is still
+something a human should go attribute — it just isn't a growth *rate*.
 
 ## Scale-gate targets
 
@@ -253,6 +282,15 @@ bites. There is no `taskset` dependency: entity-count overload is portable acros
 structures (the `EntityManager` pool + `SpatialIndex`) at **thousands** of entities, the server has a
 load-spawn affordance — `[world] test_spawn_ai_count = N` pre-spawns N cheap loiter-AI entities over
 `test_spawn_spread_km` at `test_spawn_agl_m`. **A testing affordance, not a capacity guarantee.**
+
+> ⚠ **`test_spawn_agl_m` is measured above the ORIGIN's ground elevation, not above each entity's own
+> local terrain.** Spread over 50 km, anything spawned at the old 500 m runner default that lands over
+> higher ground starts *inside* a hill and dies on contact. Measured with 64 loiter entities and **no
+> clients connected**: the population decayed 64 → 56 → 52 → 49 within 90 s at 500 m, and held a flat
+> 64 at 4000 m. A world that shrinks while you measure it makes every number a function of run
+> duration and luck — it was worth ±13% on the `idle` baseline, and over a 2 h soak it would drain the
+> world the sensor-loaded profiles exist to populate. `run_loadtest.sh` therefore defaults
+> `FL_TEST_SPAWN_AGL_M=4000`; override it only if you know the terrain under your spread.
 
 The runner exposes it (and the worker sweep) via env, so you can sweep entity count × worker count and
 read the authoritative `server_tick` per-phase budget:

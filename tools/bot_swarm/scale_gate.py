@@ -294,6 +294,11 @@ def evaluate_report(report, profile, strict):
         else:
             ok = slope <= profile["assert_max_rss_slope_kb_per_min"]
             detail = f"{slope:.2f} <= {profile['assert_max_rss_slope_kb_per_min']:.2f} KB/min tail slope"
+            # The slope deliberately ignores ONE isolated step (#1095), so name the step here rather
+            # than let a multi-MB allocation vanish behind a passing number.
+            step_kb = report.get("rss_step_max_kb")
+            if step_kb:
+                detail += f" (largest tail step {step_kb / 1024:.1f} MB at t={report.get('rss_step_at_s', 0):.0f}s)"
         checks.append({
             "name": "rss_slope_kb_per_min",
             "ok": ok,
@@ -610,7 +615,14 @@ def main(argv=None):
     for idx, run in enumerate(runs):
         pattern, label = run["pattern"], run["label"]
         # Distinct port per run dodges the UDP rebind race between back-to-back servers.
-        port = base_port + idx
+        #
+        # STRIDE OF 2, not 1: fl-server also binds a server-query responder, and an unconfigured
+        # query port is derived as GAME PORT + 1 (server/fl-server/main.cpp). With a stride of 1,
+        # run n+1's game port IS run n's query port, so the second pattern of every multi-pattern
+        # profile raced the previous server's still-open query socket and died with
+        # "bind failed: CreateListenSocketIP failed" — which the gate reports as `no report (exit 1)`,
+        # not as a port clash. It cost the `reference` profile its `weave` leg every run.
+        port = base_port + idx * 2
         report_path = RESULTS_DIR / f"loadtest_{profile['clients']}c_{label}_{args.profile}.json"
         code, report_path = run_pattern(args.build_dir, profile["clients"], profile["duration_s"],
                                         pattern, flags + run["flags"], runner, port, report_path,
