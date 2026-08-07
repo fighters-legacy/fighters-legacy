@@ -26,6 +26,11 @@ target_link_libraries(test_mesh_articulation PRIVATE Catch2::Catch2WithMain engi
 target_include_directories(test_mesh_articulation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_mesh_articulation)
 
+add_executable(test_mesh_articulation_paths test_mesh_articulation_paths.cpp)
+target_link_libraries(test_mesh_articulation_paths PRIVATE Catch2::Catch2WithMain engine-render)
+target_include_directories(test_mesh_articulation_paths PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_mesh_articulation_paths)
+
 add_executable(test_window test_window.cpp)
 target_link_libraries(test_window PRIVATE Catch2::Catch2WithMain platform-hal)
 target_include_directories(test_window PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
