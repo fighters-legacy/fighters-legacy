@@ -151,6 +151,13 @@ Read it, and either add the tests or say in the PR why the drop is right. If it 
 number — the message says "no coverage number was produced" — that is a broken measurement, not a
 verdict on your change; please flag it rather than working around it.
 
+> **The `engine/` branch gate is currently failing, and it is not your PR.** Branch coverage is
+> 75.09% against the 80% threshold. The gate spent five weeks unable to measure anything (#1128),
+> and most of the engine was written in that window; the shortfall and where it lives are tracked in
+> **#1145**. The threshold is deliberately staying at 80 rather than being moved down to meet it, so
+> expect this check to be red until #1145 closes. Judge your own change by the Codecov delta on the
+> files you touched.
+
 The project targets meaningful coverage on logic-bearing code. Trivial getters, generated code,
 and platform-specific HAL shims are excluded from the threshold.
 

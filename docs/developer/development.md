@@ -268,6 +268,12 @@ automatically opened tracking issue that closes itself on the next green run, be
 that only reports through a red X in the Actions list can stay broken unnoticed. It did, for three
 weeks (#1128).
 
+⚠ **`engine/` branch coverage is 75.09% today, so the branch gate fails.** That is the first real
+measurement since 2026-06-29, and the engine grew from 21.7k to 74.3k lines while the gate could not
+measure anything — the new code arrived below the bar. The threshold stays at 80: the shortfall is
+tracked as debt in **#1145**, with the per-subsystem breakdown, rather than absorbed by moving the
+number. Until it closes, judge a change by its Codecov delta rather than by the gate's colour.
+
 `platform/` backends, `tools/`, and `game/` are excluded from coverage reporting. Branch
 coverage catches untested conditional paths and is the primary gate; line coverage is a
 secondary floor. `platform/` is excluded because platform divergence makes unit testing
