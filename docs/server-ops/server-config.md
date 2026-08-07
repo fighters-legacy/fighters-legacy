@@ -100,7 +100,7 @@ time_scale         = 10.0        # game seconds per real second; 10 = full day/n
 # --- load-test affordance (#573); A TESTING AFFORDANCE, NOT A CAPACITY GUARANTEE; leave at 0 normally ---
 # test_spawn_ai_count     = 0        # pre-spawn N server-side AI entities at startup; [0, 1000000]; restart
 # test_spawn_spread_km    = 50.0     # phyllotaxis spread radius (km); [0, 100000]; restart
-# test_spawn_agl_m        = 500.0    # spawn/loiter altitude above origin ground (m); [0, 50000]; restart
+# test_spawn_agl_m        = 500.0    # spawn/loiter altitude above LOCAL ground (m); [0, 50000]; restart
 # test_spawn_ai_mix       = ""       # weighted controller mix, e.g. "loiter:60,pursuit:25,patrol:15"; restart (#580)
 # test_projectile_rate    = 0.0      # short-lived entities spawned per second (churn); [0, 100000]; restart (#580)
 # test_projectile_ttl_s   = 3.0      # churned-entity lifetime (s); [0.05, 600]; restart (#580)
@@ -784,7 +784,9 @@ effect (the worker pool is built at startup).
 
 **A testing affordance, not a capacity guarantee.** When `test_spawn_ai_count > 0`, the server
 pre-spawns that many server-side loiter-AI entities at startup, spread over a `test_spawn_spread_km`
-disk (phyllotaxis pattern) at `test_spawn_agl_m` above the origin ground elevation. This exists to
+disk (phyllotaxis pattern) at `test_spawn_agl_m` above **each entity's own local terrain** (#1137 —
+it was the origin's ground elevation for every entity before, which buried anything spawned over
+higher ground). This exists to
 stress the entity pool + `SpatialIndex` at thousands of entities (peers + AI) without needing that
 many real clients — see [entity-scale-characterization.md](../developer/decisions/entity-scale-characterization.md) and
 [load-testing.md](../developer/load-testing.md). The server *accepting* a large count does **not** mean it *serves*

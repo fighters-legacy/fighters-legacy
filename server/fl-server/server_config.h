@@ -111,7 +111,7 @@ struct ServerConfig {
     // A TESTING AFFORDANCE, NOT A CAPACITY GUARANTEE. 0 = disabled. Restart-only.
     uint32_t testSpawnAiCount = 0;   // number of AI entities to pre-spawn; [0, 1000000]
     double testSpawnSpreadKm = 50.0; // spread radius (km) of the phyllotaxis distribution; [0, 100000]
-    double testSpawnAglM = 500.0;    // spawn/loiter altitude above the origin ground elevation (m); [0, 50000]
+    double testSpawnAglM = 500.0;    // spawn/loiter altitude above the entity's OWN local terrain (m); [0, 50000]
     // #580: weighted controller mix for the pre-spawned entities, "loiter:70,pursuit:20,patrol:10"
     // (deterministic per-index assignment; behaviors: loiter | pursuit | patrol). Empty = all loiter
     // (the #573 baseline). Invalid specs log Warn and fall back to all loiter. Restart-only.

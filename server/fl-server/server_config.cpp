@@ -133,7 +133,7 @@ static const char* kDefaultToml =
     "# --- A TESTING AFFORDANCE, NOT A CAPACITY GUARANTEE. Leave at 0 for normal operation. ---\n"
     "# test_spawn_ai_count = 0          # server-side AI entities to pre-spawn at startup; 0 = disabled; [0, 1000000]\n"
     "# test_spawn_spread_km = 50.0      # phyllotaxis spread radius (km); [0, 100000]\n"
-    "# test_spawn_agl_m = 500.0         # spawn/loiter altitude above origin ground elevation (m); [0, 50000]\n"
+    "# test_spawn_agl_m = 500.0         # spawn/loiter altitude above the local ground (m); [0, 50000]\n"
     "# test_spawn_ai_mix = \"\"           # weighted controller mix, e.g. \"loiter:70,pursuit:20,patrol:10\"; empty = "
     "all loiter (#580)\n"
     "# test_spawn_entity_type = \"\"       # load AI type; empty = builtin:debug-entity; builtin:bomber = crewed AI "

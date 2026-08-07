@@ -736,9 +736,11 @@ int main(int argc, char** argv) {
     // placeholder. Bounded by a wall-clock deadline so a missing/stuck tile can never hang startup.
     // Without this the entity spawns too low and the per-tick floor query snaps it up to the terrain
     // surface once it streams in, which the client sees as the camera jumping after load-in.
-    auto primeSpawnHeight = [&](double x, double z) {
+    // Returns whether the column ended up spawn-accurate. Split out so the load spawn can prime a
+    // whole spread of points under ONE shared budget and report the shortfall as a count (#1137),
+    // rather than a per-point 5 s timeout and a warning per point.
+    auto primeSpawnHeightUntil = [&](double x, double z, std::chrono::steady_clock::time_point deadline) -> bool {
         using namespace std::chrono;
-        const auto deadline = steady_clock::now() + seconds(5);
         // Pump at the near-side surface estimate, not world-Y 0: far from the origin the near side
         // of the sphere sits well below y=0, and SSE refinement only reaches heightReadyAt depth
         // when the pumped position is close to the surface. The estimate converges as tiles stream.
@@ -748,7 +750,11 @@ int main(int argc, char** argv) {
             if (!terrainStreamer.heightReadyAt(nearSideSurface(x, z, 0.0)))
                 std::this_thread::sleep_for(milliseconds(2));
         }
-        if (!terrainStreamer.heightReadyAt(nearSideSurface(x, z, 0.0)))
+        return terrainStreamer.heightReadyAt(nearSideSurface(x, z, 0.0));
+    };
+    auto primeSpawnHeight = [&](double x, double z) {
+        using namespace std::chrono;
+        if (!primeSpawnHeightUntil(x, z, steady_clock::now() + seconds(5)))
             log->log(LogLevel::Warn, __FILE__, __LINE__,
                      "terrain: spawn-point chunk not ready within timeout; spawning at AGL only");
     };
@@ -2141,9 +2147,47 @@ int main(int argc, char** argv) {
     // + SpatialIndex at scale. A TESTING AFFORDANCE, NOT A CAPACITY GUARANTEE. Disabled (0) by default;
     // must be wired before gameLoop.start() (registerController is sim-thread-only afterward).
     if (cfg.testSpawnAiCount > 0) {
-        const double baseElev = terrainStreamer.heightAt(glm::dvec3{0.0, 0.0, 0.0}); // origin chunk primed above
         const double spreadM = cfg.testSpawnSpreadKm * 1000.0;
-        const auto positions = fl::testSpawnPositions(cfg.testSpawnAiCount, spreadM, cfg.testSpawnAglM, baseElev);
+
+        // Terrain-relative placement (#1137). test_spawn_agl_m used to be measured above the
+        // ORIGIN's ground for every entity, so over a wide spread anything above higher ground
+        // spawned INSIDE a hill and died on contact — invisible, as a slowly draining population
+        // rather than an error, and it made the scale-gate baseline a function of run duration.
+        // Each column is primed to heightReadyAt depth before it is sampled; the cost is bounded by
+        // the number of distinct tiles under the spread, not by the entity count, because a primed
+        // level-10 tile spans ~10 km and covers every later point that lands on it.
+        //
+        // The shortfall is COUNTED and reported: a spread wide enough to exhaust the budget falls
+        // back to whatever coarse height is resident, which is a worse altitude, not a wrong one —
+        // and saying so is the difference between a known limitation and the silent drain this
+        // replaces.
+        // BOUNDED, and bounded tightly: server startup is on a deadline that operators and tests rely
+        // on — the replay-determinism test gives fl-server 30 s to reach "listening on", and a 30 s
+        // priming budget here blew straight through it on an ASan build, where procedural terrain
+        // generation is several times slower. 5 s total, and no single column may eat more than
+        // 750 ms of it, so a wide spread degrades to coarse heights (counted and reported below)
+        // instead of holding the port closed.
+        using namespace std::chrono;
+        const auto primeBudget = steady_clock::now() + seconds(5);
+        constexpr auto kPerColumnBudget = milliseconds(750);
+        uint32_t coarseSpawnPoints = 0;
+        const fl::TestSpawnSurfaceFn loadSpawnSurface = [&](double x, double z, double aglM) -> std::array<double, 3> {
+            const auto columnDeadline = std::min(primeBudget, steady_clock::now() + kPerColumnBudget);
+            if (!primeSpawnHeightUntil(x, z, columnDeadline))
+                ++coarseSpawnPoints;
+            const glm::dvec3 s = nearSideSurface(x, z, aglM);
+            return {s.x, s.y, s.z};
+        };
+        const auto positions =
+            fl::testSpawnPositions(cfg.testSpawnAiCount, spreadM, cfg.testSpawnAglM, loadSpawnSurface);
+        if (coarseSpawnPoints > 0) {
+            char cbuf[192];
+            std::snprintf(cbuf, sizeof(cbuf),
+                          "test spawn: %u of %u spawn points used a COARSE terrain height (streaming budget "
+                          "exhausted) — those entities may sit lower above ground than %.0f m",
+                          coarseSpawnPoints, cfg.testSpawnAiCount, cfg.testSpawnAglM);
+            log->log(LogLevel::Warn, __FILE__, __LINE__, cbuf);
+        }
 
         // Controller mix (#580): weighted per-index assignment (deterministic, no RNG). Empty mix
         // (the default) = all loiter, keeping the #573 pool+index characterisation baseline intact.
@@ -2224,12 +2268,22 @@ int main(int argc, char** argv) {
     // SnapshotDespawn TLV path. Runs on the sim thread (callbacks drain at the top of each tick,
     // before onTick), so spawn/kill need no extra synchronisation. A TESTING AFFORDANCE.
     if (cfg.testProjectileRate > 0.0) {
-        const double baseElev = terrainStreamer.heightAt(glm::dvec3{0.0, 0.0, 0.0});
         const double spreadM = cfg.testSpawnSpreadKm * 1000.0;
-        const double y = baseElev + cfg.testSpawnAglM;
+        const double aglM = cfg.testSpawnAglM;
         const uint64_t ttlTicks = static_cast<uint64_t>(cfg.testProjectileTtlS * 60.0) + 1u;
         const double rate = cfg.testProjectileRate;
-        churnTick = [&churnState, &churnTick, &entityManager, &gameLoop, rate, ttlTicks, spreadM, y]() {
+        // Terrain-relative, same as the load spawn (#1137) — the churn walks the same spread off the
+        // same knob, so it had the same trap. Sampled per spawn on the SIM thread: heightAt() is
+        // thread-safe (m_tileMutex) and is already the per-tick physics floor, and only update() is
+        // main-thread-only. No priming here — the spread's tiles were primed above, and a projectile
+        // whose column is not resident gets the coarse height rather than the origin's.
+        const fl::TestSpawnSurfaceFn churnSurface = [&nearSideSurface](double x, double z,
+                                                                       double agl) -> std::array<double, 3> {
+            const glm::dvec3 s = nearSideSurface(x, z, agl);
+            return {s.x, s.y, s.z};
+        };
+        churnTick = [&churnState, &churnTick, &entityManager, &gameLoop, rate, ttlTicks, spreadM, aglM,
+                     churnSurface]() {
             ++churnState.tick;
             // Reap expired projectiles (FIFO: deadlines are monotonic).
             while (!churnState.pending.empty() && churnState.pending.front().second <= churnState.tick) {
@@ -2239,7 +2293,7 @@ int main(int argc, char** argv) {
             // Spawn this tick's quota (fractional accumulator carries sub-tick rates).
             const uint32_t n = fl::churnSpawnCount(churnState.spawnAccum, rate, 1.0 / 60.0);
             for (uint32_t i = 0; i < n; ++i) {
-                const auto pos = fl::testProjectilePosition(churnState.spawnCounter++, spreadM, y);
+                const auto pos = fl::testProjectilePosition(churnState.spawnCounter++, spreadM, aglM, churnSurface);
                 fl::EntityTransform t{};
                 t.pos[0] = pos[0];
                 t.pos[1] = pos[1];

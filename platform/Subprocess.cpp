@@ -53,26 +53,61 @@ struct Subprocess::Impl {
     std::atomic<bool> readerDone{false};
 
     ~Impl() {
-        // Ensure reader thread is joined before destructing shared state.
+        // STOP THE CHILD FIRST, then join the reader.
+        //
+        // The reader thread blocks in a read on the child's stdout, which only returns at EOF — and
+        // stdout does not reach EOF while the child is alive. Joining first therefore deadlocks for
+        // as long as the child runs, which is forever if nobody told it to quit. That is not
+        // hypothetical: a REQUIRE failure in a test that spawns fl-server unwound into this
+        // destructor and hung until ctest killed it at its 1500 s timeout, so a clear one-line
+        // assertion failure was reported as "(Timeout)" 25 minutes later with no diagnosis in it.
+        // A harness that turns a legible failure into a hang costs more than the bug it was hiding.
+        //
+        // This object owns the process, so ending it here is the correct ownership semantic; a
+        // caller that wants the child to outlive it should not be holding a Subprocess.
+#if defined(_WIN32)
+        if (hStdinWrite != INVALID_HANDLE_VALUE) {
+            CloseHandle(hStdinWrite); // EOF on the child's stdin: a well-behaved child exits
+            hStdinWrite = INVALID_HANDLE_VALUE;
+        }
+        if (hProcess != INVALID_HANDLE_VALUE) {
+            // Give it a moment to go on its own before insisting.
+            if (WaitForSingleObject(hProcess, 2000) != WAIT_OBJECT_0)
+                TerminateProcess(hProcess, 1);
+        }
         if (readerThread.joinable())
             readerThread.join();
-#if defined(_WIN32)
-        if (hStdinWrite != INVALID_HANDLE_VALUE)
-            CloseHandle(hStdinWrite);
         if (hProcess != INVALID_HANDLE_VALUE)
             CloseHandle(hProcess);
         if (stdoutFile)
             fclose(stdoutFile);
 #else
-        if (stdinWriteFd >= 0)
-            close(stdinWriteFd);
+        if (stdinWriteFd >= 0) {
+            close(stdinWriteFd); // EOF on the child's stdin: a well-behaved child exits
+            stdinWriteFd = -1;
+        }
+        if (pid > 0) {
+            // Poll briefly for a clean exit, then SIGKILL. kill() on an already-reaped pid fails
+            // with ESRCH, which is fine — the point is only that nothing is left holding stdout.
+            bool exited = false;
+            for (int i = 0; i < 200 && !exited; ++i) { // up to ~2 s
+                int status = 0;
+                if (waitpid(pid, &status, WNOHANG) == pid)
+                    exited = true;
+                else
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            if (!exited) {
+                ::kill(pid, SIGKILL);
+                int status = 0;
+                waitpid(pid, &status, 0);
+            }
+            pid = -1;
+        }
+        if (readerThread.joinable())
+            readerThread.join();
         if (stdoutFile)
             fclose(stdoutFile);
-        // Reap zombie if still alive.
-        if (pid > 0) {
-            int status;
-            waitpid(pid, &status, WNOHANG);
-        }
 #endif
     }
 

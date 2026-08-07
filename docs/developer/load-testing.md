@@ -283,14 +283,20 @@ structures (the `EntityManager` pool + `SpatialIndex`) at **thousands** of entit
 load-spawn affordance — `[world] test_spawn_ai_count = N` pre-spawns N cheap loiter-AI entities over
 `test_spawn_spread_km` at `test_spawn_agl_m`. **A testing affordance, not a capacity guarantee.**
 
-> ⚠ **`test_spawn_agl_m` is measured above the ORIGIN's ground elevation, not above each entity's own
-> local terrain.** Spread over 50 km, anything spawned at the old 500 m runner default that lands over
-> higher ground starts *inside* a hill and dies on contact. Measured with 64 loiter entities and **no
-> clients connected**: the population decayed 64 → 56 → 52 → 49 within 90 s at 500 m, and held a flat
-> 64 at 4000 m. A world that shrinks while you measure it makes every number a function of run
-> duration and luck — it was worth ±13% on the `idle` baseline, and over a 2 h soak it would drain the
-> world the sensor-loaded profiles exist to populate. `run_loadtest.sh` therefore defaults
-> `FL_TEST_SPAWN_AGL_M=4000`; override it only if you know the terrain under your spread.
+> ⚠ **`test_spawn_agl_m` is above each entity's own local terrain (#1137), but it still needs
+> generous margin — keep the 4000 m default.** It used to be measured above the *origin's* ground for
+> every entity, so a wide spread put anything over higher ground inside a hill. That is fixed: each
+> column is sampled at spawn (`clearance 500.0..500.0 m` measured over a 50 km spread whose local
+> ground ranges 506–605 m).
+>
+> It is **not** enough to keep the population stable at a low AGL, and the reason is a different
+> defect: the loiter AI **oscillates in altitude**. Measured with 8 well-separated entities at an
+> exact 500 m clearance and no clients — `y` swings between ~1050 m and ~519 m against 506–605 m of
+> ground, and the population still decays 8 → 6 → 5 within 70 s. Terrain relief around each loiter
+> circle is only 30 m, and the entities are 17 km apart, so neither hills nor mutual collision
+> explains it. `run_loadtest.sh` therefore keeps `FL_TEST_SPAWN_AGL_M=4000`, which puts the trough of
+> that oscillation well clear of the ground. A world that shrinks while you measure it makes every
+> number a function of run duration and luck — it was worth ±13% on the `idle` baseline.
 
 The runner exposes it (and the worker sweep) via env, so you can sweep entity count × worker count and
 read the authoritative `server_tick` per-phase budget:
