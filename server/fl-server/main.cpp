@@ -2157,15 +2157,23 @@ int main(int argc, char** argv) {
         // the number of distinct tiles under the spread, not by the entity count, because a primed
         // level-10 tile spans ~10 km and covers every later point that lands on it.
         //
-        // One budget for the whole spread, and the shortfall is COUNTED and reported: a spread wide
-        // enough to exhaust it falls back to whatever coarse height is resident, which is a worse
-        // altitude, not a wrong one — and saying so is the difference between a known limitation
-        // and the silent drain this replaces.
+        // The shortfall is COUNTED and reported: a spread wide enough to exhaust the budget falls
+        // back to whatever coarse height is resident, which is a worse altitude, not a wrong one —
+        // and saying so is the difference between a known limitation and the silent drain this
+        // replaces.
+        // BOUNDED, and bounded tightly: server startup is on a deadline that operators and tests rely
+        // on — the replay-determinism test gives fl-server 30 s to reach "listening on", and a 30 s
+        // priming budget here blew straight through it on an ASan build, where procedural terrain
+        // generation is several times slower. 5 s total, and no single column may eat more than
+        // 750 ms of it, so a wide spread degrades to coarse heights (counted and reported below)
+        // instead of holding the port closed.
         using namespace std::chrono;
-        const auto primeBudget = steady_clock::now() + seconds(30);
+        const auto primeBudget = steady_clock::now() + seconds(5);
+        constexpr auto kPerColumnBudget = milliseconds(750);
         uint32_t coarseSpawnPoints = 0;
         const fl::TestSpawnSurfaceFn loadSpawnSurface = [&](double x, double z, double aglM) -> std::array<double, 3> {
-            if (!primeSpawnHeightUntil(x, z, primeBudget))
+            const auto columnDeadline = std::min(primeBudget, steady_clock::now() + kPerColumnBudget);
+            if (!primeSpawnHeightUntil(x, z, columnDeadline))
                 ++coarseSpawnPoints;
             const glm::dvec3 s = nearSideSurface(x, z, aglM);
             return {s.x, s.y, s.z};
