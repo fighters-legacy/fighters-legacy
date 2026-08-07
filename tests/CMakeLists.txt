@@ -1030,6 +1030,10 @@ target_link_libraries(test_campaign
     PRIVATE Catch2::Catch2WithMain engine-campaign engine-mission) # engine-mission: a generated sortie must parse
 catch_discover_tests(test_campaign)
 
+add_executable(test_campaign_engine_branches test_campaign_engine_branches.cpp)
+target_link_libraries(test_campaign_engine_branches PRIVATE Catch2::Catch2WithMain engine-campaign)
+catch_discover_tests(test_campaign_engine_branches)
+
 add_executable(test_validate_licenses test_validate_licenses.cpp)
 target_link_libraries(test_validate_licenses
     PRIVATE Catch2::Catch2WithMain validate-licenses-lib)
