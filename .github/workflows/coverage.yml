@@ -1,12 +1,33 @@
 name: Coverage
 
+# WHY THIS RUNS ON PULL REQUESTS (#1128). CONTRIBUTING.md promises "Codecov posts an automated
+# comment on every PR showing the coverage delta for changed files". For as long as this workflow
+# was push-to-main only, that promise could not be kept by construction, and new contributors were
+# being pointed at a signal that did not exist. The PR trigger is what makes the documentation true;
+# it is deliberately NOT a required check, so it informs a review rather than blocking a merge.
+#
+# WHY THE MAIN TRIGGER STAYS: Codecov needs a baseline commit on the default branch for a PR delta
+# to mean anything, and the post-merge run is the one that catches a regression that only appears
+# once several PRs are combined.
+#
+# WHY THE TRACKING ISSUE (below): this workflow was red on main for three weeks with nobody told —
+# an advisory workflow's red X is only a signal if something durable carries it. A run's conclusion
+# is immutable, so a red run never turns green; the issue is opened when main's gate fails and
+# closed automatically by the next run that passes. Same pattern, and the same reasoning, as
+# release-notes-gate.yml.
 on:
   push:
     branches: [main]
+  pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write
 
 jobs:
   coverage:
@@ -85,31 +106,104 @@ jobs:
           path: coverage-report/
           retention-days: 30
 
-      - name: Enforce branch coverage gate — engine/ >= 80%
-        run: |
-          gcovr \
-            --filter 'engine/' \
-            --gcov-exclude '.*/_deps/.*' \
-            --gcov-ignore-errors all \
-            --gcov-ignore-parse-errors suspicious_hits.warn_once_per_file \
-            --exclude-throw-branches \
-            --fail-under-branch 80 \
-            --print-summary
-
-      - name: Enforce line coverage gate — engine/ >= 70%
-        run: |
-          gcovr \
-            --filter 'engine/' \
-            --gcov-exclude '.*/_deps/.*' \
-            --gcov-ignore-errors all \
-            --gcov-ignore-parse-errors suspicious_hits.warn_once_per_file \
-            --exclude-throw-branches \
-            --fail-under-line 70 \
-            --print-summary
-
+      # BEFORE the gate, not after. A run that fails the threshold is precisely the run whose
+      # numbers someone wants to look at, and a failing step ends the job — which is why Codecov
+      # received nothing at all for the three weeks the gate was aborting (#1128).
       - name: Upload to Codecov
         uses: codecov/codecov-action@v7
         with:
           files: coverage.info
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
+
+      # ONE gcovr invocation for both thresholds, and three distinct outcomes: passed, measured and
+      # below threshold, or not measured at all. The old pair of `gcovr --fail-under-*` steps could
+      # not tell the last two apart — a gcov parse abort and a real regression both surfaced as a red
+      # X under a step named after the threshold, which is how three weeks of "coverage < 80%" turned
+      # out to be "coverage was never computed". tools/coverage_gate.py owns that distinction and is
+      # unit-tested on both halves (tests/test_coverage_gate.py).
+      - name: Coverage gate — engine/ branch >= 80%, line >= 70%
+        id: gate
+        run: |
+          set +e
+          python3 tools/coverage_gate.py \
+            --filter 'engine/' \
+            --gcov-exclude '.*/_deps/.*' \
+            --exclude-throw-branches \
+            --min-branch 80 \
+            --min-line 70 \
+            --summary-json coverage-summary.json
+          rc=$?
+          case "$rc" in
+            0) verdict=pass ;;
+            1) verdict=threshold ;;
+            *) verdict=unmeasured ;;
+          esac
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+      - name: Upload coverage summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-summary
+          path: coverage-summary.json
+          retention-days: 30
+          if-no-files-found: ignore
+
+      # The durable, self-clearing signal for main. A PR run needs none — its red X is attached to
+      # the thing being reviewed — so this is push-only, which also keeps it out of fork PRs where
+      # GITHUB_TOKEN has no issues: write.
+      - name: Open or close the coverage tracking issue
+        if: always() && github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          # Never interpolate an expression into the script itself — see
+          # tools/lint_workflow_expressions.py. These arrive as environment data.
+          VERDICT: ${{ steps.gate.outputs.verdict }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          title="coverage: the gate on main is not green"
+          existing=$(gh issue list --state open --search "\"$title\" in:title" \
+                       --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -1)
+
+          # An empty verdict means the gate step never ran (the build or the tests failed first).
+          # That is a coverage outage too — the workflow produced no number — so it is reported as
+          # one rather than passing silently.
+          case "${VERDICT:-none}" in
+            pass)
+              if [ -n "$existing" ]; then
+                gh issue close "$existing" --reason completed \
+                  --comment "The coverage gate is green again on main. Closed automatically by $RUN_URL"
+                echo "closed tracking issue #$existing"
+              fi
+              echo "coverage gate green on main"
+              exit 0
+              ;;
+            threshold)
+              what="engine/ coverage is **below the threshold**. A number *was* produced — see the run's job summary for the measured percentages and the lowest-covered files."
+              ;;
+            unmeasured)
+              what="the gate produced **no coverage number at all** (a measurement failure, not a regression). Nothing about the project's real coverage can be concluded from this run — fix the measurement first."
+              ;;
+            *)
+              what="the Coverage workflow failed **before the gate ran**, so no coverage was measured. Check the build and test steps."
+              ;;
+          esac
+
+          body=$(printf '%s\n' \
+            "The Coverage workflow is failing on \`main\`: $what" "" \
+            "This workflow is advisory — it is not a required check — so this issue is the signal." \
+            "It is opened automatically when main's coverage gate is not green and closed" \
+            "automatically by the next run that is. Do not close it by hand." "" \
+            "Run: $RUN_URL")
+
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --body "$body" >/dev/null
+            echo "updated tracking issue #$existing"
+          else
+            gh issue create --title "$title" --label 'component: ci' --body "$body" >/dev/null
+            echo "opened tracking issue"
+          fi

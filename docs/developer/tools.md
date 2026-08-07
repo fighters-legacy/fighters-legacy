@@ -74,6 +74,7 @@ aircraft's performance.
 |---|---|
 | `code_stats.py` | Application statistics for a release: composition by category plus the product surface. Attached to every release and appended to minor-release bodies — see [the release process](project-management.md#application-statistics-milestone-gates) |
 | `docs_drift.py` | Checks documentation against the code it describes ([the drift gate](https://github.com/fighters-legacy/fighters-legacy/blob/main/.github/workflows/docs-drift.yml)) |
+| `coverage_gate.py` | Runs `gcovr` once and gates on the result, separating "below threshold" from "no number was produced" ([code coverage](development.md#code-coverage)) |
 | `check_deps.py` | Reports which pinned dependencies have newer upstream releases |
 | `lint_workflow_expressions.py` | Catches `${{ }}` interpolation into `run:` blocks |
 | `mission_test/` | Mission harness assertions |

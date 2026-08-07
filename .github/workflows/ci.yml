@@ -425,6 +425,14 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: python3 -m pytest tests/test_gen_changelog.py -v
 
+      # Both halves of the verdict (#1128): a threshold miss must name the measured number, and a
+      # measurement failure must name no number at all. The Coverage workflow exercises the tool for
+      # real; this is what stops the two outcomes collapsing back into one exit code, which is what
+      # left the gate reporting "coverage < 80%" for three weeks while measuring nothing.
+      - name: Unit test coverage_gate.py (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 -m pytest tests/test_coverage_gate.py -v
+
       # Pure assertion logic only; the full harness run against fl-server is the mission_harness_ci_smoke
       # ctest (#856).
       - name: Unit test mission_test/mission_test.py (Ubuntu)
