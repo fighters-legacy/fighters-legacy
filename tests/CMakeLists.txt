@@ -26,6 +26,11 @@ target_link_libraries(test_mesh_articulation PRIVATE Catch2::Catch2WithMain engi
 target_include_directories(test_mesh_articulation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_mesh_articulation)
 
+add_executable(test_mesh_articulation_paths test_mesh_articulation_paths.cpp)
+target_link_libraries(test_mesh_articulation_paths PRIVATE Catch2::Catch2WithMain engine-render)
+target_include_directories(test_mesh_articulation_paths PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_mesh_articulation_paths)
+
 add_executable(test_window test_window.cpp)
 target_link_libraries(test_window PRIVATE Catch2::Catch2WithMain platform-hal)
 target_include_directories(test_window PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -356,6 +361,10 @@ target_link_libraries(test_content_system PRIVATE Catch2::Catch2WithMain engine-
     engine-sensor)
 catch_discover_tests(test_content_system)
 
+add_executable(test_folder_content_pack test_folder_content_pack.cpp)
+target_link_libraries(test_folder_content_pack PRIVATE Catch2::Catch2WithMain engine-content)
+catch_discover_tests(test_folder_content_pack)
+
 # fl::tomlInt guards five parsers against a real UB bug in toml++ (#824).
 add_executable(test_toml_numeric test_toml_numeric.cpp)
 target_link_libraries(test_toml_numeric PRIVATE Catch2::Catch2WithMain tomlplusplus::tomlplusplus)
@@ -410,6 +419,11 @@ add_executable(test_userconfig test_userconfig.cpp)
 target_link_libraries(test_userconfig PRIVATE Catch2::Catch2WithMain engine-config)
 target_include_directories(test_userconfig PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_userconfig)
+
+add_executable(test_userconfig_enums test_userconfig_enums.cpp)
+target_link_libraries(test_userconfig_enums PRIVATE Catch2::Catch2WithMain engine-config)
+target_include_directories(test_userconfig_enums PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_userconfig_enums)
 
 add_executable(test_settings test_settings.cpp)
 target_link_libraries(test_settings PRIVATE Catch2::Catch2WithMain engine-config)
@@ -669,6 +683,13 @@ target_include_directories(test_replay_format PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_replay_format)
 
+add_executable(test_replay_reader_sections test_replay_reader_sections.cpp)
+target_link_libraries(test_replay_reader_sections PRIVATE Catch2::Catch2WithMain engine-replay)
+target_include_directories(test_replay_reader_sections PRIVATE
+    "${CMAKE_SOURCE_DIR}/engine"
+    "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_replay_reader_sections)
+
 # ReplayPlayer (#41): playback timing, speed control and scrubbing. Compiles the game-layer source
 # directly (the test_screen_manager idiom) and links engine-replay for the reader.
 add_executable(test_replay_player test_replay_player.cpp
@@ -705,6 +726,11 @@ target_link_libraries(test_ai_controllers PRIVATE engine-ai engine-entity engine
     Catch2::Catch2WithMain)
 catch_discover_tests(test_ai_controllers)
 
+add_executable(test_state_machine_controller test_state_machine_controller.cpp)
+target_link_libraries(test_state_machine_controller PRIVATE engine-ai engine-entity engine-spatial engine-sensor
+    Catch2::Catch2WithMain)
+catch_discover_tests(test_state_machine_controller)
+
 # Takeoff / landing ground-and-pattern controllers (#701, ATC epic #673).
 add_executable(test_takeoff_controller test_takeoff_controller.cpp)
 target_link_libraries(test_takeoff_controller PRIVATE engine-ai engine-entity engine-spatial Catch2::Catch2WithMain)
@@ -719,6 +745,11 @@ add_executable(test_atc_service test_atc_service.cpp)
 target_link_libraries(test_atc_service PRIVATE engine-atc engine-world engine-entity engine-spatial
     Catch2::Catch2WithMain)
 catch_discover_tests(test_atc_service)
+
+add_executable(test_atc_facility_sequencing test_atc_facility_sequencing.cpp)
+target_link_libraries(test_atc_facility_sequencing PRIVATE engine-atc engine-world engine-entity engine-spatial
+    Catch2::Catch2WithMain)
+catch_discover_tests(test_atc_facility_sequencing)
 
 # The scripted wingman grammar + its two wire messages (#610). Header-only + engine-protocol only.
 add_executable(test_wingman_command test_wingman_command.cpp)
@@ -776,6 +807,19 @@ catch_discover_tests(test_match_controller)
 add_executable(test_airport_registry test_airport_registry.cpp)
 target_link_libraries(test_airport_registry PRIVATE Catch2::Catch2WithMain engine-world)
 catch_discover_tests(test_airport_registry)
+
+add_executable(test_airport_csv_import test_airport_csv_import.cpp)
+target_link_libraries(test_airport_csv_import PRIVATE Catch2::Catch2WithMain engine-world)
+catch_discover_tests(test_airport_csv_import)
+
+add_executable(test_airport_bootstrap test_airport_bootstrap.cpp)
+target_link_libraries(test_airport_bootstrap PRIVATE Catch2::Catch2WithMain engine-world)
+target_include_directories(test_airport_bootstrap PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_airport_bootstrap)
+
+add_executable(test_crew_partition test_crew_partition.cpp)
+target_link_libraries(test_crew_partition PRIVATE Catch2::Catch2WithMain engine-entity)
+catch_discover_tests(test_crew_partition)
 
 add_executable(test_airport_renderer test_airport_renderer.cpp)
 target_link_libraries(test_airport_renderer PRIVATE Catch2::Catch2WithMain engine-render engine-world)
@@ -931,10 +975,85 @@ catch_discover_tests(test_shot_director)
 
 # engine-campaign (#635): the deterministic dynamic-campaign runtime — frontline raster, campaign
 # schema parser, and the theater-graph state machine (story injection, dynamic selection, save/restore).
+# CampaignParser validation + referential integrity (#1145): every way a campaign can be malformed.
+# The parser is the only thing between an authoring mistake and a campaign that loads broken.
+# MissionParser schema validation (#1145): ~90 distinct rejections, written as perturbations of one
+# valid mission because that is how authoring failures arrive — a working file with one thing wrong.
+# FlightModelParser rejections (#1145): one entry point, five vehicle schemas, each with its own
+# required tables. A model that loads with a table missing flies wrong instead of failing to load.
+# AssetManager multi-pack resolution (#1145): which pack wins, what happens when one hands back
+# rubbish, and what the cache does about it — the behaviour that makes modding work.
+# createController (#1145): 23 behaviours behind one string, each with its own argument grammar.
+# The surface an operator types at the console and an author writes in YAML — a malformed argument
+# must yield null rather than a controller quietly flying on defaults nobody asked for.
+# VoiceCalloutManager audio resolution (#1145): TTS vs packed OGG, the radio treatment, the buffer
+# cache, and every way each of those can be unavailable. The subsystem is built to degrade; that is
+# only true if it is exercised.
+# The pack-loading half of ContentBootstrap (#1145): airports, zone policies and weapons share the
+# entity-def loader's list/load/parse/register shape. One broken file in a downloaded pack must cost
+# the player that one asset, never the pack — and must name the file so an author can find it.
+# AircraftManual for the non-fixed-wing vehicles and the full store/sensor vocabularies (#1145).
+# The enum-to-name tables are the kind of thing that silently grows a "?" when an enumerator is added.
+# LobbyListClient's request lifecycle (#1145): URL construction, the in-flight guard, chunked body
+# accumulation, and every way a fetch against a remote lobby can fail.
+# EntityDefParser's rejection rules (#1145): hardpoints, turrets, crew seats, sensors, decks. Each
+# rule exists because the alternative is an entity that registers and then misbehaves.
+add_executable(test_entity_def_parser_rules test_entity_def_parser_rules.cpp)
+target_link_libraries(test_entity_def_parser_rules PRIVATE Catch2::Catch2WithMain engine-entity)
+catch_discover_tests(test_entity_def_parser_rules)
+
+add_executable(test_lobby_list_client test_lobby_list_client.cpp)
+target_link_libraries(test_lobby_list_client PRIVATE Catch2::Catch2WithMain engine-net platform-hal)
+target_include_directories(test_lobby_list_client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_lobby_list_client)
+
+add_executable(test_aircraft_manual_vehicles test_aircraft_manual_vehicles.cpp)
+target_link_libraries(test_aircraft_manual_vehicles PRIVATE Catch2::Catch2WithMain engine-manual engine-flight
+    engine-entity engine-weapon engine-sensor)
+catch_discover_tests(test_aircraft_manual_vehicles)
+
+add_executable(test_content_bootstrap_loaders test_content_bootstrap_loaders.cpp)
+target_link_libraries(test_content_bootstrap_loaders PRIVATE Catch2::Catch2WithMain engine-bootstrap
+    engine-content engine-entity engine-weapon engine-world)
+target_include_directories(test_content_bootstrap_loaders PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_content_bootstrap_loaders)
+
+add_executable(test_voice_callout_paths test_voice_callout_paths.cpp)
+target_link_libraries(test_voice_callout_paths PRIVATE Catch2::Catch2WithMain engine-audio engine-content
+    engine-radio engine-i18n)
+target_include_directories(test_voice_callout_paths PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_voice_callout_paths)
+
+add_executable(test_ai_controller_factory test_ai_controller_factory.cpp)
+target_link_libraries(test_ai_controller_factory PRIVATE Catch2::Catch2WithMain engine-ai engine-entity
+    engine-spatial engine-sensor engine-worldai)
+catch_discover_tests(test_ai_controller_factory)
+
+add_executable(test_asset_manager_fallback test_asset_manager_fallback.cpp)
+target_link_libraries(test_asset_manager_fallback PRIVATE Catch2::Catch2WithMain engine-content)
+target_include_directories(test_asset_manager_fallback PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_asset_manager_fallback)
+
+add_executable(test_flight_model_parser_validation test_flight_model_parser_validation.cpp)
+target_link_libraries(test_flight_model_parser_validation PRIVATE Catch2::Catch2WithMain engine-flight)
+catch_discover_tests(test_flight_model_parser_validation)
+
+add_executable(test_mission_parser_validation test_mission_parser_validation.cpp)
+target_link_libraries(test_mission_parser_validation PRIVATE Catch2::Catch2WithMain engine-mission)
+catch_discover_tests(test_mission_parser_validation)
+
+add_executable(test_campaign_parser_validation test_campaign_parser_validation.cpp)
+target_link_libraries(test_campaign_parser_validation PRIVATE Catch2::Catch2WithMain engine-campaign)
+catch_discover_tests(test_campaign_parser_validation)
+
 add_executable(test_campaign test_campaign.cpp)
 target_link_libraries(test_campaign
     PRIVATE Catch2::Catch2WithMain engine-campaign engine-mission) # engine-mission: a generated sortie must parse
 catch_discover_tests(test_campaign)
+
+add_executable(test_campaign_engine_branches test_campaign_engine_branches.cpp)
+target_link_libraries(test_campaign_engine_branches PRIVATE Catch2::Catch2WithMain engine-campaign)
+catch_discover_tests(test_campaign_engine_branches)
 
 add_executable(test_validate_licenses test_validate_licenses.cpp)
 target_link_libraries(test_validate_licenses
@@ -1030,6 +1149,14 @@ catch_discover_tests(test_radio_net)
 add_executable(test_voice_mixer test_voice_mixer.cpp)
 target_link_libraries(test_voice_mixer PRIVATE Catch2::Catch2WithMain engine-voice)
 catch_discover_tests(test_voice_mixer)
+
+# The client voice facade (#531). Its five components each had a test; the object that decides WHEN
+# to key, WHICH net to key on, and when the capture device runs had none — 0.0% branch coverage
+# until #1145, and that is exactly where the player-visible behaviour lives.
+add_executable(test_voice_chat test_voice_chat.cpp)
+target_link_libraries(test_voice_chat PRIVATE Catch2::Catch2WithMain engine-voice)
+target_include_directories(test_voice_chat PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_voice_chat)
 
 # Radio presentation DSP (#925): band-limiting, soft clipping, and the byte-stable click/squelch cues.
 add_executable(test_radio_dsp test_radio_dsp.cpp)
@@ -1156,6 +1283,10 @@ target_link_libraries(test_game_console PRIVATE Catch2::Catch2WithMain engine-co
 target_include_directories(test_game_console PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_game_console)
 
+add_executable(test_console_commands_paths test_console_commands_paths.cpp)
+target_link_libraries(test_console_commands_paths PRIVATE Catch2::Catch2WithMain engine-console engine-entity)
+catch_discover_tests(test_console_commands_paths)
+
 add_executable(test_command_shell test_command_shell.cpp)
 target_link_libraries(test_command_shell PRIVATE Catch2::Catch2WithMain engine-console)
 target_include_directories(test_command_shell PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -1218,6 +1349,11 @@ add_executable(test_trust_framework test_trust_framework.cpp)
 target_link_libraries(test_trust_framework PRIVATE Catch2::Catch2WithMain engine-content)
 target_include_directories(test_trust_framework PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_trust_framework)
+
+add_executable(test_mod_loader_load test_mod_loader_load.cpp)
+target_link_libraries(test_mod_loader_load PRIVATE Catch2::Catch2WithMain engine-content)
+target_include_directories(test_mod_loader_load PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_mod_loader_load)
 
 add_executable(test_asset_validator test_asset_validator.cpp)
 target_link_libraries(test_asset_validator PRIVATE Catch2::Catch2WithMain engine-content)

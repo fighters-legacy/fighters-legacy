@@ -37,6 +37,15 @@ jobs:
           python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
           python3 tools/lint_workflow_expressions.py
 
+      # ctest registers one test per Catch2 case and passes the case's NAME back to the binary as a
+      # filter to run it. On Windows that round trip is not UTF-8, so a non-ASCII character arrives
+      # mangled, the filter matches nothing, and the test is scored as a FAILURE without ever having
+      # run -- while Linux and macOS stay green. One em dash in a test name cost a full CI cycle to
+      # diagnose on #1145. Sits in `lint` so it fails before the build matrix burns macOS/Windows
+      # time, which is the whole point.
+      - name: Lint test names
+        run: python3 tools/lint_test_names.py
+
       - name: Check clang-format
         run: |
           git diff --name-only --diff-filter=d origin/${{ github.base_ref || 'main' }}...HEAD \
@@ -432,6 +441,10 @@ jobs:
       - name: Unit test coverage_gate.py (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         run: python3 -m pytest tests/test_coverage_gate.py -v
+
+      - name: Unit test lint_test_names.py (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 -m pytest tests/test_lint_test_names.py -v
 
       # Pure assertion logic only; the full harness run against fl-server is the mission_harness_ci_smoke
       # ctest (#856).

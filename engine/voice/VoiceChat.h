@@ -20,6 +20,10 @@ class ILogger;
 // Where an encoded local frame goes. The client wires this to a MsgVoiceFrame send (#532); tests
 // and tools wire it to a recorder. VoiceChat itself knows nothing about the network — the same
 // std::function-across-the-CMake-boundary seam the rest of the engine uses.
+// ⚠ The sink MUST outlive the VoiceChat. It is called from `reset()`, which `shutdown()` and the
+// DESTRUCTOR both run, to emit the end-of-transmission marker for a transmission still open at
+// teardown — so a sink capturing state that dies first is a use-after-free at destruction. Found by
+// the #1145 tests, whose first draft got the member ordering wrong and reported an invalid free.
 using VoiceFrameSink =
     std::function<void(uint8_t netId, uint16_t seq, std::span<const uint8_t> payload, bool start, bool end)>;
 

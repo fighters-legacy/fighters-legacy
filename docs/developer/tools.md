@@ -77,6 +77,7 @@ aircraft's performance.
 | `coverage_gate.py` | Runs `gcovr` once and gates on the result, separating "below threshold" from "no number was produced" ([code coverage](development.md#code-coverage)) |
 | `check_deps.py` | Reports which pinned dependencies have newer upstream releases |
 | `lint_workflow_expressions.py` | Catches `${{ }}` interpolation into `run:` blocks |
+| `lint_test_names.py` | Catches non-ASCII in Catch2 test names and tags, which ctest cannot select on Windows |
 | `mission_test/` | Mission harness assertions |
 | `record_demo/` | Headless cinematic capture ([demo recording](demo-recording.md)) |
 | `visual_check.sh` / `.ps1` | Launch the game into a known scene for visual verification |
