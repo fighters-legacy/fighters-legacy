@@ -14,12 +14,12 @@ release are the commits on `main` since the
 
 ### Added
 
-- **network**: stage 5 — wire hygiene and connect-path hardening (#1132)
+- **network**: the server browser shows each server's build version, and a returning client no longer re-downloads the entity-type table it already has (#1132)
 
 ### Changed
 
 - **network**: constexpr MsgInfo table as the single message-metadata authority (#1131)
-- **net**: stage 9 — scale honesty (#1133)
+- **net**: less work per tick at high player counts — the datalink fuses once per faction rather than once per pilot, the scoreboard builds once per window rather than once per peer, snapshot scratch buffers are reused, and the voice relay fan-out is bounded (#1133)
 - **renderer**: stop rebuilding the terrain tile set on every frame (#1140)
 
 ### Fixed
