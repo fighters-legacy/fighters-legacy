@@ -683,6 +683,13 @@ target_include_directories(test_replay_format PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_replay_format)
 
+add_executable(test_replay_reader_sections test_replay_reader_sections.cpp)
+target_link_libraries(test_replay_reader_sections PRIVATE Catch2::Catch2WithMain engine-replay)
+target_include_directories(test_replay_reader_sections PRIVATE
+    "${CMAKE_SOURCE_DIR}/engine"
+    "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_replay_reader_sections)
+
 # ReplayPlayer (#41): playback timing, speed control and scrubbing. Compiles the game-layer source
 # directly (the test_screen_manager idiom) and links engine-replay for the reader.
 add_executable(test_replay_player test_replay_player.cpp
