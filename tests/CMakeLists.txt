@@ -950,6 +950,19 @@ catch_discover_tests(test_shot_director)
 # the player that one asset, never the pack — and must name the file so an author can find it.
 # AircraftManual for the non-fixed-wing vehicles and the full store/sensor vocabularies (#1145).
 # The enum-to-name tables are the kind of thing that silently grows a "?" when an enumerator is added.
+# LobbyListClient's request lifecycle (#1145): URL construction, the in-flight guard, chunked body
+# accumulation, and every way a fetch against a remote lobby can fail.
+# EntityDefParser's rejection rules (#1145): hardpoints, turrets, crew seats, sensors, decks. Each
+# rule exists because the alternative is an entity that registers and then misbehaves.
+add_executable(test_entity_def_parser_rules test_entity_def_parser_rules.cpp)
+target_link_libraries(test_entity_def_parser_rules PRIVATE Catch2::Catch2WithMain engine-entity)
+catch_discover_tests(test_entity_def_parser_rules)
+
+add_executable(test_lobby_list_client test_lobby_list_client.cpp)
+target_link_libraries(test_lobby_list_client PRIVATE Catch2::Catch2WithMain engine-net platform-hal)
+target_include_directories(test_lobby_list_client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_lobby_list_client)
+
 add_executable(test_aircraft_manual_vehicles test_aircraft_manual_vehicles.cpp)
 target_link_libraries(test_aircraft_manual_vehicles PRIVATE Catch2::Catch2WithMain engine-manual engine-flight
     engine-entity engine-weapon engine-sensor)
