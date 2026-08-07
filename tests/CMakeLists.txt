@@ -937,6 +937,13 @@ catch_discover_tests(test_shot_director)
 # valid mission because that is how authoring failures arrive — a working file with one thing wrong.
 # FlightModelParser rejections (#1145): one entry point, five vehicle schemas, each with its own
 # required tables. A model that loads with a table missing flies wrong instead of failing to load.
+# AssetManager multi-pack resolution (#1145): which pack wins, what happens when one hands back
+# rubbish, and what the cache does about it — the behaviour that makes modding work.
+add_executable(test_asset_manager_fallback test_asset_manager_fallback.cpp)
+target_link_libraries(test_asset_manager_fallback PRIVATE Catch2::Catch2WithMain engine-content)
+target_include_directories(test_asset_manager_fallback PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_asset_manager_fallback)
+
 add_executable(test_flight_model_parser_validation test_flight_model_parser_validation.cpp)
 target_link_libraries(test_flight_model_parser_validation PRIVATE Catch2::Catch2WithMain engine-flight)
 catch_discover_tests(test_flight_model_parser_validation)
