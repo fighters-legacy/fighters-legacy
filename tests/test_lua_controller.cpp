@@ -505,21 +505,89 @@ TEST_CASE("LuaController: detected_contacts returns an empty table when sensing 
     CHECK(ctrl.throttle == Catch::Approx(1.f).epsilon(0.001f));
 }
 
+TEST_CASE("LuaController: guidance turn_aileron closes on the current bank (#1143)", "[lua][guidance]") {
+    // Wings level with a heading error to the right: right aileron. Then rolled 45 deg right with the
+    // SAME error: the bank command is spent, so the aileron backs off. bank_to_turn_aileron cannot
+    // tell those two states apart, which is how a scripted orbit ends up inverted.
+    auto c = makeCtrl("function compute_control(s,t,dt)\n"
+                      "  return {aileron = guidance.turn_aileron(s.quat, s.pos, 1.0)}\n"
+                      "end");
+    REQUIRE(c->isValid());
+
+    fl::EntityState level = makeState(0.0, 1000.0, 0.0);
+    const float atLevel = c->sample(level, 0, 1.0 / 60.0, fl::AiTickContext{}).aileron;
+    CHECK(atLevel > 0.3f);
+
+    fl::EntityState banked = level;
+    const float half = std::sin(0.3927f), w = std::cos(0.3927f); // 45 deg roll about the nose
+    banked.transform.quat[0] = half;
+    banked.transform.quat[1] = 0.f;
+    banked.transform.quat[2] = 0.f;
+    banked.transform.quat[3] = w;
+    const float atBank = c->sample(banked, 0, 1.0 / 60.0, fl::AiTickContext{}).aileron;
+    CHECK(atBank < atLevel);
+}
+
+TEST_CASE("LuaController: guidance sideslip and rudder_to_coordinate null a skid (#1143)", "[lua][guidance]") {
+    auto c =
+        makeCtrl("function compute_control(s,t,dt)\n"
+                 "  local b = guidance.sideslip(s.quat, s.vel)\n"
+                 "  return {rudder = guidance.rudder_to_coordinate(b), throttle = (type(b)=='number') and 1.0 or 0.0}\n"
+                 "end");
+    REQUIRE(c->isValid());
+
+    // Set all three components: makeState preloads vel = (10, 0, 5), and inheriting that z would
+    // make the "straight" case below a 1.9 deg skid — which is exactly what it is meant to rule out.
+    fl::EntityState skidding = makeState(0.0, 1000.0, 0.0);
+    skidding.transform.vel[0] = 150.f; // forward
+    skidding.transform.vel[1] = 0.f;
+    skidding.transform.vel[2] = 40.f; // and to the right: nose is left of the flight path
+    const fl::ControlInput out = c->sample(skidding, 0, 1.0 / 60.0, fl::AiTickContext{});
+    CHECK(out.throttle == Catch::Approx(1.f).epsilon(0.001f)); // the binding returned a number
+    CHECK(out.rudder > 0.f);                                   // yaw right, toward the airflow
+
+    fl::EntityState straight = makeState(0.0, 1000.0, 0.0);
+    straight.transform.vel[0] = 150.f;
+    straight.transform.vel[1] = 0.f;
+    straight.transform.vel[2] = 0.f;
+    CHECK(c->sample(straight, 0, 1.0 / 60.0, fl::AiTickContext{}).rudder == Catch::Approx(0.f).margin(1e-4f));
+}
+
+TEST_CASE("LuaController: guidance elevator_for_altitude_hold commands toward the target (#1143)", "[lua][guidance]") {
+    auto c = makeCtrl("function compute_control(s,t,dt)\n"
+                      "  return {elevator = guidance.elevator_for_altitude_hold(s.quat, s.pos, s.vel, 2000.0)}\n"
+                      "end");
+    REQUIRE(c->isValid());
+
+    fl::EntityState low = makeState(0.0, 1000.0, 0.0);
+    low.transform.vel[0] = 150.f;
+    low.transform.vel[1] = 0.f;
+    low.transform.vel[2] = 0.f;
+    CHECK(c->sample(low, 0, 1.0 / 60.0, fl::AiTickContext{}).elevator > 0.f); // below target: nose up
+
+    fl::EntityState high = makeState(0.0, 3000.0, 0.0);
+    high.transform.vel[0] = 150.f;
+    high.transform.vel[1] = 0.f;
+    high.transform.vel[2] = 0.f;
+    CHECK(c->sample(high, 0, 1.0 / 60.0, fl::AiTickContext{}).elevator < 0.f); // above target: nose down
+}
+
 // --- the documented example actually runs (#694) --------------------------------------------------
 
 TEST_CASE("LuaController: the detected_contacts() example from docs/modding/ai.md runs as documented") {
     // The acceptance bullet for #694 is "docs/modding/ai.md examples run against the implemented Lua
     // API". A doc example that has never been executed is a promise, not a fact — so this IS the
     // example, verbatim from the guide. If someone changes the API and forgets the docs, this fails.
-    auto c = makeCtrl("function compute_control(state, tick, dt)\n"
-                      "    for _, c in ipairs(detected_contacts()) do\n"
-                      "        if c.reacted and c.faction ~= 0 and c.faction ~= state.faction then\n"
-                      "            local herr = guidance.heading_error(state.quat, state.pos, c.pos)\n"
-                      "            return { aileron = guidance.bank_to_turn_aileron(herr), throttle = 1.0 }\n"
-                      "        end\n"
-                      "    end\n"
-                      "    return { throttle = 0.6 }   -- nothing detected: no target to chase\n"
-                      "end");
+    auto c =
+        makeCtrl("function compute_control(state, tick, dt)\n"
+                 "    for _, c in ipairs(detected_contacts()) do\n"
+                 "        if c.reacted and c.faction ~= 0 and c.faction ~= state.faction then\n"
+                 "            local herr = guidance.heading_error(state.quat, state.pos, c.pos)\n"
+                 "            return { aileron = guidance.turn_aileron(state.quat, state.pos, herr), throttle = 1.0 }\n"
+                 "        end\n"
+                 "    end\n"
+                 "    return { throttle = 0.6 }   -- nothing detected: no target to chase\n"
+                 "end");
     REQUIRE(c->isValid());
 
     // With no contacts it cruises — it does not chase a target it has not found.
@@ -556,6 +624,11 @@ TEST_CASE("LuaController: the Script-anatomy loiter example from docs/modding/ai
     // straight ahead forever. This is that example, verbatim from the guide (only the loiter centre
     // constants matter to the assertions). If the binding signature and the doc drift again, this
     // fails instead of the next content author's evening.
+    //
+    // Updated with the example in #1143: it used to teach bank_to_turn_aileron + coordinated_rudder,
+    // which roll a scripted aircraft onto its back on an orbit exactly as they did the engine's own
+    // loiter controllers. Keeping this test in step with the guide is the whole point of it existing,
+    // so it moves when the guide moves.
     auto c = makeCtrl("local cx, cz, alt = 0, 0, 600\n"
                       "local radius = 3000\n"
                       "\n"
@@ -572,11 +645,10 @@ TEST_CASE("LuaController: the Script-anatomy loiter example from docs/modding/ai
                       "    local tx   = pos.x + nx * math.min(dist, 1000) + nz * 1000\n"
                       "    local tz   = pos.z + nz * math.min(dist, 1000) - nx * 1000\n"
                       "    local herr = guidance.heading_error(quat, pos, {x = tx, y = pos.y, z = tz})\n"
-                      "    local perr = guidance.pitch_error_from_alt(quat, pos, alt - pos.y)\n"
                       "    return {\n"
-                      "        aileron  = guidance.bank_to_turn_aileron(herr),\n"
-                      "        rudder   = guidance.coordinated_rudder(guidance.bank_to_turn_aileron(herr)),\n"
-                      "        elevator = guidance.elevator_from_pitch_error(perr),\n"
+                      "        aileron  = guidance.turn_aileron(quat, pos, herr),\n"
+                      "        rudder   = guidance.rudder_to_coordinate(guidance.sideslip(quat, state.vel)),\n"
+                      "        elevator = guidance.elevator_for_altitude_hold(quat, pos, state.vel, alt),\n"
                       "        throttle = 0.65,\n"
                       "    }\n"
                       "end");
