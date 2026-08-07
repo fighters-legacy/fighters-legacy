@@ -38,6 +38,11 @@ fl::ControlInput BreakTurnController::sample(const fl::EntityState& state, uint6
         };
         // Bank toward the threat to orient the lift vector for the maximum-G pull.
         float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, threatPos, m_planetRadiusM);
+        // Deliberately the RATE-only turn law (#1143): rolling past knife-edge IS this manoeuvre, so an
+        // attitude-closed bank limit would be the regression. It is safe here for the reason the loiter
+        // controllers were not — this runs for a couple of seconds under a state machine, not
+        // indefinitely, so the heading error cannot outlive the manoeuvre. tests/test_ai_turn_law.cpp
+        // pins that it still rolls hard.
         ctrl.aileron = bankToTurnAileron(headErr);
         ctrl.rudder = coordinatedRudder(ctrl.aileron);
         ctrl.throttle = 1.f;

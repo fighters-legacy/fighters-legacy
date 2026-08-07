@@ -86,8 +86,12 @@ fl::ControlInput LandingController::sample(const fl::EntityState& state, uint64_
         const float altErr = targetAlt - static_cast<float>(fl::localAltitude(ownPos, m_planetRadiusM));
         ctrl.elevator = elevatorFromPitchError(
             pitchErrorFromAlt(state.transform.quat, state.transform.pos, altErr, m_planetRadiusM));
-        ctrl.aileron = bankToTurnAileron(headErr);
-        ctrl.rudder = coordinatedRudder(ctrl.aileron);
+        // Bank-ANGLE command closed on the current bank, and a rudder that nulls the SIDESLIP
+        // (#1143). 25 deg: an approach is flown gently, and a wing down near the runway is how you
+        // arrive on one wingtip. The rate-only law had no ceiling at all here.
+        ctrl.aileron =
+            bankToTurnAileron(state.transform.quat, state.transform.pos, headErr, m_planetRadiusM, kApproachBankRad);
+        ctrl.rudder = rudderToCoordinate(sideslipOf(state.transform.quat, state.transform.vel));
         // Hold the approach speed.
         ctrl.throttle = std::clamp(0.5f + 0.02f * (m_approachSpeedMps - gs), 0.f, 1.f);
         break;
@@ -96,8 +100,9 @@ fl::ControlInput LandingController::sample(const fl::EntityState& state, uint64_
         // Arrest the sink just above the deck: idle power, a gentle nose-up to cushion touchdown.
         ctrl.throttle = 0.f;
         ctrl.elevator = 0.25f;
-        ctrl.aileron = bankToTurnAileron(headErr);
-        ctrl.rudder = coordinatedRudder(ctrl.aileron);
+        ctrl.aileron =
+            bankToTurnAileron(state.transform.quat, state.transform.pos, headErr, m_planetRadiusM, kApproachBankRad);
+        ctrl.rudder = rudderToCoordinate(sideslipOf(state.transform.quat, state.transform.vel));
         break;
     }
     case Phase::Rollout: {

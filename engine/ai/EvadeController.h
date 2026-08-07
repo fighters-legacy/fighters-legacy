@@ -15,7 +15,7 @@ class EvadeController : public fl::IEntityController {
     EvadeController(const fl::EntityManager& entityManager, fl::EntityId threatId, float throttle = 1.f,
                     bool useAfterburner = true);
 
-    fl::ControlInput sample(const fl::EntityState& state, uint64_t /*tick*/, double /*dt*/,
+    fl::ControlInput sample(const fl::EntityState& state, uint64_t /*tick*/, double dt,
                             const fl::AiTickContext& /*ctx*/ = {}) override;
 
     void setThreat(fl::EntityId id) noexcept {
@@ -27,6 +27,12 @@ class EvadeController : public fl::IEntityController {
     fl::EntityId m_threatId;
     float m_throttle;
     bool m_useAfterburner;
+    // Altitude the evasion started at, and the pitch differentiated for inner-loop damping (#1143):
+    // an unloaded 80 deg bank spirals into the ground, which is not an escape.
+    float m_holdAltM{0.f};
+    bool m_haveHoldAlt{false};
+    float m_prevPitchRad{0.f};
+    bool m_havePrevPitch{false};
 };
 
 } // namespace fl::ai

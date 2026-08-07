@@ -98,8 +98,11 @@ fl::ControlInput TakeoffController::sample(const fl::EntityState& state, uint64_
         const float curPitch = fl::pitchOf(state.transform.quat, ownPos, m_planetRadiusM);
         ctrl.throttle = 1.f;
         ctrl.elevator = elevatorFromPitchError(kClimbPitchRad - curPitch);
-        ctrl.aileron = bankToTurnAileron(headErr);
-        ctrl.rudder = coordinatedRudder(ctrl.aileron);
+        // Bank-ANGLE command closed on the current bank, and a rudder that nulls the SIDESLIP
+        // (#1143). 25 deg: a climbout holds the runway heading, it does not manoeuvre.
+        ctrl.aileron =
+            bankToTurnAileron(state.transform.quat, state.transform.pos, headErr, m_planetRadiusM, kApproachBankRad);
+        ctrl.rudder = rudderToCoordinate(sideslipOf(state.transform.quat, state.transform.vel));
         break;
     }
     case Phase::Done:

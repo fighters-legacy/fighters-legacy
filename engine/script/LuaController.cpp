@@ -230,6 +230,65 @@ static int guidanceBankToTurnAileron(lua_State* L) {
     return 1;
 }
 
+// turn_aileron(quat, own_pos, heading_error_rad, [radius_m], [max_bank_rad]) — the attitude-closed
+// turn law (#1143). Aileron commands a roll RATE, so bank_to_turn_aileron above winds the roll up
+// for as long as the heading error survives; every engine controller that flew a sustained turn on
+// it reached ~180 deg of bank within 90 s. This one closes on the aircraft's own bank and stops.
+static int guidanceTurnAileron(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE); // quat
+    luaL_checktype(L, 2, LUA_TTABLE); // own_pos
+    const float herr = static_cast<float>(luaL_checknumber(L, 3));
+    float quat[4];
+    double own[3];
+    readQuat(L, 1, quat);
+    readVec3(L, 2, own);
+    const double R = luaL_optnumber(L, 4, fl::kEarthRadiusM);
+    const float maxBank = static_cast<float>(luaL_optnumber(L, 5, static_cast<double>(fl::ai::kNavBankRad)));
+    lua_pushnumber(L, static_cast<double>(fl::ai::bankToTurnAileron(quat, own, herr, R, maxBank)));
+    return 1;
+}
+
+// sideslip(quat, vel) — the angle between where the aircraft points and where it is going.
+static int guidanceSideslip(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE); // quat
+    luaL_checktype(L, 2, LUA_TTABLE); // vel
+    float quat[4];
+    double vel[3];
+    readQuat(L, 1, quat);
+    readVec3(L, 2, vel);
+    const float velF[3] = {static_cast<float>(vel[0]), static_cast<float>(vel[1]), static_cast<float>(vel[2])};
+    lua_pushnumber(L, static_cast<double>(fl::ai::sideslipOf(quat, velF)));
+    return 1;
+}
+
+// rudder_to_coordinate(sideslip_rad) — rudder that nulls a skid. THIS is turn coordination;
+// coordinated_rudder(aileron) commands nothing in a steady turn, where the aileron is already zero.
+static int guidanceRudderToCoordinate(lua_State* L) {
+    const float beta = static_cast<float>(luaL_checknumber(L, 1));
+    lua_pushnumber(L, static_cast<double>(fl::ai::rudderToCoordinate(beta)));
+    return 1;
+}
+
+// elevator_for_altitude_hold(quat, own_pos, vel, target_alt_m, [radius_m]) — altitude hold closed on
+// CLIMB RATE. pitch_error_from_alt commands a pitch attitude and cannot tell "nose up" from
+// "climbing": an aircraft mushing nose-high while descending satisfies it completely (#1141).
+static int guidanceElevatorForAltitudeHold(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE); // quat
+    luaL_checktype(L, 2, LUA_TTABLE); // own_pos
+    luaL_checktype(L, 3, LUA_TTABLE); // vel
+    const float targetAlt = static_cast<float>(luaL_checknumber(L, 4));
+    float quat[4];
+    double own[3];
+    double vel[3];
+    readQuat(L, 1, quat);
+    readVec3(L, 2, own);
+    readVec3(L, 3, vel);
+    const float velF[3] = {static_cast<float>(vel[0]), static_cast<float>(vel[1]), static_cast<float>(vel[2])};
+    const double R = luaL_optnumber(L, 5, fl::kEarthRadiusM);
+    lua_pushnumber(L, static_cast<double>(fl::ai::elevatorForAltitudeHold(quat, own, velF, targetAlt, R)));
+    return 1;
+}
+
 static int guidanceCoordinatedRudder(lua_State* L) {
     float aileron = static_cast<float>(luaL_checknumber(L, 1));
     lua_pushnumber(L, static_cast<double>(fl::ai::coordinatedRudder(aileron)));
@@ -788,7 +847,11 @@ static void registerGuidanceModule(lua_State* L) {
         {"heading_error", guidanceHeadingError},
         {"pitch_error_from_alt", guidancePitchErrorFromAlt},
         {"bank_to_turn_aileron", guidanceBankToTurnAileron},
+        {"turn_aileron", guidanceTurnAileron},
         {"coordinated_rudder", guidanceCoordinatedRudder},
+        {"sideslip", guidanceSideslip},
+        {"rudder_to_coordinate", guidanceRudderToCoordinate},
+        {"elevator_for_altitude_hold", guidanceElevatorForAltitudeHold},
         {"elevator_from_pitch_error", guidanceElevatorFromPitchError},
         {"body_forward", guidanceBodyForward},
         {nullptr, nullptr},
