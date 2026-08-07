@@ -37,16 +37,27 @@ struct CountingLogger final : ILogger {
     }
 };
 
+// What the pack DID, held separately from the pack itself.
+//
+// AssetManager takes ownership of every pack and DESTROYS the ones it drops, so a raw pointer to a
+// pack is dangling the moment initialize() decides against it. Reading counters through one is a
+// use-after-free that Linux happened to tolerate and macOS did not. The counters therefore live in
+// a shared block the test keeps alive.
+struct PackCounters {
+    int init{0};
+    int configure{0};
+    int load{0};
+    std::string lastRequested;
+};
+
 // A pack that can be told exactly what to do: its identity, whether it needs configuration, and
 // what bytes (if any) it hands back for a texture.
 struct ScriptedPack final : public NullContentPack {
+    std::shared_ptr<PackCounters> counters{std::make_shared<PackCounters>()};
     std::string packId{"scripted"};
     std::string packVersion{"1.0"};
     Status initStatus{Status::Ready};
     bool configureOk{true};
-    int initCalls{0};
-    int configureCalls{0};
-    int loadCalls{0};
     std::optional<std::vector<uint8_t>> textureBytes; // nullopt = "I don't have it"
     std::vector<std::string> assets;
 
@@ -57,16 +68,16 @@ struct ScriptedPack final : public NullContentPack {
         return packVersion.c_str();
     }
     Status init() override {
-        ++initCalls;
+        ++counters->init;
         return initStatus;
     }
     bool configure(IWindow*) override {
-        ++configureCalls;
+        ++counters->configure;
         return configureOk;
     }
     std::optional<TextureData> loadTexture(const char* name) override {
-        ++loadCalls;
-        lastRequested = name ? name : "";
+        ++counters->load;
+        counters->lastRequested = name ? name : "";
         if (!textureBytes)
             return std::nullopt;
         TextureData d;
@@ -76,7 +87,6 @@ struct ScriptedPack final : public NullContentPack {
     std::vector<std::string> listAssets(AssetType) const override {
         return assets;
     }
-    std::string lastRequested;
 };
 
 // A KTX2 header the asset validator accepts, padded to a plausible size.
@@ -102,15 +112,15 @@ TEST_CASE("AssetManager: a pack needing configuration is configured when a windo
     MockWindow window;
     auto p = std::make_unique<ScriptedPack>();
     p->initStatus = IContentPack::Status::NeedsConfiguration;
-    ScriptedPack* raw = p.get();
+    const auto counters = p->counters; // outlives the pack, which the manager may destroy
 
     std::vector<std::unique_ptr<IContentPack>> packs;
     packs.push_back(std::move(p));
     auto am = makeManager(std::move(packs), log);
     am->initialize(&window);
 
-    CHECK(raw->initCalls == 1);
-    CHECK(raw->configureCalls == 1);
+    CHECK(counters->init == 1);
+    CHECK(counters->configure == 1);
     CHECK(am->packManifest().size() == 1); // configured, so still active
 }
 
@@ -121,15 +131,15 @@ TEST_CASE("AssetManager: a pack needing configuration is dropped headless (#1145
     CountingLogger log;
     auto p = std::make_unique<ScriptedPack>();
     p->initStatus = IContentPack::Status::NeedsConfiguration;
-    ScriptedPack* raw = p.get();
+    const auto counters = p->counters; // outlives the pack, which the manager may destroy
 
     std::vector<std::unique_ptr<IContentPack>> packs;
     packs.push_back(std::move(p));
     auto am = makeManager(std::move(packs), log);
     am->initialize(nullptr);
 
-    CHECK(raw->initCalls == 1);
-    CHECK(raw->configureCalls == 0);
+    CHECK(counters->init == 1);
+    CHECK(counters->configure == 0);
     CHECK(am->packManifest().empty());
 }
 
@@ -186,8 +196,8 @@ TEST_CASE("AssetManager: a pack without the asset falls through to the next (#11
     auto holder = std::make_unique<ScriptedPack>();
     holder->packId = "holder";
     holder->textureBytes = validKtx2();
-    ScriptedPack* emptyRaw = empty.get();
-    ScriptedPack* holderRaw = holder.get();
+    const auto emptyCounters = empty->counters;
+    const auto holderCounters = holder->counters;
 
     std::vector<std::unique_ptr<IContentPack>> packs;
     packs.push_back(std::move(empty));
@@ -197,8 +207,8 @@ TEST_CASE("AssetManager: a pack without the asset falls through to the next (#11
 
     const auto tex = am->loadTexture("hud_font");
     CHECK(tex != nullptr);
-    CHECK(emptyRaw->loadCalls == 1);  // asked
-    CHECK(holderRaw->loadCalls == 1); // and it answered
+    CHECK(emptyCounters->load == 1);  // asked
+    CHECK(holderCounters->load == 1); // and it answered
 }
 
 TEST_CASE("AssetManager: an asset failing validation is discarded and the next pack tried (#1145)",
@@ -245,7 +255,7 @@ TEST_CASE("AssetManager: a loaded asset is cached and the packs are not asked tw
     CountingLogger log;
     auto p = std::make_unique<ScriptedPack>();
     p->textureBytes = validKtx2();
-    ScriptedPack* raw = p.get();
+    const auto counters = p->counters; // outlives the pack, which the manager may destroy
 
     std::vector<std::unique_ptr<IContentPack>> packs;
     packs.push_back(std::move(p));
@@ -256,14 +266,14 @@ TEST_CASE("AssetManager: a loaded asset is cached and the packs are not asked tw
     const auto second = am->loadTexture("hud_font");
     REQUIRE(first != nullptr);
     CHECK(first == second);     // the same shared_ptr, not a second decode
-    CHECK(raw->loadCalls == 1); // asked exactly once
+    CHECK(counters->load == 1); // asked exactly once
 }
 
 TEST_CASE("AssetManager: the pack sees the name without its type prefix (#1145)", "[content][assets]") {
     CountingLogger log;
     auto p = std::make_unique<ScriptedPack>();
     p->textureBytes = validKtx2();
-    ScriptedPack* raw = p.get();
+    const auto counters = p->counters; // outlives the pack, which the manager may destroy
 
     std::vector<std::unique_ptr<IContentPack>> packs;
     packs.push_back(std::move(p));
@@ -271,5 +281,5 @@ TEST_CASE("AssetManager: the pack sees the name without its type prefix (#1145)"
     am->initialize(nullptr);
     am->loadTexture("hud_font");
 
-    CHECK(raw->lastRequested == "hud_font"); // the cache key's "texture:" prefix is manager-side only
+    CHECK(counters->lastRequested == "hud_font"); // the cache key's "texture:" prefix is manager-side only
 }
