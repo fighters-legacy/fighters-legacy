@@ -939,6 +939,23 @@ catch_discover_tests(test_shot_director)
 # required tables. A model that loads with a table missing flies wrong instead of failing to load.
 # AssetManager multi-pack resolution (#1145): which pack wins, what happens when one hands back
 # rubbish, and what the cache does about it — the behaviour that makes modding work.
+# createController (#1145): 23 behaviours behind one string, each with its own argument grammar.
+# The surface an operator types at the console and an author writes in YAML — a malformed argument
+# must yield null rather than a controller quietly flying on defaults nobody asked for.
+# VoiceCalloutManager audio resolution (#1145): TTS vs packed OGG, the radio treatment, the buffer
+# cache, and every way each of those can be unavailable. The subsystem is built to degrade; that is
+# only true if it is exercised.
+add_executable(test_voice_callout_paths test_voice_callout_paths.cpp)
+target_link_libraries(test_voice_callout_paths PRIVATE Catch2::Catch2WithMain engine-audio engine-content
+    engine-radio engine-i18n)
+target_include_directories(test_voice_callout_paths PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_voice_callout_paths)
+
+add_executable(test_ai_controller_factory test_ai_controller_factory.cpp)
+target_link_libraries(test_ai_controller_factory PRIVATE Catch2::Catch2WithMain engine-ai engine-entity
+    engine-spatial engine-sensor engine-worldai)
+catch_discover_tests(test_ai_controller_factory)
+
 add_executable(test_asset_manager_fallback test_asset_manager_fallback.cpp)
 target_link_libraries(test_asset_manager_fallback PRIVATE Catch2::Catch2WithMain engine-content)
 target_include_directories(test_asset_manager_fallback PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
