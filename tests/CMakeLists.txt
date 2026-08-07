@@ -812,6 +812,11 @@ add_executable(test_airport_csv_import test_airport_csv_import.cpp)
 target_link_libraries(test_airport_csv_import PRIVATE Catch2::Catch2WithMain engine-world)
 catch_discover_tests(test_airport_csv_import)
 
+add_executable(test_airport_bootstrap test_airport_bootstrap.cpp)
+target_link_libraries(test_airport_bootstrap PRIVATE Catch2::Catch2WithMain engine-world)
+target_include_directories(test_airport_bootstrap PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_airport_bootstrap)
+
 add_executable(test_airport_renderer test_airport_renderer.cpp)
 target_link_libraries(test_airport_renderer PRIVATE Catch2::Catch2WithMain engine-render engine-world)
 catch_discover_tests(test_airport_renderer)
