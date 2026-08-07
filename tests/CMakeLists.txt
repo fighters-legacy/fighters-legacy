@@ -1243,6 +1243,10 @@ target_link_libraries(test_game_console PRIVATE Catch2::Catch2WithMain engine-co
 target_include_directories(test_game_console PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_game_console)
 
+add_executable(test_console_commands_paths test_console_commands_paths.cpp)
+target_link_libraries(test_console_commands_paths PRIVATE Catch2::Catch2WithMain engine-console engine-entity)
+catch_discover_tests(test_console_commands_paths)
+
 add_executable(test_command_shell test_command_shell.cpp)
 target_link_libraries(test_command_shell PRIVATE Catch2::Catch2WithMain engine-console)
 target_include_directories(test_command_shell PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -1305,6 +1309,11 @@ add_executable(test_trust_framework test_trust_framework.cpp)
 target_link_libraries(test_trust_framework PRIVATE Catch2::Catch2WithMain engine-content)
 target_include_directories(test_trust_framework PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_trust_framework)
+
+add_executable(test_mod_loader_load test_mod_loader_load.cpp)
+target_link_libraries(test_mod_loader_load PRIVATE Catch2::Catch2WithMain engine-content)
+target_include_directories(test_mod_loader_load PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_mod_loader_load)
 
 add_executable(test_asset_validator test_asset_validator.cpp)
 target_link_libraries(test_asset_validator PRIVATE Catch2::Catch2WithMain engine-content)
