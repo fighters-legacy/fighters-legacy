@@ -252,6 +252,28 @@ Create a `CMakeUserPresets.json` in the repo root to override preset defaults lo
 
 For running the test suite see [Building → Running tests](#running-tests).
 
+### Test names are ASCII
+
+`catch_discover_tests()` registers one ctest test per Catch2 case using the case's **name**, and
+ctest runs it by passing that name straight back to the binary as a filter argument. On Windows that
+round trip is not UTF-8, so a non-ASCII character arrives mangled, the filter matches nothing, and
+ctest reports a **failure** for a test that never ran:
+
+```
+Filters: "AtcFacility: a landed flight is never retired ? pinned pending #1149"
+No test cases matched
+***Failed
+```
+
+Linux and macOS run it green, so the diagnosis costs a full CI cycle and the failure text points at
+the wrong subsystem. Keep `TEST_CASE` names and tags to ASCII — use `--` or parentheses instead of an
+em dash, straight quotes instead of curly ones. `tools/lint_test_names.py` enforces this in the
+`lint` job, before the build matrix spends macOS and Windows minutes.
+
+**This applies only to names and tags.** Comments, log strings, assertion text and localisation data
+are UTF-8 throughout and should stay that way; the linter reads nothing but the registration macros'
+string literals.
+
 ### Code coverage
 
 The `Coverage` workflow runs on every pull request and on every push to `main`, and applies these
@@ -268,11 +290,14 @@ automatically opened tracking issue that closes itself on the next green run, be
 that only reports through a red X in the Actions list can stay broken unnoticed. It did, for three
 weeks (#1128).
 
-⚠ **`engine/` branch coverage is 75.09% today, so the branch gate fails.** That is the first real
-measurement since 2026-06-29, and the engine grew from 21.7k to 74.3k lines while the gate could not
-measure anything — the new code arrived below the bar. The threshold stays at 80: the shortfall is
-tracked as debt in **#1145**, with the per-subsystem breakdown, rather than absorbed by moving the
-number. Until it closes, judge a change by its Codecov delta rather than by the gate's colour.
+`engine/` branch coverage is **80.3%** and the gate passes (#1145, 2026-08-07). It had been 75.09%
+— the first real measurement since 2026-06-29, taken after the engine grew from 21.7k to 74.3k lines
+while the gate could not measure anything, so the new code had arrived below the bar. The threshold
+was held at 80 and the shortfall paid down rather than absorbed by moving the number.
+
+The margin above the bar is thin by design but not razor-thin: branch counts differ slightly between
+compilers, so a change that lands the local measurement at exactly 80.0% can still fail on CI. Aim
+for headroom rather than the bar itself.
 
 `platform/` backends, `tools/`, and `game/` are excluded from coverage reporting. Branch
 coverage catches untested conditional paths and is the primary gate; line coverage is a
