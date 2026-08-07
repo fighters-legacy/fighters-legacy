@@ -945,6 +945,22 @@ catch_discover_tests(test_shot_director)
 # VoiceCalloutManager audio resolution (#1145): TTS vs packed OGG, the radio treatment, the buffer
 # cache, and every way each of those can be unavailable. The subsystem is built to degrade; that is
 # only true if it is exercised.
+# The pack-loading half of ContentBootstrap (#1145): airports, zone policies and weapons share the
+# entity-def loader's list/load/parse/register shape. One broken file in a downloaded pack must cost
+# the player that one asset, never the pack — and must name the file so an author can find it.
+# AircraftManual for the non-fixed-wing vehicles and the full store/sensor vocabularies (#1145).
+# The enum-to-name tables are the kind of thing that silently grows a "?" when an enumerator is added.
+add_executable(test_aircraft_manual_vehicles test_aircraft_manual_vehicles.cpp)
+target_link_libraries(test_aircraft_manual_vehicles PRIVATE Catch2::Catch2WithMain engine-manual engine-flight
+    engine-entity engine-weapon engine-sensor)
+catch_discover_tests(test_aircraft_manual_vehicles)
+
+add_executable(test_content_bootstrap_loaders test_content_bootstrap_loaders.cpp)
+target_link_libraries(test_content_bootstrap_loaders PRIVATE Catch2::Catch2WithMain engine-bootstrap
+    engine-content engine-entity engine-weapon engine-world)
+target_include_directories(test_content_bootstrap_loaders PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_content_bootstrap_loaders)
+
 add_executable(test_voice_callout_paths test_voice_callout_paths.cpp)
 target_link_libraries(test_voice_callout_paths PRIVATE Catch2::Catch2WithMain engine-audio engine-content
     engine-radio engine-i18n)
