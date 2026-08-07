@@ -420,6 +420,11 @@ target_link_libraries(test_userconfig PRIVATE Catch2::Catch2WithMain engine-conf
 target_include_directories(test_userconfig PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_userconfig)
 
+add_executable(test_userconfig_enums test_userconfig_enums.cpp)
+target_link_libraries(test_userconfig_enums PRIVATE Catch2::Catch2WithMain engine-config)
+target_include_directories(test_userconfig_enums PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_userconfig_enums)
+
 add_executable(test_settings test_settings.cpp)
 target_link_libraries(test_settings PRIVATE Catch2::Catch2WithMain engine-config)
 target_include_directories(test_settings PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
