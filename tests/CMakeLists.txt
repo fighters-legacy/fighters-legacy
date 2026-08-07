@@ -356,6 +356,10 @@ target_link_libraries(test_content_system PRIVATE Catch2::Catch2WithMain engine-
     engine-sensor)
 catch_discover_tests(test_content_system)
 
+add_executable(test_folder_content_pack test_folder_content_pack.cpp)
+target_link_libraries(test_folder_content_pack PRIVATE Catch2::Catch2WithMain engine-content)
+catch_discover_tests(test_folder_content_pack)
+
 # fl::tomlInt guards five parsers against a real UB bug in toml++ (#824).
 add_executable(test_toml_numeric test_toml_numeric.cpp)
 target_link_libraries(test_toml_numeric PRIVATE Catch2::Catch2WithMain tomlplusplus::tomlplusplus)
@@ -776,6 +780,10 @@ catch_discover_tests(test_match_controller)
 add_executable(test_airport_registry test_airport_registry.cpp)
 target_link_libraries(test_airport_registry PRIVATE Catch2::Catch2WithMain engine-world)
 catch_discover_tests(test_airport_registry)
+
+add_executable(test_airport_csv_import test_airport_csv_import.cpp)
+target_link_libraries(test_airport_csv_import PRIVATE Catch2::Catch2WithMain engine-world)
+catch_discover_tests(test_airport_csv_import)
 
 add_executable(test_airport_renderer test_airport_renderer.cpp)
 target_link_libraries(test_airport_renderer PRIVATE Catch2::Catch2WithMain engine-render engine-world)
