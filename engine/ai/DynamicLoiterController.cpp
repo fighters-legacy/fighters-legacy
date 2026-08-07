@@ -4,15 +4,17 @@
 #include "ai/Guidance.h"
 #include "entity/EntityState.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace fl::ai {
 
 DynamicLoiterController::DynamicLoiterController(const fl::EntityManager& entityManager, fl::EntityId targetId,
                                                  float radiusM, float throttle, LoiterDir dir)
-    : m_entityManager(entityManager), m_targetId(targetId), m_radiusM(radiusM), m_throttle(throttle), m_dir(dir) {}
+    : m_entityManager(entityManager), m_targetId(targetId), m_radiusM(radiusM), m_throttle(throttle),
+      m_targetSpeedMps(std::clamp(0.85f * turnSpeedForRadius(radiusM, kMaxBankRad), 60.f, 300.f)), m_dir(dir) {}
 
-fl::ControlInput DynamicLoiterController::sample(const fl::EntityState& state, uint64_t /*tick*/, double /*dt*/,
+fl::ControlInput DynamicLoiterController::sample(const fl::EntityState& state, uint64_t /*tick*/, double dt,
                                                  const fl::AiTickContext& /*ctx*/) {
     const fl::EntityState* target = m_entityManager.get(m_targetId);
     if (!target || target->dead)
@@ -22,7 +24,13 @@ fl::ControlInput DynamicLoiterController::sample(const fl::EntityState& state, u
     const glm::dvec3 center(target->transform.pos[0], target->transform.pos[1], target->transform.pos[2]);
 
     fl::ControlInput ctrl{};
-    ctrl.throttle = m_throttle;
+    // Same three loops as LoiterController, for the same reason (#1141): this orbits indefinitely
+    // too, so a rate-only turn law winds the roll up, an attitude-only altitude law mushes it into
+    // the ground, and a fixed throttle lets the airspeed run past what the orbit can be turned at.
+    const float speed =
+        std::sqrt(state.transform.vel[0] * state.transform.vel[0] + state.transform.vel[1] * state.transform.vel[1] +
+                  state.transform.vel[2] * state.transform.vel[2]);
+    ctrl.throttle = throttleForSpeed(speed, m_targetSpeedMps, m_throttle);
 
     // Vector from entity to centre in the XZ plane.
     float tx = static_cast<float>(center.x - state.transform.pos[0]);
@@ -55,15 +63,20 @@ fl::ControlInput DynamicLoiterController::sample(const fl::EntityState& state, u
     };
 
     float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, lookahead, m_planetRadiusM);
-    ctrl.aileron = bankToTurnAileron(headErr);
-    ctrl.rudder = coordinatedRudder(ctrl.aileron);
+    ctrl.aileron = bankToTurnAileron(state.transform.quat, state.transform.pos, headErr, m_planetRadiusM, kMaxBankRad);
+    ctrl.rudder = rudderToCoordinate(sideslipOf(state.transform.quat, state.transform.vel));
 
-    // Radial (local-up) altitude error toward the target's altitude — escort at the covered asset's height.
+    // Escort at the covered asset's own altitude, held on climb rate rather than pitch attitude.
     const glm::dvec3 ownWorld(state.transform.pos[0], state.transform.pos[1], state.transform.pos[2]);
-    float altErr =
-        static_cast<float>(fl::localAltitude(center, m_planetRadiusM) - fl::localAltitude(ownWorld, m_planetRadiusM));
-    float pitchErr = pitchErrorFromAlt(state.transform.quat, state.transform.pos, altErr, m_planetRadiusM);
-    ctrl.elevator = elevatorFromPitchError(pitchErr);
+    const float curPitch = fl::pitchOf(state.transform.quat, ownWorld, m_planetRadiusM);
+    float pitchRate = 0.f;
+    if (m_havePrevPitch && dt > 1e-6)
+        pitchRate = static_cast<float>((curPitch - m_prevPitchRad) / dt);
+    m_prevPitchRad = curPitch;
+    m_havePrevPitch = true;
+    ctrl.elevator = elevatorForAltitudeHold(state.transform.quat, state.transform.pos, state.transform.vel,
+                                            static_cast<float>(fl::localAltitude(center, m_planetRadiusM)),
+                                            m_planetRadiusM, pitchRate);
 
     return ctrl;
 }
