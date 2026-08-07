@@ -154,8 +154,15 @@ jobs:
       # The durable, self-clearing signal for main. A PR run needs none — its red X is attached to
       # the thing being reviewed — so this is push-only, which also keeps it out of fork PRs where
       # GITHUB_TOKEN has no issues: write.
+      #
+      # `!cancelled()`, NOT `always()`: this workflow sets cancel-in-progress, so merging a few PRs
+      # in quick succession cancels each run as the next push arrives. Under always() those
+      # cancelled runs reached this step with no gate verdict and filed "the Coverage workflow
+      # failed BEFORE the gate ran — check the build and test steps", which was untrue: nothing was
+      # broken, the run was superseded. Five merges in 90 seconds produced exactly that, and an
+      # automated signal that cries wolf is the thing this gate exists to not be.
       - name: Open or close the coverage tracking issue
-        if: always() && github.event_name == 'push'
+        if: ${{ !cancelled() && github.event_name == 'push' }}
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
