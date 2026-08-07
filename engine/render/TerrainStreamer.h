@@ -221,7 +221,7 @@ class TerrainStreamer : public IAsyncFilesystemHandler {
     // update() helpers (main thread)
     void refine(const TileKey& key, glm::dvec3 camPos, std::vector<TileKey>& leaves) const;
     [[nodiscard]] bool shouldRefine(const TileKey& key, glm::dvec3 camPos) const noexcept;
-    void balanceLeaves(TileSet& leaves) const;
+    void balanceLeaves(TileSet& leaves); // non-const: uses the m_balanceSnapshot scratch
     void loadTile(const TileKey& key, int& proceduralCount);
     void loadTileProcedural(const TileKey& key);
     void queueSatelliteRead(const TileKey& key); // #488 — client-only; runs for pack AND procedural tiles
@@ -254,6 +254,20 @@ class TerrainStreamer : public IAsyncFilesystemHandler {
     // Desired tree from the last update(): leaves + every ancestor up to the roots.
     TileSet m_desiredLeaves;
     TileSet m_desiredAll;
+
+    // update() scratch, reused across frames (#1135). update() runs every frame — on fl-server too,
+    // which drives the streamer headless for height queries — and these were locals, so each frame
+    // allocated and freed a hash node per leaf tile plus the vectors' growth: ~65 M allocation calls
+    // over a 93-minute soak at 0 B net. m_lastRefinedLeaves is the pre-balance leaf set the last
+    // rebuild ran on; update() skips the rebuild entirely while it is unchanged, which is the steady
+    // state. It MUST be cleared anywhere m_desiredLeaves/m_desiredAll are dropped, or the skip would
+    // leave the desired tree empty (setPlanetRadius, setHeightModifier).
+    std::vector<TileKey> m_refinedLeaves;
+    std::vector<TileKey> m_lastRefinedLeaves;
+    TileSet m_scratchLeaves;
+    std::vector<TileKey> m_balanceSnapshot;
+    std::vector<std::pair<double, TileKey>> m_missingTiles;
+    std::vector<std::pair<uint64_t, TileKey>> m_evictable;
 
     double m_planetRadiusM{6'371'000.0};
     float m_screenHeightPx{1080.f};
