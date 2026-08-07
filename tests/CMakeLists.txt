@@ -931,6 +931,24 @@ catch_discover_tests(test_shot_director)
 
 # engine-campaign (#635): the deterministic dynamic-campaign runtime — frontline raster, campaign
 # schema parser, and the theater-graph state machine (story injection, dynamic selection, save/restore).
+# CampaignParser validation + referential integrity (#1145): every way a campaign can be malformed.
+# The parser is the only thing between an authoring mistake and a campaign that loads broken.
+# MissionParser schema validation (#1145): ~90 distinct rejections, written as perturbations of one
+# valid mission because that is how authoring failures arrive — a working file with one thing wrong.
+# FlightModelParser rejections (#1145): one entry point, five vehicle schemas, each with its own
+# required tables. A model that loads with a table missing flies wrong instead of failing to load.
+add_executable(test_flight_model_parser_validation test_flight_model_parser_validation.cpp)
+target_link_libraries(test_flight_model_parser_validation PRIVATE Catch2::Catch2WithMain engine-flight)
+catch_discover_tests(test_flight_model_parser_validation)
+
+add_executable(test_mission_parser_validation test_mission_parser_validation.cpp)
+target_link_libraries(test_mission_parser_validation PRIVATE Catch2::Catch2WithMain engine-mission)
+catch_discover_tests(test_mission_parser_validation)
+
+add_executable(test_campaign_parser_validation test_campaign_parser_validation.cpp)
+target_link_libraries(test_campaign_parser_validation PRIVATE Catch2::Catch2WithMain engine-campaign)
+catch_discover_tests(test_campaign_parser_validation)
+
 add_executable(test_campaign test_campaign.cpp)
 target_link_libraries(test_campaign
     PRIVATE Catch2::Catch2WithMain engine-campaign engine-mission) # engine-mission: a generated sortie must parse
@@ -1030,6 +1048,14 @@ catch_discover_tests(test_radio_net)
 add_executable(test_voice_mixer test_voice_mixer.cpp)
 target_link_libraries(test_voice_mixer PRIVATE Catch2::Catch2WithMain engine-voice)
 catch_discover_tests(test_voice_mixer)
+
+# The client voice facade (#531). Its five components each had a test; the object that decides WHEN
+# to key, WHICH net to key on, and when the capture device runs had none — 0.0% branch coverage
+# until #1145, and that is exactly where the player-visible behaviour lives.
+add_executable(test_voice_chat test_voice_chat.cpp)
+target_link_libraries(test_voice_chat PRIVATE Catch2::Catch2WithMain engine-voice)
+target_include_directories(test_voice_chat PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_voice_chat)
 
 # Radio presentation DSP (#925): band-limiting, soft clipping, and the byte-stable click/squelch cues.
 add_executable(test_radio_dsp test_radio_dsp.cpp)
