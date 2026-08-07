@@ -724,6 +724,11 @@ target_link_libraries(test_atc_service PRIVATE engine-atc engine-world engine-en
     Catch2::Catch2WithMain)
 catch_discover_tests(test_atc_service)
 
+add_executable(test_atc_facility_sequencing test_atc_facility_sequencing.cpp)
+target_link_libraries(test_atc_facility_sequencing PRIVATE engine-atc engine-world engine-entity engine-spatial
+    Catch2::Catch2WithMain)
+catch_discover_tests(test_atc_facility_sequencing)
+
 # The scripted wingman grammar + its two wire messages (#610). Header-only + engine-protocol only.
 add_executable(test_wingman_command test_wingman_command.cpp)
 target_link_libraries(test_wingman_command PRIVATE engine-protocol engine-world engine-ai Catch2::Catch2WithMain)
