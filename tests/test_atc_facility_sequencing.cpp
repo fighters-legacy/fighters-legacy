@@ -364,7 +364,7 @@ TEST_CASE("AtcFacility: an arrival releases the runway once it has stopped (#114
     CHECK(fac.arrivalCount() == 0u);
 }
 
-TEST_CASE("AtcFacility: a landed flight is never retired — pinned pending #1149", "[atc]") {
+TEST_CASE("AtcFacility: a landed flight is never retired (pinned pending #1149)", "[atc]") {
     // THIS TEST PINS A DEFECT. It asserts what the FSM does today, not what it should do, so that
     // fixing #1149 fails here and the fixer has to say what the new behaviour is.
     //
