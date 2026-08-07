@@ -119,7 +119,7 @@ TEST_CASE("loadOrImportAirports: a cache built from different CSVs is refused (#
     addCsvs(fs);
 
     AirportLoadStats warm;
-    loadOrImportAirports(fs, log, &warm);
+    (void)loadOrImportAirports(fs, log, &warm); // priming the cache; the defs are checked elsewhere
     REQUIRE(fs.files.count(kCachePath) == 1u);
 
     // Ship a new database: one more airport, so the hash changes.
@@ -134,7 +134,7 @@ TEST_CASE("loadOrImportAirports: a cache built from different CSVs is refused (#
 
     // And the rewritten cache is now the current one.
     AirportLoadStats again;
-    loadOrImportAirports(fs, log, &again);
+    (void)loadOrImportAirports(fs, log, &again);
     CHECK(again.cacheHit);
     CHECK(again.airports == 3u);
 }
@@ -160,7 +160,7 @@ TEST_CASE("loadOrImportAirports: a corrupt or truncated cache falls back to the 
     }
     SECTION("a valid index truncated mid-record") {
         AirportLoadStats warm;
-        loadOrImportAirports(fs, log, &warm);
+        (void)loadOrImportAirports(fs, log, &warm); // priming the cache so it can be corrupted
         auto& bytes = fs.files[kCachePath];
         REQUIRE(bytes.size() > 16u);
         bytes.resize(bytes.size() / 2);
