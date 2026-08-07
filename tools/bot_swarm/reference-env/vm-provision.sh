@@ -18,6 +18,11 @@ set -euo pipefail
 # docs/developer/gns-backend.md. Without these, cmake/dependencies.cmake silently force-disables GNS and the
 # legs would measure enet6; the workflow asserts FL_ENABLE_GNS stayed ON after configure so that
 # can't pass silently.
+#
+# These packages are necessary but were NOT sufficient on their own (#1136): Fedora ships protobuf
+# shared-only, and dependencies.cmake prefers the static archive, so the find failed here even fully
+# provisioned. The build side of that is FL_ALLOW_SHARED_PROTOBUF, set by run-benchmark.sh and by
+# the reference-runner leg of scale-gate.yml.
 dnf -y install \
     gcc-c++ cmake ninja-build git \
     openssl-devel protobuf-devel protobuf-compiler libzstd-devel \

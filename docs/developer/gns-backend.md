@@ -119,11 +119,24 @@ constraint is that GNS v1.6.0 needs the **pre-abseil protobuf 3.21.x line** (the
 | Linux | **GNS on** | `libssl-dev` (apt) | `libprotobuf-dev` + `protobuf-compiler` (apt — Ubuntu ships 3.21.x) |
 | macOS | **GNS on** | `brew openssl@3` (`OPENSSL_ROOT_DIR`) | pinned formula `protobuf@21` (= 3.21.12, keg-only), surfaced via `CMAKE_PREFIX_PATH` — the main `protobuf` formula is the abseil-based 5.x line |
 | Windows | **GNS on** | runner-provided | vcpkg manifest (repo-root `vcpkg.json` pins `protobuf` 3.21.12#4) under the vcpkg toolchain; `x64-windows-static-md` triplet matches the presets' /MD(d) CRT |
+| Fedora (reference env) | **GNS on** | `openssl-devel` (dnf) | `protobuf-devel` + `protobuf-compiler` (dnf — Fedora ships 3.19.x) **plus `-DFL_ALLOW_SHARED_PROTOBUF=ON`**, see below |
 
-`cmake/dependencies.cmake` auto-disables `FL_ENABLE_GNS` (with a warning) when OpenSSL or system
-protobuf is absent, so any build/CI leg without the deps configures cleanly as enet6-only. Because
-of that graceful fallback, the CI legs **assert `FL_ENABLE_GNS:BOOL=ON` in the CMakeCache after
-configure** — a broken dependency setup fails the leg instead of silently passing as enet6-only.
+protobuf is linked **statically**: `Protobuf_USE_STATIC_LIBS ON` is set before the seeding
+`find_package`, because a release `fl-server` dynamically linked against `libprotobuf.so.32` will
+not load on a machine without that exact private build ([#905]).
+
+**`FL_ALLOW_SHARED_PROTOBUF`** (default OFF) exists because some distributions — Fedora among them —
+ship protobuf as a shared library only. There the static-only find fails with every package
+correctly installed, and GNS gets force-disabled on a machine that could build it perfectly well
+([#1136]). Turning the option ON retries the find against the shared library and warns loudly, every
+configure, that the resulting binary must not be shipped. It is for binaries that never leave the
+machine that built them: the `bot_swarm` reference environment sets it, and nothing that ships does.
+
+`cmake/dependencies.cmake` auto-disables `FL_ENABLE_GNS` (with a warning naming *which* of the two
+causes applies) when OpenSSL or usable system protobuf is absent, so any build/CI leg without the
+deps configures cleanly as enet6-only. Because of that graceful fallback, the CI legs and
+`run-benchmark.sh` **assert `FL_ENABLE_GNS:BOOL=ON` in the CMakeCache after configure** — a broken
+dependency setup fails the leg instead of silently passing as enet6-only.
 It uses `find_package(Protobuf)` to both gate and seed the module cache that GNS's own
 `find_package` reuses. On macOS, pinning `protobuf@21` first in `CMAKE_PREFIX_PATH` also avoids
 the mixed module/config double-`find_package` clash the abseil-based Homebrew `protobuf` config
@@ -135,6 +148,8 @@ ignore it.
 [#649]: https://github.com/fighters-legacy/fighters-legacy/issues/649
 [#653]: https://github.com/fighters-legacy/fighters-legacy/issues/653
 [#773]: https://github.com/fighters-legacy/fighters-legacy/issues/773
+[#905]: https://github.com/fighters-legacy/fighters-legacy/issues/905
+[#1136]: https://github.com/fighters-legacy/fighters-legacy/issues/1136
 
 ## Scale validation ([#649], GNS-primary since [#773])
 
