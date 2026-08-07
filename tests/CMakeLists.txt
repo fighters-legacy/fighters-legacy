@@ -719,6 +719,11 @@ target_link_libraries(test_ai_controllers PRIVATE engine-ai engine-entity engine
     Catch2::Catch2WithMain)
 catch_discover_tests(test_ai_controllers)
 
+add_executable(test_state_machine_controller test_state_machine_controller.cpp)
+target_link_libraries(test_state_machine_controller PRIVATE engine-ai engine-entity engine-spatial engine-sensor
+    Catch2::Catch2WithMain)
+catch_discover_tests(test_state_machine_controller)
+
 # Takeoff / landing ground-and-pattern controllers (#701, ATC epic #673).
 add_executable(test_takeoff_controller test_takeoff_controller.cpp)
 target_link_libraries(test_takeoff_controller PRIVATE engine-ai engine-entity engine-spatial Catch2::Catch2WithMain)
