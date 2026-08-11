@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -23,6 +24,15 @@
 // Bounded on purpose: a long match must not grow this without limit, and an agent that stops reading
 // must not be able to exhaust server memory. Old records are dropped, and `droppedCount()` says how
 // many, so a consumer can tell "nothing happened" from "you fell behind".
+//
+// The LOG stamps `tick`, not the caller (#1076). It used to be the caller's field, and the outcome was
+// the one an append-only log with a caller-supplied timestamp always reaches: two callers remembered
+// and one did not, so every airspace alert-level change -- the escalation record #162 exists to
+// produce -- was written at tick 0 in the .flrep recording, the /events stream and the MCP audit
+// mirror. Three consumers, all wrong, silently, for every session recorded since Stage 1. There is no
+// way for a reader to tell a real tick-0 event from a forgotten stamp, so the field cannot be left
+// where forgetting it is possible. Same reasoning as `ServerUptime`: one authority for the value,
+// required rather than defaulted, because a second source of truth IS the bug.
 
 namespace fl {
 
@@ -81,7 +91,9 @@ enum class MatchEventType : uint8_t {
 // left at their defaults, and `matchEventTypeName` documents which is which.
 struct MatchEvent {
     uint64_t seq{0};  // monotonic across the session; a consumer resumes with "everything after N"
-    uint64_t tick{0}; // sim tick the event occurred on
+    uint64_t tick{0}; // sim tick the event occurred on. STAMPED BY MatchEventLog::append (#1076) --
+                      // setting it on a record you are about to append has no effect. A record read
+                      // back out of a .flrep or a JSON payload carries the tick the log stamped.
 
     MatchEventType type{MatchEventType::Spawn};
 
@@ -115,7 +127,24 @@ class MatchEventLog {
 
     explicit MatchEventLog(std::size_t capacity = kDefaultCapacity);
 
-    // Stamps `seq` and appends. `tick` and the payload are the caller's. Sim thread.
+    // Advance the log's tick. Called once per tick by the sim's owner (WorldBroadcaster::onTick),
+    // before anything that could append. Sim thread.
+    void setTick(uint64_t tick) noexcept {
+        // Relaxed: this publishes no other data, and every append takes the mutex for the ring
+        // itself. An append from another thread (the MCP audit path runs on an HTTP thread) may
+        // therefore read a tick up to one tick stale, which is a far better number than the up-to-1 s
+        // stale published-snapshot tick that path used to copy in by hand. Exact ORDERING is carried
+        // by `seq`, which is stamped under the lock.
+        m_tick.store(tick, std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] uint64_t tick() const noexcept {
+        return m_tick.load(std::memory_order_relaxed);
+    }
+
+    // Stamps `seq` AND `tick`, then appends; the payload is the caller's. Any `tick` already set on
+    // `ev` is overwritten -- that is the point, and it is what makes the stamp impossible to forget.
+    // Callable from any thread.
     void append(MatchEvent ev);
 
     // Every retained record with seq > afterSeq, oldest first. Pass 0 for "everything retained".
@@ -143,6 +172,9 @@ class MatchEventLog {
     void clear();
 
   private:
+    // Outside the mutex on purpose: the sim thread advances this every tick, and taking the ring's
+    // lock at 60 Hz would contend with a reader copying up to 4096 records for a /events response.
+    std::atomic<uint64_t> m_tick{0};
     mutable std::mutex m_mutex;
     std::vector<MatchEvent> m_ring; // sized to m_capacity once; m_head is the next write slot
     std::size_t m_capacity;

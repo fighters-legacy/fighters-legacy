@@ -348,7 +348,6 @@ void WorldBroadcaster::recordParticipant(uint32_t participantId, uint16_t factio
         m_matchParticipantSink(participantId, faction, isBot, joined);
 
     MatchEvent me;
-    me.tick = m_currentTick;
     me.type = joined ? MatchEventType::Join : MatchEventType::Leave;
     me.actor = participantId;
     me.factionIndex = faction;
@@ -774,6 +773,8 @@ void WorldBroadcaster::forEachPeer(std::function<void(const PeerInfo&)> fn) cons
 
 void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     m_currentTick = tickIndex;
+    // The match event log stamps its own records (#1076); this is the one place its tick advances.
+    m_matchEventLog.setTick(tickIndex);
 
     // Per-phase tick-budget instrumentation. beginTick() resets the per-tick accumulators and
     // records the wall start; each phase boundary records its elapsed wall-time; endTick() rolls
@@ -4107,7 +4108,6 @@ void WorldBroadcaster::onEntityEvent(const EntityEvent& event) {
         // match, the log exists to say what happened.
         {
             MatchEvent me;
-            me.tick = m_currentTick;
             me.type = MatchEventType::Kill;
             me.subjectIdx = event.subject.index;
             me.subjectGen = static_cast<uint16_t>(event.subject.generation);
@@ -4128,7 +4128,6 @@ void WorldBroadcaster::onEntityEvent(const EntityEvent& event) {
         // The event that did not exist before #600: without it the log could say what died but never
         // where anything came from.
         MatchEvent me;
-        me.tick = m_currentTick;
         me.type = MatchEventType::Spawn;
         me.subjectIdx = event.subject.index;
         me.subjectGen = static_cast<uint16_t>(event.subject.generation);
@@ -4696,7 +4695,6 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         // command left was the Info log line below, which no consumer can read.
         {
             MatchEvent me;
-            me.tick = m_currentTick;
             me.type = MatchEventType::AdminCommand;
             me.actor = issuer.peerId;
             me.factionIndex = issuer.factionIndex;
@@ -5366,7 +5364,6 @@ void WorldBroadcaster::handleChat(uint32_t peerId, const void* data, std::size_t
     // the log rather than present-but-unsent, which would make the log disagree with the match.
     {
         MatchEvent me;
-        me.tick = m_currentTick;
         me.type = MatchEventType::Chat;
         me.actor = peerId;
         me.channel = hdr.channel;

@@ -1664,6 +1664,8 @@ int main(int argc, char** argv) {
                         me.type = fl::MatchEventType::AlertLevel;
                         me.factionIndex = fi;
                         me.value = static_cast<int32_t>(lvl);
+                        // No tick stamp here, and none needed: the log stamps it (#1076). This caller
+                        // is the one that forgot, which is why it no longer can.
                         broadcaster.matchEventLog().append(std::move(me));
                     };
                     alertSystem.onEscalate = [&log](uint32_t entityIdx, const std::string& zoneId,
@@ -2738,12 +2740,10 @@ int main(int argc, char** argv) {
                 ev.type = fl::MatchEventType::AgentAction;
                 ev.actor = issuer.peerId;
                 ev.factionIndex = issuer.factionIndex;
-                // The published snapshot's tick, not the live one: m_currentTick is sim-thread-only
-                // and this runs on an HTTP thread. It lags by up to the ~1 Hz republish interval,
-                // which is the honest number available here — and an ordering that is exact is
-                // already carried by `seq`, which append() stamps.
-                if (const auto snap = broadcaster.worldStatePublisher().get())
-                    ev.tick = snap->tick;
+                // The log stamps the tick (#1076). This path used to copy the PUBLISHED snapshot's
+                // tick, because m_currentTick is sim-thread-only and this runs on an HTTP thread —
+                // which lagged by up to the ~1 Hz republish interval. The log's own tick is an
+                // atomic, so it reads a value at most one tick old from any thread.
                 ev.text = std::string(tool) + " " + std::string(detail);
                 broadcaster.matchEventLog().append(std::move(ev));
             };
