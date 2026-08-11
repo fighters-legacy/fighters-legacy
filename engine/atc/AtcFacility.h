@@ -97,6 +97,11 @@ class AtcFacility {
 
   private:
     void setClearance(fl::EntityId flight, ClearanceState s);
+    // Park a waved-off flight outside the arrival sequence for a while (#1154).
+    void holdOff(fl::EntityId flight, uint64_t untilTick);
+    // False while a flight is serving a wave-off: it is neither picked for the runway nor counted by
+    // the departure-hold range test, so the field keeps moving even if it never leaves (#1154).
+    [[nodiscard]] bool sequenceable(fl::EntityId flight, uint64_t tick) const;
     [[nodiscard]] double horizDistToThreshold(const double pos[3]) const;
     [[nodiscard]] double aglOf(const double pos[3]) const;
 
@@ -112,6 +117,7 @@ class AtcFacility {
     struct Clearance {
         fl::EntityId id;
         ClearanceState state{ClearanceState::None};
+        uint64_t holdOffUntilTick{0}; // waved off: not sequenced until this tick (#1154)
     };
     std::unordered_map<uint32_t, Clearance> m_clearance; // keyed by entity pool index
 
