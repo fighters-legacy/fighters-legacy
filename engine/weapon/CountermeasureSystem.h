@@ -57,7 +57,7 @@ class CountermeasureSystem {
     bool dispense(uint32_t entityIdx, const glm::dvec3& pos, const glm::vec3& vel, uint64_t tick);
 
     // Age the airborne decoys: integrate the lag/fall and drop expired ones. Serial, once per tick.
-    void step(uint64_t tick, float dt);
+    void onTick(double simDt, uint64_t tick);
 
     // Would an expendable seduce a seeker this check (#529)? True when a matching-channel decoy is
     // within kEffectRadiusM of `targetPos` AND the deterministic die comes up under the missile's

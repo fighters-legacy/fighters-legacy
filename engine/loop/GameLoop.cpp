@@ -6,6 +6,7 @@
 #include "util/SimThreadOwnership.h"
 
 #include <algorithm>
+#include <cassert>
 #include <chrono>
 #include <cstdio>
 #include <thread>
@@ -31,7 +32,15 @@ int clampCatchupTicks(int rawTicks, int maxCatchup, uint64_t& dropped) noexcept 
 }
 
 GameLoop::GameLoop(ISimUpdate& sim, ILogger& logger, double tickRate, int maxCatchupTicks)
-    : m_sim(sim), m_logger(logger), m_tickRate(tickRate), m_maxCatchupTicks(std::clamp(maxCatchupTicks, 1, 64)) {}
+    : m_systems{&sim}, m_logger(logger), m_tickRate(tickRate), m_maxCatchupTicks(std::clamp(maxCatchupTicks, 1, 64)) {}
+
+void GameLoop::addSimUpdate(ISimUpdate& sim) {
+    assert(!m_running.load(std::memory_order_relaxed) &&
+           "GameLoop::addSimUpdate() must run before start(): the sim thread walks the list unlocked");
+    if (m_running.load(std::memory_order_relaxed))
+        return;
+    m_systems.push_back(&sim);
+}
 
 GameLoop::~GameLoop() {
     stop();
@@ -108,6 +117,17 @@ void GameLoop::drainSimCallbacks() {
         fn();
 }
 
+void GameLoop::stepSystems(double simDt, uint64_t tickIndex) {
+    for (ISimUpdate* system : m_systems)
+        system->onTick(simDt, tickIndex);
+}
+
+void GameLoop::stepOnce(double simDt, uint64_t tickIndex) {
+    assert(!m_running.load(std::memory_order_relaxed) &&
+           "GameLoop::stepOnce() drives ticks itself; it must not race the sim thread");
+    stepSystems(simDt, tickIndex);
+}
+
 void GameLoop::simThreadFunc() {
     // Publish this thread's identity so classes with a sim-thread-only tier can assert on it in debug
     // builds without knowing about GameLoop (#1094). Released on the way out, so teardown reads as
@@ -161,7 +181,9 @@ void GameLoop::simThreadFunc() {
             m_lastTickNs.store(tickNs, std::memory_order_release);
             m_totalTicksSnap.fetch_add(1, std::memory_order_relaxed);
 
-            m_sim.onTick(tc.fixedStep(), tc.totalTicks());
+            // Registration order is execution order. A system's own sub-rate cadence (1 Hz, every 30
+            // ticks) is its concern, not the loop's.
+            stepSystems(tc.fixedStep(), tc.totalTicks());
         }
     }
 }

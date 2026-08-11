@@ -255,6 +255,70 @@ struct OwnershipProbeSim : ISimUpdate {
     }
 };
 
+// #1078: ordering is DATA. The load-bearing property is that registration order is execution order --
+// the server's five sim systems used to be hand-sequenced inside one lambda, where the order was the
+// body's statement order and invisible to anything that might check it.
+struct OrderRecordingSim : ISimUpdate {
+    OrderRecordingSim(std::string& log, char id) : m_log(log), m_id(id) {}
+    void onTick(double, uint64_t) override {
+        m_log += m_id;
+    }
+    std::string& m_log;
+    char m_id;
+};
+
+TEST_CASE("GameLoop: registration order is execution order (#1078)", "[gl]") {
+    std::string order;
+    OrderRecordingSim a(order, 'a'), b(order, 'b'), c(order, 'c');
+    MockLogger logger;
+
+    GameLoop gl(a, logger); // the ctor registers the first system
+    gl.addSimUpdate(b);
+    gl.addSimUpdate(c);
+    CHECK(gl.simUpdateCount() == 3);
+
+    gl.stepOnce(1.0 / 60.0, 1);
+    CHECK(order == "abc");
+    gl.stepOnce(1.0 / 60.0, 2);
+    CHECK(order == "abcabc"); // and the same order every tick
+
+    // Registered LAST runs last, so a system that must observe a stepped world (airspace enforcement)
+    // gets that by where it is registered rather than by where a lambda body happens to call it.
+    std::string order2;
+    OrderRecordingSim x(order2, 'x'), y(order2, 'y');
+    GameLoop gl2(y, logger);
+    gl2.addSimUpdate(x);
+    gl2.stepOnce(1.0 / 60.0, 1);
+    CHECK(order2 == "yx");
+}
+
+TEST_CASE("GameLoop: stepOnce runs the same list the sim thread does (#1078)", "[gl]") {
+    // The determinism harness (--mission-report) drives ticks itself. If it walked the systems on its
+    // own that would be a SECOND definition of tick order, and a determinism gate whose order can
+    // differ from production's measures the wrong thing.
+    std::string threaded, stepped;
+    MockLogger logger;
+    {
+        OrderRecordingSim a(threaded, 'a'), b(threaded, 'b');
+        GameLoop gl(a, logger);
+        gl.addSimUpdate(b);
+        gl.start();
+        std::this_thread::sleep_for(200ms);
+        gl.stop();
+    }
+    {
+        OrderRecordingSim a(stepped, 'a'), b(stepped, 'b');
+        GameLoop gl(a, logger);
+        gl.addSimUpdate(b);
+        for (int i = 0; i < 4; ++i)
+            gl.stepOnce(1.0 / 60.0, static_cast<uint64_t>(i + 1));
+    }
+    REQUIRE(threaded.size() >= 2);
+    CHECK(threaded.size() % 2 == 0);      // whole ticks only: never a partial system list
+    CHECK(threaded.substr(0, 2) == "ab"); // same order...
+    CHECK(stepped == "abababab");         // ...as the harness path
+}
+
 TEST_CASE("GameLoop: the sim thread claims ownership for the duration of the run (#1094)", "[gl]") {
     OwnershipProbeSim sim;
     MockLogger logger;

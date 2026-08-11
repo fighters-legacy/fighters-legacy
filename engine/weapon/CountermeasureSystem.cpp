@@ -74,7 +74,8 @@ bool CountermeasureSystem::dispense(uint32_t entityIdx, const glm::dvec3& pos, c
     return released;
 }
 
-void CountermeasureSystem::step(uint64_t tick, float dt) {
+void CountermeasureSystem::onTick(double simDt, uint64_t tick) {
+    const float dt = static_cast<float>(simDt);
     for (Decoy& d : m_decoys) {
         // Lag the aircraft: shed inherited speed and fall under a light gravity proxy.
         d.pos += glm::dvec3(d.vel) * static_cast<double>(dt);

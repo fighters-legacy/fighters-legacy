@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "loop/ISimUpdate.h"
+
 #include "match/GameModeDef.h"
 #include "match/TeamBalancer.h"
 
@@ -37,7 +39,7 @@ struct TeamScore {
 //
 // step(tick) is called every sim tick with the current tick index; all timing is derived from tick
 // deltas and the configured sim dt, so behavior is identical on any wall clock.
-class MatchController {
+class MatchController : public ISimUpdate {
   public:
     using PhaseHook = std::function<void(MatchPhase from, MatchPhase to)>;
     using RotateHook = std::function<void()>;
@@ -55,7 +57,7 @@ class MatchController {
     }
 
     // Per-tick advance. Drives the countdowns and the score/time-limit checks.
-    void step(uint64_t tick);
+    void onTick(double simDt, uint64_t tick) override;
 
     // Participant bookkeeping (humans + bots). Warmup starts on the first human; the warmup countdown
     // only runs while human count >= minPlayers.
