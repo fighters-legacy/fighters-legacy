@@ -425,6 +425,24 @@ so a caller polling `clearanceState()` can act on them, and a fresh `requestTake
 the turnaround. The occupancy timeout stays a pure deadlock backstop — it frees the runway but never
 claims a landing the aircraft did not make.
 
+**2026-08-11 — a landing clearance is range-gated, and a wave-off is enforced (#1154).** The other half
+of the same mutex problem: a flight that takes the runway and *never* lands. Two decisions. **(1)** A
+landing clearance is only issued from inside `kDepartureHoldRangeM` — one range, one rule: *an arrival
+claims the runway exactly when it is close enough that a departure could not have got out first.*
+Previously it was granted at any distance, so an arrival 30 km out owned the runway for the whole
+approach and blew the occupancy budget on the way in, which made that budget useless as a signal. The
+AI arrival composition is unaffected: it loiters at a 3 km pattern radius, so it is already inside the
+gate before it is ever cleared. **(2)** The occupancy budget is now per-kind — 90 s for a departure
+from a standing start, 240 s for an arrival that must fly the approach, flare, roll out and stop —
+and blowing the arrival budget triggers a wave-off **only under contention**, when another arrival or
+a queued departure is genuinely being starved. With an empty field nobody is starved and a slow final
+is left alone. A waved-off flight is held out of the sequence for 120 s, during which it is skipped
+for the runway *and* excluded from the departure-hold range test; that exclusion is what lets the
+field keep working when the aircraft is non-compliant and simply will not leave. The same hold-off now
+applies to the short-final wave-off, which previously re-cleared the flight to land on the next step
+while it was still climbing away. We cannot force an aircraft to depart the area; the accepted steady
+state is that it cycles the runway with everyone else instead of owning it.
+
 **2026-07-18 — Multi-crew aircraft: seats unified into `ControlledEntity` (Epic #966).** Aircraft
 gain 2+ crew positions ("seats") alongside the single-pilot model — a bomber with a pilot and
 defensive gunners, spawned with every seat bot-filled, any non-human seat human-joinable. The core

@@ -448,7 +448,7 @@ TEST_CASE("AtcFacility: the next arrival is cleared once the one ahead has lande
     // The queue has to keep moving. Retiring the lander promotes whoever was behind it.
     World w;
     const EntityId first = w.spawnAt(2000, 200);
-    const EntityId second = w.spawnAt(12000, 900);
+    const EntityId second = w.spawnAt(5000, 400); // behind it, but inside the clearance range
     AtcFacility fac = makeFacility();
     std::vector<RadioTransmission> out;
 
@@ -470,10 +470,10 @@ TEST_CASE("AtcFacility: the next arrival is cleared once the one ahead has lande
     CHECK(sent(out, AtcPhrase::ClearedToLand, second));
 }
 
-TEST_CASE("AtcFacility: the arrival backstop frees the runway without claiming a landing (#1149)", "[atc]") {
-    // kOccTimeoutTicks is a deadlock backstop for the runway mutex, not an assertion that anyone
-    // landed. An aircraft still airborne when it fires — a slow long final, a touch-and-go climbing
-    // away — must not be stamped Landed or retired: it is still an arrival and re-sequences.
+TEST_CASE("AtcFacility: the arrival backstop never claims a landing (#1149)", "[atc]") {
+    // The arrival budget is a backstop for the runway mutex, not an assertion that anyone landed. An
+    // aircraft still airborne when it blows it — a slow final, a hover, a touch-and-go climbing away
+    // — must never be stamped Landed or retired as if it were down.
     World w;
     const EntityId slow = w.spawnAt(4000, 300);
     AtcFacility fac = makeFacility();
@@ -484,10 +484,152 @@ TEST_CASE("AtcFacility: the arrival backstop frees the runway without claiming a
     REQUIRE(fac.occupant() == slow);
 
     out.clear();
-    fac.update(w.em, 100 + 5401, out);
+    fac.update(w.em, 100 + 14401, out);
     CHECK(fac.clearanceState(slow) != ClearanceState::Landed);
     CHECK(fac.arrivalCount() == 1u); // still on the approach
     CHECK_FALSE(sent(out, AtcPhrase::TaxiToParking, slow));
+}
+
+// ---------------------------------------------------------------------------
+// Starvation: an arrival that never lands (#1154)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("AtcFacility: an arrival that never lands is waved off so a departure can go (#1154)", "[atc]") {
+    // The motivating case: a hover over the threshold. It holds a landing clearance, so releasing the
+    // runway on the backstop achieved nothing — it was still the nearest arrival and re-took it on
+    // the same tick, and since arrivals beat departures the field never reopened.
+    World w;
+    const EntityId hover = w.spawnAt(1500, 60);
+    const EntityId dep = w.spawnAt(0, 0);
+    AtcFacility fac = makeFacility();
+    std::vector<RadioTransmission> out;
+
+    fac.requestLanding(hover);
+    fac.requestTakeoff(dep);
+    fac.update(w.em, 100, out);
+    REQUIRE(fac.occupant() == hover);
+    REQUIRE(fac.clearanceState(dep) == ClearanceState::HoldShort);
+
+    // Still up there, still going nowhere, well past the arrival budget.
+    out.clear();
+    fac.update(w.em, 100 + 14401, out);
+
+    CHECK(fac.clearanceState(hover) == ClearanceState::GoAround);
+    CHECK(sent(out, AtcPhrase::GoAround, hover));
+    CHECK(fac.clearanceState(hover) != ClearanceState::Landed);
+    CHECK(fac.arrivalCount() == 1u); // waved off, not retired — it may still come back
+
+    // And the point of all of it: the departure finally goes, even though the hoverer is still
+    // sitting inside the departure-hold range.
+    CHECK(fac.occupant() == dep);
+    CHECK(fac.clearanceState(dep) == ClearanceState::ClearedTakeoff);
+}
+
+TEST_CASE("AtcFacility: a slow arrival with nobody waiting keeps the runway (#1154)", "[atc]") {
+    // Nobody is starved when nobody is waiting, and a slow aircraft still working the approach has
+    // done nothing wrong. Waving it off on the budget alone would punish a legitimate long final.
+    World w;
+    const EntityId slow = w.spawnAt(4000, 300);
+    AtcFacility fac = makeFacility();
+    std::vector<RadioTransmission> out;
+
+    fac.requestLanding(slow);
+    fac.update(w.em, 100, out);
+    REQUIRE(fac.occupant() == slow);
+
+    for (int step = 0; step < 3; ++step) {
+        out.clear();
+        fac.update(w.em, 100 + 14401 + 14401ull * static_cast<uint64_t>(step), out);
+        CHECK(fac.clearanceState(slow) == ClearanceState::ClearedToLand);
+        CHECK(fac.occupant() == slow);
+        CHECK(out.empty()); // no wave-off, and no re-transmitted clearance
+    }
+}
+
+TEST_CASE("AtcFacility: a waved-off flight yields the sequence to the arrival behind it (#1154)", "[atc]") {
+    // The hold-off is what makes a wave-off mean something: while it runs, the flight is skipped when
+    // picking the runway, so the aircraft queued behind it actually gets in.
+    World w;
+    const EntityId hover = w.spawnAt(1500, 60);
+    const EntityId next = w.spawnAt(4000, 300);
+    AtcFacility fac = makeFacility();
+    std::vector<RadioTransmission> out;
+
+    fac.requestLanding(hover);
+    fac.update(w.em, 100, out);
+    REQUIRE(fac.occupant() == hover);
+
+    fac.requestLanding(next);
+    out.clear();
+    fac.update(w.em, 100 + 14401, out);
+
+    CHECK(fac.clearanceState(hover) == ClearanceState::GoAround);
+    CHECK(fac.occupant() == next); // the nearer aircraft is skipped, the one behind it lands
+    CHECK(fac.clearanceState(next) == ClearanceState::ClearedToLand);
+    CHECK(sent(out, AtcPhrase::ClearedToLand, next));
+}
+
+TEST_CASE("AtcFacility: the hold-off expires and a waved-off flight is sequenced again (#1154)", "[atc]") {
+    // A wave-off is not a ban. The flight re-enters the sequence once the window is up — which is
+    // also the accepted steady state for an aircraft that simply refuses to leave: it cycles the
+    // runway with everyone else instead of owning it.
+    World w;
+    const EntityId hover = w.spawnAt(1500, 60);
+    const EntityId dep = w.spawnAt(0, 0);
+    AtcFacility fac = makeFacility();
+    std::vector<RadioTransmission> out;
+
+    fac.requestLanding(hover);
+    fac.requestTakeoff(dep);
+    fac.update(w.em, 100, out);
+    const uint64_t wavedAt = 100 + 14401;
+    fac.update(w.em, wavedAt, out);
+    REQUIRE(fac.clearanceState(hover) == ClearanceState::GoAround);
+
+    // Inside the window: still skipped, so the departure keeps the runway it was given.
+    fac.update(w.em, wavedAt + 3600, out);
+    CHECK(fac.occupant() == dep);
+
+    // Past it: eligible again, and with the departure long gone it is cleared to land.
+    w.em.get(dep)->transform.pos[1] = 200.0; // departure climbed clear
+    out.clear();
+    fac.update(w.em, wavedAt + 7201, out);
+    CHECK(fac.occupant() == hover);
+    CHECK(fac.clearanceState(hover) == ClearanceState::ClearedToLand);
+    CHECK(sent(out, AtcPhrase::ClearedToLand, hover));
+}
+
+TEST_CASE("AtcFacility: a short-final wave-off is not re-cleared the instant the runway frees (#1154)", "[atc]") {
+    // The existing short-final wave-off gets the same hold-off. Without it the flight was re-cleared
+    // to land on the very next step, while it was still climbing away from the go-around it was just
+    // given — a clearance no pilot could act on.
+    World w;
+    const EntityId dep = w.spawnAt(0, 0);
+    AtcFacility fac = makeFacility();
+    std::vector<RadioTransmission> out;
+
+    fac.requestTakeoff(dep);
+    fac.update(w.em, 60, out);
+    REQUIRE(fac.occupant() == dep);
+
+    const EntityId arr = w.spawnAt(1500, 80); // short final, runway held by the departure
+    fac.requestLanding(arr);
+    fac.update(w.em, 120, out);
+    REQUIRE(fac.clearanceState(arr) == ClearanceState::GoAround);
+
+    // The departure climbs out and the runway frees on the same step.
+    w.em.get(dep)->transform.pos[1] = 200.0;
+    out.clear();
+    fac.update(w.em, 180, out);
+    CHECK(fac.clearanceState(arr) == ClearanceState::GoAround);
+    CHECK_FALSE(fac.runwayOccupied());
+    CHECK(out.empty());
+
+    // Once the window is up it is sequenced normally again.
+    out.clear();
+    fac.update(w.em, 120 + 7201, out);
+    CHECK(fac.clearanceState(arr) == ClearanceState::ClearedToLand);
+    CHECK(fac.occupant() == arr);
 }
 
 TEST_CASE("AtcFacility: an arrival still airborne over the field does not count as stopped (#1145)", "[atc]") {
@@ -548,7 +690,10 @@ TEST_CASE("AtcFacility: an inbound arrival holds a waiting departure on the grou
     CHECK(fac.departureQueueDepth() == 1u); // still queued, not dropped
 }
 
-TEST_CASE("AtcFacility: a departure goes once the arrival is far enough out (#1145)", "[atc]") {
+TEST_CASE("AtcFacility: a departure goes once the arrival is far enough out (#1145, #1154)", "[atc]") {
+    // A landing clearance is only issued from inside the range where a departure could not have got
+    // out first. Beyond it the arrival is sequenced but does not own the runway — it used to claim it
+    // from 40 km, blocking every departure for the whole approach (#1154).
     World w;
     const EntityId dep = w.spawnAt(0, 0);
     const EntityId arr = w.spawnAt(40000, 4000); // well beyond the hold range
@@ -558,15 +703,20 @@ TEST_CASE("AtcFacility: a departure goes once the arrival is far enough out (#11
     fac.requestTakeoff(dep);
     fac.requestLanding(arr);
     fac.update(w.em, 60, out);
-    // The arrival still takes the runway first — it is the only one being sequenced onto it.
-    CHECK(fac.occupant() == arr);
+    CHECK(fac.occupant() == dep);
+    CHECK(fac.clearanceState(dep) == ClearanceState::ClearedTakeoff);
+    CHECK(fac.clearanceState(arr) == ClearanceState::Pattern); // sequenced, not cleared
+    CHECK(fac.arrivalCount() == 1u);
+    CHECK_FALSE(sent(out, AtcPhrase::ClearedToLand, arr));
 
-    // With no arrival at all, the departure goes.
-    AtcFacility clean = makeFacility();
-    std::vector<RadioTransmission> out2;
-    clean.requestTakeoff(dep);
-    clean.update(w.em, 60, out2);
-    CHECK(clean.occupant() == dep);
+    // Once it is inside the range it takes priority again, as soon as the runway is free.
+    w.em.get(arr)->transform.pos[0] = 4000.0;
+    w.em.get(dep)->transform.pos[1] = 200.0; // departure has climbed clear
+    out.clear();
+    fac.update(w.em, 120, out);
+    CHECK(fac.occupant() == arr);
+    CHECK(fac.clearanceState(arr) == ClearanceState::ClearedToLand);
+    CHECK(sent(out, AtcPhrase::ClearedToLand, arr));
 }
 
 TEST_CASE("AtcFacility: a go-around is transmitted once, not every tick (#1145)", "[atc]") {
