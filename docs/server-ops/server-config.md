@@ -26,7 +26,6 @@ multi-key sections). See [Environment variables](#environment-variables) for the
 |---|---|---|
 | `--help`, `-h` | — | Print usage and exit |
 | `--version`, `-v` | — | Print version and exit |
-| `--persistent` | — | Enable persistent world mode (Phase 2 — not yet active) |
 | `--bind <addr>` | IP or hostname | Override `server.bind_address` from the command line; takes precedence over `server.toml` and `FL_BIND_ADDRESS`. Used by the game client when spawning fl-server for single-player mode (`--bind 127.0.0.1`). |
 | `--metrics-json <path>` | file path | Write the per-phase tick-budget JSON to `<path>`; overrides `[metrics] tick_json_path`. See [metrics](#metrics--tick-budget-export). |
 | `--mission <name>` | mission name | Load a mission at startup; overrides `[rotation]`. Resolution order: a builtin id (`builtin:sandbox`, `builtin:shape-gallery`) → a readable `.yaml`/`.yml` **file path** (the authoring loop — iterate a mission without mounting a pack; lint it with `validate-mission` first) → a pack Mission asset stem. See [rotation](#rotation--scenario-rotation). |
@@ -59,7 +58,7 @@ time_limit_min = 0
 
 [lobby]
 register   = false
-url        = "https://lobby.fighters-legacy.org"
+url        = ""                  # no lobby configured; name one to opt in (#999)
 visibility = "public"
 
 [mods]
@@ -71,8 +70,6 @@ stack = []
 player_faction = 1  # faction stamped on every player; MUST be non-zero for combat (see below)
 # player_entity_type = "builtin:debug-entity"  # aircraft a connecting pilot flies when the client requests none (#834)
 # allow_observers    = true          # false = refuse observer-role (spectator) connections (#857)
-save_path          = "world.sav"
-autosave_interval_s = 300
 time_scale         = 10.0        # game seconds per real second; 10 = full day/night ≈ 2.4 real hours
 # planet_radius_m         = 6371000  # planet sphere radius (m); Earth default
 # earth_rotation          = true     # Coriolis + centrifugal in the Earth-fixed world frame (#482)
@@ -193,9 +190,10 @@ Network interface to bind on.
   [docs/developer/architecture.md](../developer/architecture.md).
 - A specific IP — bind to one interface on a multi-homed host.
 
-> **Phase 2:** Bind address enforcement requires `INetwork::bind()` to be extended to
-> accept an address parameter. The value is parsed and stored now so config files remain
-> stable; the restriction takes effect when that work lands.
+> **Not yet enforced.** Binding to one interface requires `INetwork::bind()` to take an address
+> parameter; until then the value is parsed and stored so config files stay stable, and the server
+> listens on all interfaces regardless. `--bind 127.0.0.1` is still meaningful to the single-player
+> client, which passes it so the spawned server is addressable locally.
 
 ### `max_peers`
 
@@ -414,9 +412,12 @@ Set to `true` to advertise this server to the `fl-lobby` service named by `url`.
 
 | Type | Default |
 |---|---|
-| string | `"https://lobby.fighters-legacy.org"` |
+| string | `""` |
 
-`fl-lobby` REST base URL. Ignored unless `register = true`.
+`fl-lobby` REST base URL. Ignored unless `register = true`. Empty means **no lobby is configured**,
+which is the default: a URL pointing at a host with no service behind it turns "I did not set this up"
+into recurring outbound registration failures an operator has to diagnose. Registration itself ships
+(#143); the reference lobby service is #999.
 
 ### `visibility`
 
@@ -427,8 +428,9 @@ Set to `true` to advertise this server to the `fl-lobby` service named by `url`.
 Server visibility in the lobby browser.
 
 - `"public"` — visible to all players browsing the lobby.
-- `"private"` — token-gated; only players with the correct invite token can see or join.
-  Token-gating is a Phase 2 feature.
+- `"private"` — token-gated; only players with the correct invite token can see or join. The value is
+  reported to the lobby; invite-token issuing and checking is part of the reference lobby service
+  (#999), not of `fl-server`.
 
 ---
 
@@ -501,27 +503,12 @@ required_policy = "refuse"
 
 ---
 
-## [world] — Persistent world settings
+## [world] — World simulation settings
 
-> **Phase 2:** These settings are only active when `fl-server` is launched with the
-> `--persistent` flag (or `FL_PERSISTENT=true`). The keys are parsed and stored;
-> persistent-world logic is not yet implemented.
-
-### `save_path`
-
-| Type | Default |
-|---|---|
-| string | `"world.sav"` |
-
-Path to the persistent world save file, relative to the working directory or absolute.
-
-### `autosave_interval_s`
-
-| Type | Default |
-|---|---|
-| integer | `300` (5 minutes) |
-
-Autosave interval in seconds. `0` disables autosaving.
+Persistence is **not** in this section, and no longer pretends to be: `save_path`,
+`autosave_interval_s` and the `--persistent` flag were removed in #1072 because no world store exists
+to honour them. A saved world returns as real work under Epic H (#500) in M5.0, where `IPersistence`
+actually lands.
 
 ### `time_scale`
 
@@ -2088,9 +2075,8 @@ Example using `mcrcon`:
 | `FL_BIND_ADDRESS` | `"0.0.0.0"` | `server.bind_address` |
 | `FL_MAX_PEERS` | `32` | `server.max_peers` |
 | `FL_NAME` | `"Unnamed Server"` | `server.name` |
-| `FL_PERSISTENT` | `"false"` | `--persistent` flag |
 | `FL_LOBBY_REGISTER` | `"false"` | `lobby.register` |
-| `FL_LOBBY_URL` | `"https://lobby.fighters-legacy.org"` | `lobby.url` |
+| `FL_LOBBY_URL` | `""` | `lobby.url` |
 | `FL_LOBBY_VISIBILITY` | `"public"` | `lobby.visibility` |
 | `FL_AI_DIFFICULTY_FLOOR` | `"recruit"` | `ai.difficulty_floor` |
 | `FL_AI_API_KEY` | — | The AI provider's API key (#163). **Read only from the environment**; the variable name is configurable via `ai.provider.api_key_env` |
@@ -2104,7 +2090,7 @@ config-file-only; see the security note in the [password](#password) section.
 available *only* as an environment variable and has no config key at all. Setting
 `ai.provider.api_key` in the file is logged as an error rather than accepted.
 
-Boolean env vars (`FL_PERSISTENT`, `FL_LOBBY_REGISTER`) accept `"true"` or `"1"`.
+Boolean env vars (`FL_LOBBY_REGISTER`) accept `"true"` or `"1"`.
 
 ---
 

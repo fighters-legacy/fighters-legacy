@@ -38,9 +38,12 @@ struct ServerConfig {
     std::string botsAiScript = "builtin:fighter"; // AI script the bots fly
     bool botsBalanceTeams = true;                 // even the bots across teams
 
-    // [lobby]  — Phase 2: parsed and stored; lobby registration pending (issue #36)
+    // [lobby] — registration ships (#143). lobbyUrl defaults EMPTY: pointing at a host with no
+    // service behind it turns "I did not configure a lobby" into recurring outbound failures an
+    // operator has to diagnose. The reference lobby service is #999 (M5.0); until it exists, a lobby
+    // is something you opt into by naming one.
     bool lobbyRegister = false;
-    std::string lobbyUrl = "https://lobby.fighters-legacy.org";
+    std::string lobbyUrl;
     std::string lobbyVisibility = "public";
 
     // [mods]  — Phase 2: parsed and logged; ModLoader integration pending
@@ -52,16 +55,13 @@ struct ServerConfig {
     std::vector<std::string> requiredPacks;
     std::string requiredPackPolicy = "warn";
 
-    // [world]  — Phase 2: active only with --persistent flag
-    bool persistent = false;
-    std::string worldSavePath = "world.sav";
+    // [world]
     // Entity type spawned for a connecting pilot when the client requests none (#834). A client may
     // request a specific type in MsgConnectRequest; the server clamps it to a REGISTERED type and falls
     // back to this default, then to builtin:debug-entity. Lets "boot server, connect, look at the
     // aeroplane" be a config change instead of an engine patch.
     std::string playerEntityType = "builtin:debug-entity";
-    bool allowObservers = true; // #857: false = refuse observer-role connect requests
-    int worldAutosaveIntervalS = 300;
+    bool allowObservers = true;         // #857: false = refuse observer-role connect requests
     int entitySoftCap = 0;              // 0 = unlimited; server-enforced object count limit
     double timeScale = 10.0;            // game seconds per real second; 10 = full day/night ~2.4 real hrs
     double planetRadiusM = 6'371'000.0; // sphere radius (m); Earth default

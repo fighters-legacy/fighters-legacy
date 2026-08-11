@@ -68,7 +68,7 @@ static const char* kDefaultToml =
     "\n"
     "[lobby]\n"
     "register = false\n"
-    "url = \"https://lobby.fighters-legacy.org\"\n"
+    "url = \"\"\n"
     "visibility = \"public\"\n"
     "\n"
     "[mods]\n"
@@ -77,8 +77,6 @@ static const char* kDefaultToml =
     "# required_policy = \"warn\"          # warn | refuse | allow_placeholder -- action on a missing pack\n"
     "\n"
     "[world]\n"
-    "save_path = \"world.sav\"\n"
-    "autosave_interval_s = 300\n"
     "# entity_soft_cap = 0              # ceiling on live world objects; 0 = unlimited (#1049).\n"
     "#                                  # Spawns past it are REFUSED (nothing is killed to make room),\n"
     "#                                  # so a runaway mission script or a stuck respawn loop cannot\n"
@@ -605,14 +603,10 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         }
 
         // [world]
-        if (auto v = tbl["world"]["save_path"].value<std::string>())
-            cfg.worldSavePath = std::move(*v);
         if (auto v = tbl["world"]["player_entity_type"].value<std::string>())
             cfg.playerEntityType = std::move(*v); // clamped to a registered type at spawn (#834)
         if (auto v = tbl["world"]["allow_observers"].value<bool>())
             cfg.allowObservers = *v; // #857
-        if (auto v = tomlInt(tbl["world"]["autosave_interval_s"]))
-            cfg.worldAutosaveIntervalS = static_cast<int>(*v);
         if (auto v = tomlInt(tbl["world"]["entity_soft_cap"])) {
             if (*v < 0) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__, "world.entity_soft_cap must be >= 0; using 0 (unlimited)");
