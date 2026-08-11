@@ -60,7 +60,7 @@ TEST_CASE("spawn: a type index is accepted as well as a type id (#1145)", "[cons
     ctx.serverCommand = [&](std::string_view s) { fwd.lines.emplace_back(s); };
     registerConsoleCommands(cmds, ctx);
 
-    CHECK(cmds.dispatch("spawn 0 1 2 3").find("queued") != std::string::npos);
+    CHECK(cmds.dispatch("spawn 0 1 2 3", systemIssuer()).find("queued") != std::string::npos);
     CHECK(fwd.last() == "spawn 0 1 2 3");
 }
 
@@ -75,8 +75,8 @@ TEST_CASE("spawn: an out-of-range index is rejected, not forwarded (#1145)", "[c
     ctx.serverCommand = [&](std::string_view s) { fwd.lines.emplace_back(s); };
     registerConsoleCommands(cmds, ctx);
 
-    CHECK(cmds.dispatch("spawn 99 1 2 3").find("unknown type") != std::string::npos);
-    CHECK(cmds.dispatch("spawn nope:missing 1 2 3").find("unknown type") != std::string::npos);
+    CHECK(cmds.dispatch("spawn 99 1 2 3", systemIssuer()).find("unknown type") != std::string::npos);
+    CHECK(cmds.dispatch("spawn nope:missing 1 2 3", systemIssuer()).find("unknown type") != std::string::npos);
     CHECK(fwd.lines.empty());
 }
 
@@ -89,14 +89,14 @@ TEST_CASE("spawn: bad coordinates are refused before anything is queued (#1145)"
     ctx.serverCommand = [&](std::string_view s) { fwd.lines.emplace_back(s); };
     registerConsoleCommands(cmds, ctx);
 
-    CHECK(cmds.dispatch("spawn test:unit x 2 3").find("invalid coordinates") != std::string::npos);
-    CHECK(cmds.dispatch("spawn test:unit 1 y 3").find("invalid coordinates") != std::string::npos);
-    CHECK(cmds.dispatch("spawn test:unit 1 2 z").find("invalid coordinates") != std::string::npos);
-    CHECK(cmds.dispatch("spawn test:unit 1 2 3four").find("invalid coordinates") != std::string::npos);
+    CHECK(cmds.dispatch("spawn test:unit x 2 3", systemIssuer()).find("invalid coordinates") != std::string::npos);
+    CHECK(cmds.dispatch("spawn test:unit 1 y 3", systemIssuer()).find("invalid coordinates") != std::string::npos);
+    CHECK(cmds.dispatch("spawn test:unit 1 2 z", systemIssuer()).find("invalid coordinates") != std::string::npos);
+    CHECK(cmds.dispatch("spawn test:unit 1 2 3four", systemIssuer()).find("invalid coordinates") != std::string::npos);
     CHECK(fwd.lines.empty());
 
     // Negative and exponent forms are legitimate world coordinates and must survive.
-    CHECK(cmds.dispatch("spawn test:unit -1000.5 1e3 +0").find("queued") != std::string::npos);
+    CHECK(cmds.dispatch("spawn test:unit -1000.5 1e3 +0", systemIssuer()).find("queued") != std::string::npos);
 }
 
 TEST_CASE("spawn: with no type registry the type is the server's problem (#1145)", "[console][commands]") {
@@ -108,7 +108,7 @@ TEST_CASE("spawn: with no type registry the type is the server's problem (#1145)
     ctx.serverCommand = [&](std::string_view s) { fwd.lines.emplace_back(s); };
     registerConsoleCommands(cmds, ctx);
 
-    CHECK(cmds.dispatch("spawn anything:at:all 1 2 3").find("queued") != std::string::npos);
+    CHECK(cmds.dispatch("spawn anything:at:all 1 2 3", systemIssuer()).find("queued") != std::string::npos);
     CHECK(fwd.last() == "spawn anything:at:all 1 2 3");
 }
 
@@ -123,12 +123,12 @@ TEST_CASE("kill: the index must be a plain non-negative integer (#1145)", "[cons
     ctx.serverCommand = [&](std::string_view s) { fwd.lines.emplace_back(s); };
     registerConsoleCommands(cmds, ctx);
 
-    CHECK(cmds.dispatch("kill -1").find("invalid entity index") != std::string::npos);
-    CHECK(cmds.dispatch("kill 4.5").find("invalid entity index") != std::string::npos);
-    CHECK(cmds.dispatch("kill abc").find("invalid entity index") != std::string::npos);
+    CHECK(cmds.dispatch("kill -1", systemIssuer()).find("invalid entity index") != std::string::npos);
+    CHECK(cmds.dispatch("kill 4.5", systemIssuer()).find("invalid entity index") != std::string::npos);
+    CHECK(cmds.dispatch("kill abc", systemIssuer()).find("invalid entity index") != std::string::npos);
     CHECK(fwd.lines.empty());
 
-    CHECK(cmds.dispatch("kill 7").find("queued") != std::string::npos);
+    CHECK(cmds.dispatch("kill 7", systemIssuer()).find("queued") != std::string::npos);
     CHECK(fwd.last() == "kill 7");
 }
 
@@ -141,13 +141,13 @@ TEST_CASE("tp: without a known player entity there is nothing to move (#1145)", 
     CommandContext ctx{};
     ctx.serverCommand = [&](std::string_view s) { fwd.lines.emplace_back(s); };
     registerConsoleCommands(cmds, ctx);
-    CHECK(cmds.dispatch("tp 1 2 3").find("player entity unknown") != std::string::npos);
+    CHECK(cmds.dispatch("tp 1 2 3", systemIssuer()).find("player entity unknown") != std::string::npos);
 
     CommandRegistry withGenOnly;
     CommandContext gctx = ctx;
     gctx.playerEntityGen = &gen; // index still missing
     registerConsoleCommands(withGenOnly, gctx);
-    CHECK(withGenOnly.dispatch("tp 1 2 3").find("player entity unknown") != std::string::npos);
+    CHECK(withGenOnly.dispatch("tp 1 2 3", systemIssuer()).find("player entity unknown") != std::string::npos);
     CHECK(fwd.lines.empty());
 
     CommandRegistry full;
@@ -155,7 +155,7 @@ TEST_CASE("tp: without a known player entity there is nothing to move (#1145)", 
     fctx.playerEntityIdx = &idx;
     fctx.playerEntityGen = &gen;
     registerConsoleCommands(full, fctx);
-    CHECK(full.dispatch("tp 10 500 20").find("queued") != std::string::npos);
+    CHECK(full.dispatch("tp 10 500 20", systemIssuer()).find("queued") != std::string::npos);
     CHECK(fwd.last() == "tp 3 10 500 20"); // the player's index leads the coordinates
 }
 
@@ -169,9 +169,9 @@ TEST_CASE("tp: bad coordinates are refused (#1145)", "[console][commands]") {
     ctx.serverCommand = [&](std::string_view s) { fwd.lines.emplace_back(s); };
     registerConsoleCommands(cmds, ctx);
 
-    CHECK(cmds.dispatch("tp here 2 3").find("invalid coordinates") != std::string::npos);
-    CHECK(cmds.dispatch("tp 1 there 3").find("invalid coordinates") != std::string::npos);
-    CHECK(cmds.dispatch("tp 1 2 nowhere").find("invalid coordinates") != std::string::npos);
+    CHECK(cmds.dispatch("tp here 2 3", systemIssuer()).find("invalid coordinates") != std::string::npos);
+    CHECK(cmds.dispatch("tp 1 there 3", systemIssuer()).find("invalid coordinates") != std::string::npos);
+    CHECK(cmds.dispatch("tp 1 2 nowhere", systemIssuer()).find("invalid coordinates") != std::string::npos);
     CHECK(fwd.lines.empty());
 }
 
@@ -188,10 +188,10 @@ TEST_CASE("detonate: arguments are forwarded verbatim (#1145)", "[console][comma
     ctx.serverCommand = [&](std::string_view s) { fwd.lines.emplace_back(s); };
     registerConsoleCommands(cmds, ctx);
 
-    CHECK(cmds.dispatch("detonate 0 100 0 250 5000").find("queued") != std::string::npos);
+    CHECK(cmds.dispatch("detonate 0 100 0 250 5000", systemIssuer()).find("queued") != std::string::npos);
     CHECK(fwd.last() == "detonate 0 100 0 250 5000");
 
-    CHECK(cmds.dispatch("detonate 0 100 0 2500 90000 --nuclear").find("queued") != std::string::npos);
+    CHECK(cmds.dispatch("detonate 0 100 0 2500 90000 --nuclear", systemIssuer()).find("queued") != std::string::npos);
     CHECK(fwd.last() == "detonate 0 100 0 2500 90000 --nuclear"); // the optional flag survives
 }
 
@@ -202,8 +202,8 @@ TEST_CASE("detonate: too few arguments is a usage message, not a partial blast (
     ctx.serverCommand = [&](std::string_view s) { fwd.lines.emplace_back(s); };
     registerConsoleCommands(cmds, ctx);
 
-    CHECK(cmds.dispatch("detonate").find("usage") != std::string::npos);
-    CHECK(cmds.dispatch("detonate 0 100 0 250").find("usage") != std::string::npos);
+    CHECK(cmds.dispatch("detonate", systemIssuer()).find("usage") != std::string::npos);
+    CHECK(cmds.dispatch("detonate 0 100 0 250", systemIssuer()).find("usage") != std::string::npos);
     CHECK(fwd.lines.empty());
 }
 
@@ -227,7 +227,7 @@ TEST_CASE("reload_content: both halves run, and either alone still reports (#114
         ctx.serverCommand = [&](std::string_view s) { fwd.lines.emplace_back(s); };
         registerConsoleCommands(cmds, ctx);
 
-        const std::string out = cmds.dispatch("reload_content");
+        const std::string out = cmds.dispatch("reload_content", systemIssuer());
         CHECK(reloaded);
         CHECK(fwd.last() == "reload_content");
         CHECK(out.find("12 assets evicted") != std::string::npos);
@@ -240,7 +240,7 @@ TEST_CASE("reload_content: both halves run, and either alone still reports (#114
         ctx.serverCommand = [&](std::string_view s) { fwd.lines.emplace_back(s); };
         registerConsoleCommands(cmds, ctx);
 
-        CHECK(cmds.dispatch("reload_content").find("forwarded to server") != std::string::npos);
+        CHECK(cmds.dispatch("reload_content", systemIssuer()).find("forwarded to server") != std::string::npos);
         CHECK(fwd.last() == "reload_content");
     }
     SECTION("client only — connected to a remote server") {
@@ -248,13 +248,13 @@ TEST_CASE("reload_content: both halves run, and either alone still reports (#114
         CommandContext ctx{};
         ctx.reloadContent = [] { return std::string("client: done"); };
         registerConsoleCommands(cmds, ctx);
-        CHECK(cmds.dispatch("reload_content") == "client: done");
+        CHECK(cmds.dispatch("reload_content", systemIssuer()) == "client: done");
     }
     SECTION("neither") {
         CommandRegistry cmds;
         CommandContext ctx{};
         registerConsoleCommands(cmds, ctx);
-        CHECK(cmds.dispatch("reload_content").find("not available") != std::string::npos);
+        CHECK(cmds.dispatch("reload_content", systemIssuer()).find("not available") != std::string::npos);
     }
 }
 
@@ -277,7 +277,7 @@ TEST_CASE("art: a channel is set by name and released by clear (#1145)", "[conso
     ctx.clearArtChannels = [&] { ++clears; };
     registerConsoleCommands(cmds, ctx);
 
-    CHECK(cmds.dispatch("art 3 gear 1.0").find("gear") != std::string::npos);
+    CHECK(cmds.dispatch("art 3 gear 1.0", systemIssuer()).find("gear") != std::string::npos);
     REQUIRE(calls.size() == 1u);
     CHECK(calls[0].idx == 3u);
     CHECK(calls[0].channel == static_cast<uint8_t>(ArtChannel::Gear));
@@ -285,11 +285,11 @@ TEST_CASE("art: a channel is set by name and released by clear (#1145)", "[conso
 
     // A signed channel takes a negative value — clamping it to 0 here would make it impossible to
     // scrub a control surface to one end of its travel.
-    CHECK(cmds.dispatch("art 3 elevator -1").find("elevator") != std::string::npos);
+    CHECK(cmds.dispatch("art 3 elevator -1", systemIssuer()).find("elevator") != std::string::npos);
     REQUIRE(calls.size() == 2u);
     CHECK(calls[1].value == -1.0f);
 
-    CHECK(cmds.dispatch("art clear").find("cleared") != std::string::npos);
+    CHECK(cmds.dispatch("art clear", systemIssuer()).find("cleared") != std::string::npos);
     CHECK(clears == 1);
     CHECK(calls.size() == 2u); // clear does not set anything
 }
@@ -308,7 +308,7 @@ TEST_CASE("art: every channel name in the vocabulary resolves (#1145)", "[consol
     for (std::size_t i = 0; i < kArtChannelCount; ++i) {
         const std::string name(artChannelName(static_cast<ArtChannel>(i)));
         INFO("channel " << name);
-        CHECK(cmds.dispatch("art 1 " + name + " 0.5").find("unknown channel") == std::string::npos);
+        CHECK(cmds.dispatch("art 1 " + name + " 0.5", systemIssuer()).find("unknown channel") == std::string::npos);
     }
     CHECK(seen.size() == kArtChannelCount);
 }
@@ -321,7 +321,7 @@ TEST_CASE("art: an unknown channel lists the ones that exist (#1145)", "[console
     ctx.clearArtChannels = [] {};
     registerConsoleCommands(cmds, ctx);
 
-    const std::string out = cmds.dispatch("art 1 wingtips 0.5");
+    const std::string out = cmds.dispatch("art 1 wingtips 0.5", systemIssuer());
     CHECK(out.find("unknown channel") != std::string::npos);
     CHECK(out.find("gear") != std::string::npos); // the list is in the error itself
     CHECK(out.find("speedbrake") != std::string::npos);
@@ -335,13 +335,13 @@ TEST_CASE("art: malformed invocations do not reach the renderer (#1145)", "[cons
     ctx.clearArtChannels = [&] { ++clears; };
     registerConsoleCommands(cmds, ctx);
 
-    CHECK(cmds.dispatch("art").find("usage") != std::string::npos);
-    CHECK(cmds.dispatch("art 1").find("usage") != std::string::npos);
-    CHECK(cmds.dispatch("art 1 gear").find("usage") != std::string::npos);
-    CHECK(cmds.dispatch("art 1 gear 0.5 extra").find("usage") != std::string::npos);
-    CHECK(cmds.dispatch("art -1 gear 0.5").find("non-negative integer") != std::string::npos);
-    CHECK(cmds.dispatch("art x gear 0.5").find("non-negative integer") != std::string::npos);
-    CHECK(cmds.dispatch("art 1 gear open").find("must be a number") != std::string::npos);
+    CHECK(cmds.dispatch("art", systemIssuer()).find("usage") != std::string::npos);
+    CHECK(cmds.dispatch("art 1", systemIssuer()).find("usage") != std::string::npos);
+    CHECK(cmds.dispatch("art 1 gear", systemIssuer()).find("usage") != std::string::npos);
+    CHECK(cmds.dispatch("art 1 gear 0.5 extra", systemIssuer()).find("usage") != std::string::npos);
+    CHECK(cmds.dispatch("art -1 gear 0.5", systemIssuer()).find("non-negative integer") != std::string::npos);
+    CHECK(cmds.dispatch("art x gear 0.5", systemIssuer()).find("non-negative integer") != std::string::npos);
+    CHECK(cmds.dispatch("art 1 gear open", systemIssuer()).find("must be a number") != std::string::npos);
     CHECK(sets == 0);
     CHECK(clears == 0);
 }
@@ -351,8 +351,8 @@ TEST_CASE("art: without a renderer the command says so rather than doing nothing
     CommandRegistry cmds;
     CommandContext ctx{}; // both hooks null
     registerConsoleCommands(cmds, ctx);
-    CHECK(cmds.dispatch("art 1 gear 1").find("not available") != std::string::npos);
-    CHECK(cmds.dispatch("art clear").find("not available") != std::string::npos);
+    CHECK(cmds.dispatch("art 1 gear 1", systemIssuer()).find("not available") != std::string::npos);
+    CHECK(cmds.dispatch("art clear", systemIssuer()).find("not available") != std::string::npos);
 
     // Half-wired is still unavailable: setting a channel with no way to release it would strand the
     // override on screen.
@@ -360,5 +360,5 @@ TEST_CASE("art: without a renderer the command says so rather than doing nothing
     CommandContext sctx{};
     sctx.setArtChannel = [](uint32_t, uint8_t, float) {};
     registerConsoleCommands(halfSet, sctx);
-    CHECK(halfSet.dispatch("art 1 gear 1").find("not available") != std::string::npos);
+    CHECK(halfSet.dispatch("art 1 gear 1", systemIssuer()).find("not available") != std::string::npos);
 }

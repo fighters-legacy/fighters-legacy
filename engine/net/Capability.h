@@ -190,9 +190,7 @@ struct PeerAuthority {
 // Who issued a command, threaded through CommandRegistry::dispatch so a command can be
 // permission-checked (#946). Named CommandIssuer rather than the #944 "CommandContext" because that
 // name is already taken by the game client's console context (engine/console/ConsoleCommands.h, same
-// namespace fl). The implicit-Admin paths (stdin console / RCON / single-player --admin-token /
-// operator_password auth) use dispatch(line) without an issuer; a default-constructed issuer is Admin
-// so constructing one is never a surprise. kIssuerNoPeer mirrors fl::kNoPeer
+// namespace fl). kIssuerNoPeer mirrors fl::kNoPeer
 // (engine/world/Formation.h) without pulling that header, keeping this vocabulary header stdlib-only.
 inline constexpr uint32_t kIssuerNoPeer = 0xFFFFFFFFu;
 
@@ -201,5 +199,18 @@ struct CommandIssuer {
     CapabilityMask caps{kAdminCaps};                         // default: full authority (system issuer)
     uint16_t factionIndex{PeerAuthority::kNoFactionBinding}; // faction binding for a faction-scoped grant (#948)
 };
+
+// The issuer whose authority is the process's own: the operator typing at the server's stdin, an
+// authenticated RCON client, the single-player --admin-token path, and the mission YAML the operator
+// chose to load. Full caps, no peer id.
+//
+// It exists to be NAMED (#1079). These callers used to reach an issuer-less
+// CommandRegistry::dispatch(line) that ignored every command's required mask, so an unprivileged
+// frontend added later would have inherited a bypass by writing the shorter call. Passing this instead
+// makes a privileged dispatch a statement rather than an omitted argument -- and "trusted YAML is still
+// an issuer, just a privileged one" is exactly the distinction the deleted overload erased.
+[[nodiscard]] inline constexpr CommandIssuer systemIssuer() noexcept {
+    return CommandIssuer{};
+}
 
 } // namespace fl

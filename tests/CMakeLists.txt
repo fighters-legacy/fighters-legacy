@@ -760,6 +760,14 @@ add_executable(test_job_system test_job_system.cpp)
 target_link_libraries(test_job_system PRIVATE Catch2::Catch2WithMain engine-job)
 catch_discover_tests(test_job_system)
 
+# AdminChannel + AdminChannelRegistry (#1079): the six admin frontends' shared auth, dispatch and
+# async-ack drain. engine-net only -- no sockets, no registry, injected clock, so the drain deadline is
+# testable without opening a file descriptor (the test_rcon_server recipe generalised).
+add_executable(test_admin_channel test_admin_channel.cpp)
+target_link_libraries(test_admin_channel PRIVATE Catch2::Catch2WithMain engine-net)
+target_include_directories(test_admin_channel PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_admin_channel)
+
 # The engine's one JSON escaper, writer set and reader (#1080). Header-only and stdlib-only, so this
 # links nothing: engine-protocol's zero-dep rule is the reason the helper is shaped that way.
 add_executable(test_json test_json.cpp)

@@ -55,7 +55,7 @@ static CommandRegistry makeRegistry(ServerCommandContext ctx = {}) {
 
 TEST_CASE("AdminConsole: help lists registered commands", "[admin_console]") {
     auto reg = makeRegistry();
-    std::string out = reg.dispatch("help");
+    std::string out = reg.dispatch("help", systemIssuer());
     CHECK(out.find("status") != std::string::npos);
     CHECK(out.find("peers") != std::string::npos);
     CHECK(out.find("kick") != std::string::npos);
@@ -67,7 +67,7 @@ TEST_CASE("AdminConsole: help lists registered commands", "[admin_console]") {
 
 TEST_CASE("AdminConsole: unknown command returns error", "[admin_console]") {
     auto reg = makeRegistry();
-    std::string out = reg.dispatch("xyzzy");
+    std::string out = reg.dispatch("xyzzy", systemIssuer());
     CHECK(out.find("unknown command") != std::string::npos);
 }
 
@@ -77,7 +77,7 @@ TEST_CASE("AdminConsole: unknown command returns error", "[admin_console]") {
 
 TEST_CASE("AdminConsole: status with null broadcaster returns error", "[admin_console]") {
     auto reg = makeRegistry(); // broadcaster == nullptr
-    std::string out = reg.dispatch("status");
+    std::string out = reg.dispatch("status", systemIssuer());
     CHECK(out.find("not available") != std::string::npos);
 }
 
@@ -87,19 +87,19 @@ TEST_CASE("AdminConsole: status with null broadcaster returns error", "[admin_co
 
 TEST_CASE("AdminConsole: kick with no args returns usage", "[admin_console]") {
     auto reg = makeRegistry();
-    std::string out = reg.dispatch("kick");
+    std::string out = reg.dispatch("kick", systemIssuer());
     CHECK(out.find("usage") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole: kick with non-numeric arg and null broadcaster returns error", "[admin_console]") {
     auto reg = makeRegistry(); // broadcaster == nullptr
-    std::string out = reg.dispatch("kick 1.2.3.4");
+    std::string out = reg.dispatch("kick 1.2.3.4", systemIssuer());
     CHECK(out.find("not available") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole: kick with numeric arg and null broadcaster returns error", "[admin_console]") {
     auto reg = makeRegistry();
-    std::string out = reg.dispatch("kick 42");
+    std::string out = reg.dispatch("kick 42", systemIssuer());
     CHECK(out.find("not available") != std::string::npos);
 }
 
@@ -109,25 +109,25 @@ TEST_CASE("AdminConsole: kick with numeric arg and null broadcaster returns erro
 
 TEST_CASE("AdminConsole: ban with no args returns usage", "[admin_console]") {
     auto reg = makeRegistry();
-    std::string out = reg.dispatch("ban");
+    std::string out = reg.dispatch("ban", systemIssuer());
     CHECK(out.find("usage") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole: ban with null broadcaster returns error", "[admin_console]") {
     auto reg = makeRegistry();
-    std::string out = reg.dispatch("ban 1.2.3.4");
+    std::string out = reg.dispatch("ban 1.2.3.4", systemIssuer());
     CHECK(out.find("not available") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole: unban with no args returns usage", "[admin_console]") {
     auto reg = makeRegistry();
-    std::string out = reg.dispatch("unban");
+    std::string out = reg.dispatch("unban", systemIssuer());
     CHECK(out.find("usage") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole: unban with null broadcaster returns error", "[admin_console]") {
     auto reg = makeRegistry();
-    std::string out = reg.dispatch("unban 1.2.3.4");
+    std::string out = reg.dispatch("unban 1.2.3.4", systemIssuer());
     CHECK(out.find("not available") != std::string::npos);
 }
 
@@ -137,25 +137,25 @@ TEST_CASE("AdminConsole: unban with null broadcaster returns error", "[admin_con
 
 TEST_CASE("AdminConsole: mute with no args returns usage", "[admin_console]") {
     auto reg = makeRegistry();
-    CHECK(reg.dispatch("mute").find("usage") != std::string::npos);
-    CHECK(reg.dispatch("unmute").find("usage") != std::string::npos);
+    CHECK(reg.dispatch("mute", systemIssuer()).find("usage") != std::string::npos);
+    CHECK(reg.dispatch("unmute", systemIssuer()).find("usage") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole: mute with null broadcaster returns not available", "[admin_console]") {
     auto reg = makeRegistry();
-    CHECK(reg.dispatch("mute 3").find("not available") != std::string::npos);
-    CHECK(reg.dispatch("mutes").find("not available") != std::string::npos);
+    CHECK(reg.dispatch("mute 3", systemIssuer()).find("not available") != std::string::npos);
+    CHECK(reg.dispatch("mutes", systemIssuer()).find("not available") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole: admin_unlock with no args returns usage", "[admin_console]") {
     auto reg = makeRegistry();
-    std::string out = reg.dispatch("admin_unlock");
+    std::string out = reg.dispatch("admin_unlock", systemIssuer());
     CHECK(out.find("usage") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole: admin_unlock with null broadcaster returns not available", "[admin_console]") {
     auto reg = makeRegistry();
-    std::string out = reg.dispatch("admin_unlock 1.2.3.4");
+    std::string out = reg.dispatch("admin_unlock 1.2.3.4", systemIssuer());
     CHECK(out.find("not available") != std::string::npos);
 }
 
@@ -165,13 +165,13 @@ TEST_CASE("AdminConsole: admin_unlock with null broadcaster returns not availabl
 
 TEST_CASE("AdminConsole: set_time out-of-range returns error", "[admin_console]") {
     auto reg = makeRegistry();
-    CHECK(reg.dispatch("set_time 25").find("must be in") != std::string::npos);
-    CHECK(reg.dispatch("set_time -1").find("must be in") != std::string::npos);
+    CHECK(reg.dispatch("set_time 25", systemIssuer()).find("must be in") != std::string::npos);
+    CHECK(reg.dispatch("set_time -1", systemIssuer()).find("must be in") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole: set_time with no args returns usage", "[admin_console]") {
     auto reg = makeRegistry();
-    CHECK(reg.dispatch("set_time").find("usage") != std::string::npos);
+    CHECK(reg.dispatch("set_time", systemIssuer()).find("usage") != std::string::npos);
 }
 
 // ---------------------------------------------------------------------------
@@ -180,7 +180,7 @@ TEST_CASE("AdminConsole: set_time with no args returns usage", "[admin_console]"
 
 TEST_CASE("AdminConsole: reload_config with null configPath returns error", "[admin_console]") {
     auto reg = makeRegistry(); // configPath == nullptr
-    std::string out = reg.dispatch("reload_config");
+    std::string out = reg.dispatch("reload_config", systemIssuer());
     CHECK(out.find("not available") != std::string::npos);
 }
 
@@ -193,14 +193,14 @@ TEST_CASE("AdminConsole: quit sets quitFlag to 1", "[admin_console]") {
     ServerCommandContext ctx;
     ctx.env.quitFlag = &flag;
     auto reg = makeRegistry(ctx);
-    auto out = reg.dispatch("quit");
+    auto out = reg.dispatch("quit", systemIssuer());
     CHECK(flag == 1);
     CHECK(!out.empty());
 }
 
 TEST_CASE("AdminConsole: quit with null quitFlag returns error", "[admin_console]") {
     auto reg = makeRegistry(); // quitFlag == nullptr
-    std::string out = reg.dispatch("quit");
+    std::string out = reg.dispatch("quit", systemIssuer());
     CHECK(out.find("not available") != std::string::npos);
 }
 
@@ -210,7 +210,7 @@ TEST_CASE("AdminConsole: quit with null quitFlag returns error", "[admin_console
 
 TEST_CASE("AdminConsole: reload_banlist with null banlistPath returns not available", "[admin_console][security]") {
     auto reg = makeRegistry(); // banlistPath == nullptr
-    std::string out = reg.dispatch("reload_banlist");
+    std::string out = reg.dispatch("reload_banlist", systemIssuer());
     CHECK(out.find("not available") != std::string::npos);
 }
 
@@ -219,7 +219,7 @@ TEST_CASE("AdminConsole: reload_banlist with empty banlistPath returns not avail
     std::string emptyPath;
     ctx.bans.banlistPath = &emptyPath; // non-null but empty
     auto reg = makeRegistry(ctx);
-    std::string out = reg.dispatch("reload_banlist");
+    std::string out = reg.dispatch("reload_banlist", systemIssuer());
     CHECK(out.find("not available") != std::string::npos);
 }
 
@@ -229,7 +229,7 @@ TEST_CASE("AdminConsole: reload_banlist with empty banlistPath returns not avail
 
 TEST_CASE("AdminConsole: reload_allowlist with null allowlistPath returns not available", "[admin_console][security]") {
     auto reg = makeRegistry();
-    std::string out = reg.dispatch("reload_allowlist");
+    std::string out = reg.dispatch("reload_allowlist", systemIssuer());
     CHECK(out.find("not available") != std::string::npos);
 }
 
@@ -239,7 +239,7 @@ TEST_CASE("AdminConsole: reload_allowlist with empty allowlistPath returns not a
     std::string emptyPath;
     ctx.bans.allowlistPath = &emptyPath;
     auto reg = makeRegistry(ctx);
-    std::string out = reg.dispatch("reload_allowlist");
+    std::string out = reg.dispatch("reload_allowlist", systemIssuer());
     CHECK(out.find("not available") != std::string::npos);
 }
 
@@ -249,13 +249,13 @@ TEST_CASE("AdminConsole: reload_allowlist with empty allowlistPath returns not a
 
 TEST_CASE("AdminConsole: ban with null broadcaster returns not available", "[admin_console][security]") {
     auto reg = makeRegistry(); // broadcaster == nullptr
-    std::string out = reg.dispatch("ban 1.2.3.4");
+    std::string out = reg.dispatch("ban 1.2.3.4", systemIssuer());
     CHECK(out.find("not available") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole: unban with null broadcaster returns not available", "[admin_console][security]") {
     auto reg = makeRegistry();
-    std::string out = reg.dispatch("unban 1.2.3.4");
+    std::string out = reg.dispatch("unban 1.2.3.4", systemIssuer());
     CHECK(out.find("not available") != std::string::npos);
 }
 
@@ -265,7 +265,7 @@ TEST_CASE("AdminConsole: unban with null broadcaster returns not available", "[a
 
 TEST_CASE("AdminConsole: shutdown with null broadcaster returns not available", "[admin_console][shutdown]") {
     auto reg = makeRegistry(); // broadcaster == nullptr
-    std::string out = reg.dispatch("shutdown --in 30m --force");
+    std::string out = reg.dispatch("shutdown --in 30m --force", systemIssuer());
     CHECK(out.find("not available") != std::string::npos);
 }
 
@@ -276,7 +276,7 @@ TEST_CASE("AdminConsole: shutdown --in with null gameLoop returns not available"
     ctx.sim.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
     ctx.sim.gameLoop = nullptr;
     auto reg = makeRegistry(ctx);
-    std::string out = reg.dispatch("shutdown --in 30m --force");
+    std::string out = reg.dispatch("shutdown --in 30m --force", systemIssuer());
     CHECK(out.find("not available") != std::string::npos);
 }
 
@@ -286,7 +286,7 @@ TEST_CASE("AdminConsole: shutdown --in with invalid duration returns error", "[a
     ctx.sim.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
     ctx.sim.gameLoop = reinterpret_cast<GameLoop*>(&sentinel);
     auto reg = makeRegistry(ctx);
-    std::string out = reg.dispatch("shutdown --in notaduration --force");
+    std::string out = reg.dispatch("shutdown --in notaduration --force", systemIssuer());
     CHECK(out.find("invalid") != std::string::npos);
 }
 
@@ -297,7 +297,7 @@ TEST_CASE("AdminConsole: shutdown --in without --force returns confirmation prom
     ctx.sim.gameLoop = reinterpret_cast<GameLoop*>(&sentinel);
     ctx.shutdown.requireConfirm = true;
     auto reg = makeRegistry(ctx);
-    std::string out = reg.dispatch("shutdown --in 30m");
+    std::string out = reg.dispatch("shutdown --in 30m", systemIssuer());
     // Should prompt to re-run with --force, not schedule anything
     CHECK(out.find("--force") != std::string::npos);
 }
@@ -309,19 +309,19 @@ TEST_CASE("AdminConsole: shutdown --now without --force returns confirmation pro
     ctx.sim.gameLoop = reinterpret_cast<GameLoop*>(&sentinel);
     ctx.shutdown.requireConfirm = true;
     auto reg = makeRegistry(ctx);
-    std::string out = reg.dispatch("shutdown --now");
+    std::string out = reg.dispatch("shutdown --now", systemIssuer());
     CHECK(out.find("--force") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole: shutdown --cancel with null broadcaster returns not available", "[admin_console][shutdown]") {
     auto reg = makeRegistry();
-    std::string out = reg.dispatch("shutdown --cancel");
+    std::string out = reg.dispatch("shutdown --cancel", systemIssuer());
     CHECK(out.find("not available") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole: shutdown --delay with null broadcaster returns not available", "[admin_console][shutdown]") {
     auto reg = makeRegistry();
-    std::string out = reg.dispatch("shutdown --delay 5m");
+    std::string out = reg.dispatch("shutdown --delay 5m", systemIssuer());
     CHECK(out.find("not available") != std::string::npos);
 }
 
@@ -331,7 +331,7 @@ TEST_CASE("AdminConsole: shutdown unknown flag returns error", "[admin_console][
     ctx.sim.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
     ctx.sim.gameLoop = reinterpret_cast<GameLoop*>(&sentinel);
     auto reg = makeRegistry(ctx);
-    std::string out = reg.dispatch("shutdown --bogus");
+    std::string out = reg.dispatch("shutdown --bogus", systemIssuer());
     CHECK(out.find("unknown flag") != std::string::npos);
 }
 
@@ -341,7 +341,7 @@ TEST_CASE("AdminConsole: shutdown --reason without value returns error", "[admin
     ctx.sim.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
     ctx.sim.gameLoop = reinterpret_cast<GameLoop*>(&sentinel);
     auto reg = makeRegistry(ctx);
-    std::string out = reg.dispatch("shutdown --in 30m --force --reason");
+    std::string out = reg.dispatch("shutdown --in 30m --force --reason", systemIssuer());
     CHECK(out.find("requires a value") != std::string::npos);
 }
 
@@ -353,7 +353,7 @@ TEST_CASE("AdminConsole: shutdown --in with multi-word --reason preserves confir
     ctx.sim.gameLoop = reinterpret_cast<GameLoop*>(&sentinel);
     ctx.shutdown.requireConfirm = true;
     auto reg = makeRegistry(ctx);
-    std::string out = reg.dispatch("shutdown --in 30m --reason scheduled maintenance");
+    std::string out = reg.dispatch("shutdown --in 30m --reason scheduled maintenance", systemIssuer());
     CHECK(out.find("--force") != std::string::npos);
 }
 
@@ -367,7 +367,7 @@ TEST_CASE("AdminConsole: shutdown --reason stops consuming at next double-dash f
     auto reg = makeRegistry(ctx);
     // --reason consumes "maintenance" only (stops at --force); --force bypasses the confirm gate;
     // the 10s delay is below minShutdownDelayS=100 so the min-delay gate fires.
-    std::string out = reg.dispatch("shutdown --in 10s --reason maintenance --force");
+    std::string out = reg.dispatch("shutdown --in 10s --reason maintenance --force", systemIssuer());
     CHECK(out.find("at least") != std::string::npos);
 }
 
@@ -407,7 +407,7 @@ int AsyncAckFixture::em_sentinel = 0;
 TEST_CASE("AdminConsole async ack: kick numeric peer returns non-empty ack with id", "[admin_console][async_ack]") {
     AsyncAckFixture f;
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("kick 42");
+    std::string out = reg.dispatch("kick 42", systemIssuer());
     CHECK_FALSE(out.empty());
     CHECK(out.find("42") != std::string::npos);
 }
@@ -415,36 +415,36 @@ TEST_CASE("AdminConsole async ack: kick numeric peer returns non-empty ack with 
 TEST_CASE("AdminConsole async ack: mute non-numeric arg rejected (#646)", "[admin_console][async_ack]") {
     AsyncAckFixture f;
     auto reg = makeRegistry(f.ctx);
-    CHECK(reg.dispatch("mute notanid").find("expected a peer ID") != std::string::npos);
+    CHECK(reg.dispatch("mute notanid", systemIssuer()).find("expected a peer ID") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole async ack: mute/unmute/mutes return a sync ack (#646)", "[admin_console][async_ack]") {
     AsyncAckFixture f;
     auto reg = makeRegistry(f.ctx);
-    CHECK(reg.dispatch("mute 7").find("queued peer 7") != std::string::npos);
-    CHECK(reg.dispatch("unmute 7").find("queued peer 7") != std::string::npos);
-    CHECK(reg.dispatch("mutes") == "mutes: queued");
+    CHECK(reg.dispatch("mute 7", systemIssuer()).find("queued peer 7") != std::string::npos);
+    CHECK(reg.dispatch("unmute 7", systemIssuer()).find("queued peer 7") != std::string::npos);
+    CHECK(reg.dispatch("mutes", systemIssuer()) == "mutes: queued");
 }
 
 TEST_CASE("AdminConsole: spectate usage / not-available (#403)", "[admin_console]") {
     auto reg = makeRegistry();
-    CHECK(reg.dispatch("spectate").find("usage") != std::string::npos);
-    CHECK(reg.dispatch("spectate 3").find("usage") != std::string::npos);
-    CHECK(reg.dispatch("spectate 3 5").find("not available") != std::string::npos);
+    CHECK(reg.dispatch("spectate", systemIssuer()).find("usage") != std::string::npos);
+    CHECK(reg.dispatch("spectate 3", systemIssuer()).find("usage") != std::string::npos);
+    CHECK(reg.dispatch("spectate 3 5", systemIssuer()).find("not available") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole async ack: spectate parses target + off (#403)", "[admin_console][async_ack]") {
     AsyncAckFixture f;
     auto reg = makeRegistry(f.ctx);
-    CHECK(reg.dispatch("spectate 3 5").find("queued peer 3") != std::string::npos);
-    CHECK(reg.dispatch("spectate 3 off").find("queued peer 3") != std::string::npos);
-    CHECK(reg.dispatch("spectate 3 notanumber").find("number or 'off'") != std::string::npos);
+    CHECK(reg.dispatch("spectate 3 5", systemIssuer()).find("queued peer 3") != std::string::npos);
+    CHECK(reg.dispatch("spectate 3 off", systemIssuer()).find("queued peer 3") != std::string::npos);
+    CHECK(reg.dispatch("spectate 3 notanumber", systemIssuer()).find("number or 'off'") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole async ack: kick IP returns non-empty ack with address", "[admin_console][async_ack]") {
     AsyncAckFixture f;
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("kick 1.2.3.4");
+    std::string out = reg.dispatch("kick 1.2.3.4", systemIssuer());
     CHECK_FALSE(out.empty());
     CHECK(out.find("1.2.3.4") != std::string::npos);
 }
@@ -452,14 +452,14 @@ TEST_CASE("AdminConsole async ack: kick IP returns non-empty ack with address", 
 TEST_CASE("AdminConsole async ack: ban IP returns non-empty ack", "[admin_console][async_ack]") {
     AsyncAckFixture f;
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("ban 1.2.3.4");
+    std::string out = reg.dispatch("ban 1.2.3.4", systemIssuer());
     CHECK_FALSE(out.empty());
 }
 
 TEST_CASE("AdminConsole async ack: unban IP returns non-empty ack with address", "[admin_console][async_ack]") {
     AsyncAckFixture f;
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("unban 1.2.3.4");
+    std::string out = reg.dispatch("unban 1.2.3.4", systemIssuer());
     CHECK_FALSE(out.empty());
     CHECK(out.find("1.2.3.4") != std::string::npos);
 }
@@ -467,7 +467,7 @@ TEST_CASE("AdminConsole async ack: unban IP returns non-empty ack with address",
 TEST_CASE("AdminConsole async ack: admin_unlock IP returns non-empty ack", "[admin_console][async_ack]") {
     AsyncAckFixture f;
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("admin_unlock 1.2.3.4");
+    std::string out = reg.dispatch("admin_unlock 1.2.3.4", systemIssuer());
     CHECK_FALSE(out.empty());
     CHECK(out.find("1.2.3.4") != std::string::npos);
 }
@@ -477,7 +477,7 @@ TEST_CASE("AdminConsole async ack: admin_unlock with clearRconLockout set return
     AsyncAckFixture f;
     f.ctx.rcon.clearRconLockout = [](const std::string&) -> bool { return false; };
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("admin_unlock 1.2.3.4");
+    std::string out = reg.dispatch("admin_unlock 1.2.3.4", systemIssuer());
     CHECK_FALSE(out.empty());
     CHECK(out.find("1.2.3.4") != std::string::npos);
 }
@@ -491,7 +491,7 @@ TEST_CASE("AdminConsole: admin_unlock help text mentions both channels", "[admin
 TEST_CASE("AdminConsole async ack: spawn returns non-empty ack with type", "[admin_console][async_ack]") {
     AsyncAckFixture f;
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("spawn builtin:debug-entity 0 100 0");
+    std::string out = reg.dispatch("spawn builtin:debug-entity 0 100 0", systemIssuer());
     CHECK_FALSE(out.empty());
     CHECK(out.find("builtin:debug-entity") != std::string::npos);
 }
@@ -500,7 +500,7 @@ TEST_CASE("AdminConsole: spawn --ai lua returns error when loadAIScript is null"
     AsyncAckFixture f;
     f.ctx.env.loadAIScript = nullptr;
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("spawn builtin:debug-entity 0 100 0 --ai lua patrol");
+    std::string out = reg.dispatch("spawn builtin:debug-entity 0 100 0 --ai lua patrol", systemIssuer());
     // When loadAIScript is null the command returns an error string immediately.
     CHECK_FALSE(out.empty());
     CHECK(out.find("not available") != std::string::npos);
@@ -512,7 +512,7 @@ TEST_CASE("AdminConsole: spawn --ai lua returns error when script not found", "[
         return {}; // empty = not found
     };
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("spawn builtin:debug-entity 0 100 0 --ai lua patrol");
+    std::string out = reg.dispatch("spawn builtin:debug-entity 0 100 0 --ai lua patrol", systemIssuer());
     CHECK_FALSE(out.empty());
     CHECK(out.find("not found") != std::string::npos);
 }
@@ -523,7 +523,7 @@ TEST_CASE("AdminConsole: spawn --ai lua returns non-empty ack when script valid"
         return {"function compute_control(s,t,dt) return {} end", ""};
     };
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("spawn builtin:debug-entity 0 100 0 --ai lua patrol");
+    std::string out = reg.dispatch("spawn builtin:debug-entity 0 100 0 --ai lua patrol", systemIssuer());
     CHECK_FALSE(out.empty());
     CHECK(out.find("builtin:debug-entity") != std::string::npos);
 }
@@ -531,7 +531,7 @@ TEST_CASE("AdminConsole: spawn --ai lua returns non-empty ack when script valid"
 TEST_CASE("AdminConsole async ack: kill returns non-empty ack with index", "[admin_console][async_ack]") {
     AsyncAckFixture f;
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("kill 1");
+    std::string out = reg.dispatch("kill 1", systemIssuer());
     CHECK_FALSE(out.empty());
     CHECK(out.find("1") != std::string::npos);
 }
@@ -539,7 +539,7 @@ TEST_CASE("AdminConsole async ack: kill returns non-empty ack with index", "[adm
 TEST_CASE("AdminConsole async ack: tp returns non-empty ack with entity index", "[admin_console][async_ack]") {
     AsyncAckFixture f;
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("tp 1 0 100 0");
+    std::string out = reg.dispatch("tp 1 0 100 0", systemIssuer());
     CHECK_FALSE(out.empty());
     CHECK(out.find("1") != std::string::npos);
 }
@@ -547,7 +547,7 @@ TEST_CASE("AdminConsole async ack: tp returns non-empty ack with entity index", 
 TEST_CASE("AdminConsole async ack: shutdown no-args returns status queued string", "[admin_console][async_ack]") {
     AsyncAckFixture f;
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("shutdown");
+    std::string out = reg.dispatch("shutdown", systemIssuer());
     CHECK(out == "shutdown: status queued");
 }
 
@@ -555,7 +555,7 @@ TEST_CASE("AdminConsole async ack: shutdown --delay returns extension queued str
     AsyncAckFixture f;
     f.ctx.shutdown.requireConfirm = false;
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("shutdown --delay 5m");
+    std::string out = reg.dispatch("shutdown --delay 5m", systemIssuer());
     CHECK(out == "shutdown: extension queued");
 }
 
@@ -595,7 +595,7 @@ TEST_CASE("AdminConsole shell drain: drainSince captures post-dispatch shell out
     registerServerCommands(reg, std::make_shared<const ServerCommandContext>(ctx));
 
     // Simulate RCON thread: dispatch then snapshot mark (after dispatch to skip sync writes)
-    (void)reg.dispatch("kick 42");
+    (void)reg.dispatch("kick 42", systemIssuer());
     int m = shell.mark();
 
     // Simulate sim-thread callback writing the async confirmation
@@ -615,7 +615,7 @@ TEST_CASE("AdminConsole shell drain: drainSince captures post-dispatch shell out
 TEST_CASE("AdminConsole: pause sets GameLoop rate to Paused", "[admin_console][pause]") {
     AsyncAckFixture f;
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("pause");
+    std::string out = reg.dispatch("pause", systemIssuer());
     CHECK_FALSE(out.empty());
     CHECK(f.loop.rate() == TimeRate::Paused);
 }
@@ -623,9 +623,9 @@ TEST_CASE("AdminConsole: pause sets GameLoop rate to Paused", "[admin_console][p
 TEST_CASE("AdminConsole: resume sets GameLoop rate to Normal", "[admin_console][pause]") {
     AsyncAckFixture f;
     auto reg = makeRegistry(f.ctx);
-    (void)reg.dispatch("pause");
+    (void)reg.dispatch("pause", systemIssuer());
     CHECK(f.loop.rate() == TimeRate::Paused);
-    std::string out = reg.dispatch("resume");
+    std::string out = reg.dispatch("resume", systemIssuer());
     CHECK_FALSE(out.empty());
     CHECK(f.loop.rate() == TimeRate::Normal);
 }
@@ -634,7 +634,7 @@ TEST_CASE("AdminConsole: pause with null gameLoop returns error message", "[admi
     ServerCommandContext ctx{};
     ctx.sim.gameLoop = nullptr;
     auto reg = makeRegistry(ctx);
-    std::string out = reg.dispatch("pause");
+    std::string out = reg.dispatch("pause", systemIssuer());
     CHECK_FALSE(out.empty()); // should return "not available" or similar, not crash
 }
 
@@ -642,7 +642,7 @@ TEST_CASE("AdminConsole: resume with null gameLoop returns error message", "[adm
     ServerCommandContext ctx{};
     ctx.sim.gameLoop = nullptr;
     auto reg = makeRegistry(ctx);
-    std::string out = reg.dispatch("resume");
+    std::string out = reg.dispatch("resume", systemIssuer());
     CHECK_FALSE(out.empty());
 }
 
@@ -699,18 +699,18 @@ struct WbFixture {
 
 TEST_CASE("AdminConsole: peers with null broadcaster returns not available", "[admin_console]") {
     auto reg = makeRegistry(); // broadcaster == nullptr
-    std::string out = reg.dispatch("peers");
+    std::string out = reg.dispatch("peers", systemIssuer());
     CHECK(out.find("not available") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole wb: set_role validates and queues with a synchronous ack (#857)", "[admin_console][wb]") {
     WbFixture f;
     auto reg = makeRegistry(f.ctx);
-    CHECK(reg.dispatch("set_role").find("usage") != std::string::npos);
-    CHECK(reg.dispatch("set_role 0").find("usage") != std::string::npos);
-    CHECK(reg.dispatch("set_role x observer").find("invalid peer ID") != std::string::npos);
-    CHECK(reg.dispatch("set_role 0 bogus").find("pilot") != std::string::npos);
-    std::string ok = reg.dispatch("set_role 3 observer");
+    CHECK(reg.dispatch("set_role", systemIssuer()).find("usage") != std::string::npos);
+    CHECK(reg.dispatch("set_role 0", systemIssuer()).find("usage") != std::string::npos);
+    CHECK(reg.dispatch("set_role x observer", systemIssuer()).find("invalid peer ID") != std::string::npos);
+    CHECK(reg.dispatch("set_role 0 bogus", systemIssuer()).find("pilot") != std::string::npos);
+    std::string ok = reg.dispatch("set_role 3 observer", systemIssuer());
     CHECK(ok.find("queued peer 3") != std::string::npos);
     CHECK(ok.find("observer") != std::string::npos);
 }
@@ -719,12 +719,12 @@ TEST_CASE("AdminConsole wb: grant validates and queues with a synchronous ack (#
           "[admin_console][wb][permission]") {
     WbFixture f;
     auto reg = makeRegistry(f.ctx);
-    CHECK(reg.dispatch("grant").find("usage") != std::string::npos);
-    CHECK(reg.dispatch("grant 0").find("usage") != std::string::npos);
-    CHECK(reg.dispatch("grant x gm").find("invalid peer ID") != std::string::npos);
-    CHECK(reg.dispatch("grant 0 superuser").find("role must be") != std::string::npos);
-    CHECK(reg.dispatch("grant 0 faction_leader nope").find("invalid faction") != std::string::npos);
-    std::string ok = reg.dispatch("grant 3 gm");
+    CHECK(reg.dispatch("grant", systemIssuer()).find("usage") != std::string::npos);
+    CHECK(reg.dispatch("grant 0", systemIssuer()).find("usage") != std::string::npos);
+    CHECK(reg.dispatch("grant x gm", systemIssuer()).find("invalid peer ID") != std::string::npos);
+    CHECK(reg.dispatch("grant 0 superuser", systemIssuer()).find("role must be") != std::string::npos);
+    CHECK(reg.dispatch("grant 0 faction_leader nope", systemIssuer()).find("invalid faction") != std::string::npos);
+    std::string ok = reg.dispatch("grant 3 gm", systemIssuer());
     CHECK(ok.find("queued peer 3") != std::string::npos);
     CHECK(ok.find("gm") != std::string::npos);
 }
@@ -733,9 +733,9 @@ TEST_CASE("AdminConsole wb: revoke validates and queues with a synchronous ack (
           "[admin_console][wb][permission]") {
     WbFixture f;
     auto reg = makeRegistry(f.ctx);
-    CHECK(reg.dispatch("revoke").find("usage") != std::string::npos);
-    CHECK(reg.dispatch("revoke x").find("invalid peer ID") != std::string::npos);
-    CHECK(reg.dispatch("revoke 7").find("queued peer 7") != std::string::npos);
+    CHECK(reg.dispatch("revoke", systemIssuer()).find("usage") != std::string::npos);
+    CHECK(reg.dispatch("revoke x", systemIssuer()).find("invalid peer ID") != std::string::npos);
+    CHECK(reg.dispatch("revoke 7", systemIssuer()).find("queued peer 7") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole wb: grant -> act -> revoke -> refused end to end (#947)", "[admin_console][wb][permission]") {
@@ -767,14 +767,14 @@ TEST_CASE("AdminConsole wb: peers with null gameLoop returns not available", "[a
     WbFixture f;
     f.ctx.sim.gameLoop = nullptr;
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("peers");
+    std::string out = reg.dispatch("peers", systemIssuer());
     CHECK(out.find("not available") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole wb: peers with no connected peers returns 0 peer(s) connected", "[admin_console][wb]") {
     WbFixture f;
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("peers");
+    std::string out = reg.dispatch("peers", systemIssuer());
     CHECK(out == "0 peer(s) connected");
 }
 
@@ -784,7 +784,7 @@ TEST_CASE("AdminConsole wb: peers with one connected peer returns 1 peer(s) conn
     f.broadcaster.onConnect(0u);
 
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("peers");
+    std::string out = reg.dispatch("peers", systemIssuer());
     CHECK(out == "1 peer(s) connected");
 }
 
@@ -809,14 +809,14 @@ TEST_CASE("AdminConsole wb: status with null entityManager returns not available
     WbFixture f;
     f.ctx.sim.entityManager = nullptr; // broadcaster is real; entityManager is null
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("status");
+    std::string out = reg.dispatch("status", systemIssuer());
     CHECK(out.find("not available") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole wb: status with zero peers contains peers: 0", "[admin_console][wb]") {
     WbFixture f;
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("status");
+    std::string out = reg.dispatch("status", systemIssuer());
     CHECK(out.find("peers: 0") != std::string::npos);
 }
 
@@ -826,14 +826,14 @@ TEST_CASE("AdminConsole wb: status with one connected peer contains peers: 1", "
     f.broadcaster.onConnect(0u);
 
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("status");
+    std::string out = reg.dispatch("status", systemIssuer());
     CHECK(out.find("peers: 1") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole wb: status shows the real tick Hz line", "[admin_console][wb]") {
     WbFixture f;
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("status");
+    std::string out = reg.dispatch("status", systemIssuer());
     CHECK(out.find("tick:") != std::string::npos);
     CHECK(out.find("Hz") != std::string::npos);
     CHECK(out.find("mean/p99") != std::string::npos);
@@ -857,7 +857,7 @@ TEST_CASE("AdminConsole wb: status reports the SERVER's uptime, not the machine'
     clock.advance(std::chrono::seconds(137));
 
     auto reg = makeRegistry(f.ctx);
-    CHECK(parseUptimeSecs(reg.dispatch("status")) == 137);
+    CHECK(parseUptimeSecs(reg.dispatch("status", systemIssuer())) == 137);
 }
 
 TEST_CASE("AdminConsole wb: a context nobody handed a start instant still cannot report boot time (#1048)",
@@ -868,7 +868,7 @@ TEST_CASE("AdminConsole wb: a context nobody handed a start instant still cannot
     // ServerUptime starts itself, so the worst case is now "a few milliseconds", not "eleven days".
     WbFixture f; // f.ctx.env.uptime left exactly as constructed
     auto reg = makeRegistry(f.ctx);
-    const long long secs = parseUptimeSecs(reg.dispatch("status"));
+    const long long secs = parseUptimeSecs(reg.dispatch("status", systemIssuer()));
     CHECK(secs >= 0);
     CHECK(secs < 60);
 }
@@ -879,14 +879,14 @@ TEST_CASE("AdminConsole wb: a context nobody handed a start instant still cannot
 
 TEST_CASE("AdminConsole: tickstats with null broadcaster returns not available", "[admin_console]") {
     auto reg = makeRegistry(); // broadcaster == nullptr
-    std::string out = reg.dispatch("tickstats");
+    std::string out = reg.dispatch("tickstats", systemIssuer());
     CHECK(out.find("not available") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole wb: tickstats before any tick reports no samples", "[admin_console][wb]") {
     WbFixture f;
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("tickstats");
+    std::string out = reg.dispatch("tickstats", systemIssuer());
     CHECK(out.find("no ticks sampled") != std::string::npos);
 }
 
@@ -898,7 +898,7 @@ TEST_CASE("AdminConsole wb: tickstats reports per-phase rows after ticks", "[adm
         f.broadcaster.onTick(1.0 / 60.0, tick);
 
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("tickstats");
+    std::string out = reg.dispatch("tickstats", systemIssuer());
     CHECK(out.find("tick") != std::string::npos);
     CHECK(out.find("integrate") != std::string::npos);
     CHECK(out.find("ai") != std::string::npos);
@@ -915,21 +915,21 @@ TEST_CASE("AdminConsole wb: tickstats reports per-phase rows after ticks", "[adm
 
 TEST_CASE("AdminConsole: admin_auth_status with null broadcaster returns not available", "[admin_console]") {
     auto reg = makeRegistry(); // broadcaster == nullptr
-    std::string out = reg.dispatch("admin_auth_status");
+    std::string out = reg.dispatch("admin_auth_status", systemIssuer());
     CHECK(out.find("not available") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole wb: admin_auth_status with no lockouts returns section header", "[admin_console][wb]") {
     WbFixture f;
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("admin_auth_status");
+    std::string out = reg.dispatch("admin_auth_status", systemIssuer());
     CHECK(out == "[admin] MsgAdminCommand channel:");
 }
 
 TEST_CASE("AdminConsole wb: status with no lockouts does not show lockout line", "[admin_console][wb]") {
     WbFixture f;
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("status");
+    std::string out = reg.dispatch("status", systemIssuer());
     CHECK(out.find("admin auth lockouts") == std::string::npos);
 }
 
@@ -957,11 +957,11 @@ TEST_CASE("AdminConsole wb: status and admin_auth_status reflect active lockout"
 
     auto reg = makeRegistry(f.ctx);
 
-    std::string statusOut = reg.dispatch("status");
+    std::string statusOut = reg.dispatch("status", systemIssuer());
     CHECK(statusOut.find("admin auth lockouts: 1 active") != std::string::npos);
     CHECK(statusOut.find("use admin_auth_status") != std::string::npos);
 
-    std::string authOut = reg.dispatch("admin_auth_status");
+    std::string authOut = reg.dispatch("admin_auth_status", systemIssuer());
     CHECK(authOut.find("MsgAdminCommand channel:") != std::string::npos);
     CHECK(authOut.find("1.2.3.4") != std::string::npos);
     CHECK(authOut.find("locked out") != std::string::npos);
@@ -990,7 +990,7 @@ TEST_CASE("AdminConsole wb: admin_auth_status shows pending failure line", "[adm
     f.broadcaster.onReceive(0u, &cmd, sizeof(cmd)); // 1 failure, threshold=3, no lockout
 
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("admin_auth_status");
+    std::string out = reg.dispatch("admin_auth_status", systemIssuer());
     CHECK(out.find("1.2.3.4") != std::string::npos);
     CHECK(out.find("1 failure(s)") != std::string::npos);
     CHECK(out.find("threshold: 3") != std::string::npos);
@@ -999,7 +999,7 @@ TEST_CASE("AdminConsole wb: admin_auth_status shows pending failure line", "[adm
 TEST_CASE("AdminConsole wb: admin_auth_status no RCON callback shows only admin section", "[admin_console][wb]") {
     WbFixture f; // ctx.rcon.getRconAuthSummary is null by default
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("admin_auth_status");
+    std::string out = reg.dispatch("admin_auth_status", systemIssuer());
     CHECK(out.find("MsgAdminCommand channel:") != std::string::npos);
     CHECK(out.find("RCON channel:") == std::string::npos);
 }
@@ -1009,7 +1009,7 @@ TEST_CASE("AdminConsole wb: admin_auth_status with RCON callback shows both sect
     WbFixture f;
     f.ctx.rcon.getRconAuthSummary = []() { return fl::AuthLockoutSummary{}; };
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("admin_auth_status");
+    std::string out = reg.dispatch("admin_auth_status", systemIssuer());
     CHECK(out.find("MsgAdminCommand channel:") != std::string::npos);
     CHECK(out.find("RCON channel:") != std::string::npos);
 }
@@ -1022,7 +1022,7 @@ TEST_CASE("AdminConsole wb: admin_auth_status with RCON callback shows locked-ou
     rconS.entries.push_back({"5.6.7.8", true, 0, 120LL});
     f.ctx.rcon.getRconAuthSummary = [rconS]() { return rconS; };
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("admin_auth_status");
+    std::string out = reg.dispatch("admin_auth_status", systemIssuer());
     CHECK(out.find("RCON channel:") != std::string::npos);
     CHECK(out.find("5.6.7.8") != std::string::npos);
     CHECK(out.find("locked out") != std::string::npos);
@@ -1036,7 +1036,7 @@ TEST_CASE("AdminConsole wb: admin_auth_status with RCON callback shows pending R
     rconS.entries.push_back({"9.10.11.12", false, 3, 0LL});
     f.ctx.rcon.getRconAuthSummary = [rconS]() { return rconS; };
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("admin_auth_status");
+    std::string out = reg.dispatch("admin_auth_status", systemIssuer());
     CHECK(out.find("RCON channel:") != std::string::npos);
     CHECK(out.find("9.10.11.12") != std::string::npos);
     CHECK(out.find("3 failure(s)") != std::string::npos);
@@ -1060,7 +1060,7 @@ TEST_CASE("AdminConsole wb: status shows no lockout line after admin_unlock clea
     f.broadcaster.unlockAdminAuth("1.2.3.4");
 
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("status");
+    std::string out = reg.dispatch("status", systemIssuer());
     CHECK(out.find("admin auth lockouts") == std::string::npos);
 }
 
@@ -1108,7 +1108,7 @@ TEST_CASE("AdminConsole: set_weather snow enqueues preset change", "[admin_conso
     fl::WeatherController wc;
     f.ctx.sim.weatherController = &wc;
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("set_weather snow");
+    std::string out = reg.dispatch("set_weather snow", systemIssuer());
     CHECK(out.find("snow") != std::string::npos);
     CHECK(out.find("not available") == std::string::npos);
 }
@@ -1118,7 +1118,7 @@ TEST_CASE("AdminConsole: set_weather blizzard enqueues preset change", "[admin_c
     fl::WeatherController wc;
     f.ctx.sim.weatherController = &wc;
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("set_weather blizzard");
+    std::string out = reg.dispatch("set_weather blizzard", systemIssuer());
     CHECK(out.find("blizzard") != std::string::npos);
     CHECK(out.find("not available") == std::string::npos);
 }
@@ -1127,11 +1127,11 @@ TEST_CASE("Admin console: detonate validates and queues with a synchronous ack",
     AsyncAckFixture f;
     auto reg = makeRegistry(f.ctx);
 
-    CHECK(reg.dispatch("detonate").find("usage:") != std::string::npos);
-    CHECK(reg.dispatch("detonate 0 0 0 abc 50").find("invalid") != std::string::npos);
-    CHECK(reg.dispatch("detonate 0 0 0 0 50").find("must be > 0") != std::string::npos);
+    CHECK(reg.dispatch("detonate", systemIssuer()).find("usage:") != std::string::npos);
+    CHECK(reg.dispatch("detonate 0 0 0 abc 50", systemIssuer()).find("invalid") != std::string::npos);
+    CHECK(reg.dispatch("detonate 0 0 0 0 50", systemIssuer()).find("must be > 0") != std::string::npos);
 
-    const std::string ack = reg.dispatch("detonate 100 500 -200 120 200 --nuclear");
+    const std::string ack = reg.dispatch("detonate 100 500 -200 120 200 --nuclear", systemIssuer());
     CHECK(ack.find("detonate: queued") != std::string::npos);
     CHECK(ack.find("nuclear") != std::string::npos);
 }
@@ -1167,42 +1167,42 @@ TEST_CASE("AdminConsole: atc_status reports facilities", "[admin_console][atc]")
     AtcFixture f;
     // No traffic yet -> no active facilities.
     auto reg = makeRegistry(f.ctx);
-    CHECK(reg.dispatch("atc_status").find("no active facilities") != std::string::npos);
+    CHECK(reg.dispatch("atc_status", systemIssuer()).find("no active facilities") != std::string::npos);
 
     // A scramble creates a facility; atc_status then lists it. Run the scramble directly on the
     // service (the admin path would enqueue it) so the facility exists for the sync read.
     f.atc->setSpawnHandler([](const fl::atc::AtcService::DepartureSpawn&) {});
     f.atc->scramble("builtin:airfield", "builtin:debug-entity", 1);
-    CHECK(reg.dispatch("atc_status").find("builtin:airfield") != std::string::npos);
+    CHECK(reg.dispatch("atc_status", systemIssuer()).find("builtin:airfield") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole: atc_scramble acks synchronously", "[admin_console][atc]") {
     AtcFixture f;
     auto reg = makeRegistry(f.ctx);
-    std::string out = reg.dispatch("atc_scramble builtin:airfield builtin:debug-entity 3");
+    std::string out = reg.dispatch("atc_scramble builtin:airfield builtin:debug-entity 3", systemIssuer());
     CHECK_FALSE(out.empty());
     CHECK(out.find("queued 3") != std::string::npos);
     CHECK(out.find("builtin:airfield") != std::string::npos);
 
-    CHECK(reg.dispatch("atc_scramble").find("usage:") != std::string::npos);
-    CHECK(reg.dispatch("atc_scramble a b 99").find("count must be") != std::string::npos);
+    CHECK(reg.dispatch("atc_scramble", systemIssuer()).find("usage:") != std::string::npos);
+    CHECK(reg.dispatch("atc_scramble a b 99", systemIssuer()).find("count must be") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole: atc_hold acks synchronously and validates its argument", "[admin_console][atc]") {
     AtcFixture f;
     auto reg = makeRegistry(f.ctx);
-    CHECK(reg.dispatch("atc_hold builtin:airfield on").find("holding") != std::string::npos);
-    CHECK(reg.dispatch("atc_hold builtin:airfield off").find("releasing") != std::string::npos);
-    CHECK(reg.dispatch("atc_hold builtin:airfield maybe").find("on|off") != std::string::npos);
-    CHECK(reg.dispatch("atc_hold").find("usage:") != std::string::npos);
+    CHECK(reg.dispatch("atc_hold builtin:airfield on", systemIssuer()).find("holding") != std::string::npos);
+    CHECK(reg.dispatch("atc_hold builtin:airfield off", systemIssuer()).find("releasing") != std::string::npos);
+    CHECK(reg.dispatch("atc_hold builtin:airfield maybe", systemIssuer()).find("on|off") != std::string::npos);
+    CHECK(reg.dispatch("atc_hold", systemIssuer()).find("usage:") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole: atc commands report unavailable with no service", "[admin_console][atc]") {
     ServerCommandContext ctx{}; // no atc, no gameLoop
     auto reg = makeRegistry(ctx);
-    CHECK(reg.dispatch("atc_status").find("not available") != std::string::npos);
-    CHECK(reg.dispatch("atc_scramble a b").find("not available") != std::string::npos);
-    CHECK(reg.dispatch("atc_hold a on").find("not available") != std::string::npos);
+    CHECK(reg.dispatch("atc_status", systemIssuer()).find("not available") != std::string::npos);
+    CHECK(reg.dispatch("atc_scramble a b", systemIssuer()).find("not available") != std::string::npos);
+    CHECK(reg.dispatch("atc_hold a on", systemIssuer()).find("not available") != std::string::npos);
 }
 
 // ---------------------------------------------------------------------------
@@ -1218,10 +1218,10 @@ static bool refused(const std::string& out) {
 TEST_CASE("AdminConsole: dispatch(line) implicit-Admin path never cap-checks", "[admin_console][permission]") {
     auto reg = makeRegistry();
     // The no-issuer overload runs every command regardless of caps (stdin / RCON / --admin-token).
-    CHECK_FALSE(refused(reg.dispatch("kick 42")));
-    CHECK_FALSE(refused(reg.dispatch("spawn x 0 0 0")));
-    CHECK_FALSE(refused(reg.dispatch("set_weather storm")));
-    CHECK_FALSE(refused(reg.dispatch("quit")));
+    CHECK_FALSE(refused(reg.dispatch("kick 42", systemIssuer())));
+    CHECK_FALSE(refused(reg.dispatch("spawn x 0 0 0", systemIssuer())));
+    CHECK_FALSE(refused(reg.dispatch("set_weather storm", systemIssuer())));
+    CHECK_FALSE(refused(reg.dispatch("quit", systemIssuer())));
 }
 
 TEST_CASE("AdminConsole: Admin issuer runs every capability class", "[admin_console][permission]") {
