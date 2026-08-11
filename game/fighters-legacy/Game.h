@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include "ClientBackends.h"
 #include "IScreen.h"
 #include <memory>
 #include <string>
@@ -10,7 +11,8 @@ struct GameImpl;
 
 class Game {
   public:
-    Game();
+    // The renderer/GUI backends are injected rather than named here (#1067) — see ClientBackends.h.
+    explicit Game(ClientBackends backends);
     ~Game();
     bool init(int argc, char** argv);
     void run();
@@ -46,6 +48,9 @@ class Game {
     // pollEvents(), before anything reads a binding.
     void reconcileInputDevices();
 
+    // Held on Game rather than in GameImpl: the pimpl is built inside init(), and the backends must
+    // survive the constructor that receives them.
+    ClientBackends m_backends;
     std::unique_ptr<GameImpl> m_impl;
 };
 

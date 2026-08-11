@@ -109,26 +109,59 @@ layered model above is therefore not just a drawing — it is a set of CMake-tar
 asserted on every configure. At the target level the layer DAG is:
 
 ```
-  fighters-legacy (game client)              fl-server (headless server)
-      │  │  │                                     │
-      │  │  └── client backends:                  │  (no client backend may
-      │  │      platform-sdl3 / platform-vulkan / │   reach fl-server)
-      │  │      platform-openal                   │
-      │  └───────────┬────────────────────────────┘
-      │              ▼
-      │      platform-net (createNetwork() facade)
-      │              ├── platform-enet  (enet6)
-      │              └── platform-gns   (GameNetworkingSockets, FL_ENABLE_GNS)
+  fighters-legacy (thin main)                fl-server (thin main)
+      │         │                                  │
+      │         └── render/GUI/audio backends:     │
+      │             platform-vulkan /              │
+      │             platform-gui / platform-openal │
+      ▼                                            ▼
+  game-client (product library)  ✗────✗    fl-server-lib (product library)
+      │  │                       neither may reach   │
+      │  └── platform-sdl3       the other; shared   │  (no client backend may
+      │      (window/input;      code is promoted    │   reach either server target)
+      │       always available)  to engine-*         │
+      └───────────┬─────────────────────────────────┘
+                  ▼
+          platform-net (createNetwork() facade)
+                  ├── platform-enet  (enet6)
+                  └── platform-gns   (GameNetworkingSockets, FL_ENABLE_GNS)
+      │
       ▼
   engine-* ──────────────▶ platform-hal (INTERFACE: HAL headers + GLM)
-      │                        headless platform utilities also allowed:
-      │                        platform-file-logger / platform-subprocess / platform-stdfs
+      │       ▲                headless platform utilities also allowed:
+      │       │                platform-file-logger / platform-subprocess / platform-stdfs
+      │       └── platform-* may NEVER link back into engine-*
       ▼
   engine-protocol (zero-dep wire-protocol seam: stdlib only)
       ▲
       └── consumed by engine-net, the game client, and the headless tools
           (bot_swarm, net_check) without pulling WorldBroadcaster / engine-entity
 ```
+
+**Product libraries (#1067).** `game/` and `server/fl-server/` are each a static library plus a thin
+`main.cpp`: `game-client` and `fl-server-lib`. Before they existed the two products were bare
+`add_executable()` calls, so `tests/CMakeLists.txt` re-listed production sources 80 times (39 distinct
+files, each with a private include/link set), `fuzz/CMakeLists.txt` did the same 9 times, and the
+layering guard could not see client or server code **at all** — nothing stopped `game/` reaching into
+`server/`. Tests and fuzz harnesses now link the library.
+
+`game-client` names no render, GUI or audio backend: `main.cpp` injects all three through
+`ClientBackends` (`game/fighters-legacy/ClientBackends.h`), the same discipline as the
+`createNetwork()` transport facade. That is what keeps the library — and the ~25 client tests that link
+it — configurable in the CI legs built without a Vulkan SDK (asan, tsan, fuzz, the scale gate), where
+`platform-vulkan` and `platform-gui` do not exist as targets.
+
+SDL3 is the one backend `game-client` still names directly — window, input, joystick, display, cursor
+and audio capture. It is always available (`cmake/dependencies.cmake` FetchContent-builds it when the
+system has no package), and `Game` reaches through `SDL3Window` to install the input and joystick
+sinks, which no factory signature would express.
+
+The audio injection also closed a live seam violation: `platform/openal/OALAudioFactory.h` exists so
+consumers "are never exposed to OpenAL headers", and `Game.cpp` was including the concrete
+`OALAudio.h` anyway. That compiled only because `platform-openal` links `OpenAL::OpenAL` **PRIVATE** and
+a system OpenAL package happens to put `AL/al.h` on the default include path — so it built on a
+developer box with the package installed and failed on all three CI platforms, which FetchContent
+OpenAL Soft instead.
 
 **Allowed edges (policy):**
 
@@ -147,11 +180,21 @@ asserted on every configure. At the target level the layer DAG is:
   or the entity system.
 - **`fl-server` links no client backend** — headless means headless: no SDL3, Vulkan, or OpenAL,
   statically or dynamically. Transport backends are legitimate server dependencies.
-- **Transport backends are reached only through the `platform-net` facade**: the game binary and
-  `fl-server` link `platform-net` and select a backend at runtime via `createNetwork(TransportKind)`;
-  neither may link `platform-enet`/`platform-gns` directly (the #507 HAL-leak fix, kept fixed). The
-  load tools (`net_check`, `bot_swarm`) deliberately link `platform-enet` as a regression instrument
-  and are exempt.
+- **Transport backends are reached only through the `platform-net` facade**: the two binaries and the
+  two product libraries link `platform-net` and select a backend at runtime via
+  `createNetwork(TransportKind)`; none may link `platform-enet`/`platform-gns` directly (the #507
+  HAL-leak fix, kept fixed). The rule names the product libraries as well as the binaries because
+  that is where the sources live — a check on the executables alone would no longer see client or
+  server code. The load tools (`net_check`, `bot_swarm`) deliberately link `platform-enet` as a
+  regression instrument and are exempt.
+- **Neither product library reaches the other** (D23, 2026-07-30 review): `game-client` may not reach
+  `fl-server-lib` and `fl-server-lib` may not reach `game-client`. Code both products need is
+  **promoted to `engine-*`** — it never lives in one product library and gets reached from the other.
+  There were zero `game/`↔`server/` cross-includes when the rule landed; it exists so the first one
+  fails the configure instead of arriving unnoticed.
+- **`platform-*` may never reach `engine-*`.** `platform/` is the HAL: it defines the interfaces the
+  engine consumes, so an edge back into the engine inverts the layering. This was policy in prose and
+  in review only until #1067 gave it a mechanism.
 
 **Enforcement mechanics:**
 
@@ -160,12 +203,15 @@ asserted on every configure. At the target level the layer DAG is:
   `add_subdirectory()` (all targets exist, including conditional ones). It walks
   `LINK_LIBRARIES`/`INTERFACE_LINK_LIBRARIES` transitively (aliases resolved, `$<LINK_ONLY:...>`
   stripped) and fails the configure with the full offending link chain
-  (e.g. `engine-world -> platform-sdl3`) for any of the four rule classes above. The walker
-  self-tests against synthetic targets on every configure, so a refactor that silently broke the
-  graph walk fails configure instead of disabling enforcement.
+  (e.g. `engine-world -> platform-sdl3`) for every rule class above. The walker self-tests against
+  synthetic targets on every configure, so a refactor that silently broke the graph walk fails
+  configure instead of disabling enforcement; the product-separation rule is self-tested through its
+  own code path against a synthetic client→server edge, which also pins the direction it reports.
 - **CI binary backstop** — the "Verify static linking (Linux)" step in `ci.yml` runs `ldd` on both
   the game binary (rejects dynamic `sdl3|openal|ktx`; our bundled libs must be static) and
-  `fl-server` (rejects `sdl3|vulkan|openal`; no client backend at all).
+  `fl-server` (rejects `sdl3|vulkan|openal`; no client backend at all). Static libraries carry no
+  `ldd` output of their own, which is exactly why the configure-time rules name the product libraries
+  directly rather than relying on this step to catch a bad edge.
 
 ## Locked Architectural Decisions
 

@@ -105,11 +105,10 @@ target_include_directories(test_hud_projection PRIVATE ${CMAKE_CURRENT_SOURCE_DI
 catch_discover_tests(test_hud_projection)
 
 # Player autopilot (#640): pure hold-controller + closed-loop convergence through the integrator.
-add_executable(test_autopilot test_autopilot.cpp
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/Autopilot.cpp")
-target_link_libraries(test_autopilot PRIVATE Catch2::Catch2WithMain engine-flight engine-ai)
+add_executable(test_autopilot test_autopilot.cpp)
+target_link_libraries(test_autopilot PRIVATE Catch2::Catch2WithMain engine-flight engine-ai game-client)
 target_include_directories(test_autopilot PRIVATE
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" ${CMAKE_CURRENT_SOURCE_DIR})
+    ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_autopilot)
 
 # Turn-law audit (#1143): every controller that commands a roll, flown through the real integrator
@@ -128,19 +127,17 @@ target_link_libraries(test_ai_altitude_hold PRIVATE Catch2::Catch2WithMain engin
 catch_discover_tests(test_ai_altitude_hold)
 
 # Client-side target designation (#696): pure snapshot cycling / filtering / best-in-cone.
-add_executable(test_target_designation test_target_designation.cpp
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/TargetDesignation.cpp")
-target_link_libraries(test_target_designation PRIVATE Catch2::Catch2WithMain engine-render engine-entity)
+add_executable(test_target_designation test_target_designation.cpp)
+target_link_libraries(test_target_designation PRIVATE Catch2::Catch2WithMain engine-render engine-entity game-client)
 target_include_directories(test_target_designation PRIVATE
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" ${CMAKE_CURRENT_SOURCE_DIR})
+    ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_target_designation)
 
 # Padlock tracker (#697): pure aim + lock state machine, scripted trajectories.
-add_executable(test_padlock_tracker test_padlock_tracker.cpp
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/PadlockTracker.cpp")
-target_link_libraries(test_padlock_tracker PRIVATE Catch2::Catch2WithMain engine-spatial platform-hal)
+add_executable(test_padlock_tracker test_padlock_tracker.cpp)
+target_link_libraries(test_padlock_tracker PRIVATE Catch2::Catch2WithMain engine-spatial platform-hal game-client)
 target_include_directories(test_padlock_tracker PRIVATE
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" ${CMAKE_CURRENT_SOURCE_DIR})
+    ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_padlock_tracker)
 
 # Target-slaved inset camera math (#698): pure standoff / look-at / rect layout.
@@ -151,11 +148,10 @@ target_include_directories(test_inset_view PRIVATE
 catch_discover_tests(test_inset_view)
 
 # Head tracking (#927): pure opentrack parse + EMA/freshness filter (socketless).
-add_executable(test_head_tracker test_head_tracker.cpp
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HeadTracker.cpp")
-target_link_libraries(test_head_tracker PRIVATE Catch2::Catch2WithMain engine-config platform-hal)
+add_executable(test_head_tracker test_head_tracker.cpp)
+target_link_libraries(test_head_tracker PRIVATE Catch2::Catch2WithMain engine-config platform-hal game-client)
 target_include_directories(test_head_tracker PRIVATE
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" ${CMAKE_CURRENT_SOURCE_DIR})
+    ${CMAKE_CURRENT_SOURCE_DIR})
 if(WIN32)
     target_link_libraries(test_head_tracker PRIVATE ws2_32)
 endif()
@@ -542,15 +538,13 @@ if(TARGET platform-enet)
         "${CMAKE_CURRENT_SOURCE_DIR}")
     catch_discover_tests(test_server_query)
 
-    add_executable(test_admin_console test_admin_console.cpp
-        "${CMAKE_SOURCE_DIR}/server/fl-server/ServerCommands.cpp")
+    add_executable(test_admin_console test_admin_console.cpp)
     target_link_libraries(test_admin_console PRIVATE
         Catch2::Catch2WithMain
         fl-server-config engine-console engine-net engine-entity engine-weather engine-loop
-        engine-ai engine-atc engine-world engine-script)
+        engine-ai engine-atc engine-world engine-script fl-server-lib)
     target_include_directories(test_admin_console PRIVATE
-        "${CMAKE_SOURCE_DIR}/server/fl-server"
-        "${CMAKE_CURRENT_SOURCE_DIR}")
+    "${CMAKE_CURRENT_SOURCE_DIR}")
     catch_discover_tests(test_admin_console)
 
     # Server content bootstrap (#683): pack entity defs -> EntityTypeRegistry. Compiles the
@@ -564,19 +558,13 @@ if(TARGET platform-enet)
 
     # REST admin API (#233). Every security decision — token table, bearer extraction, constant-time
     # compare, issuer construction, untrusted body scanning — lives in free functions, so this covers
-    # them without opening a socket (the test_rcon_server recipe). HttpAdminServer.cpp is in no
-    # library, so it is compiled directly.
-    add_executable(test_http_admin test_http_admin.cpp
-        "${CMAKE_SOURCE_DIR}/server/fl-server/HttpAdminServer.cpp"
-        "${CMAKE_SOURCE_DIR}/server/fl-server/HttpAdminAuth.cpp"
-        "${CMAKE_SOURCE_DIR}/server/fl-server/McpProtocol.cpp"
-        "${CMAKE_SOURCE_DIR}/server/fl-server/McpEndpoint.cpp")
+    # them without opening a socket (the test_rcon_server recipe).
+    add_executable(test_http_admin test_http_admin.cpp)
     target_link_libraries(test_http_admin PRIVATE
-        Catch2::Catch2WithMain fl-server-config engine-console engine-net engine-mission httplib::httplib)
+        Catch2::Catch2WithMain fl-server-config engine-console engine-net engine-mission httplib::httplib fl-server-lib)
     target_include_directories(test_http_admin PRIVATE
-        "${CMAKE_SOURCE_DIR}/server/fl-server"
-        "${CMAKE_BINARY_DIR}/engine"  # generated Version.h, via McpEndpoint's initialize response
-        "${CMAKE_CURRENT_SOURCE_DIR}")
+    "${CMAKE_BINARY_DIR}/engine"  # generated Version.h, via McpEndpoint's initialize response
+    "${CMAKE_CURRENT_SOURCE_DIR}")
     if(WIN32)
         target_link_libraries(test_http_admin PRIVATE ws2_32)
     endif()
@@ -604,40 +592,31 @@ if(TARGET platform-enet)
     # MCP surface (#601). McpEndpoint is transport-free by design, so this drives every method, tier
     # refusal and session path without binding a port — and it links no httplib at all. engine-mission
     # arrives for submit_mission's in-process validateMission. SDL/ENet-free, so it joins the TSan set.
-    add_executable(test_mcp_protocol test_mcp_protocol.cpp
-        "${CMAKE_SOURCE_DIR}/server/fl-server/McpProtocol.cpp"
-        "${CMAKE_SOURCE_DIR}/server/fl-server/McpEndpoint.cpp"
-        "${CMAKE_SOURCE_DIR}/server/fl-server/HttpAdminAuth.cpp")
+    add_executable(test_mcp_protocol test_mcp_protocol.cpp)
     target_link_libraries(test_mcp_protocol PRIVATE
-        Catch2::Catch2WithMain fl-server-config engine-console engine-net engine-mission)
+        Catch2::Catch2WithMain fl-server-config engine-console engine-net engine-mission fl-server-lib)
     target_include_directories(test_mcp_protocol PRIVATE
-        "${CMAKE_SOURCE_DIR}/server/fl-server"
-        "${CMAKE_BINARY_DIR}/engine"  # generated Version.h — reported in initialize's serverInfo
-        "${CMAKE_CURRENT_SOURCE_DIR}")
+    "${CMAKE_BINARY_DIR}/engine"  # generated Version.h — reported in initialize's serverInfo
+    "${CMAKE_CURRENT_SOURCE_DIR}")
     catch_discover_tests(test_mcp_protocol)
 
-    add_executable(test_rcon_server test_rcon_server.cpp
-        "${CMAKE_SOURCE_DIR}/server/fl-server/RconServer.cpp")
+    add_executable(test_rcon_server test_rcon_server.cpp)
     target_link_libraries(test_rcon_server PRIVATE
-        Catch2::Catch2WithMain fl-server-config engine-console)
+        Catch2::Catch2WithMain fl-server-config engine-console fl-server-lib)
     target_include_directories(test_rcon_server PRIVATE
-        "${CMAKE_SOURCE_DIR}/server/fl-server"
-        "${CMAKE_CURRENT_SOURCE_DIR}")
+    "${CMAKE_CURRENT_SOURCE_DIR}")
     if(WIN32)
         target_link_libraries(test_rcon_server PRIVATE ws2_32)
     endif()
     catch_discover_tests(test_rcon_server)
 
     # Admin-console stdin reader (#1038). Pure line assembly + the reader lifecycle; no fd, no
-    # server. StdinCommandReader.cpp is in no library, so it is compiled directly (the
-    # test_rcon_server recipe). Threads only -- the platform read loop needs no link deps.
+    # server. Threads is here for the platform read loop; everything else arrives with fl-server-lib.
     find_package(Threads REQUIRED)
-    add_executable(test_stdin_reader test_stdin_reader.cpp
-        "${CMAKE_SOURCE_DIR}/server/fl-server/StdinCommandReader.cpp")
-    target_link_libraries(test_stdin_reader PRIVATE Catch2::Catch2WithMain Threads::Threads)
+    add_executable(test_stdin_reader test_stdin_reader.cpp)
+    target_link_libraries(test_stdin_reader PRIVATE Catch2::Catch2WithMain Threads::Threads fl-server-lib)
     target_include_directories(test_stdin_reader PRIVATE
-        "${CMAKE_SOURCE_DIR}/server/fl-server"
-        "${CMAKE_CURRENT_SOURCE_DIR}")
+    "${CMAKE_CURRENT_SOURCE_DIR}")
     catch_discover_tests(test_stdin_reader)
 endif()
 
@@ -690,25 +669,21 @@ target_include_directories(test_replay_reader_sections PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_replay_reader_sections)
 
-# ReplayPlayer (#41): playback timing, speed control and scrubbing. Compiles the game-layer source
-# directly (the test_screen_manager idiom) and links engine-replay for the reader.
-add_executable(test_replay_player test_replay_player.cpp
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ReplayPlayer.cpp")
-target_link_libraries(test_replay_player PRIVATE Catch2::Catch2WithMain engine-replay engine-render platform-hal)
+# ReplayPlayer (#41): playback timing, speed control and scrubbing. game-client carries the player;
+# engine-replay is the reader behind it.
+add_executable(test_replay_player test_replay_player.cpp)
+target_link_libraries(test_replay_player PRIVATE Catch2::Catch2WithMain engine-replay engine-render platform-hal game-client)
 target_include_directories(test_replay_player PRIVATE
     "${CMAKE_SOURCE_DIR}/engine"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
     "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_replay_player)
 
 # The replay browser (#41): the directory scan and the list/confirm behaviour, including the refusal
 # path for a file this build cannot read.
-add_executable(test_replay_select test_replay_select.cpp
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ReplaySelectScreen.cpp")
-target_link_libraries(test_replay_select PRIVATE Catch2::Catch2WithMain engine-replay platform-hal)
+add_executable(test_replay_select test_replay_select.cpp)
+target_link_libraries(test_replay_select PRIVATE Catch2::Catch2WithMain engine-replay platform-hal game-client)
 target_include_directories(test_replay_select PRIVATE
     "${CMAKE_SOURCE_DIR}/engine"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
     "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_replay_select)
 
@@ -1224,24 +1199,18 @@ target_link_libraries(test_gui PRIVATE Catch2::Catch2WithMain platform-hal)
 catch_discover_tests(test_gui)
 
 # JoinServerScreen (#322) — the first IGui screen, driven against NullGui + the HAL mocks.
-add_executable(test_join_server_screen test_join_server_screen.cpp
-    ${CMAKE_SOURCE_DIR}/game/fighters-legacy/JoinServerScreen.cpp)
-target_link_libraries(test_join_server_screen PRIVATE Catch2::Catch2WithMain platform-hal)
-target_include_directories(test_join_server_screen PRIVATE ${CMAKE_SOURCE_DIR}/game/fighters-legacy)
+add_executable(test_join_server_screen test_join_server_screen.cpp)
+target_link_libraries(test_join_server_screen PRIVATE Catch2::Catch2WithMain platform-hal game-client)
 catch_discover_tests(test_join_server_screen)
 
 # ServerBrowserScreen (#143) — the IGui server-browser list, driven against NullGui.
-add_executable(test_server_browser_screen test_server_browser_screen.cpp
-    ${CMAKE_SOURCE_DIR}/game/fighters-legacy/ServerBrowserScreen.cpp)
-target_link_libraries(test_server_browser_screen PRIVATE Catch2::Catch2WithMain engine-net platform-hal)
-target_include_directories(test_server_browser_screen PRIVATE ${CMAKE_SOURCE_DIR}/game/fighters-legacy)
+add_executable(test_server_browser_screen test_server_browser_screen.cpp)
+target_link_libraries(test_server_browser_screen PRIVATE Catch2::Catch2WithMain engine-net platform-hal game-client)
 catch_discover_tests(test_server_browser_screen)
 
 # ScoreboardOverlay (#647) — the IGui scoreboard table, driven against NullGui.
-add_executable(test_scoreboard_overlay test_scoreboard_overlay.cpp
-    ${CMAKE_SOURCE_DIR}/game/fighters-legacy/ScoreboardOverlay.cpp)
-target_link_libraries(test_scoreboard_overlay PRIVATE Catch2::Catch2WithMain platform-hal)
-target_include_directories(test_scoreboard_overlay PRIVATE ${CMAKE_SOURCE_DIR}/game/fighters-legacy)
+add_executable(test_scoreboard_overlay test_scoreboard_overlay.cpp)
+target_link_libraries(test_scoreboard_overlay PRIVATE Catch2::Catch2WithMain platform-hal game-client)
 catch_discover_tests(test_scoreboard_overlay)
 
 # KillFeed (#647) — the HudElement kill-feed ring; header-only, deterministic clock.
@@ -1251,10 +1220,8 @@ target_include_directories(test_kill_feed PRIVATE ${CMAKE_SOURCE_DIR}/game/fight
 catch_discover_tests(test_kill_feed)
 
 # ChatOverlay (#646) — the chat display ring + IGui input box, driven against NullGui + a manual clock.
-add_executable(test_chat_overlay test_chat_overlay.cpp
-    ${CMAKE_SOURCE_DIR}/game/fighters-legacy/ChatOverlay.cpp)
-target_link_libraries(test_chat_overlay PRIVATE Catch2::Catch2WithMain engine-net platform-hal)
-target_include_directories(test_chat_overlay PRIVATE ${CMAKE_SOURCE_DIR}/game/fighters-legacy)
+add_executable(test_chat_overlay test_chat_overlay.cpp)
+target_link_libraries(test_chat_overlay PRIVATE Catch2::Catch2WithMain engine-net platform-hal game-client)
 catch_discover_tests(test_chat_overlay)
 
 # Frame-capture swizzle helper (#912): the pure GPU-independent core of the capture readback.
@@ -1374,12 +1341,10 @@ target_link_libraries(test_lua_controller PRIVATE
 target_include_directories(test_lua_controller PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_lua_controller)
 
-add_executable(test_haptic_controller test_haptic_controller.cpp
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp")
+add_executable(test_haptic_controller test_haptic_controller.cpp)
 target_link_libraries(test_haptic_controller PRIVATE
-    Catch2::Catch2WithMain engine-render platform-hal)
+    Catch2::Catch2WithMain engine-render platform-hal game-client)
 target_include_directories(test_haptic_controller PRIVATE
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
     "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_haptic_controller)
 
@@ -1391,10 +1356,7 @@ target_include_directories(test_precipitation_controller PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_precipitation_controller)
 
-add_executable(test_flight_input_collector test_flight_input_collector.cpp
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightInputCollector.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/PadlockTracker.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/CameraInput.cpp")
+add_executable(test_flight_input_collector test_flight_input_collector.cpp)
 target_link_libraries(test_flight_input_collector PRIVATE
     Catch2::Catch2WithMain
     platform-hal
@@ -1405,9 +1367,8 @@ target_link_libraries(test_flight_input_collector PRIVATE
     engine-console
     engine-config
     engine-input
-    engine-net)
+    engine-net game-client)
 target_include_directories(test_flight_input_collector PRIVATE
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
     "${CMAKE_CURRENT_SOURCE_DIR}")
 if(WIN32)
     add_custom_command(TARGET test_flight_input_collector POST_BUILD
@@ -1425,37 +1386,23 @@ target_include_directories(test_server_notice PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_server_notice)
 
-add_executable(test_client_net_event_handler test_client_net_event_handler.cpp
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientEffectRouter.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp" # ClientEffectRouter own-ship haptics (#631)
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp"
-    # ClientNetEventHandler dispatches MsgWingmanAck into the radio menu (#610).
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/WingmanMenu.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ChatOverlay.cpp" # ChatEvent -> chat overlay (#646)
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ManualOverlay.cpp")
+# ClientNetEventHandler dispatches MsgWingmanAck into the radio menu (#610), routes the effects TLV
+# through ClientEffectRouter, and the router drives own-ship haptics (#631); game-client carries them all.
+add_executable(test_client_net_event_handler test_client_net_event_handler.cpp)
 target_link_libraries(test_client_net_event_handler PRIVATE
     Catch2::Catch2WithMain engine-net engine-render engine-entity engine-console engine-weather engine-audio
-    engine-config platform-hal)
+    engine-config platform-hal game-client)
 target_include_directories(test_client_net_event_handler PRIVATE
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
     "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_client_net_event_handler)
 
 # Game-master overview map overlay (#861): drives the overlay against NullGui + a ClientNetEventHandler
 # fed a GM feed. Same link set as the handler test plus the game IGui HAL header.
-add_executable(test_gm_map_overlay test_gm_map_overlay.cpp
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/GmMapOverlay.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientEffectRouter.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/WingmanMenu.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ChatOverlay.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ManualOverlay.cpp")
+add_executable(test_gm_map_overlay test_gm_map_overlay.cpp)
 target_link_libraries(test_gm_map_overlay PRIVATE
     Catch2::Catch2WithMain engine-net engine-render engine-entity engine-console engine-weather engine-audio
-    engine-config platform-hal)
+    engine-config platform-hal game-client)
 target_include_directories(test_gm_map_overlay PRIVATE
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
     "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_gm_map_overlay)
 
@@ -1463,96 +1410,55 @@ catch_discover_tests(test_gm_map_overlay)
 # Screen / ScreenManager tests
 # ---------------------------------------------------------------------------
 
-add_executable(test_main_menu_screen test_main_menu_screen.cpp
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/MainMenuScreen.cpp")
-target_link_libraries(test_main_menu_screen PRIVATE Catch2::Catch2WithMain platform-hal)
+add_executable(test_main_menu_screen test_main_menu_screen.cpp)
+target_link_libraries(test_main_menu_screen PRIVATE Catch2::Catch2WithMain platform-hal game-client)
 target_include_directories(test_main_menu_screen PRIVATE
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
+    "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_main_menu_screen)
 
-add_executable(test_loading_screen test_loading_screen.cpp
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/LoadingScreen.cpp")
-target_link_libraries(test_loading_screen PRIVATE Catch2::Catch2WithMain platform-hal engine-i18n)
+add_executable(test_loading_screen test_loading_screen.cpp)
+target_link_libraries(test_loading_screen PRIVATE Catch2::Catch2WithMain platform-hal engine-i18n game-client)
 target_include_directories(test_loading_screen PRIVATE
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
+    "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_loading_screen)
 
-add_executable(test_mission_select_screen test_mission_select_screen.cpp
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/MissionSelectScreen.cpp")
-target_link_libraries(test_mission_select_screen PRIVATE Catch2::Catch2WithMain platform-hal)
+add_executable(test_mission_select_screen test_mission_select_screen.cpp)
+target_link_libraries(test_mission_select_screen PRIVATE Catch2::Catch2WithMain platform-hal game-client)
 target_include_directories(test_mission_select_screen PRIVATE
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
+    "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_mission_select_screen)
 
-add_executable(test_mission_brief_screen test_mission_brief_screen.cpp
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/MissionBriefScreen.cpp")
-target_link_libraries(test_mission_brief_screen PRIVATE Catch2::Catch2WithMain platform-hal)
+add_executable(test_mission_brief_screen test_mission_brief_screen.cpp)
+target_link_libraries(test_mission_brief_screen PRIVATE Catch2::Catch2WithMain platform-hal game-client)
 target_include_directories(test_mission_brief_screen PRIVATE
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
+    "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_mission_brief_screen)
 
-add_executable(test_settings_screen test_settings_screen.cpp
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/SettingsScreen.cpp")
+add_executable(test_settings_screen test_settings_screen.cpp)
 target_link_libraries(test_settings_screen PRIVATE
-    Catch2::Catch2WithMain engine-config platform-hal)
+    Catch2::Catch2WithMain engine-config platform-hal game-client)
 target_include_directories(test_settings_screen PRIVATE
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
+    "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_settings_screen)
 
-add_executable(test_pause_menu_screen test_pause_menu_screen.cpp
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/PauseMenuScreen.cpp")
-target_link_libraries(test_pause_menu_screen PRIVATE Catch2::Catch2WithMain platform-hal)
+add_executable(test_pause_menu_screen test_pause_menu_screen.cpp)
+target_link_libraries(test_pause_menu_screen PRIVATE Catch2::Catch2WithMain platform-hal game-client)
 target_include_directories(test_pause_menu_screen PRIVATE
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
+    "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_pause_menu_screen)
 
-add_executable(test_debrief_screen test_debrief_screen.cpp
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/DebriefScreen.cpp")
-target_link_libraries(test_debrief_screen PRIVATE Catch2::Catch2WithMain platform-hal)
+add_executable(test_debrief_screen test_debrief_screen.cpp)
+target_link_libraries(test_debrief_screen PRIVATE Catch2::Catch2WithMain platform-hal game-client)
 target_include_directories(test_debrief_screen PRIVATE
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
+    "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_debrief_screen)
 
-add_executable(test_screen_manager test_screen_manager.cpp
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ScreenManager.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ReplayPlayer.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ReplaySelectScreen.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/MainMenuScreen.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/JoinServerScreen.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ServerBrowserScreen.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/LoadingScreen.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/MissionSelectScreen.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/MissionBriefScreen.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/SettingsScreen.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/PauseMenuScreen.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/DebriefScreen.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightScreen.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ChatOverlay.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/GmMapOverlay.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientEffectRouter.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/WingmanMenu.cpp"
-    # FlightScreen drives the voice tier's per-frame update (#935); it comes along like every other
-    # overlay this target compiles directly.
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/VoiceCommandCapture.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/CommsMenu.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ManualOverlay.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientPrediction.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/Autopilot.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/TargetDesignation.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/PadlockTracker.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HeadTracker.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/CameraInput.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightInputCollector.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp")
-target_link_libraries(test_screen_manager PRIVATE
-    Catch2::Catch2WithMain engine-config engine-render engine-sandbox engine-content engine-console engine-input engine-net engine-replay engine-entity engine-weather engine-flight engine-manual engine-audio engine-i18n engine-ai engine-spatial platform-sdl3 platform-hal SDL3::SDL3)
+# The whole screen stack plus the overlays and controllers it drives, including the voice tier
+# FlightScreen updates per frame (#935) -- all of it arrives with game-client.
+add_executable(test_screen_manager test_screen_manager.cpp)
+target_link_libraries(test_screen_manager PRIVATE Catch2::Catch2WithMain game-client)
 target_include_directories(test_screen_manager PRIVATE
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
-if(WIN32)
-    # HeadTracker.cpp uses Winsock; engine-net does not pull a transport backend (layering rule).
-    target_link_libraries(test_screen_manager PRIVATE ws2_32)
-endif()
+    "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_screen_manager)
 
 add_executable(test_connect_args test_connect_args.cpp)
@@ -1588,11 +1494,10 @@ catch_discover_tests(test_gm_map_view)
 
 # The in-flight comms menu (#704, ATC epic #673): pure page-navigation/command-emission logic over
 # IInput; compiles the game source directly, no SDL/rendering.
-add_executable(test_comms_menu test_comms_menu.cpp
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/CommsMenu.cpp")
-target_link_libraries(test_comms_menu PRIVATE Catch2::Catch2WithMain engine-protocol platform-hal)
+add_executable(test_comms_menu test_comms_menu.cpp)
+target_link_libraries(test_comms_menu PRIVATE Catch2::Catch2WithMain engine-protocol platform-hal game-client)
 target_include_directories(test_comms_menu PRIVATE
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
+    "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_comms_menu)
 
 # Crew seat picker (#975): pure roster-driven seat selection (no SDL). engine-entity for CrewCapability,
@@ -1613,42 +1518,34 @@ catch_discover_tests(test_turret_predictor)
 
 # The client/server flight-model parity gate (#811): drives the real WorldBroadcaster connect path
 # and the real client-side resolver, and asserts the two integrate the same aeroplane.
-add_executable(test_prediction_parity test_prediction_parity.cpp
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientFlightModelResolver.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientPrediction.cpp")
+add_executable(test_prediction_parity test_prediction_parity.cpp)
 target_link_libraries(test_prediction_parity PRIVATE
     Catch2::Catch2WithMain engine-net engine-entity engine-content engine-flight engine-render engine-config
-    engine-weapon)
+    engine-weapon game-client)
 target_include_directories(test_prediction_parity PRIVATE
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
+    "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_prediction_parity)
 
-add_executable(test_client_prediction test_client_prediction.cpp
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientPrediction.cpp")
+add_executable(test_client_prediction test_client_prediction.cpp)
 target_link_libraries(test_client_prediction PRIVATE
     Catch2::Catch2WithMain
     engine-flight
     engine-render
     engine-net
-    engine-config)
+    engine-config game-client)
 target_include_directories(test_client_prediction PRIVATE
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
     "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_client_prediction)
 
 # ClientEffectRouter (#625/#631): wire effect vocabulary -> particles + SFX + haptics.
-add_executable(test_effect_router test_effect_router.cpp
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientEffectRouter.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp")
+add_executable(test_effect_router test_effect_router.cpp)
 target_link_libraries(test_effect_router PRIVATE
     Catch2::Catch2WithMain
     engine-render
     engine-protocol
     engine-audio
     engine-config
-    platform-hal)
-target_include_directories(test_effect_router PRIVATE
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy")
+    platform-hal game-client)
 catch_discover_tests(test_effect_router)
 
 # SfxBuiltinSounds byte-stability + SfxManager voice pool / camera-relative play (#631).
@@ -1664,11 +1561,10 @@ catch_discover_tests(test_warning_tones)
 
 # #959 — engine/aero doppler layers: pure mapping + byte-stable loops (engine-audio) plus the
 # game-layer EngineAudioManager source wiring, compiled in directly.
-add_executable(test_engine_audio test_engine_audio.cpp
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/EngineAudioManager.cpp")
-target_link_libraries(test_engine_audio PRIVATE Catch2::Catch2WithMain engine-audio engine-config engine-content)
+add_executable(test_engine_audio test_engine_audio.cpp)
+target_link_libraries(test_engine_audio PRIVATE Catch2::Catch2WithMain engine-audio engine-config engine-content game-client)
 target_include_directories(test_engine_audio PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/game/fighters-legacy")
+    "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_engine_audio)
 
 add_executable(test_sha256 test_sha256.cpp)

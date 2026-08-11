@@ -78,6 +78,7 @@ aircraft's performance.
 | `check_deps.py` | Reports which pinned dependencies have newer upstream releases |
 | `lint_workflow_expressions.py` | Catches `${{ }}` interpolation into `run:` blocks |
 | `lint_test_names.py` | Catches non-ASCII in Catch2 test names and tags, which ctest cannot select on Windows |
+| `lint_backend_seam.py` | Catches a product-library source reaching a backend's third-party headers — an include that compiles only where a system package supplies them and fails on every CI platform ([product libraries](architecture.md#module-boundary-policy)) |
 | `mission_test/` | Mission harness assertions |
 | `record_demo/` | Headless cinematic capture ([demo recording](demo-recording.md)) |
 | `visual_check.sh` / `.ps1` | Launch the game into a known scene for visual verification |

@@ -46,6 +46,14 @@ jobs:
       - name: Lint test names
         run: python3 tools/lint_test_names.py
 
+      # platform/ links every backend's third-party dependency PRIVATE, so a product library that
+      # includes a concrete backend header compiles ONLY where a system package happens to put those
+      # headers on the default include path. Game.cpp reaching openal/OALAudio.h instead of
+      # OALAudioFactory.h (#1067) passed a clean local build and 4657 ctest tests, then failed all
+      # three Build legs plus a fuzz harness at once. Sits in `lint` so it fails in seconds instead.
+      - name: Lint the product/backend seam
+        run: python3 tools/lint_backend_seam.py
+
       - name: Check clang-format
         run: |
           git diff --name-only --diff-filter=d origin/${{ github.base_ref || 'main' }}...HEAD \
@@ -445,6 +453,10 @@ jobs:
       - name: Unit test lint_test_names.py (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         run: python3 -m pytest tests/test_lint_test_names.py -v
+
+      - name: Unit test lint_backend_seam.py (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 -m pytest tests/test_lint_backend_seam.py -v
 
       # Pure assertion logic only; the full harness run against fl-server is the mission_harness_ci_smoke
       # ctest (#856).

@@ -8,27 +8,50 @@ target_link_libraries(fl-server-config PUBLIC platform-hal tomlplusplus::tomlplu
 target_include_directories(fl-server-config PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
     PRIVATE "${CMAKE_SOURCE_DIR}/engine")  # config/TomlNumeric.h — header-only, no link needed
 
-add_executable(fl-server main.cpp ServerCommands.cpp IpListFile.cpp RconServer.cpp HttpAdminServer.cpp
-    StdinCommandReader.cpp ReplayRecorder.cpp HttpAdminAuth.cpp McpProtocol.cpp McpEndpoint.cpp)
-# platform-net is the backend-selecting facade (enet6 always, GNS when FL_ENABLE_GNS); fl-server
-# picks the transport at runtime via createNetwork(cfg.network.transport).
-target_link_libraries(fl-server PRIVATE
+# fl-server-lib — every server source except main.cpp (#1067).
+#
+# It exists for the same two reasons game-client does: tests and fuzz harnesses re-listed these
+# sources with a private include/link set each time, and cmake/layering.cmake could not see server
+# code at all. platform-net is the backend-selecting facade (enet6 always, GNS when FL_ENABLE_GNS);
+# the transport is picked at runtime via createNetwork(cfg.network.transport).
+add_library(fl-server-lib STATIC
+    ServerCommands.cpp
+    IpListFile.cpp
+    RconServer.cpp
+    HttpAdminServer.cpp
+    StdinCommandReader.cpp
+    ReplayRecorder.cpp
+    HttpAdminAuth.cpp
+    McpProtocol.cpp
+    McpEndpoint.cpp)
+# PUBLIC so consumers (the thin main, tests, fuzz harnesses) inherit the headers and link set.
+target_link_libraries(fl-server-lib PUBLIC
     fl-server-config platform-net engine-net engine-entity engine-loop engine-weather engine-console
     engine-config engine-render engine-content engine-difficulty engine-flight engine-ai engine-script
-    engine-replay engine-perf engine-weapon engine-bootstrap engine-sensor engine-mission engine-campaign engine-campaign-png engine-match engine-worldai
+    engine-replay engine-perf engine-weapon engine-bootstrap engine-sensor engine-mission engine-campaign
+    engine-campaign-png engine-match engine-worldai
     platform-stdfs platform-http
-    # cpp-httplib: the embedded REST admin API + /health (#233), and in Stage 3 the MCP endpoint
-    # (#601). Confined to this binary by cmake/layering.cmake -- no engine-* target may link it.
+    # cpp-httplib: the embedded REST admin API + /health (#233), and the MCP endpoint (#601).
+    # Confined to the server product library by cmake/layering.cmake -- no engine-* target may link it.
     httplib::httplib)
-target_include_directories(fl-server PRIVATE
+target_include_directories(fl-server-lib PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_BINARY_DIR}/engine"  # generated Version.h: the engine version stamped into recordings
     "${CMAKE_SOURCE_DIR}/platform/net"
-    "${CMAKE_SOURCE_DIR}/platform/http"
-    "${enet6_SOURCE_DIR}/include")
+    "${CMAKE_SOURCE_DIR}/platform/http")
+target_include_directories(fl-server-lib PRIVATE "${enet6_SOURCE_DIR}/include")
 
 if(WIN32)
-    target_link_libraries(fl-server PRIVATE ws2_32)
+    target_link_libraries(fl-server-lib PUBLIC ws2_32)
 endif()
+
+if(MSVC)
+    target_compile_definitions(fl-server-lib PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+
+add_executable(fl-server main.cpp)
+target_link_libraries(fl-server PRIVATE fl-server-lib)
+target_include_directories(fl-server PRIVATE "${enet6_SOURCE_DIR}/include")
 
 if(MSVC)
     target_compile_definitions(fl-server PRIVATE _CRT_SECURE_NO_WARNINGS)

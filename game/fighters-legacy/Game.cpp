@@ -68,7 +68,6 @@
 #include "firstrun/FirstRun.h"
 #include "flight/Atmosphere.h"
 #include "flight/Geodetic.h"
-#include "gui/ImGuiGui.h"               // #156: Dear ImGui backend behind the IGui HAL
 #include "http/CurlHttpClientFactory.h" // createHttpClient (#490)
 #include "i18n/Localization.h"
 #include "input/AxisConfig.h"
@@ -84,7 +83,6 @@
 #include "net/LobbyListClient.h"
 #include "net/ServerBrowserModel.h"
 #include "net/ServerQueryClient.h"
-#include "openal/OALAudio.h"
 #include "perf/FrameStatsRecorder.h"
 #include "perf/PerformanceOverlay.h"
 #include "render/BuiltinGeometry.h"
@@ -106,8 +104,7 @@
 #include "stdfs/StdAsyncFilesystem.h"
 #include "stdfs/StdFilesystem.h"
 #include "stdfs/StdFilesystemWatcher.h"
-#include "voice/VoiceChat.h" // Epic J: Opus capture/playback + radio-net mix (#531/#532)
-#include "vulkan/VkRendererFactory.h"
+#include "voice/VoiceChat.h"           // Epic J: Opus capture/playback + radio-net mix (#531/#532)
 #include "weather/WeatherController.h" // applyGeographicSun — per-observer sun (#481)
 
 #include "ClientFlightModelResolver.h"
@@ -133,6 +130,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -608,7 +606,11 @@ struct GameImpl {
 // Game
 // ---------------------------------------------------------------------------
 
-Game::Game() = default;
+Game::Game(ClientBackends backends) : m_backends(std::move(backends)) {
+    // A missing factory is a wiring mistake in main(), not a runtime mode — fail at construction
+    // rather than at the first frame that would have dereferenced an empty std::function.
+    assert(m_backends.complete() && "ClientBackends must carry a renderer and a GUI factory");
+}
 
 Game::~Game() {
     if (!m_impl)
@@ -1081,15 +1083,15 @@ bool Game::initPlatform(int argc, char** argv) {
                                   "--no-audio: running silent, no audio device opened");
         d.services.p.audio = std::make_unique<fl::NullAudio>();
     } else {
-        auto oalAudio = std::make_unique<OALAudio>();
-        if (oalAudio->init()) {
-            d.services.p.audio = std::move(oalAudio);
+        std::unique_ptr<IAudio> deviceAudio = m_backends.createAudio();
+        if (deviceAudio->init()) {
+            d.services.p.audio = std::move(deviceAudio);
         } else {
             // Warn, not Error: this is a degraded launch, not a failed one, and it must say both
             // what happened and what it did about it — the old message named only the first half.
             char buf[256];
             std::snprintf(buf, sizeof(buf), "audio device unavailable (%s) — running silent",
-                          oalAudio->getLastError() ? oalAudio->getLastError() : "unknown");
+                          deviceAudio->getLastError() ? deviceAudio->getLastError() : "unknown");
             d.services.rawLogger->log(LogLevel::Warn, __FILE__, __LINE__, buf);
             // FileLogger writes to a file only, so the log alone leaves a player wondering why the
             // game is mute. Say it where they are — the same channel the log-file fallback above uses.
@@ -1124,7 +1126,7 @@ bool Game::initWindowAndRenderer() {
         d.services.p.display = std::make_unique<HeadlessDisplay>();
         // p.cursor stays null (never dereferenced headless — Settings is unreachable).
 
-        d.services.p.renderer = createVulkanRenderer();
+        d.services.p.renderer = m_backends.createRenderer();
         if (!d.services.p.renderer->initHeadless(static_cast<uint32_t>(hw), static_cast<uint32_t>(hh))) {
             d.services.rawLogger->log(LogLevel::Error, __FILE__, __LINE__, "headless renderer init failed");
             return false;
@@ -1167,7 +1169,7 @@ bool Game::initWindowAndRenderer() {
     d.services.p.display = std::make_unique<SDL3Display>();
     d.services.p.cursor = std::make_unique<SDL3Cursor>();
 
-    d.services.p.renderer = createVulkanRenderer();
+    d.services.p.renderer = m_backends.createRenderer();
     if (!d.services.p.renderer->init(d.services.p.window.get())) {
         d.services.rawLogger->log(LogLevel::Error, __FILE__, __LINE__, "renderer init failed");
         return false;
@@ -1198,7 +1200,7 @@ bool Game::initWindowAndRenderer() {
     // #156: bring up the IGui backend (Dear ImGui) now the window + renderer exist. A null result (init
     // failure) leaves p.gui null and the game runs with the HudElement-only UI. When it succeeds, forward
     // SDL events to it at the top of the window pump so it can capture keyboard/mouse for text entry.
-    d.services.p.gui = fl::createImGuiGui(*d.services.p.window, *d.services.p.renderer);
+    d.services.p.gui = m_backends.createGui(*d.services.p.window, *d.services.p.renderer);
     if (d.services.p.gui) {
         fl::IGui* gui = d.services.p.gui.get();
         d.services.p.window->setGuiEventForwarder([gui](const void* ev) { gui->processEvent(ev); });
