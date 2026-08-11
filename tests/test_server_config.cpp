@@ -28,13 +28,12 @@ TEST_CASE("parseServerConfig: empty TOML returns all defaults", "[server_config]
     CHECK(cfg.rotationItems.empty());
     CHECK(cfg.rotationTimeLimitMin == 0);
     CHECK_FALSE(cfg.lobbyRegister);
-    CHECK(cfg.lobbyUrl == "https://lobby.fighters-legacy.org");
+    // Empty by default (#1072): a URL with no service behind it is a default that only generates
+    // confusing outbound failures. A lobby is opted into by naming one.
+    CHECK(cfg.lobbyUrl.empty());
     CHECK(cfg.lobbyVisibility == "public");
     CHECK(cfg.modStack.empty());
-    CHECK_FALSE(cfg.persistent);
-    CHECK(cfg.worldSavePath == "world.sav");
     CHECK(cfg.playerEntityType == "builtin:debug-entity");
-    CHECK(cfg.worldAutosaveIntervalS == 300);
     CHECK(cfg.aiDifficultyFloor == "recruit");
     CHECK(cfg.discoveryEnabled == true);
     CHECK(cfg.discoveryIntervalMs == 2000);
@@ -591,8 +590,6 @@ TEST_CASE("parseServerConfig: reads [world] fields", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig(R"(
 [world]
-save_path                     = "/data/world.sav"
-autosave_interval_s           = 600
 jitter_buffer_depth           = 8
 jitter_buffer_adapt_window    = 90
 jitter_buffer_hysteresis      = 3
@@ -600,8 +597,6 @@ jitter_buffer_jitter_multiplier = 1.5
 )",
                                  &log);
 
-    CHECK(cfg.worldSavePath == "/data/world.sav");
-    CHECK(cfg.worldAutosaveIntervalS == 600);
     CHECK(cfg.jitterBufferDepth == 8u);
     CHECK(cfg.jitterAdaptWindow == 90u);
     CHECK(cfg.jitterHysteresis == 3u);
@@ -1295,6 +1290,31 @@ TEST_CASE("parseServerConfig: default template parses with the [metrics] section
     // The default template ships [metrics] with an empty path (disabled) and 1000 ms interval.
     CHECK(cfg.metrics.tickJsonPath.empty());
     CHECK(cfg.metrics.tickJsonIntervalMs == 1000u);
+}
+
+// Regression (#1072): the config an operator is handed on first run must not advertise a control that
+// does nothing. `save_path` and `autosave_interval_s` described a persistent world that has no store
+// behind it -- IWorldStore does not exist anywhere in the tree -- so the operator was told the world
+// would be saved every five minutes and it never was. Same defect class as #1049's entity_soft_cap.
+// Persistence returns as real work under Epic H (#500) in M5.0; it gets these keys back then.
+//
+// This asserts on the TEMPLATE, not the parse result: the failure being guarded is a key reappearing
+// in the file the server writes, which is the surface an operator actually reads.
+TEST_CASE("defaultServerConfigToml: ships no persistence keys, which have no implementation", "[server_config]") {
+    const std::string_view toml = defaultServerConfigToml();
+    CHECK(toml.find("save_path") == std::string_view::npos);
+    CHECK(toml.find("autosave_interval_s") == std::string_view::npos);
+    CHECK(toml.find("persistent") == std::string_view::npos);
+}
+
+// Regression (#1072): a default URL pointing at a host with no service behind it is not a helpful
+// default -- it turns "I never configured a lobby" into recurring outbound POST failures the operator
+// has to chase. Registration itself ships (#143); the reference lobby service is #999. So the shipped
+// default is EMPTY, and LobbyRegistration treats empty as disabled.
+TEST_CASE("defaultServerConfigToml: the lobby url default is empty, not a host with no service", "[server_config]") {
+    MockLogger log;
+    CHECK(parseServerConfig(defaultServerConfigToml(), &log).lobbyUrl.empty());
+    CHECK(std::string_view(defaultServerConfigToml()).find("lobby.fighters-legacy.org") == std::string_view::npos);
 }
 
 // Regression (#94 fuzzing): the logger parameter is documented as optional (nullptr = no logging).

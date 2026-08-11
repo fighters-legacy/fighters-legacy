@@ -15,7 +15,7 @@ class ILogger;
 // Static + dynamic config for lobby registration (#143). The static fields are set once at
 // configure(); players/mission change over the session via setDynamic().
 struct LobbyRegistrationConfig {
-    std::string lobbyUrl;        // base, e.g. "https://lobby.fighters-legacy.org"
+    std::string lobbyUrl;        // base, e.g. "https://lobby.example.org"; EMPTY = no lobby, disabled
     std::string name;            // server name
     uint16_t gamePort{0};        // the game port a client connects to
     std::string mode;            // game-mode id

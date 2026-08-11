@@ -10,11 +10,11 @@
 //   1. server.toml in CWD (or path in FL_CONFIG env var)
 //   2. CLI positional args: fl-server [port] [maxPeers]
 //   3. Environment variables: FL_PORT, FL_BIND_ADDRESS, FL_MAX_PEERS, FL_NAME,
-//      FL_PERSISTENT, FL_LOBBY_REGISTER, FL_LOBBY_URL, FL_LOBBY_VISIBILITY,
+//      FL_LOBBY_REGISTER, FL_LOBBY_URL, FL_LOBBY_VISIBILITY,
 //      FL_AI_DIFFICULTY_FLOOR  (highest precedence)
 //
 // See docs/server-ops/server-config.md for the full operator configuration reference.
-// fl-lobby integration is tracked in issue #36.
+// Lobby registration ships (#143); the reference lobby service is #999.
 #include "GameModeSource.h"
 #include "HttpAdminServer.h"
 #include "IpListFile.h"
@@ -164,8 +164,6 @@ static void applyCliAndEnvOverrides(fl::ServerConfig& cfg, int argc, char** argv
         cfg.maxPeers = std::atoi(e);
     if (const char* e = std::getenv("FL_NAME"))
         cfg.name = e;
-    if (const char* e = std::getenv("FL_PERSISTENT"))
-        cfg.persistent = (std::strcmp(e, "true") == 0 || std::strcmp(e, "1") == 0);
     if (const char* e = std::getenv("FL_LOBBY_REGISTER"))
         cfg.lobbyRegister = (std::strcmp(e, "true") == 0 || std::strcmp(e, "1") == 0);
     if (const char* e = std::getenv("FL_LOBBY_URL"))
@@ -200,8 +198,7 @@ int main(int argc, char** argv) {
     // precisely what they did while each derived its own (#1048).
     const fl::ServerUptime serverUptime;
 
-    // Pre-pass: --help / --version / --persistent / --bind
-    bool flagPersistent = false;
+    // Pre-pass: --help / --version / --bind
     std::string flagBind;          // non-empty if --bind addr was given
     std::string flagAdminToken;    // non-empty if --admin-token was given (internal single-player use)
     std::string flagTransport;     // non-empty if --transport <gns|enet> was given (overrides [network])
@@ -226,7 +223,6 @@ int main(int argc, char** argv) {
                 "Options:\n"
                 "  --help             Print this message and exit\n"
                 "  --version          Print version and exit\n"
-                "  --persistent       Enable persistent world mode (Phase 2 -- not yet active)\n"
                 "  --bind <addr>      Bind address (overrides server.toml and FL_BIND_ADDRESS)\n"
                 "  --assets <dir>     Content root holding mods/ (overrides FL_ASSETS_ROOT and the CWD)\n"
                 "  --metrics-json <p> Write the per-phase tick-budget JSON to <p> (overrides [metrics])\n"
@@ -251,7 +247,6 @@ int main(int argc, char** argv) {
                 "  FL_ASSETS_ROOT         Content root holding mods/ (default: current directory)\n"
                 "  FL_MAX_PEERS           Max simultaneous peers (default: 32)\n"
                 "  FL_NAME                Server name (default: \"Unnamed Server\")\n"
-                "  FL_PERSISTENT          \"true\" to enable persistent world, Phase 2\n"
                 "  FL_LOBBY_REGISTER      \"true\" to advertise to fl-lobby, Phase 2\n"
                 "  FL_LOBBY_URL           fl-lobby base URL, Phase 2\n"
                 "  FL_LOBBY_VISIBILITY    \"public\" or \"private\", Phase 2\n"
@@ -266,8 +261,6 @@ int main(int argc, char** argv) {
             std::printf("fl-server %s (%s)\n", FL_VERSION_STRING, networkBackendVersion(TransportKind::Gns));
             return 0;
         }
-        if (std::strcmp(argv[i], "--persistent") == 0)
-            flagPersistent = true;
         if (std::strcmp(argv[i], "--bind") == 0 && i + 1 < argc)
             flagBind = argv[++i];
         if (std::strcmp(argv[i], "--transport") == 0 && i + 1 < argc)
@@ -337,9 +330,7 @@ int main(int argc, char** argv) {
     // ---- Tier 2 + 3: CLI positional args and environment variables ----
     applyCliAndEnvOverrides(cfg, argc, argv, log);
 
-    // --persistent / --bind / --admin-token flags from the pre-pass override any lower tier.
-    if (flagPersistent)
-        cfg.persistent = true;
+    // --bind / --admin-token flags from the pre-pass override any lower tier.
     if (!flagBind.empty())
         cfg.bindAddress = flagBind;
     // --admin-token takes highest precedence and overrides server.toml + FL_OPERATOR_PASSWORD.
@@ -383,10 +374,6 @@ int main(int argc, char** argv) {
         std::snprintf(buf, sizeof(buf), "transport: %s", networkBackendVersion(transportKind));
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
     }
-
-    // ---- Phase 2 stub logs ----
-    if (cfg.persistent)
-        log->log(LogLevel::Info, __FILE__, __LINE__, "persistent world requested (Phase 2 -- not yet active)");
 
     // Resolve the mission to load at startup (#854): --mission wins, else the first [rotation] item.
     // Multi-item rotation *timing* (advancing to the next item over the running server) lands
@@ -525,10 +512,18 @@ int main(int argc, char** argv) {
             lc.mode = cfg.matchMode;
             lc.visibilityPublic = (cfg.lobbyVisibility == "public");
             lobbyReg->configure(lc);
-            if (lobbyReg->enabled())
+            if (lobbyReg->enabled()) {
                 log->log(LogLevel::Info, __FILE__, __LINE__, "lobby registration active");
-            else
-                log->log(LogLevel::Info, __FILE__, __LINE__, "lobby registration disabled (visibility=private)");
+            } else {
+                // Two things disable it, and the message used to name only one. With [lobby] url now
+                // defaulting to empty (#1072), "register = true and no url" is the LIKELIER case, and
+                // an operator told "visibility=private" when they set public would look in the wrong
+                // place. Same defect class as the flag this issue removed.
+                log->log(LogLevel::Info, __FILE__, __LINE__,
+                         cfg.lobbyUrl.empty() ? "lobby registration requested but [lobby] url is empty; disabled "
+                                                "(set it to a lobby's base URL -- the reference service is issue #999)"
+                                              : "lobby registration disabled (visibility=private)");
+            }
         } else {
             log->log(LogLevel::Warn, __FILE__, __LINE__,
                      "lobby registration requested but no HTTP backend (libcurl absent); disabled");
