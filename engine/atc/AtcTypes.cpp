@@ -43,6 +43,8 @@ const char* atcPhraseVoiceKey(AtcPhrase p) noexcept {
         return "atc.roger";
     case AtcPhrase::Unable:
         return "atc.unable";
+    case AtcPhrase::TaxiToParking:
+        return "atc.taxi_to_parking";
     }
     return "atc.unable";
 }
@@ -64,6 +66,8 @@ const char* phraseText(AtcPhrase p) noexcept {
         return "roger";
     case AtcPhrase::Unable:
         return "unable";
+    case AtcPhrase::TaxiToParking:
+        return "clear of the runway, taxi to parking";
     }
     return "unable";
 }

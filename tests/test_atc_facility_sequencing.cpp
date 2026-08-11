@@ -349,33 +349,23 @@ TEST_CASE("AtcFacility: an arrival releases the runway once it has stopped (#114
     CHECK(fac.occupant() == lander);
     CHECK(fac.clearanceState(lander) == ClearanceState::ClearedToLand);
 
-    // Stopped and on the ground: the occupancy is released — and then immediately re-taken, because
-    // the flight is still in the arrival list. See the deadlock case below; ClearanceState::Landed
-    // is set and overwritten inside this one update() call, so no caller can observe it.
+    // Stopped and on the ground: the landing is complete, so the runway is released and the flight
+    // is retired from the arrival sequence in the same step (#1149).
     w.em.get(lander)->transform.vel[0] = 0.5f;
     w.em.get(lander)->transform.pos[1] = 2.0;
     out.clear();
     fac.update(w.em, 180, out);
-    CHECK(fac.clearanceState(lander) == ClearanceState::ClearedToLand);
-
-    // Removing the flight, which is what AtcService::cancel does, ends it properly.
-    fac.removeFlight(lander);
     CHECK_FALSE(fac.runwayOccupied());
     CHECK(fac.arrivalCount() == 0u);
+    CHECK(fac.clearanceState(lander) == ClearanceState::Landed);
+    CHECK(sent(out, AtcPhrase::TaxiToParking, lander));
 }
 
-TEST_CASE("AtcFacility: a landed flight is never retired (pinned pending #1149)", "[atc]") {
-    // THIS TEST PINS A DEFECT. It asserts what the FSM does today, not what it should do, so that
-    // fixing #1149 fails here and the fixer has to say what the new behaviour is.
-    //
-    // Nothing removes a flight once it has landed. AtcService::removeFlight is reached only from
-    // AtcService::cancel, wired to exactly one caller: the player's "4  Cancel request" comms-menu
-    // entry. An AI that lands and rolls clear stays in m_arrivals, so on the next ATC step it is
-    // once more the nearest arrival, is re-cleared to land, and re-takes the runway. The occupancy
-    // timeout does not save it — the re-clear happens on the same tick as the release.
-    //
-    // From the tower: "cleared to land" is re-transmitted to a stopped aircraft every step, and no
-    // departure is ever released, because arrivals win the runway.
+TEST_CASE("AtcFacility: a landed flight is retired and the runway goes to the departure (#1149)", "[atc]") {
+    // The defect this replaces: nothing removed a flight once it had landed, so on the same update()
+    // that released its occupancy it was once more the nearest arrival, was re-cleared to land, and
+    // re-took the runway — for the rest of the session, since arrivals beat departures. The
+    // occupancy timeout could not save it; the re-clear happened on the tick of the release.
     World w;
     const EntityId lander = w.spawnAt(500, 3);
     const EntityId dep = w.spawnAt(0, 0);
@@ -386,21 +376,118 @@ TEST_CASE("AtcFacility: a landed flight is never retired (pinned pending #1149)"
     fac.requestTakeoff(dep);
     fac.update(w.em, 60, out);
     REQUIRE(fac.occupant() == lander);
+    REQUIRE(fac.clearanceState(dep) == ClearanceState::HoldShort);
 
-    // Down, stopped, and going nowhere.
+    // Down, stopped, and going nowhere: retired on this step, and told to taxi.
     w.em.get(lander)->transform.vel[0] = 0.f;
     w.em.get(lander)->transform.pos[1] = 2.0;
+    out.clear();
+    fac.update(w.em, 120, out);
+    CHECK(fac.arrivalCount() == 0u);
+    CHECK(fac.clearanceState(lander) == ClearanceState::Landed);
+    CHECK(sent(out, AtcPhrase::TaxiToParking, lander));
+    CHECK_FALSE(sent(out, AtcPhrase::ClearedToLand, lander));
+
+    // With the arrival list empty the runway is free, so the waiting departure finally goes.
+    CHECK(fac.occupant() == dep);
+    CHECK(fac.clearanceState(dep) == ClearanceState::ClearedTakeoff);
+    CHECK(sent(out, AtcPhrase::ClearedTakeoff, dep));
+}
+
+TEST_CASE("AtcFacility: a landed flight stays landed and stays quiet (#1149)", "[atc]") {
+    // Landed is terminal, not a one-step blink: it survives every later step so a caller polling
+    // clearanceState() can actually act on it, and the taxi line is transmitted once, not per tick.
+    World w;
+    const EntityId lander = w.spawnAt(500, 3);
+    AtcFacility fac = makeFacility();
+    std::vector<RadioTransmission> out;
+
+    fac.requestLanding(lander);
+    fac.update(w.em, 60, out);
+    w.em.get(lander)->transform.vel[0] = 0.f;
+    w.em.get(lander)->transform.pos[1] = 2.0;
+    fac.update(w.em, 120, out);
+    REQUIRE(fac.clearanceState(lander) == ClearanceState::Landed);
+
     for (int step = 0; step < 4; ++step) {
         out.clear();
-        fac.update(w.em, 120 + 60ull * static_cast<uint64_t>(step), out);
+        fac.update(w.em, 180 + 60ull * static_cast<uint64_t>(step), out);
+        CHECK(fac.clearanceState(lander) == ClearanceState::Landed);
+        CHECK(fac.arrivalCount() == 0u);
+        CHECK_FALSE(fac.runwayOccupied());
+        CHECK(out.empty()); // no re-clearance, no repeated taxi line
     }
+}
 
-    // What #1149 will change: today the departure is still holding short and the stopped lander
-    // still owns the runway.
-    CHECK(fac.clearanceState(dep) == ClearanceState::HoldShort);
-    CHECK(fac.occupant() == lander);
-    CHECK(fac.clearanceState(lander) == ClearanceState::ClearedToLand); // re-cleared, never Landed
-    CHECK(sent(out, AtcPhrase::ClearedToLand, lander));                 // and re-transmitted, every step
+TEST_CASE("AtcFacility: a landed flight can request takeoff again (#1149)", "[atc]") {
+    // Turnaround: the aircraft parks, refuels and goes again. A terminal clearance is not a live one,
+    // so the new request must reset it — otherwise the flight queues while still reading `landed`.
+    World w;
+    const EntityId flight = w.spawnAt(500, 3);
+    AtcFacility fac = makeFacility();
+    std::vector<RadioTransmission> out;
+
+    fac.requestLanding(flight);
+    fac.update(w.em, 60, out);
+    w.em.get(flight)->transform.vel[0] = 0.f;
+    w.em.get(flight)->transform.pos[1] = 2.0;
+    fac.update(w.em, 120, out);
+    REQUIRE(fac.clearanceState(flight) == ClearanceState::Landed);
+
+    fac.requestTakeoff(flight);
+    CHECK(fac.clearanceState(flight) == ClearanceState::HoldShort);
+    CHECK(fac.departureQueueDepth() == 1u);
+
+    out.clear();
+    fac.update(w.em, 180, out);
+    CHECK(fac.clearanceState(flight) == ClearanceState::ClearedTakeoff);
+    CHECK(fac.occupant() == flight);
+}
+
+TEST_CASE("AtcFacility: the next arrival is cleared once the one ahead has landed (#1149)", "[atc]") {
+    // The queue has to keep moving. Retiring the lander promotes whoever was behind it.
+    World w;
+    const EntityId first = w.spawnAt(2000, 200);
+    const EntityId second = w.spawnAt(12000, 900);
+    AtcFacility fac = makeFacility();
+    std::vector<RadioTransmission> out;
+
+    fac.requestLanding(first);
+    fac.requestLanding(second);
+    fac.update(w.em, 60, out);
+    REQUIRE(fac.occupant() == first);
+    REQUIRE(fac.clearanceState(second) == ClearanceState::Pattern);
+
+    w.em.get(first)->transform.vel[0] = 0.f;
+    w.em.get(first)->transform.pos[0] = 500.0;
+    w.em.get(first)->transform.pos[1] = 2.0;
+    out.clear();
+    fac.update(w.em, 120, out);
+
+    CHECK(fac.arrivalCount() == 1u);
+    CHECK(fac.occupant() == second);
+    CHECK(fac.clearanceState(second) == ClearanceState::ClearedToLand);
+    CHECK(sent(out, AtcPhrase::ClearedToLand, second));
+}
+
+TEST_CASE("AtcFacility: the arrival backstop frees the runway without claiming a landing (#1149)", "[atc]") {
+    // kOccTimeoutTicks is a deadlock backstop for the runway mutex, not an assertion that anyone
+    // landed. An aircraft still airborne when it fires — a slow long final, a touch-and-go climbing
+    // away — must not be stamped Landed or retired: it is still an arrival and re-sequences.
+    World w;
+    const EntityId slow = w.spawnAt(4000, 300);
+    AtcFacility fac = makeFacility();
+    std::vector<RadioTransmission> out;
+
+    fac.requestLanding(slow);
+    fac.update(w.em, 100, out);
+    REQUIRE(fac.occupant() == slow);
+
+    out.clear();
+    fac.update(w.em, 100 + 5401, out);
+    CHECK(fac.clearanceState(slow) != ClearanceState::Landed);
+    CHECK(fac.arrivalCount() == 1u); // still on the approach
+    CHECK_FALSE(sent(out, AtcPhrase::TaxiToParking, slow));
 }
 
 TEST_CASE("AtcFacility: an arrival still airborne over the field does not count as stopped (#1145)", "[atc]") {
