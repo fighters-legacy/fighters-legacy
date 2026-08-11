@@ -77,8 +77,11 @@ enable_testing()
 
 add_subdirectory(engine)
 add_subdirectory(platform)
-add_subdirectory(game)
+# server before game: game-client embeds the build-tree fl-server path for the single-player
+# LocalServer (#1054), and guarding that on `if(TARGET fl-server)` requires the target to exist by
+# then. Nothing under server/ depends on game/.
 add_subdirectory(server)
+add_subdirectory(game)
 add_subdirectory(tools)
 add_subdirectory(tests)
 

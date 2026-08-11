@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "ClientBackends.h"
 #include "Game.h"
 #include "Version.h"
+#include "gui/ImGuiGui.h"             // #156: Dear ImGui backend behind the IGui HAL
+#include "openal/OALAudioFactory.h"   // the OpenAL Soft IAudio backend
+#include "vulkan/VkRendererFactory.h" // the Vulkan IRenderer backend
 #include <cstdio>
 #include <cstring>
 
@@ -52,7 +56,13 @@ int main(int argc, char** argv) {
             return 0;
         }
     }
-    Game game;
+    // The composition root: the only place in the client that names a render, GUI or audio backend
+    // (#1067). Everything else lives in game-client, which links none of them — see ClientBackends.h.
+    Game game(ClientBackends{
+        .createRenderer = [] { return createVulkanRenderer(); },
+        .createGui = [](IWindow& window, IRenderer& renderer) { return createImGuiGui(window, renderer); },
+        .createAudio = [] { return createOALAudio(); },
+    });
     if (!game.init(argc, argv))
         return 1;
     game.run();

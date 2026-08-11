@@ -11,7 +11,7 @@ add_custom_target(fuzzers)
 
 # fl_add_fuzzer(<name>): build fuzz/<name>.cpp into a libFuzzer executable + a 60 s ctest smoke test
 # (label "fuzz") that replays the committed corpus/<name>/ seeds plus a build-tree working corpus.
-# Callers add target_link_libraries / target_sources / target_include_directories AFTER the call
+# Callers add target_link_libraries / target_include_directories AFTER the call
 # (inline idiom, like tests/CMakeLists.txt) so per-harness link sets differ freely.
 function(fl_add_fuzzer name)
     add_executable(${name} ${name}.cpp)
@@ -66,29 +66,19 @@ target_link_libraries(fuzz_lobby_list PRIVATE engine-net)
 # helpers moved into their own TU with #601, so this harness no longer drags in an HTTP server to
 # fuzz a field scanner.
 fl_add_fuzzer(fuzz_http_admin_body)
-# McpProtocol.cpp comes along for parseAutonomy, which buildTokenTable resolves per token row.
-target_sources(fuzz_http_admin_body PRIVATE
-    "${CMAKE_SOURCE_DIR}/server/fl-server/HttpAdminAuth.cpp"
-    "${CMAKE_SOURCE_DIR}/server/fl-server/McpProtocol.cpp")
-target_link_libraries(fuzz_http_admin_body PRIVATE fl-server-config engine-console engine-net)
-target_include_directories(fuzz_http_admin_body PRIVATE "${CMAKE_SOURCE_DIR}/server/fl-server")
+# fl-server-lib carries HttpAdminAuth plus McpProtocol (parseAutonomy, which buildTokenTable resolves
+# per token row). Linking the archive pulls only the objects the harness actually reaches (#1067).
+target_link_libraries(fuzz_http_admin_body PRIVATE fl-server-lib)
 
 # MCP JSON-RPC envelope + depth-aware member scanner (#601): the first code to touch an MCP request
 # body. Pure logic, no sockets — McpProtocol.cpp links nothing but engine-net's jsonEscape.
 fl_add_fuzzer(fuzz_mcp)
-target_sources(fuzz_mcp PRIVATE "${CMAKE_SOURCE_DIR}/server/fl-server/McpProtocol.cpp")
-target_link_libraries(fuzz_mcp PRIVATE fl-server-config engine-net)
-target_include_directories(fuzz_mcp PRIVATE "${CMAKE_SOURCE_DIR}/server/fl-server")
+target_link_libraries(fuzz_mcp PRIVATE fl-server-lib)
 
-# Source-Engine RCON packet decoder: fl::rcon::decodePacket. RconServer.cpp is not in any library
-# (fl-server compiles it directly), so mirror tests/CMakeLists.txt's test_rcon_server recipe.
+# Source-Engine RCON packet decoder: fl::rcon::decodePacket, from fl-server-lib (#1067 — the library
+# carries the Winsock link edge too, so the WIN32 branch this harness needed is gone).
 fl_add_fuzzer(fuzz_rcon_packet)
-target_sources(fuzz_rcon_packet PRIVATE "${CMAKE_SOURCE_DIR}/server/fl-server/RconServer.cpp")
-target_link_libraries(fuzz_rcon_packet PRIVATE fl-server-config engine-console)
-target_include_directories(fuzz_rcon_packet PRIVATE "${CMAKE_SOURCE_DIR}/server/fl-server")
-if(WIN32)
-    target_link_libraries(fuzz_rcon_packet PRIVATE ws2_32)
-endif()
+target_link_libraries(fuzz_rcon_packet PRIVATE fl-server-lib)
 
 # --- v2 message-handler harnesses (#709; stateful, over the tests/ mocks — no real SDL/ENet) ---
 
@@ -106,21 +96,12 @@ fl_add_fuzzer(fuzz_connect_path)
 target_link_libraries(fuzz_connect_path PRIVATE engine-net)
 target_include_directories(fuzz_connect_path PRIVATE "${CMAKE_SOURCE_DIR}/tests")
 
-# ClientNetEventHandler::onReceive — the widest untrusted-input surface on the client. The handler
-# lives in the SDL-gated game exe, so compile its .cpp directly (mirrors tests/test_client_net_event_handler).
+# ClientNetEventHandler::onReceive — the widest untrusted-input surface on the client. It dispatches
+# MsgWingmanAck into the radio menu (#610), routes the effects TLV through ClientEffectRouter (#625),
+# and the router drives own-ship haptics (#631); game-client carries every one of them.
 fl_add_fuzzer(fuzz_client_msg)
-# ClientNetEventHandler dispatches MsgWingmanAck into the radio menu (#610), routes the effects TLV
-# through ClientEffectRouter (#625), and the router drives own-ship haptics (#631) — all come with it.
-target_sources(fuzz_client_msg PRIVATE
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientEffectRouter.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ChatOverlay.cpp" # ChatEvent -> chat overlay (#646)
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp"
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/WingmanMenu.cpp")
-target_link_libraries(fuzz_client_msg PRIVATE engine-net engine-render engine-entity engine-console engine-weather
-                                              engine-audio engine-config platform-hal)
-target_include_directories(fuzz_client_msg PRIVATE "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
-                                                   "${CMAKE_SOURCE_DIR}/tests")
+target_link_libraries(fuzz_client_msg PRIVATE game-client)
+target_include_directories(fuzz_client_msg PRIVATE "${CMAKE_SOURCE_DIR}/tests")
 
 # --- v2 content / asset parser harnesses (#709; mostly pure) ---
 
@@ -179,11 +160,7 @@ target_link_libraries(fuzz_mesh_json PRIVATE validate-mesh-lib)
 # --- Seed-corpus mint tool (NOT a fuzzer: own main, no -fsanitize=fuzzer, no ctest) ---
 # Regenerates the committed corpus/<name>/seed-*.bin from the same builders the unit tests use.
 # Run once after building: ./build/fuzz/fuzz/fuzz-mint-seeds
-add_executable(fuzz-mint-seeds mint_seeds.cpp "${CMAKE_SOURCE_DIR}/server/fl-server/RconServer.cpp")
-target_link_libraries(fuzz-mint-seeds PRIVATE engine-protocol engine-replay fl-server-config engine-console)
-target_include_directories(fuzz-mint-seeds PRIVATE "${CMAKE_SOURCE_DIR}/server/fl-server"
-                                                   "${CMAKE_SOURCE_DIR}/tests")
+add_executable(fuzz-mint-seeds mint_seeds.cpp)
+target_link_libraries(fuzz-mint-seeds PRIVATE engine-protocol engine-replay fl-server-lib)
+target_include_directories(fuzz-mint-seeds PRIVATE "${CMAKE_SOURCE_DIR}/tests")
 target_compile_definitions(fuzz-mint-seeds PRIVATE FL_FUZZ_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
-if(WIN32)
-    target_link_libraries(fuzz-mint-seeds PRIVATE ws2_32)
-endif()

@@ -17,19 +17,32 @@
 #   3. Headless server (transitive): `fl-server` may not reach a client backend
 #      (platform-sdl3 / platform-vulkan / platform-openal or their third-party libs). Transport
 #      backends are legitimate server deps and stay allowed.
-#   4. Transport facade (direct): the game binary and `fl-server` must not link `platform-enet` /
-#      `platform-gns` directly — they go through the `createNetwork()` facade (`platform-net`),
-#      which reaches the backends transitively by design (so this rule is direct-links-only).
-#      Locks in the #507 HAL-leak fix. The load tools are exempt (the rule names only the two
-#      binaries): net_check links platform-enet directly (it IS the enet6 regression instrument),
-#      and bot_swarm links the platform-net facade so it can select enet6 (its default) or GNS
-#      via --transport for the #649 GNS scale gate.
+#   4. Transport facade (direct): the game binary, `fl-server` and both product libraries must not
+#      link `platform-enet` / `platform-gns` directly — they go through the `createNetwork()` facade
+#      (`platform-net`), which reaches the backends transitively by design (so this rule is
+#      direct-links-only). Locks in the #507 HAL-leak fix. The load tools are exempt (the rule names
+#      only the binaries and the two product libs): net_check links platform-enet directly (it IS the
+#      enet6 regression instrument), and bot_swarm links the platform-net facade so it can select
+#      enet6 (its default) or GNS via --transport for the #649 GNS scale gate.
+#   5. Product separation (transitive, #1067 / D23): `game-client` may not reach `fl-server-lib`, and
+#      `fl-server-lib` may not reach `game-client`. Code both products need is promoted to `engine-*`;
+#      it never lives in one product library and gets reached from the other. Before the product
+#      libraries existed there was nothing to police — `game/` and `server/` were bare
+#      add_executable() calls, so this guard could not see either binary's code at all.
+#   6. Headless server library (transitive): `fl-server-lib` reaches no client backend, for the same
+#      reason `fl-server` does not. Stated on the library so it holds in configs that build the
+#      library without the executable, and so the failure names the library that introduced the edge.
+#   7. Platform floor (transitive): no `platform-*` target may reach an `engine-*` target. platform/
+#      is the HAL — it defines interfaces the engine consumes, so an edge back into the engine
+#      inverts the layering. This rule was policy in docs and in review only; it is a mechanism now.
 #
 # fl_assert_layering() is armed from the root CMakeLists.txt via cmake_language(DEFER CALL ...) so
 # it runs after every add_subdirectory() — all targets exist, including conditional ones
 # (platform-vulkan without an SDK, platform-gns when FL_ENABLE_GNS=OFF). It first runs a self-test
 # of the graph walker against synthetic targets, so a refactor that silently breaks the walker
-# fails configure instead of passing forever.
+# fails configure instead of passing forever. The self-test also builds a synthetic
+# game-client -> fl-server-lib edge and asserts the product-separation rule catches it, so rule 5
+# cannot rot into a no-op if the real targets are ever renamed.
 
 # Collect every non-UTILITY buildsystem target under <dir>, recursively.
 function(_fl_all_targets out_var dir)
@@ -137,6 +150,25 @@ function(_fl_assert_links_only target allow_regex out_var)
     endforeach()
 endfunction()
 
+# Rule 5's body, factored out so the self-test can drive the real code path with synthetic targets:
+# neither product library may reach the other. Sets <out_var> to a list of violation strings (empty
+# when clean). Absent targets are skipped, so a lean configure that builds only one product is fine.
+function(_fl_product_separation_violations a b out_var)
+    set(_found "")
+    foreach(_pair "${a};${b}" "${b};${a}")
+        list(GET _pair 0 _from)
+        list(GET _pair 1 _to)
+        if(TARGET "${_from}" AND TARGET "${_to}")
+            _fl_assert_reaches_none("${_from}" "^${_to}$" 0 _chain)
+            if(_chain)
+                list(APPEND _found
+                    "[product separation] ${_from} must not reach ${_to} — promote the shared code to engine-*: ${_chain}")
+            endif()
+        endif()
+    endforeach()
+    set(${out_var} "${_found}" PARENT_SCOPE)
+endfunction()
+
 # Self-test of the walker mechanics against synthetic INTERFACE targets (a -> b -> c). Runs on
 # every configure: the guard is pure configure-time logic, so without this a refactor that broke
 # the walk would silently disable enforcement. Synthetic names avoid colliding with real backends
@@ -168,9 +200,30 @@ function(_fl_layering_selftest)
         message(FATAL_ERROR
             "layering guard self-test: allowlist check broken (got '${_chain}').")
     endif()
+
+    # Rule 5 (#1067): a synthetic client -> server product edge must be reported, and only in that
+    # direction. This drives _fl_product_separation_violations itself, so the rule cannot decay into a
+    # no-op — the failure mode it guards against is the real target names being renamed out from under
+    # a hand-written check that then passes forever.
+    add_library(fl-layering-selftest-client INTERFACE)
+    add_library(fl-layering-selftest-server INTERFACE)
+    target_link_libraries(fl-layering-selftest-client INTERFACE fl-layering-selftest-server)
+    _fl_product_separation_violations(
+        fl-layering-selftest-client fl-layering-selftest-server _product_violations)
+    list(LENGTH _product_violations _n)
+    if(NOT _n EQUAL 1)
+        message(FATAL_ERROR
+            "layering guard self-test: product-separation rule reported ${_n} violation(s) for one "
+            "synthetic client -> server edge, expected exactly 1 (got '${_product_violations}').")
+    endif()
+    if(NOT _product_violations MATCHES "fl-layering-selftest-client must not reach fl-layering-selftest-server")
+        message(FATAL_ERROR
+            "layering guard self-test: product-separation rule reported the wrong direction "
+            "(got '${_product_violations}').")
+    endif()
 endfunction()
 
-# Deferred entry point: enforce all four rules, collect every violation, fail configure with the
+# Deferred entry point: enforce every rule, collect all violations, fail configure with the
 # full list of offending link chains.
 function(fl_assert_layering)
     _fl_layering_selftest()
@@ -205,25 +258,50 @@ function(fl_assert_layering)
         endif()
     endif()
 
-    # Rule 3 — headless server: fl-server reaches no client backend.
+    # Rules 3 + 6 — headless server: neither fl-server nor its product library reaches a client
+    # backend. Naming the library too means the failure points at the target that introduced the edge,
+    # and the rule still holds in a configure that builds fl-server-lib without the executable.
     set(_client_deny
         "^(platform-sdl3|platform-vulkan|platform-gui|platform-openal)$|^SDL3::|^Vulkan::|^OpenAL::|^imgui$")
-    if(TARGET fl-server)
-        _fl_assert_reaches_none(fl-server "${_client_deny}" 0 _chain)
-        if(_chain)
-            list(APPEND _violations
-                "[headless server] fl-server must not reach a client backend: ${_chain}")
+    foreach(_srv fl-server fl-server-lib)
+        if(TARGET "${_srv}")
+            _fl_assert_reaches_none("${_srv}" "${_client_deny}" 0 _chain)
+            if(_chain)
+                list(APPEND _violations
+                    "[headless server] ${_srv} must not reach a client backend: ${_chain}")
+            endif()
         endif()
-    endif()
+    endforeach()
 
-    # Rule 4 — transport facade: the game binary and fl-server select transports at runtime via
-    # createNetwork() (platform-net); neither may link a concrete transport backend directly.
-    foreach(_bin fighters-legacy fl-server)
+    # Rule 4 — transport facade: the binaries and the two product libraries select transports at
+    # runtime via createNetwork() (platform-net); none may link a concrete transport backend directly.
+    # The product libraries are named explicitly because they are where the sources now live: a
+    # depth-1 check on the executables alone would stop seeing the client/server code entirely.
+    foreach(_bin fighters-legacy fl-server game-client fl-server-lib)
         if(TARGET "${_bin}")
             _fl_assert_reaches_none("${_bin}" "^(platform-enet|platform-gns)$" 1 _chain)
             if(_chain)
                 list(APPEND _violations
                     "[transport facade] ${_bin} must link platform-net, not a concrete transport backend: ${_chain}")
+            endif()
+        endif()
+    endforeach()
+
+    # Rule 5 — product separation (D23): neither product library reaches the other. Shared code is
+    # promoted to engine-*, which is the ruling this rule enforces rather than restates.
+    _fl_product_separation_violations(game-client fl-server-lib _product_violations)
+    if(_product_violations)
+        list(APPEND _violations ${_product_violations})
+    endif()
+
+    # Rule 7 — platform floor: no platform-* target reaches an engine-* target. platform/ defines the
+    # interfaces the engine consumes; an edge back into engine/ inverts the layering.
+    foreach(_t IN LISTS _all)
+        if(_t MATCHES "^platform-")
+            _fl_assert_reaches_none("${_t}" "^engine-" 0 _chain)
+            if(_chain)
+                list(APPEND _violations
+                    "[platform floor] platform targets must not reach engine targets: ${_chain}")
             endif()
         endif()
     endforeach()
