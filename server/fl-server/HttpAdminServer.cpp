@@ -5,7 +5,7 @@
 
 #include <console/CommandRegistry.h>
 #include <console/CommandShell.h>
-#include <net/WorldStateJson.h> // jsonEscape — one escaper for every JSON this server emits
+#include <util/Json.h> // json::escape — the one escaper for every JSON this server emits
 
 #include <httplib.h>
 
@@ -117,7 +117,7 @@ struct HttpAdminServer::Impl {
             return;
         }
         res.status = 200;
-        res.set_content("{\"result\": \"" + jsonEscape(result) + "\"}", "application/json");
+        res.set_content("{\"result\": \"" + json::escape(result) + "\"}", "application/json");
     }
 
     // A route whose body is already JSON (worldstate / events) is passed through verbatim rather than

@@ -127,8 +127,8 @@ TEST_CASE("provenance strings are escaped", "[framestats]") {
     // And it must still parse.
     fl::FrameStatsSummary sum;
     CHECK(fl::parseFrameStats(json, sum));
-    CHECK(fl::detail::findString(json, "gpu_info").value_or("") == "NVIDIA \"RTX 5080\" C:\\driver");
-    CHECK(fl::detail::findString(json, "scene").value_or("") == "builtin:sandbox");
+    CHECK(fl::json::stringField(json, "gpu_info").value_or("") == "NVIDIA \"RTX 5080\" C:\\driver");
+    CHECK(fl::json::stringField(json, "scene").value_or("") == "builtin:sandbox");
 }
 
 TEST_CASE("parseFrameStats is tolerant of garbage and partial documents", "[framestats]") {

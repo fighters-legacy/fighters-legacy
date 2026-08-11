@@ -105,7 +105,8 @@ A structured, read-only, out-of-band surface:
 >   before, it copied in the ~1 Hz published-snapshot tick by hand. Exact ordering is `seq`.
 > - JSON lives in `engine/net/WorldStateJson.h`, hand-rolled in the `ServerTickReport` style so
 >   engine-net gains no JSON dependency. It **escapes strings**, unlike `MissionReport::toJson`, because
->   it carries chat lines and admin commands.
+>   it carries chat lines and admin commands — through `engine/util/Json.h` (#1080), which is the one
+>   escaper, writer set and reader in the tree. See [JSON in the engine](architecture.md#json-in-the-engine).
 > - `WorldStatePublisher` is the off-thread handoff: the sim publishes an immutable snapshot and any
 >   thread takes a `shared_ptr` to whatever was current, so a serializer never holds a lock across a
 >   multi-thousand-entity document. `worldState()` remains the sim-thread-only fast path for the GM feed.

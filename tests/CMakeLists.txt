@@ -760,6 +760,13 @@ add_executable(test_job_system test_job_system.cpp)
 target_link_libraries(test_job_system PRIVATE Catch2::Catch2WithMain engine-job)
 catch_discover_tests(test_job_system)
 
+# The engine's one JSON escaper, writer set and reader (#1080). Header-only and stdlib-only, so this
+# links nothing: engine-protocol's zero-dep rule is the reason the helper is shaped that way.
+add_executable(test_json test_json.cpp)
+target_link_libraries(test_json PRIVATE Catch2::Catch2WithMain)
+target_include_directories(test_json PRIVATE "${CMAKE_SOURCE_DIR}/engine")
+catch_discover_tests(test_json)
+
 add_executable(test_faction_registry test_faction_registry.cpp)
 target_link_libraries(test_faction_registry PRIVATE Catch2::Catch2WithMain engine-world)
 catch_discover_tests(test_faction_registry)

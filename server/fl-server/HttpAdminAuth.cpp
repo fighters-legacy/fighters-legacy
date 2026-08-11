@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "HttpAdminServer.h"
 
-#include <net/WorldStateJson.h> // jsonEscape — one escaper for every JSON this server emits
+#include <util/Json.h> // json::escape — the one escaper for every JSON this server emits
 
 #include <cctype>
 #include <cstdlib>
@@ -97,85 +97,28 @@ CommandIssuer issuerFor(const TokenGrant& grant) noexcept {
     return CommandIssuer{kIssuerNoPeer, grant.caps, grant.factionIndex};
 }
 
+// Untrusted REST bodies, read through the engine's one JSON scanner (#1080). The old pair located a
+// key with find("\"key\""), which matched a key nested inside a sub-object or one that merely appeared
+// inside a string VALUE -- `{"note": "\"admin\": true"}` satisfied a lookup for `admin`. json::member
+// walks the object and reads keys at its top level only, so these endpoints now accept exactly the flat
+// object they document.
+//
+// kMaxField is deliberately far below json::kMaxStringValue: a kick reason or a token is short, and an
+// unterminated quote must not make the server return a megabyte because someone sent one.
 namespace {
-
-// Locate `"key"` at an object level we are willing to read: these bodies are one flat object, so
-// anything nested is not a field this endpoint accepts.
-[[nodiscard]] std::size_t findKey(std::string_view json, std::string_view key) {
-    const std::string needle = "\"" + std::string(key) + "\"";
-    const std::size_t k = json.find(needle);
-    if (k == std::string_view::npos)
-        return std::string_view::npos;
-    std::size_t p = k + needle.size();
-    while (p < json.size() && (json[p] == ' ' || json[p] == '\t' || json[p] == '\n' || json[p] == '\r'))
-        ++p;
-    if (p >= json.size() || json[p] != ':')
-        return std::string_view::npos;
-    ++p;
-    while (p < json.size() && (json[p] == ' ' || json[p] == '\t' || json[p] == '\n' || json[p] == '\r'))
-        ++p;
-    return p;
-}
-
+constexpr std::size_t kMaxField = 512;
 } // namespace
 
 std::optional<double> jsonNumberField(std::string_view json, std::string_view key) {
-    const std::size_t p = findKey(json, key);
-    if (p == std::string_view::npos || p >= json.size())
-        return std::nullopt;
-    // strtod, not from_chars: Apple Clang has no floating-point from_chars (the JsonScan.h rule).
-    const std::string tail(json.substr(p, 64));
-    char* end = nullptr;
-    const double v = std::strtod(tail.c_str(), &end);
-    if (end == tail.c_str())
-        return std::nullopt;
-    return v;
+    return fl::json::numberField(json, key);
 }
 
 std::optional<std::string> jsonStringField(std::string_view json, std::string_view key) {
-    const std::size_t p = findKey(json, key);
-    if (p == std::string_view::npos || p >= json.size() || json[p] != '"')
-        return std::nullopt;
-    std::string out;
-    // Bound the field: a body is untrusted, and an unterminated quote must not make us scan forever
-    // or return a megabyte because someone sent one.
-    constexpr std::size_t kMaxField = 512;
-    for (std::size_t i = p + 1; i < json.size() && out.size() <= kMaxField; ++i) {
-        const char c = json[i];
-        if (c == '"')
-            return out;
-        if (c == '\\') {
-            if (++i >= json.size())
-                return std::nullopt;
-            switch (json[i]) {
-            case 'n':
-                out += '\n';
-                break;
-            case 'r':
-                out += '\r';
-                break;
-            case 't':
-                out += '\t';
-                break;
-            case '"':
-                out += '"';
-                break;
-            case '\\':
-                out += '\\';
-                break;
-            default:
-                out += json[i];
-                break;
-            }
-            continue;
-        }
-        out += c;
-    }
-    return std::nullopt; // unterminated or over-long
+    return fl::json::stringField(json, key, kMaxField);
 }
 
 std::string errorJson(std::string_view message) {
-    return "{\"error\": \"" + jsonEscape(message) + "\"}";
+    return "{\"error\": \"" + json::escape(message) + "\"}";
 }
 
 } // namespace fl::httpadmin

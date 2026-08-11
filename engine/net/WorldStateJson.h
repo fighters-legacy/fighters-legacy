@@ -3,6 +3,7 @@
 
 #include "net/MatchEventLog.h"
 #include "net/WorldState.h"
+#include "util/Json.h"
 
 #include <cstdio>
 #include <span>
@@ -25,64 +26,12 @@
 // UNLIKE MissionReport.h, this escapes strings. It carries chat lines, admin command text and
 // faction names, which are attacker-controlled or mod-controlled; emitting them raw would let a chat
 // line containing a quote break the document, which is a JSON-injection bug and not a cosmetic one.
+//
+// The escaper and the two writer helpers this file used to define were promoted to engine/util/Json.h
+// under #1080 -- they were shared correctly by all of fl-server already, which is what showed the
+// consolidation works, so they became the shared ones rather than one of two copies.
 
 namespace fl {
-
-// Escape for a JSON string literal: the two mandatory escapes plus the short forms, and \uXXXX for
-// anything else below 0x20. Bytes >= 0x20 pass through, so valid UTF-8 stays intact (the chat path
-// already sanitizes to BMP UTF-8 with control characters stripped; this is the second line).
-[[nodiscard]] inline std::string jsonEscape(std::string_view s) {
-    std::string out;
-    out.reserve(s.size() + 8);
-    for (const char c : s) {
-        switch (c) {
-        case '"':
-            out += "\\\"";
-            break;
-        case '\\':
-            out += "\\\\";
-            break;
-        case '\n':
-            out += "\\n";
-            break;
-        case '\r':
-            out += "\\r";
-            break;
-        case '\t':
-            out += "\\t";
-            break;
-        case '\b':
-            out += "\\b";
-            break;
-        case '\f':
-            out += "\\f";
-            break;
-        default:
-            if (static_cast<unsigned char>(c) < 0x20) {
-                char buf[8];
-                std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned>(static_cast<unsigned char>(c)));
-                out += buf;
-            } else {
-                out += c;
-            }
-        }
-    }
-    return out;
-}
-
-namespace detail {
-
-[[nodiscard]] inline std::string jsonNum(double v) {
-    char buf[64];
-    std::snprintf(buf, sizeof(buf), "%.6g", v);
-    return buf;
-}
-
-[[nodiscard]] inline std::string jsonStr(std::string_view s) {
-    return "\"" + jsonEscape(s) + "\"";
-}
-
-} // namespace detail
 
 // One entity as a compact single-line object — entity lists run to thousands of rows, and one line
 // per row keeps a snapshot readable in a terminal and diffable in a golden test.
@@ -92,10 +41,9 @@ namespace detail {
         ", \"faction\": " + std::to_string(e.factionIndex) + ", \"type\": " + std::to_string(e.typeIndex) +
         ", \"owner_peer\": " + std::to_string(e.ownerPeerId) + ", \"formation\": " + std::to_string(e.formationId) +
         ", \"category\": " + std::to_string(e.category) + ", \"damage_level\": " + std::to_string(e.damageLevel) +
-        ", \"flags\": " + std::to_string(e.flags) + ", \"pos\": [" + detail::jsonNum(e.pos[0]) + ", " +
-        detail::jsonNum(e.pos[1]) + ", " + detail::jsonNum(e.pos[2]) + "], \"vel\": [" + detail::jsonNum(e.vel[0]) +
-        ", " + detail::jsonNum(e.vel[1]) + ", " + detail::jsonNum(e.vel[2]) +
-        "], \"hp_frac\": " + detail::jsonNum(e.hpFrac) + " }";
+        ", \"flags\": " + std::to_string(e.flags) + ", \"pos\": [" + json::num(e.pos[0]) + ", " + json::num(e.pos[1]) +
+        ", " + json::num(e.pos[2]) + "], \"vel\": [" + json::num(e.vel[0]) + ", " + json::num(e.vel[1]) + ", " +
+        json::num(e.vel[2]) + "], \"hp_frac\": " + json::num(e.hpFrac) + " }";
     return s;
 }
 
@@ -105,15 +53,15 @@ namespace detail {
 }
 
 [[nodiscard]] inline std::string toJson(const WorldStateFaction& f) {
-    return "{ \"index\": " + std::to_string(f.factionIndex) + ", \"id\": " + detail::jsonStr(f.id) +
-           ", \"name\": " + detail::jsonStr(f.name) + ", \"alert_level\": " + std::to_string(f.alertLevel) + " }";
+    return "{ \"index\": " + std::to_string(f.factionIndex) + ", \"id\": " + json::str(f.id) +
+           ", \"name\": " + json::str(f.name) + ", \"alert_level\": " + std::to_string(f.alertLevel) + " }";
 }
 
 [[nodiscard]] inline std::string toJson(const MatchEvent& e) {
     std::string s =
         "{ \"seq\": " + std::to_string(e.seq) + ", \"tick\": " + std::to_string(e.tick) +
-        ", \"type\": " + detail::jsonStr(matchEventTypeName(e.type)) +
-        ", \"subject_idx\": " + std::to_string(e.subjectIdx) + ", \"subject_gen\": " + std::to_string(e.subjectGen) +
+        ", \"type\": " + json::str(matchEventTypeName(e.type)) + ", \"subject_idx\": " + std::to_string(e.subjectIdx) +
+        ", \"subject_gen\": " + std::to_string(e.subjectGen) +
         ", \"instigator_idx\": " + std::to_string(e.instigatorIdx) +
         ", \"instigator_gen\": " + std::to_string(e.instigatorGen) + ", \"actor\": " + std::to_string(e.actor) +
         ", \"target\": " + std::to_string(e.target) + ", \"faction\": " + std::to_string(e.factionIndex) +
@@ -122,7 +70,7 @@ namespace detail {
     // `text` is omitted rather than emitted empty: most record types never carry one, and a snapshot
     // of a busy match is mostly kills and spawns.
     if (!e.text.empty())
-        s += ", \"text\": " + detail::jsonStr(e.text);
+        s += ", \"text\": " + json::str(e.text);
     s += " }";
     return s;
 }
@@ -156,13 +104,13 @@ template <typename T, typename Fn>
     std::string s = pad + "{\n";
     s += in + "\"tick\": " + std::to_string(w.tick) + ",\n";
     s += in + "\"weather_preset\": " + std::to_string(w.weatherPreset) + ",\n";
-    s += in + "\"time_of_day_hours\": " + detail::jsonNum(w.timeOfDayHours) + ",\n";
-    s += in + "\"wind\": [" + detail::jsonNum(w.windX) + ", " + detail::jsonNum(w.windZ) + "],\n";
+    s += in + "\"time_of_day_hours\": " + json::num(w.timeOfDayHours) + ",\n";
+    s += in + "\"wind\": [" + json::num(w.windX) + ", " + json::num(w.windZ) + "],\n";
 
     s += in + "\"mission\": { \"active\": " + std::string(w.mission.active ? "true" : "false") +
-         ", \"name\": " + detail::jsonStr(w.mission.name) + ", \"outcome\": " + std::to_string(w.mission.outcome) +
+         ", \"name\": " + json::str(w.mission.name) + ", \"outcome\": " + std::to_string(w.mission.outcome) +
          ", \"triggers_fired\": " + std::to_string(w.mission.triggersFired) +
-         ", \"elapsed_seconds\": " + detail::jsonNum(w.mission.elapsedSeconds) + " },\n";
+         ", \"elapsed_seconds\": " + json::num(w.mission.elapsedSeconds) + " },\n";
 
     s += in +
          "\"factions\": " + detail::jsonArray(w.factions, in, [](const WorldStateFaction& f) { return toJson(f); }) +

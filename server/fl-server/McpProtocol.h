@@ -2,6 +2,7 @@
 #pragma once
 
 #include <IClock.h>
+#include <util/Json.h> // the promoted structural JSON reader (#1080)
 
 #include <chrono>
 #include <cstdint>
@@ -58,35 +59,20 @@ enum class Autonomy : uint8_t {
 // ---------------------------------------------------------------------------
 // A depth-aware JSON member scanner
 // ---------------------------------------------------------------------------
+// JSON reading
+// ---------------------------------------------------------------------------
 //
-// NOT a JSON parser, and deliberately not: the engine's standing answer (engine/perf/JsonScan.h,
-// fl::httpadmin) is that a full parser is a dependency this does not need. But MCP params are nested
-// one level (`params.arguments.command`), and httpadmin's flat `findKey` — a bare substring search —
-// would happily match a key inside a nested object or, worse, inside a STRING VALUE an attacker
-// controls. So this one tracks brace/bracket depth and skips over strings and their escapes, and
-// returns the raw value span at exactly one object level.
+// This layer's structural member scanner was PROMOTED to engine/util/Json.h under #1080 and is now the
+// engine's one JSON reader: `json::member`, `json::stringValue`, `json::intValue`, `json::boolValue`,
+// `json::isObject`. It was promoted rather than replaced because it was the rigorous one -- the four
+// other readers located a key with find("\"key\""), which matches a key nested inside a sub-object or
+// one that merely appears inside a string value.
 //
-// Fails closed everywhere: anything unexpected yields an empty span or nullopt, never a guess.
-
-// Raw value span for `key` at the top level of the object `obj` (which must start at its '{'), or
-// an empty span. The span covers the value only, with surrounding whitespace trimmed.
-[[nodiscard]] std::string_view objectMember(std::string_view obj, std::string_view key) noexcept;
-
-// Decode a raw span as a JSON string (unescaping), an integer, or a bool. Bounded: a string longer
-// than `maxLen` is refused rather than returned, so an over-long field cannot be used to make the
-// server allocate on demand.
-//
-// A caller that accepts a DOCUMENT (submit_mission's YAML) raises the bound and checks the raw span
-// itself first, so an over-long argument is reported as over-long instead of as absent — the two
-// caps disagreeing, and the misleading error that produced, is what the size test caught.
-inline constexpr std::size_t kMaxStringValue = 64 * 1024;
-[[nodiscard]] std::optional<std::string> stringValue(std::string_view span, std::size_t maxLen = kMaxStringValue);
-[[nodiscard]] std::optional<long long> intValue(std::string_view span) noexcept;
-[[nodiscard]] std::optional<bool> boolValue(std::string_view span) noexcept;
-
-// True when the span is a JSON object (`{...}`). Used to refuse `params` that is an array or scalar
-// before any member lookup pretends to succeed on it.
-[[nodiscard]] bool isObject(std::string_view span) noexcept;
+// The MCP-specific bound stays here: a caller that accepts a DOCUMENT (submit_mission's YAML) raises it
+// and checks the raw span itself first, so an over-long argument is reported as over-long instead of as
+// absent -- the two caps disagreeing, and the misleading error that produced, is what the size test
+// caught.
+inline constexpr std::size_t kMaxStringValue = json::kMaxStringValue;
 
 // ---------------------------------------------------------------------------
 // JSON-RPC 2.0 envelope

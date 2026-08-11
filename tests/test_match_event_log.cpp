@@ -247,15 +247,15 @@ TEST_CASE("MatchEventLog: the type vocabulary round-trips and gates untrusted or
 TEST_CASE("jsonEscape closes the injection a raw chat line would open", "[match_event_log][json]") {
     // MissionReport.h assumes safe input and says so; this document carries chat text and admin
     // commands, which a player controls.
-    CHECK(jsonEscape("plain") == "plain");
-    CHECK(jsonEscape("say \"hi\"") == "say \\\"hi\\\"");
-    CHECK(jsonEscape("back\\slash") == "back\\\\slash");
-    CHECK(jsonEscape("a\nb\tc\rd") == "a\\nb\\tc\\rd");
+    CHECK(json::escape("plain") == "plain");
+    CHECK(json::escape("say \"hi\"") == "say \\\"hi\\\"");
+    CHECK(json::escape("back\\slash") == "back\\\\slash");
+    CHECK(json::escape("a\nb\tc\rd") == "a\\nb\\tc\\rd");
     // Split literal on purpose: "\x01end" would greedily parse as the single hex escape \x1e.
-    CHECK(jsonEscape(std::string("ctl\x01"
-                                 "end")) == "ctl\\u0001end");
+    CHECK(json::escape(std::string("ctl\x01"
+                                   "end")) == "ctl\\u0001end");
     // A UTF-8 multibyte sequence passes through untouched.
-    CHECK(jsonEscape("caf\xc3\xa9") == "caf\xc3\xa9");
+    CHECK(json::escape("caf\xc3\xa9") == "caf\xc3\xa9");
 }
 
 TEST_CASE("match event JSON carries the cursor and escapes its text", "[match_event_log][json]") {
