@@ -12,8 +12,11 @@ MatchEventLog::MatchEventLog(std::size_t capacity) : m_capacity(capacity == 0 ? 
 }
 
 void MatchEventLog::append(MatchEvent ev) {
+    // Read before the lock: m_tick is independent of the ring, and the load is relaxed.
+    const uint64_t tick = m_tick.load(std::memory_order_relaxed);
     std::lock_guard<std::mutex> lk(m_mutex);
     ev.seq = m_nextSeq++;
+    ev.tick = tick;
     if (m_count == m_capacity)
         ++m_dropped; // overwriting the oldest retained record
     m_ring[m_head] = std::move(ev);

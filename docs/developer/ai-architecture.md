@@ -96,6 +96,13 @@ A structured, read-only, out-of-band surface:
 >   and `hasGapBefore`, so a consumer that fell behind learns it has a gap instead of receiving a
 >   partial history it believes is complete. `EntityEventType::Spawned` was added to raise the spawn
 >   half — before #600 a spawn was observable nowhere.
+> - **The log stamps `tick`, not the caller (#1076).** `WorldBroadcaster::onTick` advances the log's
+>   tick once per tick and `append()` reads it, overwriting anything the caller set. While it was the
+>   caller's field, two of three callers stamped it and the alert-level caller did not — so every
+>   airspace posture change was recorded at tick 0 in the `.flrep`, in `/events` and in this audit
+>   mirror, with no way for a reader to tell that from a genuine tick-0 event. The tick is an atomic,
+>   so the MCP audit path can append from an HTTP thread and get a value at most one tick stale;
+>   before, it copied in the ~1 Hz published-snapshot tick by hand. Exact ordering is `seq`.
 > - JSON lives in `engine/net/WorldStateJson.h`, hand-rolled in the `ServerTickReport` style so
 >   engine-net gains no JSON dependency. It **escapes strings**, unlike `MissionReport::toJson`, because
 >   it carries chat lines and admin commands.

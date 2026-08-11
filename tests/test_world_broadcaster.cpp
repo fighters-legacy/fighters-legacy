@@ -315,6 +315,40 @@ static void ackTick(fl::WorldBroadcaster& b, uint32_t peerId, uint64_t tick, uin
 // Tests
 // ---------------------------------------------------------------------------
 
+// The wiring behind #1076: the log stamps its own records, and this is the one place its tick
+// advances. Deleting that line would put the whole event stream back at tick 0 for anything appended
+// off the sim thread, so it gets a test rather than trust -- an event log whose timestamp silently
+// stops moving is exactly the failure this issue existed to end.
+TEST_CASE("WorldBroadcaster: onTick advances the match event log's tick (#1076)", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    CHECK(broadcaster.matchEventLog().tick() == 0u);
+
+    broadcaster.onTick(1.0 / 60.0, 41u);
+    CHECK(broadcaster.matchEventLog().tick() == 41u);
+
+    // An append with no tick of its own lands on the tick that is current, which is the AlertLevel
+    // caller's exact shape.
+    fl::MatchEvent alert;
+    alert.type = fl::MatchEventType::AlertLevel;
+    alert.factionIndex = 1;
+    broadcaster.matchEventLog().append(std::move(alert));
+
+    broadcaster.onTick(1.0 / 60.0, 42u);
+    CHECK(broadcaster.matchEventLog().tick() == 42u);
+
+    const auto events = broadcaster.matchEventLog().since(0);
+    const auto it = std::find_if(events.begin(), events.end(),
+                                 [](const fl::MatchEvent& e) { return e.type == fl::MatchEventType::AlertLevel; });
+    REQUIRE(it != events.end());
+    CHECK(it->tick == 41u);
+}
+
 TEST_CASE("WorldBroadcaster: onTick broadcasts WorldSnapshot for N entities", "[world_broadcaster]") {
     MockLogger logger;
     MockNetwork net;

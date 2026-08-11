@@ -153,7 +153,7 @@ Within a tick:
 | `recordCount` | `u16` | Entity records following |
 | `eventCount` | `u16` | Match-event records following |
 | entity records | — | `SnapshotCodec` `QuantEntity` records, exactly the wire encoding |
-| event records | — | `MatchEventLog` records (#600) — kills, spawns, chat, admin actions, alert-level changes |
+| event records | — | `MatchEventLog` records (#600) — kills, spawns, chat, admin actions, alert-level changes. Each carries the tick `MatchEventLog::append` stamped (#1076), not one its caller supplied |
 
 **A keyframe tick is a tick whose entity records are all `full`.** `SnapshotCodec` has no separate
 keyframe concept — full-vs-delta is caller policy expressed by a per-record presence bit — so a replay
