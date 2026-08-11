@@ -96,6 +96,15 @@ A structured, read-only, out-of-band surface:
 >   and `hasGapBefore`, so a consumer that fell behind learns it has a gap instead of receiving a
 >   partial history it believes is complete. `EntityEventType::Spawned` was added to raise the spawn
 >   half — before #600 a spawn was observable nowhere.
+> - **`MatchEventLog` is the match event BUS (#1077), not a recorder alongside the hooks.**
+>   `subscribe()` before the sim loop starts; each subscriber is notified synchronously with the stored
+>   record, always on the sim thread. The kills-only match sink, the participant sink and the
+>   chat-intent hook were `WorldBroadcaster` setters and are subscribers now; those setters are gone.
+>   `recordParticipant` used to fire a sink AND append a Join/Leave — every participant event wired
+>   twice, and every future event type would have been too. Vetoes (`ChatModerationHook`,
+>   `TeamSwitchGuard`) and RPC (`setAdminDispatch`) stay off the bus deliberately: an observer cannot
+>   refuse anything and a bus has nowhere to put a reply. `setReplaySink` stays a dedicated tap — a
+>   whole-world quantized stream at 60 Hz is not an event.
 > - **The log stamps `tick`, not the caller (#1076).** `WorldBroadcaster::onTick` advances the log's
 >   tick once per tick and `append()` reads it, overwriting anything the caller set. While it was the
 >   caller's field, two of three callers stamped it and the alert-level caller did not — so every

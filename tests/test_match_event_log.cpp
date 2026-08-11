@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "net/MatchEventLog.h"
 #include "net/WorldStateJson.h"
+#include "util/SimThreadOwnership.h"
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 using namespace fl;
@@ -82,6 +84,137 @@ TEST_CASE("MatchEventLog: the tick starts at 0 and each append takes the tick cu
     CHECK(all[0].tick == 0);
     CHECK(all[1].tick == 10);
     CHECK(all[2].tick == 11);
+}
+
+// ── the bus (#1077) ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("MatchEventLog: subscribers see every record, in append order, already stamped", "[match_event_log][bus]") {
+    MatchEventLog log(16);
+    std::vector<std::pair<uint64_t, uint64_t>> seen; // (seq, tick)
+    std::vector<MatchEventType> types;
+    log.subscribe([&](const MatchEvent& e) {
+        seen.emplace_back(e.seq, e.tick);
+        types.push_back(e.type);
+    });
+
+    log.setTick(7);
+    log.append(ev(MatchEventType::Join));
+    log.append(ev(MatchEventType::Kill));
+    log.setTick(8);
+    log.append(ev(MatchEventType::Leave));
+
+    REQUIRE(seen.size() == 3);
+    // A subscriber sees exactly what /events and the .flrep will show -- seq and tick already stamped,
+    // which is only true because the log stamps them itself (#1076).
+    CHECK(seen[0] == std::pair<uint64_t, uint64_t>{1, 7});
+    CHECK(seen[1] == std::pair<uint64_t, uint64_t>{2, 7});
+    CHECK(seen[2] == std::pair<uint64_t, uint64_t>{3, 8});
+    CHECK(types == std::vector<MatchEventType>{MatchEventType::Join, MatchEventType::Kill, MatchEventType::Leave});
+}
+
+TEST_CASE("MatchEventLog: subscribers are notified in registration order", "[match_event_log][bus]") {
+    MatchEventLog log(16);
+    std::string order;
+    log.subscribe([&](const MatchEvent&) { order += "a"; });
+    log.subscribe([&](const MatchEvent&) { order += "b"; });
+    log.subscribe([&](const MatchEvent&) { order += "c"; });
+    log.append(ev(MatchEventType::Spawn));
+    log.append(ev(MatchEventType::Spawn));
+    CHECK(order == "abcabc");
+}
+
+TEST_CASE("MatchEventLog: the subscriber list freezes when the sim starts", "[match_event_log][bus]") {
+    MatchEventLog log(16);
+    int early = 0;
+    log.subscribe([&](const MatchEvent&) { ++early; });
+
+    // Server init appends before the loop runs -- a mission spawn is a Spawn record -- and that must
+    // NOT close the list: fl-server registers the chat-intent subscriber after the mission loads.
+    log.append(ev(MatchEventType::Spawn));
+    CHECK(log.subscriberCount() == 1);
+    int late = 0;
+    log.subscribe([&](const MatchEvent&) { ++late; });
+    CHECK(log.subscriberCount() == 2);
+
+    log.setTick(1); // the sim is running: the list is closed from here
+    log.append(ev(MatchEventType::Kill));
+    CHECK(early == 2);
+    CHECK(late == 1);
+}
+
+TEST_CASE("MatchEventLog: a subscriber may read the log it is being notified from", "[match_event_log][bus]") {
+    // The deadlock this guards against: notify() must not hold the ring's mutex, because the natural
+    // thing for a subscriber to do is ask the log a question.
+    MatchEventLog log(16);
+    std::vector<std::size_t> sizes;
+    log.subscribe([&](const MatchEvent& e) {
+        sizes.push_back(log.size());
+        CHECK(log.nextSeq() == e.seq + 1);
+        (void)log.tail(4);
+    });
+    log.append(ev(MatchEventType::Spawn));
+    log.append(ev(MatchEventType::Spawn));
+    CHECK(sizes == std::vector<std::size_t>{1, 2});
+}
+
+TEST_CASE("MatchEventLog: an off-thread append notifies on the sim thread at the next tick", "[match_event_log][bus]") {
+    // The MCP audit path appends from an HTTP thread. MatchController::recordKill is sim-thread-only, so
+    // a subscriber must never be called on the appending thread -- the record is parked and the next
+    // setTick() delivers it, which is the one sim-thread call the log already gets every tick.
+    MatchEventLog log(16);
+    std::vector<std::thread::id> notifiedOn;
+    std::vector<uint64_t> seqs;
+    log.subscribe([&](const MatchEvent& e) {
+        notifiedOn.push_back(std::this_thread::get_id());
+        seqs.push_back(e.seq);
+    });
+
+    std::atomic<bool> appended{false};
+    std::thread sim([&] {
+        SimThreadOwnership::claim();
+        log.setTick(1);
+        log.append(ev(MatchEventType::Kill)); // seq 1, inline
+
+        // An HTTP thread appends while the sim is between ticks.
+        std::thread http([&] {
+            log.append(ev(MatchEventType::AgentAction)); // seq 2, parked
+            appended = true;
+        });
+        http.join();
+        CHECK(seqs.size() == 1); // not delivered yet
+
+        log.setTick(2);                       // drains it, then this tick's own events follow
+        log.append(ev(MatchEventType::Chat)); // seq 3
+        SimThreadOwnership::release();
+    });
+    sim.join();
+
+    CHECK(appended.load());
+    REQUIRE(seqs.size() == 3);
+    CHECK(seqs == std::vector<uint64_t>{1, 2, 3}); // seq order preserved across the deferral
+    // Every notification arrived on ONE thread: the sim thread.
+    REQUIRE(notifiedOn.size() == 3);
+    CHECK(notifiedOn[0] == notifiedOn[1]);
+    CHECK(notifiedOn[1] == notifiedOn[2]);
+    CHECK(notifiedOn[0] != std::this_thread::get_id());
+    // The RECORD was retained immediately either way -- only the notification waited.
+    CHECK(log.size() == 3);
+    CHECK(log.deferredNotifyDropped() == 0);
+}
+
+TEST_CASE("MatchEventLog: with no subscribers an off-thread append parks nothing", "[match_event_log][bus]") {
+    MatchEventLog log(16);
+    std::thread sim([&] {
+        SimThreadOwnership::claim();
+        log.setTick(1);
+        std::thread http([&] { log.append(ev(MatchEventType::AgentAction)); });
+        http.join();
+        log.setTick(2);
+        SimThreadOwnership::release();
+    });
+    sim.join();
+    CHECK(log.size() == 1);
+    CHECK(log.deferredNotifyDropped() == 0);
 }
 
 // ── ring semantics ──────────────────────────────────────────────────────────────────────────────

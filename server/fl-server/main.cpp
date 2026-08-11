@@ -1873,14 +1873,40 @@ int main(int argc, char** argv) {
         // (search "matchController.setOnRotate" below).
 
         // Feed the controller from the world: kills score, joins/leaves track participants.
-        broadcaster.setMatchEventSink([&matchController](uint32_t killer, uint32_t victim, bool sameFaction) {
-            matchController.recordKill(killer, victim, sameFaction);
-        });
-        broadcaster.setMatchParticipantSink([&matchController](uint32_t id, uint16_t faction, bool isBot, bool joined) {
-            if (joined)
-                matchController.participantJoined(id, faction, isBot);
-            else
-                matchController.participantLeft(id);
+        // The scoreboard reads the match event BUS (#1077), not two bespoke sinks. Kills and
+        // join/leave were each wired twice before -- a sink call AND a log append -- which is the
+        // divergence MatchEventLog's own header predicted and #1076's tick bug was the first instance
+        // of. One subscriber, one write path.
+        //
+        // Notification is synchronous on the sim thread from the damage path, which is what keeps the
+        // team-kill test exact: the victim and the killer are both still live entities at that moment,
+        // so their factions are there to read. A deferred or queued feed could not do this.
+        broadcaster.matchEventLog().subscribe([&matchController, &entityManager](const fl::MatchEvent& ev) {
+            switch (ev.type) {
+            case fl::MatchEventType::Kill: {
+                if (ev.actor == fl::MatchEvent::kNoParticipant && ev.target == fl::MatchEvent::kNoParticipant)
+                    return; // neither side is a scoreboard participant (AI vs AI)
+                bool sameFaction = false;
+                const fl::EntityId victim{ev.subjectIdx, ev.subjectGen};
+                if (ev.instigatorIdx != fl::MatchEvent::kNoEntityIdx) {
+                    const fl::EntityId killer{ev.instigatorIdx, ev.instigatorGen};
+                    if (const fl::EntityState* v = entityManager.get(victim))
+                        if (const fl::EntityState* k = entityManager.get(killer))
+                            sameFaction = v->factionIndex != 0 && v->factionIndex == k->factionIndex;
+                }
+                matchController.recordKill(ev.actor, ev.target, sameFaction);
+                break;
+            }
+            case fl::MatchEventType::Join:
+                // `value` carries isBot -- see the field comment in MatchEventLog.h.
+                matchController.participantJoined(ev.actor, ev.factionIndex, ev.value != 0);
+                break;
+            case fl::MatchEventType::Leave:
+                matchController.participantLeft(ev.actor);
+                break;
+            default:
+                break;
+            }
         });
 
         // AI bot backfill (#87): spawn server-side AI participants up to the fill target. Bots are not
@@ -2656,62 +2682,69 @@ int main(int argc, char** argv) {
         auto budgets = std::make_shared<std::unordered_map<uint32_t, IntentBudget>>();
         const std::string systemPrompt = fl::ai::buildIntentSystemPrompt();
 
-        broadcaster.setChatIntentHook(
-            [&, budgets, systemPrompt](uint32_t peerId, uint8_t /*channel*/, std::string_view text) {
-                // Cheap local gate first: most team chat is not addressed to the flight, and asking a
-                // model to classify every word said in a match would be both expensive and pointless.
-                if (!fl::ai::looksLikeWingmanAddress(text))
-                    return;
+        // A bus subscriber (#1077), not a hook: this tier OBSERVES team chat. The Chat record is
+        // appended after the moderation veto, so a suppressed line still never reaches a model, and the
+        // channel filter lives here -- with the policy -- rather than inside the broadcaster.
+        broadcaster.matchEventLog().subscribe([&, budgets, systemPrompt](const fl::MatchEvent& ev) {
+            if (ev.type != fl::MatchEventType::Chat ||
+                static_cast<fl::ChatChannel>(ev.channel) != fl::ChatChannel::Team)
+                return;
+            const uint32_t peerId = ev.actor;
+            const std::string_view text = ev.text;
+            // Cheap local gate first: most team chat is not addressed to the flight, and asking a
+            // model to classify every word said in a match would be both expensive and pointless.
+            if (!fl::ai::looksLikeWingmanAddress(text))
+                return;
 
-                auto& b = (*budgets)[peerId];
-                const auto now = std::chrono::steady_clock::now();
-                if (now - b.windowStart >= std::chrono::minutes(1)) {
-                    b.windowStart = now;
-                    b.count = 0;
-                    b.warned = false;
+            auto& b = (*budgets)[peerId];
+            const auto now = std::chrono::steady_clock::now();
+            if (now - b.windowStart >= std::chrono::minutes(1)) {
+                b.windowStart = now;
+                b.count = 0;
+                b.warned = false;
+            }
+            if (cfg.chatIntent.rateLimitPerMin > 0 && ++b.count > cfg.chatIntent.rateLimitPerMin) {
+                if (!b.warned && cfg.chatIntent.notifyOnDecline) {
+                    b.warned = true; // once per window; a flood must not be amplified back at the sender
+                    broadcaster.sendNoticeTo(peerId, "Voice/chat orders are rate limited; use the radio menu.");
                 }
-                if (cfg.chatIntent.rateLimitPerMin > 0 && ++b.count > cfg.chatIntent.rateLimitPerMin) {
-                    if (!b.warned && cfg.chatIntent.notifyOnDecline) {
-                        b.warned = true; // once per window; a flood must not be amplified back at the sender
-                        broadcaster.sendNoticeTo(peerId, "Voice/chat orders are rate limited; use the radio menu.");
-                    }
-                    return;
-                }
+                return;
+            }
 
-                fl::WorldAiContext ctx;
-                ctx.snapshot = broadcaster.worldStatePublisher().get();
-                ctx.utterance = std::string(text);
-                ctx.operatorHint = systemPrompt;
+            fl::WorldAiContext ctx;
+            ctx.snapshot = broadcaster.worldStatePublisher().get();
+            ctx.utterance = std::string(text);
+            ctx.operatorHint = systemPrompt;
 
-                const fl::WorldAiRequestId id =
-                    aiProvider->requestIntent(ctx, [&, peerId](std::string name, std::string error) {
-                        // Fires on the MAIN thread (provider->service()), so nothing here may touch the sim
-                        // directly. Validate here — pure — then hand the ordinal to the sim thread.
-                        if (!error.empty())
-                            return;
-                        const fl::ai::IntentResult r = fl::ai::validateIntentResponse(name);
-                        if (!r.command) {
-                            if (cfg.chatIntent.notifyOnDecline && r.rejection != fl::ai::IntentRejection::Declined) {
-                                // A DECLINE is the model behaving correctly and needs no apology; a malformed
-                                // or out-of-grammar answer is a backend problem the operator should see.
-                                char nbuf[128];
-                                std::snprintf(nbuf, sizeof(nbuf), "intent mapping rejected (%.*s)",
-                                              static_cast<int>(fl::ai::intentRejectionName(r.rejection).size()),
-                                              fl::ai::intentRejectionName(r.rejection).data());
-                                log->log(LogLevel::Warn, __FILE__, __LINE__, nbuf);
-                            }
-                            return;
+            const fl::WorldAiRequestId id =
+                aiProvider->requestIntent(ctx, [&, peerId](std::string name, std::string error) {
+                    // Fires on the MAIN thread (provider->service()), so nothing here may touch the sim
+                    // directly. Validate here — pure — then hand the ordinal to the sim thread.
+                    if (!error.empty())
+                        return;
+                    const fl::ai::IntentResult r = fl::ai::validateIntentResponse(name);
+                    if (!r.command) {
+                        if (cfg.chatIntent.notifyOnDecline && r.rejection != fl::ai::IntentRejection::Declined) {
+                            // A DECLINE is the model behaving correctly and needs no apology; a malformed
+                            // or out-of-grammar answer is a backend problem the operator should see.
+                            char nbuf[128];
+                            std::snprintf(nbuf, sizeof(nbuf), "intent mapping rejected (%.*s)",
+                                          static_cast<int>(fl::ai::intentRejectionName(r.rejection).size()),
+                                          fl::ai::intentRejectionName(r.rejection).data());
+                            log->log(LogLevel::Warn, __FILE__, __LINE__, nbuf);
                         }
-                        const auto ordinal = static_cast<uint8_t>(*r.command);
-                        gameLoop.enqueueSimCallback([&broadcaster, peerId, ordinal] {
-                            // THE SAME call the wire path makes. Authority, target designation, dispatch and
-                            // the ack to the commander are all the scripted path's, unchanged.
-                            (void)broadcaster.issueWingmanOrder(peerId, ordinal);
-                        });
+                        return;
+                    }
+                    const auto ordinal = static_cast<uint8_t>(*r.command);
+                    gameLoop.enqueueSimCallback([&broadcaster, peerId, ordinal] {
+                        // THE SAME call the wire path makes. Authority, target designation, dispatch and
+                        // the ack to the commander are all the scripted path's, unchanged.
+                        (void)broadcaster.issueWingmanOrder(peerId, ordinal);
                     });
-                if (id == 0 && cfg.chatIntent.notifyOnDecline)
-                    broadcaster.sendNoticeTo(peerId, "Voice/chat orders are unavailable; use the radio menu.");
-            });
+                });
+            if (id == 0 && cfg.chatIntent.notifyOnDecline)
+                broadcaster.sendNoticeTo(peerId, "Voice/chat orders are unavailable; use the radio menu.");
+        });
         log->log(LogLevel::Info, __FILE__, __LINE__,
                  "ai.chat_intent: free-text wingman commands enabled over team chat");
     } else if (cfg.chatIntent.enabled) {
