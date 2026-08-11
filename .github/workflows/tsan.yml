@@ -42,7 +42,7 @@ jobs:
       # parallel-tick test. These do NOT link SDL3/OpenAL/ENet/Vulkan, so the TSan run stays
       # focused on our parallel code rather than third-party (uninstrumented) library threads.
       - name: Build TSan targets
-        run: cmake --build --preset tsan --target test_job_system test_world_broadcaster test_honest_sensing test_crew_frame test_turret_gunner test_world_state test_match_event_log
+        run: cmake --build --preset tsan --target test_job_system test_world_broadcaster test_honest_sensing test_crew_frame test_turret_gunner test_world_state test_match_event_log test_faction_registry
 
       - name: Run job-system tests under TSan
         run: ./build/tsan/tests/test_job_system
@@ -55,6 +55,16 @@ jobs:
       # World-state + match event log (#600): the sim thread publishes and appends while REST/MCP
       # read from their own threads, so the publication handoff and the log's lock are exactly the
       # kind of thing this job exists to check. Both link only engine-net (no SDL/ENet/Vulkan).
+      # FactionRegistry (#1094): three tiers in one class -- load-once state read lock-free, an
+      # UNLOCKED sim-thread-only relationship matrix, and mutex-guarded alert levels written from the
+      # network thread while the sim reads them. The tiers are asserted in debug builds, but an
+      # assertion only fires where a test drives the violation; TSan is what says the LEGAL concurrent
+      # path (tier 3) is actually race-free. engine-world only, so no third-party threads.
+      - name: Run faction-registry tests under TSan
+        run: ./build/tsan/tests/test_faction_registry
+        env:
+          TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1:suppressions=${{ github.workspace }}/tools/tsan.supp
+
       - name: Run world-state + match-event-log tests under TSan
         run: |
           ./build/tsan/tests/test_world_state

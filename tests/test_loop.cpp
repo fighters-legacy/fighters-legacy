@@ -4,6 +4,7 @@
 #include "loop/TimeController.h"
 #include "loop/TimeRate.h"
 #include "mock_hal.h"
+#include "util/SimThreadOwnership.h"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -237,6 +238,40 @@ TEST_CASE("GameLoop: start/stop without sleep logs started and stopped", "[gl]")
     }
     REQUIRE(logger.hasMessage(LogLevel::Info, "game loop started"));
     REQUIRE(logger.hasMessage(LogLevel::Info, "game loop stopped"));
+}
+
+// #1094: the sim thread publishes its identity, so a class with a sim-thread-only tier can assert on
+// it without knowing about GameLoop. This is the wiring test for that: if claim() were dropped, every
+// such assertion in the engine would pass unconditionally and the whole guard would silently become a
+// no-op. onTick() is where the assertion actually has to hold, so it is checked from inside one.
+struct OwnershipProbeSim : ISimUpdate {
+    std::atomic<bool> sawOwnership{false};
+    std::atomic<bool> sawActive{false};
+    std::atomic<int> ticks{0};
+    void onTick(double /*dt*/, uint64_t) override {
+        sawOwnership = SimThreadOwnership::onSimThread();
+        sawActive = SimThreadOwnership::simThreadActive();
+        ++ticks;
+    }
+};
+
+TEST_CASE("GameLoop: the sim thread claims ownership for the duration of the run (#1094)", "[gl]") {
+    OwnershipProbeSim sim;
+    MockLogger logger;
+
+    CHECK_FALSE(SimThreadOwnership::simThreadActive()); // the main thread never owns the sim tier
+
+    GameLoop gl(sim, logger);
+    gl.start();
+    std::this_thread::sleep_for(200ms);
+    gl.stop();
+
+    REQUIRE(sim.ticks.load() >= 1);
+    CHECK(sim.sawOwnership.load()); // onTick runs ON the claimed thread
+    CHECK(sim.sawActive.load());
+    // Released when the thread exits, so post-stop teardown is single-threaded again -- which is what
+    // lets a destructor touch a sim-thread-only member without tripping an assertion.
+    CHECK_FALSE(SimThreadOwnership::simThreadActive());
 }
 
 TEST_CASE("GameLoop: onTick fires at least once after 50ms at Normal rate", "[gl]") {

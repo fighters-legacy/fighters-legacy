@@ -213,6 +213,28 @@ OpenAL Soft instead.
   `ldd` output of their own, which is exactly why the configure-time rules name the product libraries
   directly rather than relying on this step to catch a bad edge.
 
+## Thread-Ownership Assertions
+
+Several engine classes document a threading contract in a header comment and enforce it with nothing.
+`engine/util/SimThreadOwnership.h` (#1094) is the mechanism those comments now read against:
+`GameLoop`'s sim thread claims process-wide ownership as its first act and releases it as its last, and
+any class with a sim-thread-only member asserts `onSimThreadOrSingleThreaded()` in debug builds.
+Header-only and stdlib-only, so a consumer gains no link edge — `engine-world` must not depend on
+`engine-loop` to check a thread id. Same shape as `layering.cmake`: an invariant held by a comment gets
+a mechanism that fails loudly, and the mechanism is what makes the comment trustworthy.
+
+Three states, and "no sim thread" is not "wrong thread": before `start()` and after `stop()` the process
+is single-threaded and every tier is writable, which is what `load()`-style methods depend on.
+
+**It corrected the first contract it was pointed at.** `FactionRegistry` documented its relationship
+matrix as "sim-thread-only, no lock"; the first debug `fl-server` run under an assertion written from
+that comment aborted on tick 2, inside a `JobSystem` worker in `SensorSystem::evaluateObserver`. The
+parallel per-observer sensor pass reads relationships from **every worker thread** through the
+`hostile(registry, a, b)` seam, and that is sound rather than racy: `JobSystem::dispatch` is a blocking
+`parallel_for` in which the owner thread participates and then waits, so no write can be in flight
+while workers read. The corrected contract asserts **writes** only. Reads assert nothing, and a test
+pins that, because an assertion there would condemn the design instead of a bug.
+
 ## Locked Architectural Decisions
 
 These decisions are finalized and not subject to revision without an RFC — or, during primary
