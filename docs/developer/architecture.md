@@ -414,6 +414,17 @@ lesson. Ground handling (#700: wheel brakes, rolling resistance, nosewheel steer
 prerequisite work — the landing half of ATC is impossible without a lander that can stop on the
 runway. See #700–#706.
 
+**2026-08-11 — the facility owns the flight lifecycle end to end (#1149).** The runway is a mutex and
+arrivals win it over departures, so whoever retires a flight decides whether the field ever reopens.
+That is the facility, not the caller: an arrival leaves the sequence exactly three ways — it lands
+(down and stopped → `ClearanceState::Landed`, retired by `update()` and told to taxi to parking), its
+entity dies, or the pilot cancels. Having the AI arrival composition report the landing instead was
+rejected, because a human who lands and parks would then hold the runway for the rest of the session
+unless every client remembered to do the same. `Landed` and `Departed` are **terminal**: they persist
+so a caller polling `clearanceState()` can act on them, and a fresh `requestTakeoff()` clears them for
+the turnaround. The occupancy timeout stays a pure deadlock backstop — it frees the runway but never
+claims a landing the aircraft did not make.
+
 **2026-07-18 — Multi-crew aircraft: seats unified into `ControlledEntity` (Epic #966).** Aircraft
 gain 2+ crew positions ("seats") alongside the single-pilot model — a bomber with a pilot and
 defensive gunners, spawned with every seat bot-filled, any non-human seat human-joinable. The core

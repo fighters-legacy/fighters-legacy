@@ -24,8 +24,13 @@ enum class ClearanceState : uint8_t {
     Pattern,        // in the pattern, awaiting a landing clearance (or told to go around)
     ClearedToLand,  // cleared to land
     GoAround,       // wave-off: runway not available at short final
-    Landed,         // on the ground after a landing, clear of the runway
+    Landed,         // down, stopped and retired from the arrival sequence (terminal; see below)
 };
+
+// Landed and Departed are TERMINAL: the facility has finished with the flight and stops sequencing
+// it. They persist until the entity dies or the pilot makes a new request, so a caller polling
+// clearanceState() can actually observe them — unlike the live states, which the FSM overwrites as
+// the flight progresses. A new requestTakeoff() clears a terminal state (#1149).
 
 [[nodiscard]] const char* clearanceStateName(ClearanceState s) noexcept;
 
@@ -48,6 +53,7 @@ enum class AtcPhrase : uint8_t {
     ContactApproach, // "radar contact, continue inbound" (inbound acknowledgement)
     Roger,           // "roger" (generic acknowledgement — request received / cancelled)
     Unable,          // "unable" (request refused — no runway / not sequenced / no ATC)
+    TaxiToParking,   // "clear of the runway, taxi to parking" (the landing is complete)
 };
 
 [[nodiscard]] const char* atcPhraseVoiceKey(AtcPhrase p) noexcept;

@@ -24,6 +24,12 @@ namespace fl::atc {
 // one ATC step and appends any radio lines to `outbox`. Player flights participate identically —
 // touchdown/occupancy is read from EntityState, never from who is flying.
 //
+// The facility owns the whole flight lifecycle, entry to exit. An arrival leaves the sequence in
+// exactly three ways: it lands (down and stopped -> ClearanceState::Landed, retired by update()), its
+// entity dies (pruned by update()), or the pilot cancels (removeFlight). Nothing outside needs to
+// tell the facility that a landing finished — a client that forgot to would hold the runway forever,
+// because arrivals win it over departures (#1149).
+//
 // The pose is supplied through a std::function so a static airport passes a constant field pose while
 // a moving carrier entity (the #38 seam) supplies a live one, with no change to this logic.
 class AtcFacility {

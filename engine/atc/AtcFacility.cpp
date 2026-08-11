@@ -63,8 +63,11 @@ void AtcFacility::requestTakeoff(fl::EntityId flight) {
         return;
     if (std::find(m_departures.begin(), m_departures.end(), flight) == m_departures.end() && m_occupant != flight)
         m_departures.push_back(flight);
-    // Do not downgrade a flight that is already cleared/rolling.
-    if (clearanceState(flight) == ClearanceState::None)
+    // Do not downgrade a flight that is already cleared/rolling. A TERMINAL state is not a live
+    // clearance, though: a flight that has landed (or departed and come back) is asking for a new
+    // one, and would otherwise sit in the queue still reading `landed` (#1149).
+    const ClearanceState cur = clearanceState(flight);
+    if (cur == ClearanceState::None || cur == ClearanceState::Landed || cur == ClearanceState::Departed)
         setClearance(flight, ClearanceState::HoldShort);
 }
 
@@ -134,10 +137,19 @@ void AtcFacility::update(const fl::EntityManager& em, uint64_t tick, std::vector
             stopped = glm::length(v) < 3.f && aglOf(s->transform.pos) < 5.0;
         }
         if (stopped || tick - m_occSinceTick > kOccTimeoutTicks) {
-            if (s)
-                setClearance(m_occupant, ClearanceState::Landed);
+            const fl::EntityId lander = m_occupant;
             m_occupant = {};
             m_occKind = OccupancyKind::None;
+            // Down and stopped: the landing is COMPLETE, so retire the flight from the arrival
+            // sequence. Without this it is still the nearest arrival, so step 4 below re-clears it
+            // to land and re-takes the runway on this very tick — for the rest of the session, since
+            // arrivals beat departures (#1149). The timeout arm deliberately does NOT retire: it is
+            // only a deadlock backstop for the runway, and a slow long final is still an arrival.
+            if (stopped) {
+                setClearance(lander, ClearanceState::Landed);
+                m_arrivals.erase(std::remove(m_arrivals.begin(), m_arrivals.end(), lander), m_arrivals.end());
+                outbox.push_back(makeTransmission(AtcPhrase::TaxiToParking, m_speaker, lander));
+            }
         }
     }
 
