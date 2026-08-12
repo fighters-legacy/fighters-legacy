@@ -33,12 +33,12 @@ struct NullLogger : public ILogger {
 TEST_CASE("CommandRegistry dispatch", "[console][registry]") {
     CommandRegistry reg;
     reg.registerCommand("greet", "greet command", [](std::span<std::string_view>) { return std::string("hello"); });
-    REQUIRE(reg.dispatch("greet") == "hello");
+    REQUIRE(reg.dispatch("greet", systemIssuer()) == "hello");
 }
 
 TEST_CASE("CommandRegistry unknown command", "[console][registry]") {
     CommandRegistry reg;
-    std::string result = reg.dispatch("nope");
+    std::string result = reg.dispatch("nope", systemIssuer());
     REQUIRE(result.find("nope") != std::string::npos);
     REQUIRE(result.find("unknown command") != std::string::npos);
 }
@@ -54,8 +54,8 @@ TEST_CASE("CommandRegistry help lists commands", "[console][registry]") {
 
 TEST_CASE("CommandRegistry empty input", "[console][registry]") {
     CommandRegistry reg;
-    REQUIRE(reg.dispatch("") == "");
-    REQUIRE(reg.dispatch("   ") == "");
+    REQUIRE(reg.dispatch("", systemIssuer()) == "");
+    REQUIRE(reg.dispatch("   ", systemIssuer()) == "");
 }
 
 TEST_CASE("CommandRegistry multi-space tokenization", "[console][registry]") {
@@ -65,7 +65,7 @@ TEST_CASE("CommandRegistry multi-space tokenization", "[console][registry]") {
         captured.assign(args.begin(), args.end());
         return std::string{};
     });
-    (void)reg.dispatch("cmd  arg1   arg2");
+    (void)reg.dispatch("cmd  arg1   arg2", systemIssuer());
     REQUIRE(captured.size() == 2);
     REQUIRE(captured[0] == "arg1");
     REQUIRE(captured[1] == "arg2");
@@ -81,7 +81,7 @@ TEST_CASE("CommandRegistry handler receives correct args", "[console][registry]"
         }
         return std::string{};
     });
-    (void)reg.dispatch("add 3 4");
+    (void)reg.dispatch("add 3 4", systemIssuer());
     REQUIRE(got0 == "3");
     REQUIRE(got1 == "4");
 }
@@ -424,7 +424,7 @@ TEST_CASE("ConsoleCommands types command lists registered types", "[console][com
     ctx.typeRegistry = &reg;
     registerConsoleCommands(cmds, ctx);
 
-    std::string out = cmds.dispatch("types");
+    std::string out = cmds.dispatch("types", systemIssuer());
     REQUIRE(out.find("test:alpha") != std::string::npos);
     REQUIRE(out.find("test:beta") != std::string::npos);
 }
@@ -454,7 +454,7 @@ TEST_CASE("ConsoleCommands entities command lists snapshot entries", "[console][
     ctx.renderBridge = &bridge;
     registerConsoleCommands(cmds, ctx);
 
-    std::string out = cmds.dispatch("entities");
+    std::string out = cmds.dispatch("entities", systemIssuer());
     REQUIRE(out.find("test:ship") != std::string::npos);
     REQUIRE(out.find("3/1") != std::string::npos);
 }
@@ -467,7 +467,7 @@ TEST_CASE("ConsoleCommands types with null registry returns error", "[console][c
     CommandRegistry cmds;
     CommandContext ctx{}; // typeRegistry = nullptr
     registerConsoleCommands(cmds, ctx);
-    std::string out = cmds.dispatch("types");
+    std::string out = cmds.dispatch("types", systemIssuer());
     REQUIRE(out.find("no type registry") != std::string::npos);
 }
 
@@ -475,7 +475,7 @@ TEST_CASE("ConsoleCommands entities with null bridge returns error", "[console][
     CommandRegistry cmds;
     CommandContext ctx{}; // renderBridge = nullptr
     registerConsoleCommands(cmds, ctx);
-    REQUIRE(cmds.dispatch("entities").find("no render bridge") != std::string::npos);
+    REQUIRE(cmds.dispatch("entities", systemIssuer()).find("no render bridge") != std::string::npos);
 }
 
 TEST_CASE("ConsoleCommands entities with no snapshot returns message", "[console][commands]") {
@@ -484,7 +484,7 @@ TEST_CASE("ConsoleCommands entities with no snapshot returns message", "[console
     CommandContext ctx{};
     ctx.renderBridge = &bridge;
     registerConsoleCommands(cmds, ctx);
-    REQUIRE(cmds.dispatch("entities").find("no snapshot") != std::string::npos);
+    REQUIRE(cmds.dispatch("entities", systemIssuer()).find("no snapshot") != std::string::npos);
 }
 
 TEST_CASE("ConsoleCommands entities with empty snapshot returns message", "[console][commands]") {
@@ -499,22 +499,22 @@ TEST_CASE("ConsoleCommands entities with empty snapshot returns message", "[cons
     CommandContext ctx{};
     ctx.renderBridge = &bridge;
     registerConsoleCommands(cmds, ctx);
-    REQUIRE(cmds.dispatch("entities").find("no live entities") != std::string::npos);
+    REQUIRE(cmds.dispatch("entities", systemIssuer()).find("no live entities") != std::string::npos);
 }
 
 TEST_CASE("ConsoleCommands spawn with missing args returns usage", "[console][commands]") {
     CommandRegistry cmds;
     CommandContext ctx{};
     registerConsoleCommands(cmds, ctx);
-    REQUIRE(cmds.dispatch("spawn").find("usage") != std::string::npos);
-    REQUIRE(cmds.dispatch("spawn type 1 2").find("usage") != std::string::npos);
+    REQUIRE(cmds.dispatch("spawn", systemIssuer()).find("usage") != std::string::npos);
+    REQUIRE(cmds.dispatch("spawn type 1 2", systemIssuer()).find("usage") != std::string::npos);
 }
 
 TEST_CASE("ConsoleCommands spawn with null context returns error", "[console][commands]") {
     CommandRegistry cmds;
     CommandContext ctx{}; // entityManager / gameLoop = nullptr
     registerConsoleCommands(cmds, ctx);
-    std::string out = cmds.dispatch("spawn builtin:debug-entity 0 500 0");
+    std::string out = cmds.dispatch("spawn builtin:debug-entity 0 500 0", systemIssuer());
     REQUIRE(out.find("not available") != std::string::npos);
 }
 
@@ -533,7 +533,7 @@ TEST_CASE("ConsoleCommands spawn with invalid coords returns error", "[console][
     // Test invalid coords by checking the parse branch via a valid-looking context:
     // Just verify we get some error string — coord validation comes after context check.
     registerConsoleCommands(cmds, ctx);
-    REQUIRE(!cmds.dispatch("spawn test:unit x y z").empty());
+    REQUIRE(!cmds.dispatch("spawn test:unit x y z", systemIssuer()).empty());
 }
 
 TEST_CASE("ConsoleCommands spawn with unknown type returns error", "[console][commands]") {
@@ -548,21 +548,21 @@ TEST_CASE("ConsoleCommands spawn with unknown type returns error", "[console][co
     // first so unknown type check can't be reached without a running GameLoop.
     // Coverage goal: the null-context guard branch fires and is tested.
     registerConsoleCommands(cmds, ctx);
-    REQUIRE(cmds.dispatch("spawn unknown:type 0 0 0").find("not available") != std::string::npos);
+    REQUIRE(cmds.dispatch("spawn unknown:type 0 0 0", systemIssuer()).find("not available") != std::string::npos);
 }
 
 TEST_CASE("ConsoleCommands kill with missing args returns usage", "[console][commands]") {
     CommandRegistry cmds;
     CommandContext ctx{};
     registerConsoleCommands(cmds, ctx);
-    REQUIRE(cmds.dispatch("kill").find("usage") != std::string::npos);
+    REQUIRE(cmds.dispatch("kill", systemIssuer()).find("usage") != std::string::npos);
 }
 
 TEST_CASE("ConsoleCommands kill with null context returns error", "[console][commands]") {
     CommandRegistry cmds;
     CommandContext ctx{};
     registerConsoleCommands(cmds, ctx);
-    REQUIRE(cmds.dispatch("kill 5").find("not available") != std::string::npos);
+    REQUIRE(cmds.dispatch("kill 5", systemIssuer()).find("not available") != std::string::npos);
 }
 
 TEST_CASE("ConsoleCommands kill entity not in snapshot returns error", "[console][commands]") {
@@ -577,29 +577,29 @@ TEST_CASE("ConsoleCommands kill entity not in snapshot returns error", "[console
     ctx.renderBridge = &bridge;
     // entityManager / gameLoop null → "not available" fires before snapshot check
     registerConsoleCommands(cmds, ctx);
-    REQUIRE(!cmds.dispatch("kill 42").empty());
+    REQUIRE(!cmds.dispatch("kill 42", systemIssuer()).empty());
 }
 
 TEST_CASE("ConsoleCommands tp with missing args returns usage", "[console][commands]") {
     CommandRegistry cmds;
     CommandContext ctx{};
     registerConsoleCommands(cmds, ctx);
-    REQUIRE(cmds.dispatch("tp").find("usage") != std::string::npos);
-    REQUIRE(cmds.dispatch("tp 1 2").find("usage") != std::string::npos);
+    REQUIRE(cmds.dispatch("tp", systemIssuer()).find("usage") != std::string::npos);
+    REQUIRE(cmds.dispatch("tp 1 2", systemIssuer()).find("usage") != std::string::npos);
 }
 
 TEST_CASE("ConsoleCommands tp with null context returns error", "[console][commands]") {
     CommandRegistry cmds;
     CommandContext ctx{};
     registerConsoleCommands(cmds, ctx);
-    REQUIRE(cmds.dispatch("tp 0 500 0").find("not available") != std::string::npos);
+    REQUIRE(cmds.dispatch("tp 0 500 0", systemIssuer()).find("not available") != std::string::npos);
 }
 
 TEST_CASE("ConsoleCommands toggle_pos with null showPos returns error", "[console][commands]") {
     CommandRegistry cmds;
     CommandContext ctx{}; // showPos = nullptr
     registerConsoleCommands(cmds, ctx);
-    REQUIRE(cmds.dispatch("toggle_pos").find("not available") != std::string::npos);
+    REQUIRE(cmds.dispatch("toggle_pos", systemIssuer()).find("not available") != std::string::npos);
 }
 
 TEST_CASE("ConsoleCommands toggle_pos toggles flag", "[console][commands]") {
@@ -608,9 +608,9 @@ TEST_CASE("ConsoleCommands toggle_pos toggles flag", "[console][commands]") {
     CommandContext ctx{};
     ctx.showPos = &flag;
     registerConsoleCommands(cmds, ctx);
-    REQUIRE(cmds.dispatch("toggle_pos").find("ON") != std::string::npos);
+    REQUIRE(cmds.dispatch("toggle_pos", systemIssuer()).find("ON") != std::string::npos);
     REQUIRE(flag == true);
-    REQUIRE(cmds.dispatch("toggle_pos").find("OFF") != std::string::npos);
+    REQUIRE(cmds.dispatch("toggle_pos", systemIssuer()).find("OFF") != std::string::npos);
     REQUIRE(flag == false);
 }
 
@@ -618,7 +618,7 @@ TEST_CASE("ConsoleCommands show_ping with null showPing returns error", "[consol
     CommandRegistry cmds;
     CommandContext ctx{}; // showPing = nullptr
     registerConsoleCommands(cmds, ctx);
-    REQUIRE(cmds.dispatch("show_ping").find("not available") != std::string::npos);
+    REQUIRE(cmds.dispatch("show_ping", systemIssuer()).find("not available") != std::string::npos);
 }
 
 TEST_CASE("ConsoleCommands show_ping toggles flag", "[console][commands]") {
@@ -627,9 +627,9 @@ TEST_CASE("ConsoleCommands show_ping toggles flag", "[console][commands]") {
     CommandContext ctx{};
     ctx.showPing = &flag;
     registerConsoleCommands(cmds, ctx);
-    REQUIRE(cmds.dispatch("show_ping").find("on") != std::string::npos);
+    REQUIRE(cmds.dispatch("show_ping", systemIssuer()).find("on") != std::string::npos);
     REQUIRE(flag == true);
-    REQUIRE(cmds.dispatch("show_ping").find("off") != std::string::npos);
+    REQUIRE(cmds.dispatch("show_ping", systemIssuer()).find("off") != std::string::npos);
     REQUIRE(flag == false);
 }
 
@@ -637,9 +637,9 @@ TEST_CASE("ConsoleCommands stub commands return messages", "[console][commands]"
     CommandRegistry cmds;
     CommandContext ctx{};
     registerConsoleCommands(cmds, ctx);
-    REQUIRE(!cmds.dispatch("set_weather clear").empty());
-    REQUIRE(!cmds.dispatch("set_difficulty veteran").empty());
-    REQUIRE(!cmds.dispatch("reload_content").empty());
+    REQUIRE(!cmds.dispatch("set_weather clear", systemIssuer()).empty());
+    REQUIRE(!cmds.dispatch("set_difficulty veteran", systemIssuer()).empty());
+    REQUIRE(!cmds.dispatch("reload_content", systemIssuer()).empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -662,7 +662,7 @@ TEST_CASE("ConsoleCommands spawn forwards command to serverCommand", "[console][
     ctx.serverCommand = [&](std::string_view s) { captured = std::string(s); };
     registerConsoleCommands(cmds, ctx);
 
-    auto out1 = cmds.dispatch("spawn test:unit 0 500 0");
+    auto out1 = cmds.dispatch("spawn test:unit 0 500 0", systemIssuer());
     REQUIRE(out1.find("queued") != std::string::npos);
     REQUIRE(captured.find("spawn") != std::string::npos);
     REQUIRE(captured.find("test:unit") != std::string::npos);
@@ -675,7 +675,7 @@ TEST_CASE("ConsoleCommands kill forwards command to serverCommand", "[console][c
     ctx.serverCommand = [&](std::string_view s) { captured = std::string(s); };
     registerConsoleCommands(cmds, ctx);
 
-    auto out2 = cmds.dispatch("kill 42");
+    auto out2 = cmds.dispatch("kill 42", systemIssuer());
     REQUIRE(out2.find("queued") != std::string::npos);
     REQUIRE(captured.find("kill") != std::string::npos);
     REQUIRE(captured.find("42") != std::string::npos);
@@ -691,7 +691,7 @@ TEST_CASE("ConsoleCommands tp forwards command with player idx to serverCommand"
     ctx.serverCommand = [&](std::string_view s) { captured = std::string(s); };
     registerConsoleCommands(cmds, ctx);
 
-    auto out3 = cmds.dispatch("tp 10 500 20");
+    auto out3 = cmds.dispatch("tp 10 500 20", systemIssuer());
     REQUIRE(out3.find("queued") != std::string::npos);
     REQUIRE(captured.find("tp") != std::string::npos);
     REQUIRE(captured.find("3") != std::string::npos); // player entity idx
@@ -704,7 +704,7 @@ TEST_CASE("ConsoleCommands set_weather forwards command to serverCommand", "[con
     ctx.serverCommand = [&](std::string_view s) { captured = std::string(s); };
     registerConsoleCommands(cmds, ctx);
 
-    auto out4 = cmds.dispatch("set_weather storm");
+    auto out4 = cmds.dispatch("set_weather storm", systemIssuer());
     REQUIRE(out4.find("queued") != std::string::npos);
     REQUIRE(captured.find("set_weather") != std::string::npos);
     REQUIRE(captured.find("storm") != std::string::npos);
@@ -715,7 +715,8 @@ TEST_CASE("ConsoleCommands spawn with null serverCommand returns not available",
     CommandRegistry cmds;
     CommandContext ctx{};
     registerConsoleCommands(cmds, ctx);
-    REQUIRE(cmds.dispatch("spawn builtin:debug-entity 0 500 0").find("not available") != std::string::npos);
+    REQUIRE(cmds.dispatch("spawn builtin:debug-entity 0 500 0", systemIssuer()).find("not available") !=
+            std::string::npos);
 }
 
 // ---------------------------------------------------------------------------
@@ -773,7 +774,7 @@ TEST_CASE("ConsoleCommands help for specific command", "[console][commands]") {
     CommandRegistry cmds;
     CommandContext ctx{};
     registerConsoleCommands(cmds, ctx);
-    std::string out = cmds.dispatch("help spawn");
+    std::string out = cmds.dispatch("help spawn", systemIssuer());
     REQUIRE(!out.empty());
     REQUIRE(out.find("spawn") != std::string::npos);
 }
@@ -782,7 +783,7 @@ TEST_CASE("ConsoleCommands help for unknown command returns error", "[console][c
     CommandRegistry cmds;
     CommandContext ctx{};
     registerConsoleCommands(cmds, ctx);
-    REQUIRE(cmds.dispatch("help nonexistent").find("unknown command") != std::string::npos);
+    REQUIRE(cmds.dispatch("help nonexistent", systemIssuer()).find("unknown command") != std::string::npos);
 }
 
 TEST_CASE("ConsoleCommands help command lists all builtins", "[console][commands]") {
@@ -790,7 +791,7 @@ TEST_CASE("ConsoleCommands help command lists all builtins", "[console][commands
     CommandContext ctx{};
     registerConsoleCommands(cmds, ctx);
 
-    std::string out = cmds.dispatch("help");
+    std::string out = cmds.dispatch("help", systemIssuer());
     REQUIRE(out.find("types") != std::string::npos);
     REQUIRE(out.find("entities") != std::string::npos);
     REQUIRE(out.find("spawn") != std::string::npos);
@@ -834,7 +835,7 @@ TEST_CASE("ConsoleCommands spawn with invalid coordinates returns error", "[cons
     CommandRegistry cmds;
     registerConsoleCommands(cmds, makeCtxWithCapture(tyReg, captured));
 
-    std::string out = cmds.dispatch("spawn test:unit abc 0 0");
+    std::string out = cmds.dispatch("spawn test:unit abc 0 0", systemIssuer());
     REQUIRE(out.find("invalid coordinates") != std::string::npos);
     REQUIRE(captured.empty()); // serverCommand not called on parse error
 }
@@ -846,7 +847,7 @@ TEST_CASE("ConsoleCommands spawn with unknown type name returns error", "[consol
     CommandRegistry cmds;
     registerConsoleCommands(cmds, makeCtxWithCapture(tyReg, captured));
 
-    REQUIRE(cmds.dispatch("spawn unknown:thing 0 0 0").find("unknown type") != std::string::npos);
+    REQUIRE(cmds.dispatch("spawn unknown:thing 0 0 0", systemIssuer()).find("unknown type") != std::string::npos);
     REQUIRE(captured.empty());
 }
 
@@ -858,7 +859,7 @@ TEST_CASE("ConsoleCommands spawn with numeric index out of range returns error",
     registerConsoleCommands(cmds, makeCtxWithCapture(tyReg, captured));
 
     // isAllDigits("99") = true path; byIndex(99) returns nullptr
-    REQUIRE(cmds.dispatch("spawn 99 0 0 0").find("unknown type") != std::string::npos);
+    REQUIRE(cmds.dispatch("spawn 99 0 0 0", systemIssuer()).find("unknown type") != std::string::npos);
     REQUIRE(captured.empty());
 }
 
@@ -875,7 +876,7 @@ TEST_CASE("ConsoleCommands spawn valid type forwards to serverCommand", "[consol
     CommandRegistry cmds;
     registerConsoleCommands(cmds, makeCtxWithCapture(tyReg, captured));
 
-    std::string out = cmds.dispatch("spawn test:ship 0 500 0");
+    std::string out = cmds.dispatch("spawn test:ship 0 500 0", systemIssuer());
     REQUIRE(out.find("queued") != std::string::npos);
     REQUIRE(captured.find("spawn") != std::string::npos);
     REQUIRE(captured.find("test:ship") != std::string::npos);
@@ -895,7 +896,7 @@ TEST_CASE("ConsoleCommands spawn valid numeric index forwards to serverCommand",
     registerConsoleCommands(cmds, makeCtxWithCapture(tyReg, captured));
 
     // "0" is a valid index — tests isAllDigits true + byIndex success path
-    std::string out = cmds.dispatch("spawn 0 0 500 0");
+    std::string out = cmds.dispatch("spawn 0 0 500 0", systemIssuer());
     REQUIRE(out.find("queued") != std::string::npos);
     REQUIRE(!captured.empty());
 }
@@ -907,7 +908,7 @@ TEST_CASE("ConsoleCommands kill with invalid index returns error", "[console][co
     registerConsoleCommands(cmds, makeCtxWithCapture(tyReg, captured));
 
     // Non-numeric idx — parseUint fails
-    REQUIRE(cmds.dispatch("kill abc").find("invalid entity index") != std::string::npos);
+    REQUIRE(cmds.dispatch("kill abc", systemIssuer()).find("invalid entity index") != std::string::npos);
     REQUIRE(captured.empty());
 }
 
@@ -917,7 +918,7 @@ TEST_CASE("ConsoleCommands kill valid index forwards to serverCommand", "[consol
     CommandRegistry cmds;
     registerConsoleCommands(cmds, makeCtxWithCapture(tyReg, captured));
 
-    std::string out = cmds.dispatch("kill 42");
+    std::string out = cmds.dispatch("kill 42", systemIssuer());
     REQUIRE(out.find("queued") != std::string::npos);
     REQUIRE(captured.find("kill") != std::string::npos);
     REQUIRE(captured.find("42") != std::string::npos);
@@ -930,7 +931,7 @@ TEST_CASE("ConsoleCommands tp with null playerEntityIdx returns error", "[consol
     CommandRegistry cmds;
     registerConsoleCommands(cmds, makeCtxWithCapture(tyReg, captured));
 
-    REQUIRE(cmds.dispatch("tp 0 500 0").find("player entity unknown") != std::string::npos);
+    REQUIRE(cmds.dispatch("tp 0 500 0", systemIssuer()).find("player entity unknown") != std::string::npos);
     REQUIRE(captured.empty());
 }
 
@@ -941,7 +942,7 @@ TEST_CASE("ConsoleCommands tp with valid player forwards to serverCommand", "[co
     CommandRegistry cmds;
     registerConsoleCommands(cmds, makeCtxWithCapture(tyReg, captured, nullptr, &idx, &gen));
 
-    std::string out = cmds.dispatch("tp 100 500 200");
+    std::string out = cmds.dispatch("tp 100 500 200", systemIssuer());
     REQUIRE(out.find("queued") != std::string::npos);
     REQUIRE(captured.find("tp") != std::string::npos);
 }
@@ -953,7 +954,7 @@ TEST_CASE("ConsoleCommands tp with invalid coordinates returns error", "[console
     CommandRegistry cmds;
     registerConsoleCommands(cmds, makeCtxWithCapture(tyReg, captured, nullptr, &idx, &gen));
 
-    REQUIRE(cmds.dispatch("tp bad 500 0").find("invalid") != std::string::npos);
+    REQUIRE(cmds.dispatch("tp bad 500 0", systemIssuer()).find("invalid") != std::string::npos);
     REQUIRE(captured.empty());
 }
 
@@ -967,24 +968,24 @@ TEST_CASE("set_weather command forwards valid presets to serverCommand", "[conso
     CommandRegistry reg;
     registerConsoleCommands(reg, makeCtxWithCapture(tyReg, captured));
 
-    CHECK(reg.dispatch("set_weather storm").find("queued") != std::string::npos);
+    CHECK(reg.dispatch("set_weather storm", systemIssuer()).find("queued") != std::string::npos);
     CHECK(captured.find("set_weather") != std::string::npos);
     CHECK(captured.find("storm") != std::string::npos);
 
     captured.clear();
-    CHECK(reg.dispatch("set_weather clear").find("queued") != std::string::npos);
+    CHECK(reg.dispatch("set_weather clear", systemIssuer()).find("queued") != std::string::npos);
     CHECK(captured.find("clear") != std::string::npos);
 
     captured.clear();
-    CHECK(reg.dispatch("set_weather snow").find("queued") != std::string::npos);
+    CHECK(reg.dispatch("set_weather snow", systemIssuer()).find("queued") != std::string::npos);
     CHECK(captured.find("snow") != std::string::npos);
 
     captured.clear();
-    CHECK(reg.dispatch("set_weather blizzard").find("queued") != std::string::npos);
+    CHECK(reg.dispatch("set_weather blizzard", systemIssuer()).find("queued") != std::string::npos);
     CHECK(captured.find("blizzard") != std::string::npos);
 
-    CHECK(reg.dispatch("set_weather hurricane").find("unknown") != std::string::npos);
-    CHECK(reg.dispatch("set_weather").find("usage") != std::string::npos);
+    CHECK(reg.dispatch("set_weather hurricane", systemIssuer()).find("unknown") != std::string::npos);
+    CHECK(reg.dispatch("set_weather", systemIssuer()).find("usage") != std::string::npos);
 }
 
 // ============================================================================

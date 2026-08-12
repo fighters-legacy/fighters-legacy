@@ -19,7 +19,8 @@ std::string CommandShell::execute(std::string_view line) {
     if (line.empty())
         return {};
 
-    std::string result = m_registry.dispatch(line);
+    // The local console operator: full authority, stated rather than implied (#1079).
+    std::string result = m_registry.dispatch(line, systemIssuer());
 
     {
         std::lock_guard<std::mutex> lk(m_ringMutex);

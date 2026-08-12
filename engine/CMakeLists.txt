@@ -454,6 +454,7 @@ target_link_libraries(engine-replay PUBLIC engine-protocol engine-compress)
 
 # Authoritative server-sim serializer and network broadcaster.
 add_library(engine-net STATIC
+    net/AdminChannel.cpp
     net/NetworkUtils.cpp
     net/WorldBroadcaster.cpp
     net/DiscoveryBeacon.cpp

@@ -427,8 +427,10 @@ void RconServer::Impl::ioLoop() {
                         continue;
                     }
                     // dispatch() is const and thread-safe; mutating handlers go through
-                    // GameLoop::enqueueSimCallback (also thread-safe).
-                    std::string response = m_registry.dispatch(pkt.body);
+                    // GameLoop::enqueueSimCallback (also thread-safe). An authenticated RCON client has
+                    // operator authority -- unchanged, but now carried by an explicit issuer instead of
+                    // by the capability-bypassing overload this frontend used to call (#1079).
+                    std::string response = m_registry.dispatch(pkt.body, fl::systemIssuer());
                     auto chunks = rcon::splitResponse(response);
                     for (const auto& chunk : chunks) {
                         if (!queueSend(c, rcon::encodePacket(pkt.id, rcon::kTypeResponseValue, chunk))) {

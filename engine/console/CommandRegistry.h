@@ -29,13 +29,16 @@ class CommandRegistry {
     // pre-#946 all-or-nothing semantics for any command not yet given an explicit capability.
     void registerCommand(std::string name, std::string helpText, CommandHandler handler);
 
-    // Tokenize line on ASCII whitespace and dispatch to the matching handler.
-    // Empty / whitespace-only input returns empty string (no dispatch).
-    // Unknown command returns an error string. NO capability check — the implicit-Admin path.
-    [[nodiscard]] std::string dispatch(std::string_view line) const;
-
-    // Permission-checked dispatch (#946): refuses with a clear "permission denied" string when the
-    // issuer lacks the command's required capabilities; otherwise identical to dispatch(line).
+    // Tokenize line on ASCII whitespace and dispatch to the matching handler. Empty / whitespace-only
+    // input returns an empty string (no dispatch).
+    //
+    // Permission-checked, and the ONLY dispatch there is (#1079). There used to be an issuer-less
+    // overload that ignored each command's required mask entirely, and three of the six admin frontends
+    // used it -- stdin, RCON and the mission `do:` sink -- so capability enforcement was a property of
+    // WHICH FRONTEND YOU ARRIVED ON rather than of the command. Deleting it is what makes that
+    // impossible; a caller with system authority passes an explicit issuer saying so, which is a
+    // statement rather than an omission. Refuses with a clear "permission denied: <cmd> requires <cap>"
+    // when the issuer falls short.
     [[nodiscard]] std::string dispatch(std::string_view line, const CommandIssuer& issuer) const;
 
     // The required-capability mask for a command (0 if unknown / public). For tests and tooling.

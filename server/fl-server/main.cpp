@@ -2384,7 +2384,9 @@ int main(int argc, char** argv) {
     // thread-safe; mutating commands (set_weather/set_time) enqueue onto the sim callback queue, so this
     // is safe to call from the mission evaluator on the sim thread. The result string is logged.
     missionActionSink = [&adminRegistry, log](std::string_view action) {
-        const std::string result = adminRegistry.dispatch(std::string(action));
+        // Trusted YAML is still an issuer, just a privileged one (#1079): the operator chose to load
+        // this mission, so its `do:` actions carry the operator's authority -- explicitly.
+        const std::string result = adminRegistry.dispatch(std::string(action), fl::systemIssuer());
         char m[288];
         std::snprintf(m, sizeof(m), "mission action '%.120s' -> %.140s", std::string(action).c_str(), result.c_str());
         log->log(LogLevel::Info, __FILE__, __LINE__, m);
@@ -2825,7 +2827,7 @@ int main(int argc, char** argv) {
             stdinLines.clear();
             stdinReader.drain(stdinLines);
             for (const std::string& line : stdinLines) {
-                std::string result = adminRegistry.dispatch(line);
+                std::string result = adminRegistry.dispatch(line, fl::systemIssuer());
                 if (!result.empty())
                     std::printf("[admin] %s\n", result.c_str());
             }

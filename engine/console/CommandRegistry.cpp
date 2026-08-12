@@ -17,22 +17,6 @@ void CommandRegistry::registerCommand(std::string name, std::string helpText, Co
     registerCommand(std::move(name), std::move(helpText), kAdminCaps, std::move(handler));
 }
 
-std::string CommandRegistry::dispatch(std::string_view line) const {
-    auto tokens = tokenize(line);
-    if (tokens.empty())
-        return {};
-
-    std::string_view cmd = tokens[0];
-    auto args = std::span<std::string_view>(tokens).subspan(1);
-
-    for (const auto& e : m_entries) {
-        if (e.name == cmd)
-            return e.handler(args);
-    }
-
-    return "unknown command: " + std::string(cmd) + "  (type 'help' for list)";
-}
-
 std::string CommandRegistry::dispatch(std::string_view line, const CommandIssuer& issuer) const {
     auto tokens = tokenize(line);
     if (tokens.empty())
