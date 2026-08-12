@@ -52,33 +52,40 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     fl::EntityManager em(logger, registry);
 
     fl::ManualClock clock; // fixed: crashes reproduce from a single input file
-    fl::WorldQueries q_broadcaster;
-    fl::WorldBroadcasterHooks h_broadcaster;
-    h_broadcaster.comms.adminChannel = &adminChannel;
-    q_broadcaster.flightSpawner = [&](uint32_t peerId, fl::EntityId lead) {
-        const fl::FormationId fid = broadcaster.formations().create("Fz", lead, peerId);
-        fl::EntityTransform t{};
-        fl::FormationMember m{};
-        m.id = em.spawn("builtin:debug-entity", t);
-        broadcaster.formations().addMember(fid, m);
-        return fid;
-    };
-    h_broadcaster.comms.flightOrders = [](const fl::Formation&, const fl::FormationMember&, uint8_t, fl::EntityId) {
-        return true;
-    };
-    q_broadcaster.targetDesignator = [](const fl::EntityState&, const float[3]) { return fl::EntityId{}; };
-    fl::WorldBroadcaster broadcaster(em, registry, net, logger, std::move(q_broadcaster), std::move(h_broadcaster));
-    broadcaster.setClock(clock);
-    broadcaster.setOperatorPassword("fz"); // enable the admin channel (dispatch reachable via a seed's token)
+
     // The ENet frontend's AdminChannel (#1079): dispatch, the per-IP lockout and the drain in one
-    // object. A local, like the broadcaster it serves — one fresh pair per input, so a lockout cannot
-    // carry across runs and make a crash depend on execution order.
+    // object. A local, like the broadcaster it serves -- one fresh pair per input, so a lockout
+    // cannot carry across runs and make a crash depend on execution order. Declared BEFORE the
+    // broadcaster because the broadcaster takes it at construction and must not outlive it (#1082).
     fl::AdminChannel adminChannel([](std::string_view cmd, const fl::CommandIssuer&) { return std::string(cmd); },
                                   fl::AdminChannel::Config{"enet"}, clock);
 
     // Wingman/flight order channel (#610). Without these hooks installed the MsgWingmanCommand branch
-    // discards early and the whole path would be fuzzed as a no-op — so wire the same seams fl-server
+    // discards early and the whole path would be fuzzed as a no-op -- so wire the same seams fl-server
     // does, with stubs. The spawner gives peer 0 a real flight so orders have something to address.
+    // The spawner calls back into the broadcaster, which cannot name itself in its own constructor
+    // argument; the pointer is filled in immediately below, before any frame is fed in.
+    fl::WorldBroadcaster* bcPtr = nullptr;
+    fl::WorldQueries queries;
+    fl::WorldBroadcasterHooks hooks;
+    hooks.comms.adminChannel = &adminChannel;
+    queries.flightSpawner = [&](uint32_t peerId, fl::EntityId lead) {
+        const fl::FormationId fid = bcPtr->formations().create("Fz", lead, peerId);
+        fl::EntityTransform t{};
+        fl::FormationMember m{};
+        m.id = em.spawn("builtin:debug-entity", t);
+        bcPtr->formations().addMember(fid, m);
+        return fid;
+    };
+    hooks.comms.flightOrders = [](const fl::Formation&, const fl::FormationMember&, uint8_t, fl::EntityId) {
+        return true;
+    };
+    queries.targetDesignator = [](const fl::EntityState&, const float[3]) { return fl::EntityId::null(); };
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, nullptr, std::move(queries), std::move(hooks));
+    bcPtr = &broadcaster;
+    broadcaster.setClock(clock);
+    broadcaster.setOperatorPassword("fz"); // enable the admin channel (dispatch reachable via a seed's token)
 
     broadcaster.onConnect(0u); // peer required for the per-peer unicast paths
 
