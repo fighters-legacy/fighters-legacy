@@ -9,6 +9,7 @@
 #include "InputTraceWriter.h"
 #include "JitterBuffer.h"
 #include "MatchEventLog.h" // the one append-only match record (#600)
+#include "PeerAdmission.h" // whether and how a peer enters the world (#1085) — owned by value below
 #include "RequiredPackPolicy.h"
 #include "SnapshotScheduler.h"
 #include "TickGovernor.h"
@@ -74,10 +75,8 @@ struct RadioTransmission; // engine/atc/AtcTypes.h — one ATC radio line
 
 namespace fl {
 
-// Sentinel initial airspeed (#883): "no explicit speed given — pick a sane cruise default for an
-// airborne spawn." A concrete value (incl. 0 for a ground start, #885) is used verbatim. Any
-// negative value is treated as auto.
-inline constexpr float kAutoSpawnAirspeed = -1.f;
+// kAutoSpawnAirspeed (#883) and MissionSpawnSlot (#854) moved to PeerAdmission.h with the admission
+// path that owns them (#1085); WorldBroadcaster::MissionSpawnSlot remains as an alias below.
 
 // Parsed, validated client input stored per connected peer.
 struct PeerInputState {
@@ -745,15 +744,9 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // stays free of an engine-mission dependency — fl-server translates engine-mission's PlayerSlot into
     // this. `factionIndex` indexes the FactionRegistry handed to setFactionRegistry; `quat` is the
     // resolved spawn orientation (heading already placed on the local tangent frame at spawn time).
-    struct MissionSpawnSlot {
-        std::string missionObjectId; // the mission object id this slot came from (#884), reported to
-                                     // the mission-slot binder so destroy(<id>) tracks the pilot
-        std::string entityType;
-        uint16_t factionIndex{0};
-        double pos[3]{};
-        float quat[4]{0.f, 0.f, 0.f, 1.f};
-        float airspeed{kAutoSpawnAirspeed}; // initial airspeed for the joining pilot (#883); auto = cruise
-    };
+    // Defined in PeerAdmission.h, which owns the slot table (#1085). Aliased here so the name every
+    // caller already spells — fl::WorldBroadcaster::MissionSpawnSlot — keeps working.
+    using MissionSpawnSlot = fl::MissionSpawnSlot;
 
     // Notified when a pilot claims/leaves a mission player slot (#884): (missionObjectId, entity). A
     // VALID entity = the pilot's aircraft now occupies the slot; an INVALID one = the slot was freed
@@ -1007,12 +1000,13 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // designate. Default 1. Call before gameLoop.start().
     void setPlayerFaction(uint16_t faction) noexcept;
     [[nodiscard]] uint16_t playerFaction() const noexcept {
-        return m_playerFaction;
+        return m_admission.playerFaction();
     }
 
     // ── team assignment + balancing (#522) — sim-thread only ─────────────────
-    // Sentinel for "no specific team preference" in claimMissionSlot / assignment.
-    static constexpr uint16_t kNoFaction = 0xFFFFu;
+    // Sentinel for "no specific team preference" in claimMissionSlot / assignment. Defined at
+    // namespace scope in PeerAdmission.h (#1085); aliased here for every existing caller.
+    static constexpr uint16_t kNoFaction = fl::kNoFaction;
 
     // Assign a joining pilot to a team. Consulted in handleConnectRequest before slot claim; the
     // returned faction is stamped onto the spawned aircraft. Returning nullopt refuses the connection
@@ -1218,7 +1212,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // client GUID and restored on reconnect. 0 = disabled (the pre-#524 behavior). Call before
     // gameLoop.start() or via enqueueSimCallback (reload_config).
     void setReconnectGraceTicks(uint64_t ticks) noexcept {
-        m_reconnectGraceTicks = ticks;
+        m_admission.setReconnectGraceTicks(ticks);
     }
 
     // Called on the sim thread at the end of onConnect, after the peer's entity and controller exist.
@@ -1297,10 +1291,10 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // the matching password (MsgConnectRequest ConnectJoinPassword TLV) or it is refused with
     // ConnectRefusalCode::BadPassword. Sim-thread; hot-reloadable via enqueueSimCallback.
     void setJoinPassword(std::string password) {
-        m_joinPassword = std::move(password);
+        m_admission.setJoinPassword(std::move(password));
     }
     [[nodiscard]] bool hasJoinPassword() const noexcept {
-        return !m_joinPassword.empty();
+        return m_admission.hasJoinPassword();
     }
 
     // Apply all pre-start scalar configuration in one call (rate limiting, per-IP cap, MOTD, operator
@@ -1469,30 +1463,18 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     const WorldQueries m_queries;
     const WorldBroadcasterHooks m_hooks;
 
-    // Handle MsgConnectRequest (#853): grant a role, admit the peer (pilot = spawn its entity + form its
-    // flight; observer = no entity), reply MsgConnectAck, and send the MOTD. Replaces the old "server
-    // spawns on connect" flow. Sim-thread only (called from onReceive).
-    void handleConnectRequest(uint32_t peerId, const void* data, std::size_t size);
-    // Spawn a pilot peer's entity of `entityType`, register its PeerController, stamp faction, and form
-    // its flight. Returns the assigned EntityId (invalid on spawn failure). Extracted from the old
-    // onConnect. Sim-thread.
-    // `faction` = the team stamped onto the spawned aircraft (kNoFaction ⇒ m_playerFaction, the legacy
-    // default). The team assigner (#522) supplies it in handleConnectRequest.
-    EntityId admitPilot(uint32_t peerId, const std::string& entityType, uint16_t faction = kNoFaction);
+    // Whether and how a peer enters the world (#1085, D13): the connect gauntlet, the MsgConnectRequest
+    // handshake, the ConnectAck burst, the mission player slots and the reconnect grace table, with the
+    // state only they touch. Owned by value; it holds a back-reference to this object, so it MUST stay
+    // declared after m_queries/m_hooks — the references it binds are those two members.
+    PeerAdmission m_admission;
+    friend class PeerAdmission;
+
     // Shared spawn core for a pilot peer: spawn `entityType` at `t`, record m_peerEntities, stamp
     // `faction` (0 = leave neutral), resolve the flight model, and register the PeerController. Used by
     // both admitPilot (round-robin path) and the mission-slot path. Sim-thread.
     EntityId spawnPilotEntity(uint32_t peerId, const std::string& entityType, const EntityTransform& t,
                               uint16_t faction, float initialAirspeed = kAutoSpawnAirspeed);
-    // Claim the next open mission player slot for `peerId` (#854). Returns its index, or -1 when there
-    // are no slots or all are occupied. `preferredFaction` (kNoFaction = any) prefers a slot on that
-    // team, falling back to any open slot (#522). releaseMissionSlot frees it on despawn. Sim-thread.
-    int claimMissionSlot(uint32_t peerId, uint16_t preferredFaction = kNoFaction);
-    void releaseMissionSlot(uint32_t peerId);
-    // Resolve the entity type to spawn for a pilot (#834): a client-requested type wins iff it is a
-    // REGISTERED type (server-clamped allowlist); otherwise the [world] player_entity_type default;
-    // otherwise builtin:debug-entity. An unregistered request falls back with an Info log.
-    std::string resolvePlayerEntityType(const char* requested) const;
     // Tear down a peer's entity: its owned formation + AI members, its controller, sensor observer, and
     // the entity itself; erase from m_peerEntities. Does NOT touch m_peerInputs (the peer keeps its
     // slot). Shared by onDisconnect (and setPeerRole once #857 lands). Sim-thread.
@@ -1507,8 +1489,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // If `id` is a peer-spawned orphan (its pilot left) and no human occupies any of its seats now,
     // retire it. Called after a seat is vacated (#974).
     void maybeRetireOrphan(EntityId id);
-    void sendConnectAck(uint32_t peerId, EntityId assigned, PeerRole grantedRole);
-    void sendConnectRefusal(uint32_t peerId, ConnectRefusalCode code, const char* reason);
     // Send a complete admin command result over ENet. Short results (<=kAdminResponseFastPathMax
     // chars) go as a single MsgAdminResponse; longer results are streamed as MsgAdminResponseChunk
     // packets terminated by kChunkFlagEnd. reqId is echoed from the triggering MsgAdminCommand.
@@ -1609,14 +1589,11 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
 
     // Formations and the wingman order path (#610). Sim-thread only, like every other roster here.
     fl::FormationRegistry m_formations;
-    uint16_t m_playerFaction{1};                            // 0 restores the legacy neutral-player behavior
-    std::string m_playerEntityType{"builtin:debug-entity"}; // pilot spawn default when client requests none (#834)
-    bool m_allowObservers{true};                            // #857: false = refuse observer connect requests
-    std::vector<RequiredPack> m_requiredPacks;              // #872: packs a client must have (id + optional version)
-    RequiredPackPolicy m_requiredPackPolicy{RequiredPackPolicy::Warn}; // #872: what to do when one is missing
-    int m_flightCmdRateLimit{4};                                       // orders per second per peer
-    bool m_chatEnabled{true};                                          // #646: false = drop all chat
-    int m_chatRateLimit{2};                                            // #646: chat lines per second per peer
+    // The player faction, the pilot spawn default, the observer gate and the required-pack policy moved
+    // to PeerAdmission (#1085): each is consulted only while deciding how a joining peer enters.
+    int m_flightCmdRateLimit{4}; // orders per second per peer
+    bool m_chatEnabled{true};    // #646: false = drop all chat
+    int m_chatRateLimit{2};      // #646: chat lines per second per peer
     // World-mutating request limits (#1069). Seat and team requests each cost a despawn/respawn plus
     // a full ConnectAck on grant; heartbeats each cost a MsgPeerDelay reply.
     // The rate this server actually steps at, and the value MsgConnectAck advertises (#1075). Fixed
@@ -1774,18 +1751,8 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     bool m_respawnEnabled{false};
     void processRespawns(); // drain death cleanup + fire due respawns; called from onTick
 
-    // ── reconnection (#524) ──────────────────────────────────────────────────
-    struct GraceRec {
-        std::string callsign;
-        uint16_t factionIndex{0};
-        uint32_t kills{0};
-        uint32_t losses{0};
-        int32_t score{0};
-        uint64_t expiresTick{0};
-    };
-    std::unordered_map<std::string, GraceRec> m_disconnectGrace; // guid -> held identity/score
-    std::unordered_map<uint32_t, std::string> m_peerGuids;       // peerId -> client guid (set at handshake)
-    uint64_t m_reconnectGraceTicks{0};                           // 0 = disabled
+    // The reconnection grace table (#524) lives in PeerAdmission (#1085) — it is written at handshake
+    // and read on disconnect, both of which are that class's business.
 
     // ── match roster (#996) — sim-thread only ───────────────────────────────
     // participantId -> display record. Humans key on peerId; bots on kBotParticipantBase + n (#87).
@@ -1898,32 +1865,17 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // and the roster is re-broadcast. Called from routeSubsystemDamage on a seat pick.
     void applySeatDamage(ControlledEntity& ce, std::size_t seatIdx, float amount);
 
-    std::vector<std::array<double, 3>> m_spawnPoints; // pre-cached [x,y,z]; sim-thread read-only after start
-    uint32_t m_nextSpawnIdx{0};                       // round-robin counter; sim-thread only
-
-    // Mission player slots (#854). m_slotOccupant[i] = the peer holding slot i, or kSlotFree. m_peerSlot
-    // maps a peer to its held slot for O(1) release on despawn. Sim-thread only.
-    static constexpr uint32_t kSlotFree = 0xFFFFFFFFu;
-    std::vector<MissionSpawnSlot> m_missionSlots;
-    std::vector<uint32_t> m_slotOccupant;
-    std::unordered_map<uint32_t, int> m_peerSlot;
+    // Spawn points (#854 round-robin) and the mission player slots moved to PeerAdmission (#1085):
+    // both answer "where does a joining pilot start", which is the admission question.
 
     // Mission roster (#914): mission-object-id -> entity, sent as MsgMissionRoster after ConnectAck so
     // the cinematic recorder can resolve entity-relative camera shots. Sim-thread only.
     std::vector<std::pair<std::string, EntityId>> m_missionRoster;
 
-    std::unordered_set<std::string> m_bannedAddresses; // in-memory ban list; sim-thread only
-
-    // Per-IP sliding-window connection rate limiter (sim-thread only).
-    struct ConnectRecord {
-        std::deque<std::chrono::steady_clock::time_point> timestamps;
-    };
-    std::unordered_map<std::string, ConnectRecord> m_connectRecords;
-    int m_connectRateLimit{5};
-    int m_connectRateWindowS{10};
-    int m_maxConnectionsPerIp{0}; // 0 = unlimited
-    uint64_t m_ratePruneTick{0};  // coarse prune cadence counter (every 600 ticks)
-    uint64_t m_currentTick{0};    // set at start of each onTick; used in onReceive for delay estimation
+    // The ban list, the allowlist and the per-IP connect-rate window moved to PeerAdmission (#1085) —
+    // they exist only to answer the connect gauntlet's five questions.
+    uint64_t m_ratePruneTick{0}; // coarse prune cadence counter (every 600 ticks)
+    uint64_t m_currentTick{0};   // set at start of each onTick; used in onReceive for delay estimation
 
     // Per-peer packet flood detector (sim-thread only).
     struct PeerFloodState {
@@ -1932,8 +1884,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     };
     std::unordered_map<uint32_t, PeerFloodState> m_peerFloodState;
     int m_floodMultiplier{3};
-
-    std::unordered_set<std::string> m_allowedAddresses; // empty = allowlist disabled
 
     // Injectable clock for testing; defaults to steady_clock::now.
     const IClock* m_clock{&SystemClock::instance()};
@@ -1969,7 +1919,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
 
     // Network admin channel state (set before gameLoop.start(); read on sim thread only).
     std::string m_operatorPassword; // empty = admin channel disabled
-    std::string m_joinPassword;     // #998: empty = open server
+    // The join password (#998) moved to PeerAdmission (#1085) — it gates the handshake, nothing else.
     // The ENet frontend's channel: dispatcher, per-IP lockout and deferred shell drain in one object
     // shared with the other five frontends (#1079). Null = MsgAdminCommand discarded.
 
