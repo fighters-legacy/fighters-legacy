@@ -8,182 +8,268 @@
 
 namespace fl {
 
+// Every `[section]` in server.toml is a struct here (#1081, D15). It used to be half-migrated: some
+// sections were structs and the rest were flat fields with the section name glued onto each
+// identifier (`rotationOrder`, `botsFill`, `discoveryQueryPort`), which shape a key had being
+// historical accident rather than a rule. One rule now: section -> struct, key -> field, and the
+// reload class of every key lives in the table in ConfigReload.h rather than in prose.
 struct ServerConfig {
-    // [server]
-    std::string name = "Unnamed Server";
-    uint16_t port = 4778;
-    std::string bindAddress = "0.0.0.0";
-    int maxPeers = 32;
-    std::vector<std::string> gameModes = {"campaign", "mission", "sandbox"};
-    std::string motd;
-    uint16_t motdDisplayS{0}; // seconds; 0 = use client's motd_display_s setting
-    std::string password;
+    struct ServerSection {
+        std::string name = "Unnamed Server";
+        uint16_t port = 4778;
+        std::string bindAddress = "0.0.0.0";
+        int maxPeers = 32;
+        std::vector<std::string> gameModes = {"campaign", "mission", "sandbox"};
+        std::string motd;
+        uint16_t motdDisplayS{0}; // seconds; 0 = use client's motd_display_s setting
+        std::string password;
+    };
+    ServerSection server;
 
-    // [rotation]  — Phase 2: parsed and stored; rotation logic pending
-    std::string rotationOrder = "sequential";
-    std::vector<std::string> rotationItems; // each "mission" or "mission@mode" (#521)
-    int rotationTimeLimitMin = 0;
+    // Phase 2: parsed and stored; rotation logic pending
+    struct RotationConfig {
+        std::string order = "sequential";
+        std::vector<std::string> items; // each "mission" or "mission@mode" (#521)
+        int timeLimitMin = 0;
+    };
+    RotationConfig rotation;
 
-    // [match]  — multiplayer match framework (#497). The default game mode for rotation items that do
+    // Multiplayer match framework (#497). `mode` is the default game mode for rotation items that do
     // not name their own (mission@mode) and for non-rotation servers. A "builtin:" id or a pack modes/
     // asset stem; unknown ids fall back to builtin:free-flight.
-    std::string matchMode = "builtin:free-flight";
-    int matchEndScreenS = 10;       // seconds the Ending phase (frozen combat + scoreboard) lasts; [0, 120]
-    int matchReconnectGraceS = 120; // seconds a disconnected player's team+score is held (#524); [0, 3600], 0 = off
+    struct MatchConfig {
+        std::string mode = "builtin:free-flight";
+        int endScreenS = 10;       // seconds the Ending phase (frozen combat + scoreboard) lasts; [0, 120]
+        int reconnectGraceS = 120; // seconds a disconnected player's team+score is held (#524); [0, 3600], 0 = off
+    };
+    MatchConfig match;
 
-    // [bots]  — AI bot backfill (#87). Bots are server-side AI participants, not network peers.
-    int botsFill = 0;                             // desired total participants (humans + bots); 0 = disabled; [0, 128]
-    int botsMax = 16;                             // cap on live bots; [0, 127]
-    std::string botsEntityType;                   // empty = [world] player_entity_type
-    std::string botsAiScript = "builtin:fighter"; // AI script the bots fly
-    bool botsBalanceTeams = true;                 // even the bots across teams
+    // AI bot backfill (#87). Bots are server-side AI participants, not network peers.
+    struct BotsConfig {
+        int fill = 0;                             // desired total participants (humans + bots); 0 = disabled; [0, 128]
+        int max = 16;                             // cap on live bots; [0, 127]
+        std::string entityType;                   // empty = [world] player_entity_type
+        std::string aiScript = "builtin:fighter"; // AI script the bots fly
+        bool balanceTeams = true;                 // even the bots across teams
+    };
+    BotsConfig bots;
 
-    // [lobby] — registration ships (#143). lobbyUrl defaults EMPTY: pointing at a host with no
-    // service behind it turns "I did not configure a lobby" into recurring outbound failures an
-    // operator has to diagnose. The reference lobby service is #999 (M5.0); until it exists, a lobby
-    // is something you opt into by naming one.
-    bool lobbyRegister = false;
-    std::string lobbyUrl;
-    std::string lobbyVisibility = "public";
+    // Registration ships (#143). `url` defaults EMPTY: pointing at a host with no service behind it
+    // turns "I did not configure a lobby" into recurring outbound failures an operator has to
+    // diagnose. The reference lobby service is #999 (M5.0); until it exists, a lobby is something you
+    // opt into by naming one.
+    struct LobbyConfig {
+        bool registerServer = false; // the `register` key; `register` is still a reserved word in C++
+        std::string url;
+        std::string visibility = "public";
+    };
+    LobbyConfig lobby;
 
-    // [mods]  — Phase 2: parsed and logged; ModLoader integration pending
-    std::vector<std::string> modStack;
-    // Content packs a connecting client is expected to have mounted (#872). Each spec is "id" or
-    // "id@version" (empty version = any). requiredPackPolicy picks what happens when a client is missing
-    // one: "warn" (log + notify the client, admit), "refuse" (disconnect with the missing list), or
-    // "allow_placeholder" (silently serve placeholders). Restart-only.
-    std::vector<std::string> requiredPacks;
-    std::string requiredPackPolicy = "warn";
+    struct ModsConfig {
+        // Phase 2: parsed and logged; ModLoader integration pending
+        std::vector<std::string> stack;
+        // Content packs a connecting client is expected to have mounted (#872). Each spec is "id" or
+        // "id@version" (empty version = any). requiredPackPolicy picks what happens when a client is
+        // missing one: "warn" (log + notify the client, admit), "refuse" (disconnect with the missing
+        // list), or "allow_placeholder" (silently serve placeholders). Restart-only.
+        std::vector<std::string> requiredPacks;
+        std::string requiredPackPolicy = "warn";
+    };
+    ModsConfig mods;
 
-    // [world]
-    // Entity type spawned for a connecting pilot when the client requests none (#834). A client may
-    // request a specific type in MsgConnectRequest; the server clamps it to a REGISTERED type and falls
-    // back to this default, then to builtin:debug-entity. Lets "boot server, connect, look at the
-    // aeroplane" be a config change instead of an engine patch.
-    std::string playerEntityType = "builtin:debug-entity";
-    bool allowObservers = true;         // #857: false = refuse observer-role connect requests
-    int entitySoftCap = 0;              // 0 = unlimited; server-enforced object count limit
-    double timeScale = 10.0;            // game seconds per real second; 10 = full day/night ~2.4 real hrs
-    double planetRadiusM = 6'371'000.0; // sphere radius (m); Earth default
-    bool earthRotation = true;          // #482: Coriolis + centrifugal in the Earth-fixed world frame
-    // Per-peer interest radius (km); [1, 100000]. 100 km (#1093, D19): AoI is PRESENTATION
-    // relevance, not sensor truth — sensor knowledge reaches players through the datalink, not the
-    // snapshot radius — and 128 fighters are never 200 km apart, so the old default culled almost
-    // nothing while a full-radius query still visited a 41x41 cell box per peer per tick.
-    double drawDistanceKm = 100.0;
-    int spectateDelayS = 0; // dead/observer snapshot delay (s); anti-ghosting; [0, 300]; 0 = off (#403)
-    // SpatialIndex cell size (km); 0 = AUTO from the draw distance; [0, 1000]; restart. Auto is the
-    // default since #1093: the mechanism has existed since #573 (clamp(drawDist/32, 500 m, 10 km)),
-    // it simply was not what shipped, so a fixed 10 km cell sized the query box for a radius nobody
-    // was using.
-    double spatialCellSizeKm = 0.0;
-    uint32_t snapshotBudgetBytes = 1200; // per-client snapshot byte budget; 0 = unlimited; [0, 65535] (#516)
-    uint32_t jitterBufferDepth = 4;      // per-peer input queue depth (ticks); [1, 32]
-    uint32_t jitterAdaptWindow = 60;     // EWMA smoothing window in ticks; [10, 3600]
-    uint32_t jitterHysteresis = 2;       // resize dead-band in ticks; [0, 8]
-    float jitterMultiplier = 2.0f;       // k factor: depth = ceil(ewma + k*jitter); [0.0, 8.0]
-    // Adaptive per-client send-rate / congestion response (#518). Hot-reloadable via reload_config.
-    bool congestionEnabled = true;             // false = always full 60 Hz / full budget
-    float congestionMinSendHz = 10.0f;         // floor send rate under congestion; [1, 60]
-    float congestionLossThreshold = 0.02f;     // ENet mean loss fraction => congested; [0, 1]
-    uint32_t congestionBudgetFloorBytes = 400; // never scale a set byte budget below this; [0, 65535]
-    // Graceful tick-overrun governor (#514). Sheds snapshot/AI work when the tick exceeds budget under
-    // load. Hot-reloadable via reload_config, except maxCatchupTicks (a GameLoop ctor value).
-    bool overrunGovernorEnabled = true;      // false = no degradation (loadFactor pinned to 1)
-    float overrunHighWatermark = 0.90f;      // EWMA tick-ms / budget that triggers shedding; [0.1, 1.0]
-    float overrunLowWatermark = 0.60f;       // recovery threshold (dead-band below high); [0.0, high)
-    float overrunMinSnapshotHz = 15.0f;      // floor broadcast rate under overrun; [1, 60]
-    uint32_t overrunMaxAiStride = 4;         // deepest AI-sample decimation; [1, 32]
-    uint32_t overrunBudgetFloorBytes = 400;  // never scale the snapshot budget below this; [0, 65535]
-    float overrunMinInterestFraction = 0.5f; // interest-radius floor fraction; [0.1, 1.0]; 1 = lever off (#726)
-    int maxCatchupTicks = 8;                 // GameLoop catch-up cap (spiral backstop); [1, 64]; restart
-    // Sim-tick CPU parallelism: total worker threads for the per-entity AI + integrate passes,
-    // including the sim thread. 0 = auto (hardware_concurrency), 1 = serial. CPU knob, NOT a
-    // capacity guarantee. CLI --sim-worker-threads overrides this. [0, 256]
-    // Sensor geometry checks per second (#685). 10 is the REFERENCE cadence every authored `pod` is
-    // tuned against — changing it changes effective acquisition time, which is the honest
-    // consequence and is documented rather than silently renormalized. [1, 60]
-    double sensorCheckHz = 10.0;
+    struct WorldConfig {
+        // Entity type spawned for a connecting pilot when the client requests none (#834). A client may
+        // request a specific type in MsgConnectRequest; the server clamps it to a REGISTERED type and
+        // falls back to this default, then to builtin:debug-entity. Lets "boot server, connect, look at
+        // the aeroplane" be a config change instead of an engine patch.
+        std::string playerEntityType = "builtin:debug-entity";
+        bool allowObservers = true;         // #857: false = refuse observer-role connect requests
+        int entitySoftCap = 0;              // 0 = unlimited; server-enforced object count limit
+        double timeScale = 10.0;            // game seconds per real second; 10 = full day/night ~2.4 real hrs
+        double planetRadiusM = 6'371'000.0; // sphere radius (m); Earth default
+        bool earthRotation = true;          // #482: Coriolis + centrifugal in the Earth-fixed world frame
+        // Per-peer interest radius (km); [1, 100000]. 100 km (#1093, D19): AoI is PRESENTATION
+        // relevance, not sensor truth — sensor knowledge reaches players through the datalink, not the
+        // snapshot radius — and 128 fighters are never 200 km apart, so the old default culled almost
+        // nothing while a full-radius query still visited a 41x41 cell box per peer per tick.
+        double drawDistanceKm = 100.0;
+        int spectateDelayS = 0; // dead/observer snapshot delay (s); anti-ghosting; [0, 300]; 0 = off (#403)
+        // SpatialIndex cell size (km); 0 = AUTO from the draw distance; [0, 1000]; restart. Auto is the
+        // default since #1093: the mechanism has existed since #573 (clamp(drawDist/32, 500 m, 10 km)),
+        // it simply was not what shipped, so a fixed 10 km cell sized the query box for a radius nobody
+        // was using.
+        double spatialCellSizeKm = 0.0;
+        uint32_t snapshotBudgetBytes = 1200; // per-client snapshot byte budget; 0 = unlimited; [0, 65535] (#516)
+        uint32_t jitterBufferDepth = 4;      // per-peer input queue depth (ticks); [1, 32]
+        uint32_t jitterAdaptWindow = 60;     // EWMA smoothing window in ticks; [10, 3600]
+        uint32_t jitterHysteresis = 2;       // resize dead-band in ticks; [0, 8]
+        float jitterMultiplier = 2.0f;       // k factor: depth = ceil(ewma + k*jitter); [0.0, 8.0]
+        // Adaptive per-client send-rate / congestion response (#518). Hot-reloadable via reload_config.
+        bool congestionEnabled = true;             // false = always full 60 Hz / full budget
+        float congestionMinSendHz = 10.0f;         // floor send rate under congestion; [1, 60]
+        float congestionLossThreshold = 0.02f;     // ENet mean loss fraction => congested; [0, 1]
+        uint32_t congestionBudgetFloorBytes = 400; // never scale a set byte budget below this; [0, 65535]
+        // Graceful tick-overrun governor (#514). Sheds snapshot/AI work when the tick exceeds budget
+        // under load. Hot-reloadable via reload_config, except maxCatchupTicks (a GameLoop ctor value).
+        bool overrunGovernorEnabled = true;      // false = no degradation (loadFactor pinned to 1)
+        float overrunHighWatermark = 0.90f;      // EWMA tick-ms / budget that triggers shedding; [0.1, 1.0]
+        float overrunLowWatermark = 0.60f;       // recovery threshold (dead-band below high); [0.0, high)
+        float overrunMinSnapshotHz = 15.0f;      // floor broadcast rate under overrun; [1, 60]
+        uint32_t overrunMaxAiStride = 4;         // deepest AI-sample decimation; [1, 32]
+        uint32_t overrunBudgetFloorBytes = 400;  // never scale the snapshot budget below this; [0, 65535]
+        float overrunMinInterestFraction = 0.5f; // interest-radius floor fraction; [0.1, 1.0]; 1 = lever off (#726)
+        int maxCatchupTicks = 8;                 // GameLoop catch-up cap (spiral backstop); [1, 64]; restart
+        // Sensor geometry checks per second (#685). 10 is the REFERENCE cadence every authored `pod` is
+        // tuned against — changing it changes effective acquisition time, which is the honest
+        // consequence and is documented rather than silently renormalized. [1, 60]
+        double sensorCheckHz = 10.0;
+        // Sim-tick CPU parallelism: total worker threads for the per-entity AI + integrate passes,
+        // including the sim thread. 0 = auto (hardware_concurrency), 1 = serial. CPU knob, NOT a
+        // capacity guarantee. CLI --sim-worker-threads overrides this. [0, 256]
+        uint32_t simWorkerThreads = 0;
+        // Load-test affordance (#573): spawn N server-side AI entities (cheap loiter controllers spread
+        // over testSpawnSpreadKm at testSpawnAglM) at startup to stress the entity pool + SpatialIndex
+        // at scale. A TESTING AFFORDANCE, NOT A CAPACITY GUARANTEE. 0 = disabled. Restart-only.
+        uint32_t testSpawnAiCount = 0;   // number of AI entities to pre-spawn; [0, 1000000]
+        double testSpawnSpreadKm = 50.0; // spread radius (km) of the phyllotaxis distribution; [0, 100000]
+        double testSpawnAglM = 500.0;    // spawn/loiter altitude above the entity's OWN local terrain (m); [0, 50000]
+        // #580: weighted controller mix for the pre-spawned entities, "loiter:70,pursuit:20,patrol:10"
+        // (deterministic per-index assignment; behaviors: loiter | pursuit | patrol). Empty = all loiter
+        // (the #573 baseline). Invalid specs log Warn and fall back to all loiter. Restart-only.
+        std::string testSpawnAiMix;
+        // #966/#980: the entity type the load AI spawns. Default builtin:debug-entity (the #573
+        // baseline); set to builtin:bomber to run CREWED AI aircraft (a bot tail-gunner per airframe),
+        // exercising the per-seat sample/slew/fire passes + turret pose replication under 128-client
+        // scale-gate load. An unregistered type stops the spawn cleanly. Restart-only.
+        std::string testSpawnEntityType;
+        // #580: projectile-churn generator — spawn testProjectileRate short-lived entities per second,
+        // each killed after testProjectileTtlS, to stress the pool free-list, O(liveCount) forEach under
+        // fragmentation, and the SnapshotDespawn TLV path. 0 = disabled. Restart-only.
+        double testProjectileRate = 0.0; // spawns per second; [0, 100000]
+        double testProjectileTtlS = 3.0; // lifetime of each churned entity (s); [0.05, 600]
+        // Faction stamped onto every player entity on connect (#610). MUST be non-zero for any threat
+        // logic to work: fl::areFactionsHostile treats faction 0 as neutral — an entity with NO ENEMIES.
+        // With the legacy value of 0 nothing in the world is hostile to a player, so a wingman's
+        // engage/cover conditions can never fire and boresight designation can never designate.
+        // Setting 0 restores the pre-#610 behavior exactly (and disables the wingman's threat logic —
+        // fl-server warns at startup if a flight is configured alongside it). [0, 65535]
+        uint16_t playerFaction = 1;
+    };
+    WorldConfig world;
 
-    uint32_t simWorkerThreads = 0;
-    // Load-test affordance (#573): spawn N server-side AI entities (cheap loiter controllers spread over
-    // testSpawnSpreadKm at testSpawnAglM) at startup to stress the entity pool + SpatialIndex at scale.
-    // A TESTING AFFORDANCE, NOT A CAPACITY GUARANTEE. 0 = disabled. Restart-only.
-    uint32_t testSpawnAiCount = 0;   // number of AI entities to pre-spawn; [0, 1000000]
-    double testSpawnSpreadKm = 50.0; // spread radius (km) of the phyllotaxis distribution; [0, 100000]
-    double testSpawnAglM = 500.0;    // spawn/loiter altitude above the entity's OWN local terrain (m); [0, 50000]
-    // #580: weighted controller mix for the pre-spawned entities, "loiter:70,pursuit:20,patrol:10"
-    // (deterministic per-index assignment; behaviors: loiter | pursuit | patrol). Empty = all loiter
-    // (the #573 baseline). Invalid specs log Warn and fall back to all loiter. Restart-only.
-    std::string testSpawnAiMix;
-    // #966/#980: the entity type the load AI spawns. Default builtin:debug-entity (the #573 baseline);
-    // set to builtin:bomber to run CREWED AI aircraft (a bot tail-gunner per airframe), exercising the
-    // per-seat sample/slew/fire passes + turret pose replication under 128-client scale-gate load. An
-    // unregistered type stops the spawn cleanly. Restart-only.
-    std::string testSpawnEntityType;
-    // #580: projectile-churn generator — spawn testProjectileRate short-lived entities per second,
-    // each killed after testProjectileTtlS, to stress the pool free-list, O(liveCount) forEach under
-    // fragmentation, and the SnapshotDespawn TLV path. 0 = disabled. Restart-only.
-    double testProjectileRate = 0.0; // spawns per second; [0, 100000]
-    double testProjectileTtlS = 3.0; // lifetime of each churned entity (s); [0.05, 600]
+    // [ai.mcp] — the Model Context Protocol surface (#601). A SECOND FRONTEND on the [http_admin]
+    // listener, not a second server: it shares that listener, that token table and that per-IP
+    // lockout, so enabling MCP requires [http_admin] to be enabled too.
+    struct McpConfig {
+        bool enabled = false;
+        std::string path = "/mcp"; // Streamable HTTP endpoint: POST for calls, GET for notifications
+        // Default autonomy tier for a token whose row does not override it. `observe` — read-only —
+        // because a default that could act would make forgetting a field into granting authority.
+        std::string autonomy = "observe";
+        // Commands an `act`-tier token may run. EMPTY PERMITS NOTHING: enabling MCP without listing
+        // commands does not implicitly authorize all of them.
+        std::vector<std::string> allowlist;
+        int rateLimitPerMin = 120; // per token; <= 0 disables the limiter
+        int maxSessions = 32;      // concurrent MCP sessions; oldest idle is evicted beyond this
+    };
 
-    // Faction stamped onto every player entity on connect (#610). MUST be non-zero for any threat
-    // logic to work: fl::areFactionsHostile treats faction 0 as neutral — an entity with NO ENEMIES.
-    // With the legacy value of 0 nothing in the world is hostile to a player, so a wingman's
-    // engage/cover conditions can never fire and boresight designation can never designate.
-    // Setting 0 restores the pre-#610 behavior exactly (and disables the wingman's threat logic —
-    // fl-server warns at startup if a flight is configured alongside it). [0, 65535]
-    uint16_t playerFaction = 1;
+    // [ai.provider] — the generative-AI provider seam (#163). OPT-IN: an operator must set
+    // `enabled = true` before the server will talk to any model at all.
+    //
+    // Every AI feature degrades to its scripted path when this is off, and that fallback is the
+    // CI-tested one (docs/developer/ai-architecture.md §7).
+    struct AiProviderConfig {
+        bool enabled = false;
+        std::string plugin;   // path to an IWorldAiProvider shared library; empty = NullAiProvider
+        std::string endpoint; // backend-specific; interpreted by the plugin, not by fl-server
+        std::string model;
+        // The API key is NEVER a config value. `apiKeyEnv` names the ENVIRONMENT VARIABLE holding
+        // it, defaulting to FL_AI_API_KEY — the same rule the ai_eval harness follows and the same
+        // reason: a key in server.toml gets committed, and a key on a command line shows up in `ps`.
+        std::string apiKeyEnv = "FL_AI_API_KEY";
+        int maxCallsPerMinute = 10;
+        int worldEvolutionIntervalMin = 60; // in-game minutes between evolution calls
+    };
 
-    // [ai]
-    // What the SERVER runs (#682): resolved to AiScaling and fed to the sim tick, where it scales
-    // radar range (radarSensorRange) and the AI's reaction delay (reactionTimeS). `cadet|pilot|ace`;
-    // unknown value logs Warn and keeps the default. Hot-reloadable via reload_config.
-    std::string aiDifficulty = "pilot";
+    // [ai.chat_intent] — free-text wingman commands over team chat (#611).
+    //
+    // Needs [ai.provider] with the `intent` capability. With either missing, the radio menu is the
+    // path — which is the #769 decision, not a degradation to apologise for.
+    struct ChatIntentConfig {
+        bool enabled = false;
+        // Intent requests per minute per peer. Separate from the chat rate limit and much lower: a
+        // chat line is free, a model call is not, and the team channel must not become a lever
+        // against the server's own inference budget.
+        int rateLimitPerMin = 6;
+        // Tell the pilot when a call was understood, declined, or not attempted. Off would leave a
+        // player unable to tell "the wingman ignored me" from "the feature is not on".
+        bool notifyOnDecline = true;
+    };
 
-    // A FUTURE PER-CLIENT CLAMP, not what the server runs — distinct from `difficulty` above.
-    // Phase 2: parsed and stored; enforcement lands with the AI runtime.
-    std::string aiDifficultyFloor = "recruit";
+    struct AiConfig {
+        // What the SERVER runs (#682): resolved to AiScaling and fed to the sim tick, where it scales
+        // radar range (radarSensorRange) and the AI's reaction delay (reactionTimeS). `cadet|pilot|ace`;
+        // unknown value logs Warn and keeps the default. Hot-reloadable via reload_config.
+        std::string difficulty = "pilot";
+        // A FUTURE PER-CLIENT CLAMP, not what the server runs — distinct from `difficulty` above.
+        // Phase 2: parsed and stored; enforcement lands with the AI runtime.
+        std::string difficultyFloor = "recruit";
+        // The [ai.*] subsections. Nested here rather than beside [ai] because that is where the TOML
+        // puts them, and a reader looking for `ai.mcp.enabled` should find it under `ai`.
+        McpConfig mcp;
+        AiProviderConfig provider;
+        ChatIntentConfig chatIntent;
+    };
+    AiConfig ai;
 
-    // [gameplay] — the damage gates (#626). SERVER-authoritative: the client difficulty screen's
-    // matching toggles configure single-player through this same path (the embedded fl-server),
-    // never the client directly. Hot-reloadable via reload_config.
-    bool friendlyFire = false; // same-faction weapon damage suppressed when false
-    bool crashDamage = true;   // ground impacts damage the airframe when true
+    // The damage gates (#626). SERVER-authoritative: the client difficulty screen's matching toggles
+    // configure single-player through this same path (the embedded fl-server), never the client
+    // directly. Hot-reloadable via reload_config.
+    struct GameplayConfig {
+        bool friendlyFire = false; // same-faction weapon damage suppressed when false
+        bool crashDamage = true;   // ground impacts damage the airframe when true
+    };
+    GameplayConfig gameplay;
 
-    // [discovery]
-    bool discoveryEnabled = true;
-    int discoveryIntervalMs = 2000;
-    bool discoveryQueryEnabled = true; // #997: answer server-info queries
-    int discoveryQueryPort = 0;        // 0 = auto (game port + 1); [0, 65535]
+    struct DiscoveryConfig {
+        bool enabled = true;
+        int intervalMs = 2000;
+        bool queryEnabled = true; // #997: answer server-info queries
+        int queryPort = 0;        // 0 = auto (game port + 1); [0, 65535]
+    };
+    DiscoveryConfig discovery;
 
-    // [shutdown]
-    int shutdownWarningIntervalS = 300; // seconds between countdown broadcast notices (default 5 min)
-    int minShutdownDelayS = 0;          // minimum seconds of warning required; 0 = no minimum
-    bool shutdownRequireConfirm = true; // require --force flag before scheduling shutdown
+    struct ShutdownConfig {
+        int warningIntervalS = 300; // seconds between countdown broadcast notices (default 5 min)
+        int minDelayS = 0;          // minimum seconds of warning required; 0 = no minimum
+        bool requireConfirm = true; // require --force flag before scheduling shutdown
+    };
+    ShutdownConfig shutdown;
 
-    // [security]
-    int connectRateLimitCount = 5;     // max connections per IP within the window
-    int connectRateLimitWindowS = 10;  // sliding window size, seconds
-    int packetFloodMultiplier = 3;     // disconnect if peer sends > N * 60 MsgClientInput/s
-    std::string banlistPath;           // one normalized IP per line; empty = no persistence
-    std::string allowlistPath;         // allowlist file; empty = disabled (all IPs allowed)
-    uint32_t incomingBandwidthBps = 0; // ENet host incoming cap, bytes/s; 0 = unlimited
-    uint32_t outgoingBandwidthBps = 0; // ENet host outgoing cap, bytes/s; 0 = unlimited
-    std::string operatorPassword; // empty = network admin commands disabled; overridden by --admin-token at runtime
-    int preHandshakeRateLimitCount = 20; // max CONNECT attempts per IP per window; 0 = disabled
-    int preHandshakeWindowMs = 1000;     // sliding window in milliseconds
-    int maxConnectionsPerIp = 0;         // max simultaneous connections per IP; 0 = unlimited
-    int adminAuthMaxFailures = 5;        // consecutive wrong-password attempts before per-IP lockout [1,100]
-    int adminAuthLockoutSeconds = 300;   // per-IP lockout duration in seconds [1,86400]
-    int idleTimeoutS = 0;                // disconnect peers with no activity for N seconds; 0 = disabled [0,86400]
-    // World-mutating request limits (#1069). A seat or team grant despawns and respawns an entity and
-    // re-sends the whole ConnectAck type table; a heartbeat draws a MsgPeerDelay reply.
-    int seatRequestRateLimitPerS = 2; // seat requests per second per peer [1,60]
-    int teamSwitchCooldownS = 5;      // seconds between accepted team switches per peer; 0 = none [0,3600]
-    int heartbeatRateLimitPerS = 4;   // heartbeats per second per peer that draw a reply [1,60]
+    struct SecurityConfig {
+        int connectRateLimitCount = 5;     // max connections per IP within the window
+        int connectRateLimitWindowS = 10;  // sliding window size, seconds
+        int packetFloodMultiplier = 3;     // disconnect if peer sends > N * 60 MsgClientInput/s
+        std::string banlistPath;           // one normalized IP per line; empty = no persistence
+        std::string allowlistPath;         // allowlist file; empty = disabled (all IPs allowed)
+        uint32_t incomingBandwidthBps = 0; // ENet host incoming cap, bytes/s; 0 = unlimited
+        uint32_t outgoingBandwidthBps = 0; // ENet host outgoing cap, bytes/s; 0 = unlimited
+        // empty = network admin commands disabled; overridden by --admin-token at runtime
+        std::string operatorPassword;
+        int preHandshakeRateLimitCount = 20; // max CONNECT attempts per IP per window; 0 = disabled
+        int preHandshakeWindowMs = 1000;     // sliding window in milliseconds
+        int maxConnectionsPerIp = 0;         // max simultaneous connections per IP; 0 = unlimited
+        int adminAuthMaxFailures = 5;        // consecutive wrong-password attempts before per-IP lockout [1,100]
+        int adminAuthLockoutSeconds = 300;   // per-IP lockout duration in seconds [1,86400]
+        int idleTimeoutS = 0;                // disconnect peers with no activity for N seconds; 0 = disabled [0,86400]
+        // World-mutating request limits (#1069). A seat or team grant despawns and respawns an entity
+        // and re-sends the whole ConnectAck type table; a heartbeat draws a MsgPeerDelay reply.
+        int seatRequestRateLimitPerS = 2; // seat requests per second per peer [1,60]
+        int teamSwitchCooldownS = 5;      // seconds between accepted team switches per peer; 0 = none [0,3600]
+        int heartbeatRateLimitPerS = 4;   // heartbeats per second per peer that draw a reply [1,60]
+    };
+    SecurityConfig security;
 
-    // [rcon]
     struct RconConfig {
         bool enabled = false;
         uint16_t port = 27015;
@@ -220,68 +306,13 @@ struct ServerConfig {
     };
     HttpAdminConfig httpAdmin;
 
-    // [ai.mcp] — the Model Context Protocol surface (#601). A SECOND FRONTEND on the [http_admin]
-    // listener, not a second server: it shares that listener, that token table and that per-IP
-    // lockout, so enabling MCP requires [http_admin] to be enabled too.
-    //
-    // Distinct from the [ai] difficulty section above, which is what the sim runs.
-    struct McpConfig {
-        bool enabled = false;
-        std::string path = "/mcp"; // Streamable HTTP endpoint: POST for calls, GET for notifications
-        // Default autonomy tier for a token whose row does not override it. `observe` — read-only —
-        // because a default that could act would make forgetting a field into granting authority.
-        std::string autonomy = "observe";
-        // Commands an `act`-tier token may run. EMPTY PERMITS NOTHING: enabling MCP without listing
-        // commands does not implicitly authorize all of them.
-        std::vector<std::string> allowlist;
-        int rateLimitPerMin = 120; // per token; <= 0 disables the limiter
-        int maxSessions = 32;      // concurrent MCP sessions; oldest idle is evicted beyond this
-    };
-    McpConfig mcp;
-
-    // [ai.provider] — the generative-AI provider seam (#163). OPT-IN: an operator must set
-    // `enabled = true` before the server will talk to any model at all.
-    //
-    // Every AI feature degrades to its scripted path when this is off, and that fallback is the
-    // CI-tested one (docs/developer/ai-architecture.md §7).
-    struct AiProviderConfig {
-        bool enabled = false;
-        std::string plugin;   // path to an IWorldAiProvider shared library; empty = NullAiProvider
-        std::string endpoint; // backend-specific; interpreted by the plugin, not by fl-server
-        std::string model;
-        // The API key is NEVER a config value. `apiKeyEnv` names the ENVIRONMENT VARIABLE holding
-        // it, defaulting to FL_AI_API_KEY — the same rule the ai_eval harness follows and the same
-        // reason: a key in server.toml gets committed, and a key on a command line shows up in `ps`.
-        std::string apiKeyEnv = "FL_AI_API_KEY";
-        int maxCallsPerMinute = 10;
-        int worldEvolutionIntervalMin = 60; // in-game minutes between evolution calls
-    };
-    AiProviderConfig aiProvider;
-
-    // [ai.chat_intent] — free-text wingman commands over team chat (#611).
-    //
-    // Needs [ai.provider] with the `intent` capability. With either missing, the radio menu is the
-    // path — which is the #769 decision, not a degradation to apologise for.
-    struct ChatIntentConfig {
-        bool enabled = false;
-        // Intent requests per minute per peer. Separate from the chat rate limit and much lower: a
-        // chat line is free, a model call is not, and the team channel must not become a lever
-        // against the server's own inference budget.
-        int rateLimitPerMin = 6;
-        // Tell the pilot when a call was understood, declined, or not attempted. Off would leave a
-        // player unable to tell "the wingman ignored me" from "the feature is not on".
-        bool notifyOnDecline = true;
-    };
-    ChatIntentConfig chatIntent;
-
-    // [metrics]
     struct MetricsConfig {
         std::string tickJsonPath;           // empty = disabled; atomic per-interval tick-budget JSON export
         uint32_t tickJsonIntervalMs = 1000; // write cadence in ms; [100, 60000]
     };
     MetricsConfig metrics;
 
-    // [wind]  — altitude wind profile (#489)
+    // Altitude wind profile (#489)
     struct WindConfig {
         std::string profilePath; // empty = disabled; path (relative to the config dir) to a wind
                                  // profile TOML (see tools/gen_wind_profile.py). Loaded once at
@@ -289,13 +320,13 @@ struct ServerConfig {
     };
     WindConfig wind;
 
-    // [trace]  — server-side input tracing (#560)
+    // Server-side input tracing (#560)
     struct TraceConfig {
         std::string inputTraceDir; // empty = disabled; per-peer FLIT traces written here
     };
     TraceConfig trace;
 
-    // [replay]  — server-side match recording to `.flrep` (#643)
+    // Server-side match recording to `.flrep` (#643)
     //
     // On by default: #41's acceptance is "every mission recorded automatically", and a replay nobody
     // remembered to switch on is not a replay. The disk cost is bounded by rotation, not by trust.
@@ -317,7 +348,6 @@ struct ServerConfig {
     };
     ReplayConfig replay;
 
-    // [spawn]
     struct SpawnPointDef {
         double x = 0.0;
         double z = 0.0;
@@ -328,7 +358,7 @@ struct ServerConfig {
     };
     SpawnConfig spawn;
 
-    // [flight]  — the player's flight: AI wingmen auto-spawned per connecting peer (#610)
+    // The player's flight: AI wingmen auto-spawned per connecting peer (#610)
     //
     // `size` DEFAULTS TO 0 on purpose. N extra AI entities per peer would move every scale-gate and
     // load-test number, so a dedicated server is byte-for-byte unchanged unless an operator asks for
@@ -352,21 +382,21 @@ struct ServerConfig {
     };
     FlightConfig flight;
 
-    // [atc]  — air-traffic control service (#706)
+    // Air-traffic control service (#706)
     struct AtcConfig {
         bool enabled = true;                                     // build the ATC service + facilities
         std::string scrambleEntityType = "builtin:debug-entity"; // default type for atc_scramble / atc.scramble
     };
     AtcConfig atc;
 
-    // [chat]  — in-match text chat (#646)
+    // In-match text chat (#646)
     struct ChatConfig {
         bool enabled = true;   // route player chat lines; false = drop all chat
         int rateLimitPerS = 2; // chat lines per second per peer; [1, 60]
     };
     ChatConfig chat;
 
-    // [voice]  — in-game voice comms (Epic J, #532)
+    // In-game voice comms (Epic J, #532)
     //
     // Nets are DATA, not code: an operator adds a "tanker" or "awacs" net without an engine change.
     // Leave [[voice.nets]] out entirely and the compiled-in stack (team / flight / atc / proximity)
@@ -394,7 +424,7 @@ struct ServerConfig {
     };
     VoiceConfig voice;
 
-    // [network]  — transport backend selection (#507)
+    // Transport backend selection (#507)
     struct NetworkConfig {
         std::string transport = "gns"; // "gns" (GameNetworkingSockets, default) or "enet" (enet6)
         bool allowInsecure = true;     // GNS: accept unauthenticated peers (no Steam PKI); AllowWithoutAuth
@@ -421,7 +451,13 @@ struct WindProfileKnotDef {
 std::vector<WindProfileKnotDef> parseWindProfile(std::string_view content, ILogger* log);
 
 // Parse server configuration from a TOML string.
-// On parse error, logs a Warn and returns a default-constructed ServerConfig.
-ServerConfig parseServerConfig(std::string_view content, ILogger* log);
+//
+// On parse error, logs a Warn and returns a default-constructed ServerConfig — which is
+// INDISTINGUISHABLE from a valid file that happens to set nothing, so `parseFailed` exists for the
+// caller that cannot afford to confuse the two. `reload_config` is exactly that caller: without it, a
+// typo in server.toml would apply DEFAULTS over an operator's live MOTD, draw distance and
+// congestion levers, and report it as a successful reload. Null = don't care (startup, where
+// defaults are the documented fallback).
+ServerConfig parseServerConfig(std::string_view content, ILogger* log, bool* parseFailed = nullptr);
 
 } // namespace fl

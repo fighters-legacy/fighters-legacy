@@ -2,6 +2,7 @@
 #pragma once
 
 #include "ServerUptime.h"
+#include "server_config.h"
 
 #include <config/DifficultySettings.h> // AiScaling — server-side difficulty (#682)
 #include <net/AdminChannel.h>          // the enumerable admin-frontend registry (#1079)
@@ -49,6 +50,11 @@ struct ServerCommandContext {
     struct ServerEnv {
         ILogger* logger{nullptr};         // for reload_config parse logging
         std::string* configPath{nullptr}; // path to server.toml, for reload_config
+        // The config the process STARTED with (#1081). reload_config diffs the freshly parsed file
+        // against this to name the restart-only keys it ignored, and hot appliers read restart-only
+        // values from it so a reload cannot apply one through the back door. Never rewritten: a
+        // restart-only key stays "not in effect" until the restart, which is the operator's question.
+        const ServerConfig* runningConfig{nullptr};
         // How long the server has been up, for `status`. A ServerUptime and not a bare time_point so
         // that it cannot be the clock epoch, and so that every frontend reports the same number --
         // see ServerUptime.h (#1048). Default-constructed = "started when this context was built",

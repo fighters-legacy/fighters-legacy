@@ -16,6 +16,7 @@ target_include_directories(fl-server-config PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
 # the transport is picked at runtime via createNetwork(cfg.network.transport).
 add_library(fl-server-lib STATIC
     ServerCommands.cpp
+    ConfigReload.cpp
     IpListFile.cpp
     RconServer.cpp
     HttpAdminServer.cpp

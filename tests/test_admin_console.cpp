@@ -21,10 +21,13 @@
 #include <ILogger.h>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <weather/WeatherController.h>
@@ -182,6 +185,114 @@ TEST_CASE("AdminConsole: reload_config with null configPath returns error", "[ad
     auto reg = makeRegistry(); // configPath == nullptr
     std::string out = reg.dispatch("reload_config", systemIssuer());
     CHECK(out.find("not available") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole: reload_config without a running config to diff against says so", "[admin_console]") {
+    ServerCommandContext ctx;
+    std::string path = "/nonexistent/server.toml";
+    ctx.env.configPath = &path; // but env.runningConfig is null
+    auto reg = makeRegistry(ctx);
+    CHECK(reg.dispatch("reload_config", systemIssuer()).find("not available") != std::string::npos);
+}
+
+namespace {
+
+// Writes a server.toml the reload_config tests can point at. Removed on destruction so a failing
+// test does not leave one behind for the next run to read.
+struct TempConfig {
+    std::filesystem::path path;
+    explicit TempConfig(std::string_view body, std::string_view stem) {
+        path = std::filesystem::temp_directory_path() / (std::string("fl_") + std::string(stem) + ".toml");
+        std::ofstream(path) << body;
+    }
+    ~TempConfig() {
+        std::error_code ec;
+        std::filesystem::remove(path, ec);
+    }
+    std::string str() const {
+        return path.string();
+    }
+};
+
+} // namespace
+
+TEST_CASE("AdminConsole: reload_config names an edited restart-only key instead of dropping it",
+          "[admin_console][config_reload]") {
+    // The reported failure: an operator edits a restart-only key and gets silence, so they cannot
+    // tell "applied" from "ignored" (#1081).
+    TempConfig file("[server]\nport = 4779\n", "reload_restart_only");
+    ServerConfig running; // port 4778
+    ServerCommandContext ctx;
+    std::string path = file.str();
+    ctx.env.configPath = &path;
+    ctx.env.runningConfig = &running;
+    auto reg = makeRegistry(ctx);
+
+    const std::string out = reg.dispatch("reload_config", systemIssuer());
+    CHECK(out.find("restart required for 1 changed key(s)") != std::string::npos);
+    CHECK(out.find("server.port 4778 -> 4779") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole: reload_config reports the hot keys that changed", "[admin_console][config_reload]") {
+    TempConfig file("[world]\ndraw_distance_km = 50.0\n", "reload_hot");
+    ServerConfig running; // draw_distance_km 100
+    ServerCommandContext ctx;
+    std::string path = file.str();
+    ctx.env.configPath = &path;
+    ctx.env.runningConfig = &running;
+    auto reg = makeRegistry(ctx);
+
+    const std::string out = reg.dispatch("reload_config", systemIssuer());
+    CHECK(out.find("changed: world.draw_distance_km 100 -> 50") != std::string::npos);
+    CHECK(out.find("restart required") == std::string::npos);
+}
+
+TEST_CASE("AdminConsole: reload_config of an unedited file reports neither list", "[admin_console][config_reload]") {
+    TempConfig file("[server]\nname = \"Unnamed Server\"\n", "reload_noop");
+    ServerConfig running;
+    ServerCommandContext ctx;
+    std::string path = file.str();
+    ctx.env.configPath = &path;
+    ctx.env.runningConfig = &running;
+    auto reg = makeRegistry(ctx);
+
+    const std::string out = reg.dispatch("reload_config", systemIssuer());
+    CHECK(out.find("hot key(s)") != std::string::npos);
+    CHECK(out.find("changed:") == std::string::npos);
+    CHECK(out.find("restart required") == std::string::npos);
+}
+
+TEST_CASE("AdminConsole: reload_config refuses a file with a syntax error rather than applying defaults",
+          "[admin_console][config_reload]") {
+    // parseServerConfig answers a syntax error with a DEFAULT config, which is indistinguishable from
+    // a valid file that sets nothing. Applying it would reset the live MOTD, draw distance and
+    // congestion levers because the operator mistyped a bracket -- and report success.
+    TempConfig file("[world]\ndraw_distance_km = 42.0\n[world]\n", "reload_broken"); // duplicate table
+    ServerConfig running;
+    ServerCommandContext ctx;
+    std::string path = file.str();
+    ctx.env.configPath = &path;
+    ctx.env.runningConfig = &running;
+    auto reg = makeRegistry(ctx);
+
+    const std::string out = reg.dispatch("reload_config", systemIssuer());
+    CHECK(out.find("syntax error") != std::string::npos);
+    CHECK(out.find("nothing was applied") != std::string::npos);
+    CHECK(out.find("hot key(s)") == std::string::npos);
+}
+
+TEST_CASE("AdminConsole: reload_config never prints a credential", "[admin_console][config_reload]") {
+    TempConfig file("[security]\noperator_password = \"hunter2\"\n", "reload_secret");
+    ServerConfig running;
+    ServerCommandContext ctx;
+    std::string path = file.str();
+    ctx.env.configPath = &path;
+    ctx.env.runningConfig = &running;
+    auto reg = makeRegistry(ctx);
+
+    const std::string out = reg.dispatch("reload_config", systemIssuer());
+    CHECK(out.find("security.operator_password <unset> -> <set>") != std::string::npos);
+    CHECK(out.find("hunter2") == std::string::npos);
 }
 
 // ---------------------------------------------------------------------------
