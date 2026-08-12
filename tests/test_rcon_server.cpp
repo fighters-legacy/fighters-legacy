@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "IClock.h"
-#include "RconDrainHelper.h"
 #include "RconServer.h"
 #include "console/CommandRegistry.h"
 #include "console/CommandShell.h"
 #include "mock_hal.h"
+#include "net/AdminChannel.h"
 #include "server_config.h"
 
 #include <catch2/catch_approx.hpp>
@@ -290,69 +290,34 @@ TEST_CASE("AuthTracker: clearLockout is a no-op when IP is not locked", "[rcon][
     CHECK_FALSE(tracker.isLockedOut("1.2.3.4"));
 }
 
-TEST_CASE("RconServer: clearLockout returns false for non-locked IP and does not crash", "[rcon]") {
+TEST_CASE("RconServer: its lockout is the channel's, readable without a socket", "[rcon]") {
+    // The server no longer owns an AuthTracker or a mutex around one (#1079): admin_unlock and
+    // admin_auth_status reach the same state through the registry, so there is nothing to forward.
     MockLogger log;
-    CommandRegistry reg;
+    ManualClock clk;
+    AdminChannel::Config cc;
+    cc.name = "rcon";
+    cc.maxAuthFailures = 3;
+    cc.lockoutSeconds = 120;
+    AdminChannel channel([](std::string_view, const CommandIssuer&) { return std::string{}; }, cc, clk);
     ServerConfig::RconConfig cfg{};
-    cfg.maxAuthFailures = 5;
-    cfg.lockoutSeconds = 60;
-    RconServer srv(reg, cfg, log);
-    // start() not called — no sockets opened. Impl is constructed; clearLockout
-    // exercises the pimpl forwarding + mutex path without network infrastructure.
-    CHECK_FALSE(srv.clearLockout("1.2.3.4"));
-}
+    RconServer srv(channel, cfg, log); // start() not called — no sockets opened
 
-TEST_CASE("RconServer: getRconAuthSummary returns empty summary on fresh server", "[rcon]") {
-    MockLogger log;
-    CommandRegistry reg;
-    ServerConfig::RconConfig cfg{};
-    cfg.maxAuthFailures = 5;
-    cfg.lockoutSeconds = 60;
-    RconServer srv(reg, cfg, log);
-    // start() not called — exercises pimpl forwarding + mutex path.
-    auto s = srv.getRconAuthSummary();
+    CHECK_FALSE(channel.clearLockout("1.2.3.4"));
+    auto s = channel.authSummary();
     CHECK(s.activeCount == 0);
-    CHECK(s.threshold == 5);
-    CHECK(s.entries.empty());
-}
-
-TEST_CASE("RconServer: getRconAuthSummary threshold matches config", "[rcon]") {
-    MockLogger log;
-    CommandRegistry reg;
-    ServerConfig::RconConfig cfg{};
-    cfg.maxAuthFailures = 3;
-    cfg.lockoutSeconds = 120;
-    RconServer srv(reg, cfg, log);
-    auto s = srv.getRconAuthSummary();
     CHECK(s.threshold == 3);
-    CHECK(s.activeCount == 0);
     CHECK(s.entries.empty());
 }
 
 TEST_CASE("RconServer: setClock can be called before start and does not crash", "[rcon]") {
     MockLogger log;
-    CommandRegistry reg;
+    ManualClock clk;
+    AdminChannel channel([](std::string_view, const CommandIssuer&) { return std::string{}; },
+                         AdminChannel::Config{"rcon"}, clk);
     ServerConfig::RconConfig cfg{};
-    cfg.maxAuthFailures = 5;
-    cfg.lockoutSeconds = 60;
-    RconServer srv(reg, cfg, log);
-    fl::ManualClock clk;
+    RconServer srv(channel, cfg, log);
     srv.setClock(clk); // pimpl forwarding; no start() called, no sockets
-}
-
-TEST_CASE("RconServer: setClock propagates to internal AuthTracker", "[rcon]") {
-    MockLogger log;
-    CommandRegistry reg;
-    ServerConfig::RconConfig cfg{};
-    cfg.maxAuthFailures = 2;
-    cfg.lockoutSeconds = 60;
-    RconServer srv(reg, cfg, log);
-    fl::ManualClock clk;
-    srv.setClock(clk);
-    // AuthTracker now uses clk; summary call still works, threshold unchanged
-    auto s = srv.getRconAuthSummary();
-    CHECK(s.threshold == 2);
-    CHECK(s.activeCount == 0);
 }
 
 TEST_CASE("AuthTracker: lockedOutCount returns 0 initially", "[rcon][auth_tracker]") {
@@ -598,272 +563,188 @@ TEST_CASE("RCON drain: multi-line output stays within single kMaxBodyPerPacket c
     auto chunks = rcon::splitResponse(combined);
     CHECK(chunks.size() == 1); // all lines fit in a single packet
 }
-
 // ---------------------------------------------------------------------------
-// checkAndFireDrains — drain deadline unit tests
+// Drain encoding + deadline
+//
+// The DEADLINE is AdminChannel's now (#1079) -- both frontends hand-rolled the same 20 ms wall-clock
+// rule, so it is tested once, against the channel. What stays RCON's is the ENCODING: joining the
+// drained lines, splitting at kMaxBodyPerPacket, and the empty sentinel that tells a Source client the
+// multi-packet response ended. These tests drive the two together the way ioLoop does.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("RCON drain deadline: does not fire when now < drainDeadline", "[rcon][drain][deadline]") {
+namespace {
+
+// The channel an RCON client's drain is armed on, wired to a real CommandShell exactly as fl-server
+// wires it. `kToken` stands in for the per-client id ioLoop assigns on accept.
+constexpr uint64_t kToken = 1;
+
+struct DrainFixture {
     MockLogger log;
     CommandRegistry reg;
-    CommandShell shell(log, reg);
+    CommandShell shell{log, reg};
     ManualClock clk;
+    AdminChannel channel{[](std::string_view, const CommandIssuer&) { return std::string{}; },
+                         AdminChannel::Config{"rcon"}, clk};
+    std::vector<uint8_t> sendBuf;
 
-    rcon::DrainClientInfo c;
-    c.connected = true;
-    c.hasPendingDrain = true;
-    c.drainMark = shell.mark();
-    c.drainPacketId = 1;
-    c.drainDeadline = clk.now() + std::chrono::milliseconds(100);
+    DrainFixture() {
+        channel.setShellTap([this]() { return shell.mark(); }, [this](int m) { return shell.drainSince(m); });
+    }
 
-    shell.print("async output");
+    // One service pass, encoding whatever fired into sendBuf under `packetId`.
+    void service(int32_t packetId) {
+        channel.serviceDrains([&](uint64_t, const std::vector<std::string>& lines) {
+            auto bytes = rcon::encodeDrainPackets(packetId, lines);
+            sendBuf.insert(sendBuf.end(), bytes.begin(), bytes.end());
+        });
+    }
+};
 
-    std::vector<rcon::DrainClientInfo*> clients{&c};
-    rcon::checkAndFireDrains(clients, clk.now(), &shell); // now < deadline
+} // namespace
 
-    CHECK(c.hasPendingDrain);
-    CHECK(c.sendBuf.empty());
+TEST_CASE("RCON drain: does not fire before the channel's deadline", "[rcon][drain][deadline]") {
+    DrainFixture f;
+    f.channel.armDrain(kToken);
+    f.shell.print("async output");
+
+    f.service(1);
+
+    CHECK(f.channel.pendingDrainCount() == 1);
+    CHECK(f.sendBuf.empty());
 }
 
-TEST_CASE("RCON drain deadline: fires when now >= drainDeadline, single line", "[rcon][drain][deadline]") {
-    MockLogger log;
-    CommandRegistry reg;
-    CommandShell shell(log, reg);
-    ManualClock clk;
+TEST_CASE("RCON drain: fires once the deadline passes, single line", "[rcon][drain][deadline]") {
+    DrainFixture f;
+    f.channel.armDrain(kToken);
+    f.shell.print("kick confirmed");
+    f.clk.advance(std::chrono::milliseconds(20));
 
-    rcon::DrainClientInfo c;
-    c.connected = true;
-    c.hasPendingDrain = true;
-    c.drainMark = shell.mark();
-    c.drainPacketId = 7;
-    c.drainDeadline = clk.now(); // deadline == now -> fires
+    f.service(7);
 
-    shell.print("kick confirmed");
-
-    std::vector<rcon::DrainClientInfo*> clients{&c};
-    rcon::checkAndFireDrains(clients, clk.now(), &shell);
-
-    CHECK_FALSE(c.hasPendingDrain);
-    REQUIRE_FALSE(c.sendBuf.empty());
-
+    CHECK(f.channel.pendingDrainCount() == 0);
+    REQUIRE_FALSE(f.sendBuf.empty());
     rcon::RconPacket pkt;
-    int consumed = rcon::decodePacket(c.sendBuf.data(), static_cast<int>(c.sendBuf.size()), pkt);
+    const int consumed = rcon::decodePacket(f.sendBuf.data(), static_cast<int>(f.sendBuf.size()), pkt);
     REQUIRE(consumed > 0);
     CHECK(pkt.id == 7);
     CHECK(pkt.type == rcon::kTypeResponseValue);
     CHECK(pkt.body.find("kick confirmed") != std::string::npos);
 }
 
-TEST_CASE("RCON drain deadline: fires exactly once, not retriggered on second call", "[rcon][drain][deadline]") {
-    MockLogger log;
-    CommandRegistry reg;
-    CommandShell shell(log, reg);
-    ManualClock clk;
+TEST_CASE("RCON drain: fires exactly once, not retriggered on the next service pass", "[rcon][drain][deadline]") {
+    DrainFixture f;
+    f.channel.armDrain(kToken);
+    f.shell.print("first output");
+    f.clk.advance(std::chrono::milliseconds(20));
 
-    rcon::DrainClientInfo c;
-    c.connected = true;
-    c.hasPendingDrain = true;
-    c.drainMark = shell.mark();
-    c.drainPacketId = 1;
-    c.drainDeadline = clk.now();
+    f.service(1);
+    const std::size_t afterFirst = f.sendBuf.size();
+    REQUIRE(afterFirst > 0);
 
-    shell.print("first output");
+    f.shell.print("second output");
+    f.service(1);
 
-    std::vector<rcon::DrainClientInfo*> clients{&c};
-    rcon::checkAndFireDrains(clients, clk.now(), &shell); // fires
-
-    CHECK_FALSE(c.hasPendingDrain);
-    std::size_t bufAfterFirst = c.sendBuf.size();
-
-    shell.print("second output");
-
-    rcon::checkAndFireDrains(clients, clk.now(), &shell); // hasPendingDrain is false — no fire
-
-    CHECK(c.sendBuf.size() == bufAfterFirst);
+    CHECK(f.sendBuf.size() == afterFirst);
 }
 
-TEST_CASE("RCON drain deadline: fires but queues no packets when shell has no output since mark",
-          "[rcon][drain][deadline]") {
-    MockLogger log;
-    CommandRegistry reg;
-    CommandShell shell(log, reg);
-    ManualClock clk;
+TEST_CASE("RCON drain: queues no packets when the shell wrote nothing since the mark", "[rcon][drain][deadline]") {
+    DrainFixture f;
+    f.shell.print("before mark"); // written before arming — not visible to drainSince
+    f.channel.armDrain(kToken);
+    f.clk.advance(std::chrono::milliseconds(20));
 
-    shell.print("before mark"); // written before mark — not visible to drainSince
+    f.service(3);
 
-    rcon::DrainClientInfo c;
-    c.connected = true;
-    c.hasPendingDrain = true;
-    c.drainMark = shell.mark(); // mark taken now
-    c.drainPacketId = 3;
-    c.drainDeadline = clk.now();
-
-    // No shell.print() after mark
-
-    std::vector<rcon::DrainClientInfo*> clients{&c};
-    rcon::checkAndFireDrains(clients, clk.now(), &shell);
-
-    CHECK_FALSE(c.hasPendingDrain); // cleared even with no output
-    CHECK(c.sendBuf.empty());
+    CHECK(f.channel.pendingDrainCount() == 0); // cleared even with no output
+    CHECK(f.sendBuf.empty());
 }
 
-TEST_CASE("RCON drain deadline: null shell is a no-op", "[rcon][drain][deadline]") {
-    rcon::DrainClientInfo c;
-    c.connected = true;
-    c.hasPendingDrain = true;
-    c.drainDeadline = std::chrono::steady_clock::time_point{}; // epoch = well in the past
+TEST_CASE("RCON drain: a client that disconnected before the deadline is not written to", "[rcon][drain][deadline]") {
+    // ioLoop cancels by token when it reaps a closed socket; nothing reaches a send buffer that is
+    // about to be destroyed.
+    DrainFixture f;
+    f.channel.armDrain(kToken);
+    f.shell.print("output");
+    f.channel.cancelDrainsWhere([](uint64_t t) { return t == kToken; });
+    f.clk.advance(std::chrono::milliseconds(20));
 
-    std::vector<rcon::DrainClientInfo*> clients{&c};
-    rcon::checkAndFireDrains(clients, std::chrono::steady_clock::now(), nullptr);
+    f.service(1);
 
-    CHECK(c.hasPendingDrain); // unchanged
-    CHECK(c.sendBuf.empty());
+    CHECK(f.channel.pendingDrainCount() == 0);
+    CHECK(f.sendBuf.empty());
 }
 
-TEST_CASE("RCON drain deadline: disconnected client is skipped even when deadline passed", "[rcon][drain][deadline]") {
-    MockLogger log;
-    CommandRegistry reg;
-    CommandShell shell(log, reg);
-    ManualClock clk;
+TEST_CASE("RCON drain: with two clients armed, only the expired one fires", "[rcon][drain][deadline]") {
+    DrainFixture f;
+    f.channel.armDrain(10); // client A, armed now
+    f.clk.advance(std::chrono::milliseconds(20));
+    f.channel.armDrain(20); // client B, armed 20 ms later — deadline still ahead
+    f.shell.print("for A");
 
-    rcon::DrainClientInfo c;
-    c.connected = false; // disconnected
-    c.hasPendingDrain = true;
-    c.drainMark = shell.mark();
-    c.drainDeadline = clk.now();
+    std::vector<uint64_t> fired;
+    f.channel.serviceDrains([&](uint64_t token, const std::vector<std::string>&) { fired.push_back(token); });
 
-    shell.print("output");
-
-    std::vector<rcon::DrainClientInfo*> clients{&c};
-    rcon::checkAndFireDrains(clients, clk.now(), &shell);
-
-    CHECK(c.hasPendingDrain); // not cleared
-    CHECK(c.sendBuf.empty());
+    REQUIRE(fired.size() == 1);
+    CHECK(fired[0] == 10);
+    CHECK(f.channel.pendingDrainCount() == 1); // B still waiting
 }
 
-TEST_CASE("RCON drain deadline: multiple clients, only deadline-expired ones fire", "[rcon][drain][deadline]") {
-    MockLogger log;
-    CommandRegistry reg;
-    CommandShell shell(log, reg);
-    ManualClock clk;
+TEST_CASE("RCON drain: multiple lines are joined with newlines in one packet body", "[rcon][drain][deadline]") {
+    DrainFixture f;
+    f.channel.armDrain(kToken);
+    f.shell.print("line one");
+    f.shell.print("line two");
+    f.shell.print("line three");
+    f.clk.advance(std::chrono::milliseconds(20));
 
-    // Client A: deadline in the future — should NOT fire
-    rcon::DrainClientInfo a;
-    a.connected = true;
-    a.hasPendingDrain = true;
-    a.drainMark = shell.mark();
-    a.drainPacketId = 10;
-    a.drainDeadline = clk.now() + std::chrono::milliseconds(200);
+    f.service(5);
 
-    shell.print("for A");
-
-    // Client B: deadline already passed — should fire
-    rcon::DrainClientInfo b;
-    b.connected = true;
-    b.hasPendingDrain = true;
-    b.drainMark = shell.mark();
-    b.drainPacketId = 20;
-    b.drainDeadline = clk.now();
-
-    shell.print("for B");
-
-    std::vector<rcon::DrainClientInfo*> clients{&a, &b};
-    rcon::checkAndFireDrains(clients, clk.now(), &shell);
-
-    CHECK(a.hasPendingDrain); // A's deadline not yet reached
-    CHECK(a.sendBuf.empty());
-    CHECK_FALSE(b.hasPendingDrain); // B fired
-    REQUIRE_FALSE(b.sendBuf.empty());
+    REQUIRE_FALSE(f.sendBuf.empty());
     rcon::RconPacket pkt;
-    rcon::decodePacket(b.sendBuf.data(), static_cast<int>(b.sendBuf.size()), pkt);
-    CHECK(pkt.id == 20);
-    CHECK(pkt.body.find("for B") != std::string::npos);
-}
-
-TEST_CASE("RCON drain deadline: multiple lines joined with newline in packet body", "[rcon][drain][deadline]") {
-    MockLogger log;
-    CommandRegistry reg;
-    CommandShell shell(log, reg);
-    ManualClock clk;
-
-    rcon::DrainClientInfo c;
-    c.connected = true;
-    c.hasPendingDrain = true;
-    c.drainMark = shell.mark();
-    c.drainPacketId = 5;
-    c.drainDeadline = clk.now();
-
-    shell.print("line one");
-    shell.print("line two");
-    shell.print("line three");
-
-    std::vector<rcon::DrainClientInfo*> clients{&c};
-    rcon::checkAndFireDrains(clients, clk.now(), &shell);
-
-    CHECK_FALSE(c.hasPendingDrain);
-    REQUIRE_FALSE(c.sendBuf.empty());
-
-    rcon::RconPacket pkt;
-    int consumed = rcon::decodePacket(c.sendBuf.data(), static_cast<int>(c.sendBuf.size()), pkt);
+    const int consumed = rcon::decodePacket(f.sendBuf.data(), static_cast<int>(f.sendBuf.size()), pkt);
     REQUIRE(consumed > 0);
-    CHECK(pkt.body.find("line one") != std::string::npos);
-    CHECK(pkt.body.find("line two") != std::string::npos);
-    CHECK(pkt.body.find("line three") != std::string::npos);
-    // Lines are joined by '\n'
     CHECK(pkt.body.find("line one\nline two") != std::string::npos);
+    CHECK(pkt.body.find("line three") != std::string::npos);
 }
 
-TEST_CASE("RCON drain deadline: large output splits into multiple chunks with trailing empty sentinel",
-          "[rcon][drain][deadline]") {
-    MockLogger log;
-    CommandRegistry reg;
-    CommandShell shell(log, reg);
-    ManualClock clk;
+TEST_CASE("RCON drain: large output splits into chunks with a trailing empty sentinel", "[rcon][drain][deadline]") {
+    DrainFixture f;
+    f.channel.armDrain(kToken);
+    // A single line larger than kMaxBodyPerPacket (4086) forces the split: 5000 'x' →
+    // chunk1(4086) + chunk2(914) + sentinel.
+    f.shell.print(std::string(5000, 'x'));
+    f.clk.advance(std::chrono::milliseconds(20));
 
-    rcon::DrainClientInfo c;
-    c.connected = true;
-    c.hasPendingDrain = true;
-    c.drainMark = shell.mark();
-    c.drainPacketId = 9;
-    c.drainDeadline = clk.now();
+    f.service(9);
 
-    // Write a single line larger than kMaxBodyPerPacket (4086 bytes) to force splitting.
-    // 5000 'x' chars → splitResponse produces chunk1(4086) + chunk2(914).
-    shell.print(std::string(5000, 'x'));
-
-    std::vector<rcon::DrainClientInfo*> clients{&c};
-    rcon::checkAndFireDrains(clients, clk.now(), &shell);
-
-    CHECK_FALSE(c.hasPendingDrain);
-    REQUIRE_FALSE(c.sendBuf.empty());
-
-    // Decode three packets: chunk1, chunk2, empty sentinel.
+    REQUIRE_FALSE(f.sendBuf.empty());
     int offset = 0;
-    int total = static_cast<int>(c.sendBuf.size());
+    const int total = static_cast<int>(f.sendBuf.size());
 
     rcon::RconPacket p1;
-    int c1 = rcon::decodePacket(c.sendBuf.data() + offset, total - offset, p1);
+    const int c1 = rcon::decodePacket(f.sendBuf.data() + offset, total - offset, p1);
     REQUIRE(c1 > 0);
     CHECK(p1.id == 9);
-    CHECK(p1.type == rcon::kTypeResponseValue);
     CHECK(p1.body.size() == static_cast<std::size_t>(rcon::kMaxBodyPerPacket));
     offset += c1;
 
     rcon::RconPacket p2;
-    int c2 = rcon::decodePacket(c.sendBuf.data() + offset, total - offset, p2);
+    const int c2 = rcon::decodePacket(f.sendBuf.data() + offset, total - offset, p2);
     REQUIRE(c2 > 0);
     CHECK(p2.id == 9);
-    CHECK(p2.type == rcon::kTypeResponseValue);
     CHECK(p2.body.size() == 5000 - static_cast<std::size_t>(rcon::kMaxBodyPerPacket));
     offset += c2;
 
     rcon::RconPacket sentinel;
-    int cs = rcon::decodePacket(c.sendBuf.data() + offset, total - offset, sentinel);
+    const int cs = rcon::decodePacket(f.sendBuf.data() + offset, total - offset, sentinel);
     REQUIRE(cs > 0);
     CHECK(sentinel.id == 9);
-    CHECK(sentinel.type == rcon::kTypeResponseValue);
     CHECK(sentinel.body.empty()); // trailing empty sentinel
     offset += cs;
 
     CHECK(offset == total); // no extra bytes
+}
+
+TEST_CASE("RCON drain: no lines encodes to no bytes at all", "[rcon][drain]") {
+    CHECK(rcon::encodeDrainPackets(1, {}).empty());
 }

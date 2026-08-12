@@ -392,12 +392,17 @@ struct AsyncAckFixture {
     GameLoop loop{noop, log}; // do NOT call loop.start()
     static int bcast_sentinel;
     static int em_sentinel;
+    fl::AdminChannelRegistry channels;
+    fl::AdminChannel enet{[](std::string_view, const fl::CommandIssuer&) { return std::string{}; },
+                          fl::AdminChannel::Config{"enet"}, fl::SystemClock::instance()};
     ServerCommandContext ctx;
 
     AsyncAckFixture() {
         ctx.sim.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&bcast_sentinel);
         ctx.sim.entityManager = reinterpret_cast<fl::EntityManager*>(&em_sentinel);
         ctx.sim.gameLoop = &loop;
+        channels.add(enet);
+        ctx.adminChannels = &channels;
     }
 };
 int AsyncAckFixture::bcast_sentinel = 0;
@@ -472,20 +477,22 @@ TEST_CASE("AdminConsole async ack: admin_unlock IP returns non-empty ack", "[adm
     CHECK(out.find("1.2.3.4") != std::string::npos);
 }
 
-TEST_CASE("AdminConsole async ack: admin_unlock with clearRconLockout set returns ack with IP",
+TEST_CASE("AdminConsole async ack: admin_unlock with several channels registered returns ack with IP",
           "[admin_console][async_ack]") {
     AsyncAckFixture f;
-    f.ctx.rcon.clearRconLockout = [](const std::string&) -> bool { return false; };
+    fl::AdminChannel rcon([](std::string_view, const fl::CommandIssuer&) { return std::string{}; },
+                          fl::AdminChannel::Config{"rcon"}, fl::SystemClock::instance());
+    f.channels.add(rcon);
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("admin_unlock 1.2.3.4", systemIssuer());
     CHECK_FALSE(out.empty());
     CHECK(out.find("1.2.3.4") != std::string::npos);
 }
 
-TEST_CASE("AdminConsole: admin_unlock help text mentions both channels", "[admin_console]") {
+TEST_CASE("AdminConsole: admin_unlock help text promises every channel, not a fixed list", "[admin_console]") {
     auto reg = makeRegistry();
     std::string help = reg.helpFor("admin_unlock");
-    CHECK(help.find("RCON") != std::string::npos);
+    CHECK(help.find("every admin channel") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole async ack: spawn returns non-empty ack with type", "[admin_console][async_ack]") {
@@ -687,12 +694,39 @@ struct WbFixture {
     fl::WorldBroadcaster broadcaster{em, registry, net, log};
     NoopSim2 noop;
     GameLoop loop{noop, log}; // do NOT call loop.start()
+    fl::AdminChannelRegistry channels;
+    std::vector<std::unique_ptr<fl::AdminChannel>> owned;
     ServerCommandContext ctx;
 
     WbFixture() {
         ctx.sim.broadcaster = &broadcaster;
         ctx.sim.entityManager = &em;
         ctx.sim.gameLoop = &loop;
+        ctx.adminChannels = &channels;
+    }
+
+    // Register a channel the way fl-server does. Kept explicit per test: which frontends exist is
+    // exactly what admin_auth_status reports, so a fixture that always wired all six would make the
+    // "an unregistered surface is invisible" tests vacuous.
+    fl::AdminChannel& addChannel(std::string name, int maxFailures = 5, int lockoutSeconds = 300,
+                                 bool perIpAuth = true) {
+        fl::AdminChannel::Config c;
+        c.name = std::move(name);
+        c.maxAuthFailures = maxFailures;
+        c.lockoutSeconds = lockoutSeconds;
+        c.perIpAuth = perIpAuth;
+        owned.push_back(std::make_unique<fl::AdminChannel>(
+            [](std::string_view, const fl::CommandIssuer&) { return std::string{}; }, c, fl::SystemClock::instance()));
+        channels.add(*owned.back());
+        return *owned.back();
+    }
+
+    // The ENet frontend: registered AND attached to the broadcaster, which is what turns
+    // MsgAdminCommand handling on.
+    fl::AdminChannel& enableEnet(int maxFailures = 5, int lockoutSeconds = 300) {
+        fl::AdminChannel& ch = addChannel("enet", maxFailures, lockoutSeconds);
+        broadcaster.setAdminChannel(&ch);
+        return ch;
     }
 };
 } // namespace
@@ -921,9 +955,10 @@ TEST_CASE("AdminConsole: admin_auth_status with null broadcaster returns not ava
 
 TEST_CASE("AdminConsole wb: admin_auth_status with no lockouts returns section header", "[admin_console][wb]") {
     WbFixture f;
+    f.enableEnet();
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("admin_auth_status", systemIssuer());
-    CHECK(out == "[admin] MsgAdminCommand channel:");
+    CHECK(out == "[admin] enet channel:");
 }
 
 TEST_CASE("AdminConsole wb: status with no lockouts does not show lockout line", "[admin_console][wb]") {
@@ -936,9 +971,8 @@ TEST_CASE("AdminConsole wb: status with no lockouts does not show lockout line",
 TEST_CASE("AdminConsole wb: status and admin_auth_status reflect active lockout", "[admin_console][wb]") {
     WbFixture f;
     f.net.peerAddr = "1.2.3.4";
-    f.broadcaster.setAdminAuthParams(1, 300);
+    f.enableEnet(/*maxFailures=*/1, /*lockoutSeconds=*/300);
     f.broadcaster.setOperatorPassword("correct");
-    f.broadcaster.setAdminDispatch([](std::string_view, const CommandIssuer&) { return std::string{}; });
     f.registry.registerType(makeWbEntityDef());
     f.broadcaster.onConnect(0u);
     // Complete the handshake: since #1069 an un-admitted peer's MsgAdminCommand is dropped in the
@@ -962,7 +996,7 @@ TEST_CASE("AdminConsole wb: status and admin_auth_status reflect active lockout"
     CHECK(statusOut.find("use admin_auth_status") != std::string::npos);
 
     std::string authOut = reg.dispatch("admin_auth_status", systemIssuer());
-    CHECK(authOut.find("MsgAdminCommand channel:") != std::string::npos);
+    CHECK(authOut.find("enet channel:") != std::string::npos);
     CHECK(authOut.find("1.2.3.4") != std::string::npos);
     CHECK(authOut.find("locked out") != std::string::npos);
 }
@@ -970,9 +1004,8 @@ TEST_CASE("AdminConsole wb: status and admin_auth_status reflect active lockout"
 TEST_CASE("AdminConsole wb: admin_auth_status shows pending failure line", "[admin_console][wb]") {
     WbFixture f;
     f.net.peerAddr = "1.2.3.4";
-    f.broadcaster.setAdminAuthParams(3, 300);
+    f.enableEnet(/*maxFailures=*/3, /*lockoutSeconds=*/300);
     f.broadcaster.setOperatorPassword("correct");
-    f.broadcaster.setAdminDispatch([](std::string_view, const CommandIssuer&) { return std::string{}; });
     f.registry.registerType(makeWbEntityDef());
     f.broadcaster.onConnect(0u);
     // Complete the handshake: since #1069 an un-admitted peer's MsgAdminCommand is dropped in the
@@ -996,59 +1029,94 @@ TEST_CASE("AdminConsole wb: admin_auth_status shows pending failure line", "[adm
     CHECK(out.find("threshold: 3") != std::string::npos);
 }
 
-TEST_CASE("AdminConsole wb: admin_auth_status no RCON callback shows only admin section", "[admin_console][wb]") {
-    WbFixture f; // ctx.rcon.getRconAuthSummary is null by default
+TEST_CASE("AdminConsole wb: admin_auth_status with no channels registered says so", "[admin_console][wb]") {
+    WbFixture f; // no frontend wired
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("admin_auth_status", systemIssuer());
-    CHECK(out.find("MsgAdminCommand channel:") != std::string::npos);
-    CHECK(out.find("RCON channel:") == std::string::npos);
+    CHECK(out.find("no admin channels registered") != std::string::npos);
 }
 
-TEST_CASE("AdminConsole wb: admin_auth_status with RCON callback shows both sections when zero entries",
+TEST_CASE("AdminConsole wb: admin_auth_status reports one section per registered channel", "[admin_console][wb]") {
+    WbFixture f;
+    f.enableEnet();
+    f.addChannel("rcon");
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("admin_auth_status", systemIssuer());
+    CHECK(out.find("enet channel:") != std::string::npos);
+    CHECK(out.find("rcon channel:") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole wb: admin_auth_status shows a channel added later without any code change",
           "[admin_console][wb]") {
+    // The failure mode #1079 exists to fix: a frontend nobody remembered to name in these commands was
+    // invisible to an operator during an incident. Registering it is now the whole wiring.
     WbFixture f;
-    f.ctx.rcon.getRconAuthSummary = []() { return fl::AuthLockoutSummary{}; };
+    f.enableEnet();
+    fl::AdminChannel& seventh = f.addChannel("seventh-frontend");
+    seventh.recordAuthResult("5.6.7.8", /*authenticated=*/false);
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("admin_auth_status", systemIssuer());
-    CHECK(out.find("MsgAdminCommand channel:") != std::string::npos);
-    CHECK(out.find("RCON channel:") != std::string::npos);
+    CHECK(out.find("seventh-frontend channel:") != std::string::npos);
+    CHECK(out.find("5.6.7.8") != std::string::npos);
+    CHECK(out.find("1 failure(s)") != std::string::npos);
 }
 
-TEST_CASE("AdminConsole wb: admin_auth_status with RCON callback shows locked-out RCON entry", "[admin_console][wb]") {
+TEST_CASE("AdminConsole wb: admin_auth_status shows a locked-out entry with its expiry", "[admin_console][wb]") {
     WbFixture f;
-    fl::AuthLockoutSummary rconS;
-    rconS.activeCount = 1;
-    rconS.threshold = 5;
-    rconS.entries.push_back({"5.6.7.8", true, 0, 120LL});
-    f.ctx.rcon.getRconAuthSummary = [rconS]() { return rconS; };
+    fl::AdminChannel& rcon = f.addChannel("rcon", /*maxFailures=*/1, /*lockoutSeconds=*/120);
+    CHECK(rcon.recordAuthResult("5.6.7.8", /*authenticated=*/false));
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("admin_auth_status", systemIssuer());
-    CHECK(out.find("RCON channel:") != std::string::npos);
+    CHECK(out.find("rcon channel:") != std::string::npos);
     CHECK(out.find("5.6.7.8") != std::string::npos);
     CHECK(out.find("locked out") != std::string::npos);
 }
 
-TEST_CASE("AdminConsole wb: admin_auth_status with RCON callback shows pending RCON failures", "[admin_console][wb]") {
+TEST_CASE("AdminConsole wb: admin_auth_status shows pending failures under the channel's threshold",
+          "[admin_console][wb]") {
     WbFixture f;
-    fl::AuthLockoutSummary rconS;
-    rconS.activeCount = 0;
-    rconS.threshold = 5;
-    rconS.entries.push_back({"9.10.11.12", false, 3, 0LL});
-    f.ctx.rcon.getRconAuthSummary = [rconS]() { return rconS; };
+    fl::AdminChannel& rcon = f.addChannel("rcon", /*maxFailures=*/5);
+    for (int i = 0; i < 3; ++i)
+        CHECK_FALSE(rcon.recordAuthResult("9.10.11.12", /*authenticated=*/false));
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("admin_auth_status", systemIssuer());
-    CHECK(out.find("RCON channel:") != std::string::npos);
+    CHECK(out.find("rcon channel:") != std::string::npos);
     CHECK(out.find("9.10.11.12") != std::string::npos);
     CHECK(out.find("3 failure(s)") != std::string::npos);
     CHECK(out.find("threshold: 5") != std::string::npos);
 }
 
+TEST_CASE("AdminConsole wb: a trusted local surface reports no per-IP auth rather than an empty section",
+          "[admin_console][wb]") {
+    // stdin and the mission `do:` sink present no credential. Printing a threshold they can never
+    // reach would read as "protected" to an operator scanning this during an incident.
+    WbFixture f;
+    f.addChannel("stdin", 0, 0, /*perIpAuth=*/false);
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("admin_auth_status", systemIssuer());
+    CHECK(out.find("stdin channel:") != std::string::npos);
+    CHECK(out.find("no per-IP authentication") != std::string::npos);
+    CHECK(out.find("threshold") == std::string::npos);
+}
+
+TEST_CASE("AdminConsole wb: status counts lockouts across every channel, not just the ENet one",
+          "[admin_console][wb]") {
+    // The old count read the broadcaster's tracker alone, so an operator locked out of RCON saw a
+    // clean `status`.
+    WbFixture f;
+    f.enableEnet();
+    fl::AdminChannel& rcon = f.addChannel("rcon", /*maxFailures=*/1);
+    CHECK(rcon.recordAuthResult("5.6.7.8", /*authenticated=*/false));
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("status", systemIssuer());
+    CHECK(out.find("admin auth lockouts: 1 active") != std::string::npos);
+}
+
 TEST_CASE("AdminConsole wb: status shows no lockout line after admin_unlock clears it", "[admin_console][wb]") {
     WbFixture f;
     f.net.peerAddr = "1.2.3.4";
-    f.broadcaster.setAdminAuthParams(1, 300);
+    fl::AdminChannel& enet = f.enableEnet(/*maxFailures=*/1, /*lockoutSeconds=*/300);
     f.broadcaster.setOperatorPassword("correct");
-    f.broadcaster.setAdminDispatch([](std::string_view, const CommandIssuer&) { return std::string{}; });
     f.registry.registerType(makeWbEntityDef());
     f.broadcaster.onConnect(0u);
 
@@ -1057,7 +1125,7 @@ TEST_CASE("AdminConsole wb: status shows no lockout line after admin_unlock clea
     std::snprintf(cmd.command, sizeof(cmd.command), "%s", "status");
     f.broadcaster.onReceive(0u, &cmd, sizeof(cmd)); // triggers lockout
 
-    f.broadcaster.unlockAdminAuth("1.2.3.4");
+    enet.clearLockout("1.2.3.4");
 
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("status", systemIssuer());

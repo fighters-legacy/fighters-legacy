@@ -6,7 +6,6 @@
 #include "server_config.h"
 
 #include <ILogger.h>
-#include <net/AuthTracker.h>
 #include <net/Capability.h>
 
 #include <cstdint>
@@ -18,8 +17,7 @@
 #include <vector>
 
 namespace fl {
-class CommandRegistry;
-class CommandShell;
+class AdminChannel;
 } // namespace fl
 
 // ---------------------------------------------------------------------------
@@ -88,7 +86,7 @@ namespace fl {
 // capability rather than the endpoint.
 //
 // They are std::functions rather than direct references for the reason the codebase already uses
-// them (setAdminDispatch, setMissionSlotBinder, WorldApi): the caller owns where each call goes, and
+// them (setMissionSlotBinder, WorldApi): the caller owns where each call goes, and
 // this class keeps knowing nothing about WorldBroadcaster.
 struct McpHooks {
     // Record an agent tool invocation as MatchEventType::AgentAction. Stage 2 already interleaves
@@ -105,9 +103,9 @@ struct McpHooks {
 
 // The embedded REST admin API (#233).
 //
-// Every route resolves the request's bearer token to a CommandIssuer and then calls the SAME
-// permission-checked CommandRegistry::dispatch the ENet admin channel uses. It is the fourth frontend
-// over one command substrate, not a parallel admin implementation — so a capability added to a
+// Every route resolves the request's bearer token to a CommandIssuer and then dispatches through its
+// AdminChannel — the SAME permission-checked path the ENet admin channel uses. It is the fourth
+// frontend over one command substrate, not a parallel admin implementation — so a capability added to a
 // command is enforced here for free, and a command that does not exist cannot be reached over HTTP.
 //
 // Threading: cpp-httplib owns a listener thread and a thread per request. dispatch() is const and
@@ -119,8 +117,12 @@ class HttpAdminServer {
     // `uptime` is the server's single start-instant authority (#1048), passed in rather than captured
     // here so `/health` and the `status` command cannot report two different numbers. It is required,
     // not defaulted, because a default would be a second start instant -- which is the bug.
-    HttpAdminServer(const CommandRegistry& registry, const ServerConfig::HttpAdminConfig& cfg, ILogger& log,
-                    const ServerUptime& uptime, CommandShell* shell = nullptr);
+    // `channel` is this frontend's AdminChannel (#1079): the dispatcher every route calls and the
+    // per-IP lockout every route obeys, shared with the other five frontends and enumerable to an
+    // operator. It must outlive this server. The MCP surface enabled below runs on this SAME channel --
+    // it is a second protocol on one listener with one credential table, not a sixth auth surface.
+    HttpAdminServer(AdminChannel& channel, const ServerConfig::HttpAdminConfig& cfg, ILogger& log,
+                    const ServerUptime& uptime);
     ~HttpAdminServer();
 
     // Turn on the MCP frontend (#601) over this same listener. Call before start(); calling it is
@@ -135,21 +137,15 @@ class HttpAdminServer {
     // Stop the listener and join its thread. Safe if start() was never called or failed.
     void stop();
 
-    // Clear the per-IP auth lockout for the HTTP channel. Thread-safe, any thread (the admin_unlock
-    // command reaches it from the sim thread).
-    bool clearLockout(const std::string& ip);
-
-    // Lockout state for the HTTP channel, for admin_auth_status. Thread-safe.
-    [[nodiscard]] AuthLockoutSummary getAuthSummary();
+    // Inject a clock for the MCP rate limiter in tests. Call before start(). The per-IP lockout runs
+    // on the CHANNEL's clock, which the channel takes at construction -- so this no longer has a
+    // second clock to keep in step. Deliberately does NOT re-point the uptime: that one carries the
+    // clock it was constructed with, so /health can never subtract two instants from different clocks.
+    void setClock(const IClock& clock);
 
     // The bound port. Meaningful after a successful start(); 0 otherwise. A configured port of 0 asks
     // the OS to choose one, which is what a test needs in order not to fight over a fixed port.
     [[nodiscard]] uint16_t boundPort() const noexcept;
-
-    // Inject a clock for deterministic lockout expiry in tests. Call before start(). Deliberately
-    // does NOT re-point the uptime: that one carries the clock it was constructed with, so /health
-    // can never subtract two instants taken from different clocks.
-    void setClock(const IClock& clock);
 
   private:
     struct Impl;

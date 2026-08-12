@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "McpEndpoint.h"
 
-#include <console/CommandRegistry.h>
 #include <mission/MissionValidator.h>
+#include <net/AdminChannel.h>
 #include <util/Json.h> // json::escape — the one escaper for every JSON this server emits
 
 #include "Version.h" // FL_VERSION_STRING — reported to a client in initialize's serverInfo
@@ -32,9 +32,8 @@ constexpr long long kMaxEventsPerCall = 1000;
 
 } // namespace
 
-McpEndpoint::McpEndpoint(const CommandRegistry& registry, const ServerConfig::McpConfig& cfg, ILogger& log,
-                         McpHooks hooks)
-    : m_registry(registry), m_cfg(cfg), m_log(log), m_hooks(std::move(hooks)), m_limiter(cfg.rateLimitPerMin) {}
+McpEndpoint::McpEndpoint(const AdminChannel& channel, const ServerConfig::McpConfig& cfg, ILogger& log, McpHooks hooks)
+    : m_channel(channel), m_cfg(cfg), m_log(log), m_hooks(std::move(hooks)), m_limiter(cfg.rateLimitPerMin) {}
 
 void McpEndpoint::setClock(const IClock& clock) {
     m_clock = &clock;
@@ -135,9 +134,9 @@ std::string McpEndpoint::readResource(std::string_view uri, const httpadmin::Tok
     const CommandIssuer issuer = httpadmin::issuerFor(grant);
     std::string result;
     if (uri == "fl://world_state")
-        result = m_registry.dispatch("worldstate", issuer);
+        result = m_channel.dispatch("worldstate", issuer);
     else if (uri == "fl://events")
-        result = m_registry.dispatch("events", issuer);
+        result = m_channel.dispatch("events", issuer);
     else
         return "unknown resource";
 
@@ -201,7 +200,7 @@ std::string McpEndpoint::handleToolCall(std::string_view params, const httpadmin
             if (max > 0)
                 command += " " + std::to_string(max);
         }
-        const std::string json = m_registry.dispatch(command, issuer);
+        const std::string json = m_channel.dispatch(command, issuer);
         const bool ok = !json.empty() && json.front() == '{';
         return mcp::resultResponse(id, mcp::toolResult(json, ok ? json : std::string_view{}, !ok));
     }
@@ -252,7 +251,7 @@ std::string McpEndpoint::handleToolCall(std::string_view params, const httpadmin
         }
         // Through the SAME permission-checked dispatch every other frontend uses. The allowlist above
         // narrows what MCP may attempt; the capability mask inside still decides what it may do.
-        const std::string result = m_registry.dispatch(*command, issuer);
+        const std::string result = m_channel.dispatch(*command, issuer);
         const bool failed = isPermissionDenied(result) || isUnknownCommand(result);
         return mcp::resultResponse(id,
                                    mcp::toolResult(result, "{\"result\": \"" + json::escape(result) + "\"}", failed));

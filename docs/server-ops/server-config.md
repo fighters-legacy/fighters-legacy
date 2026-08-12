@@ -1549,7 +1549,7 @@ reset the counter by reconnecting. A successful authentication clears the counte
 
 Per-IP lockout duration in seconds after `admin_auth_max_failures` consecutive wrong passwords.
 During the lockout window, any new connection from the same IP is refused immediately (no
-`MsgHello` sent). The lockout expires automatically, can be inspected with `admin_auth_status`, or cleared immediately with `admin_unlock` (which also clears the RCON channel lockout for the same IP when RCON is enabled).
+`MsgHello` sent). The lockout expires automatically, can be inspected with `admin_auth_status`, or cleared immediately with `admin_unlock` — which clears the IP on **every** admin channel, not a fixed list of them.
 
 ### `idle_timeout_s`
 
@@ -1672,9 +1672,9 @@ Out-of-range values are ignored and the default is kept (a warning is logged).
   receive an immediate `AUTH_RESPONSE id=-1` and are closed before any packets are processed.
 - Command responses longer than 4086 bytes are split across multiple `SERVERDATA_RESPONSE_VALUE`
   packets per the Source Engine RCON specification, followed by an empty sentinel packet.
-- The RCON lockout TTL expires automatically; use `admin_auth_status` to view RCON lockout
-  state, or `admin_unlock <IP>` from the admin console or stdin to clear a lockout early without
-  waiting.
+- The RCON lockout TTL expires automatically; use `admin_auth_status` to view the `rcon` channel's
+  lockout state, or `admin_unlock <IP>` from the admin console or stdin to clear a lockout early
+  without waiting.
 - Async-mutating commands (`kick`, `ban`, `unban`, `tp`, `spawn`, `kill`) return a
   synchronous acknowledgement string immediately. The actual action executes on the next sim
   tick (~16 ms later); confirmation also appears on fl-server stdout and is sent to the RCON
@@ -1683,10 +1683,10 @@ Out-of-range values are ignored and the default is kept (a warning is logged).
   (including one-way delay in ticks and approximate milliseconds) is printed to stdout and
   sent to the RCON client as additional `SERVERDATA_RESPONSE_VALUE` packets on the next sim tick.
 - `admin_auth_status` returns the full per-IP lockout and failure detail as the synchronous
-  response body (no second packet), unlike `peers`. Output is split into a
-  `MsgAdminCommand channel:` section and, when RCON is enabled, an `RCON channel:` section.
-  Both RCON and ENet admin clients receive the complete detail in the immediate response.
-  Output also appears on fl-server stdout.
+  response body (no second packet), unlike `peers`. Output carries one section per **registered admin
+  channel** — `stdin`, `mission`, and `enet` / `rcon` / `http` when those frontends are enabled — so a
+  frontend added later appears without either command being edited. Both RCON and ENet admin clients
+  receive the complete detail in the immediate response. Output also appears on fl-server stdout.
 
 ### Example: connect with mcrcon
 
@@ -1960,8 +1960,8 @@ for any authenticated caller.
 | `kick` | `<peerId\|IP>` | Disconnect a peer by numeric ID, or all peers from an IP address |
 | `ban` | `<peerId\|IP>` | Add IP to the ban list and kick matching peers; saves to `banlist_path` if configured |
 | `unban` | `<IP>` | Remove an IP from the ban list; saves to `banlist_path` if configured |
-| `admin_unlock` | `<IP>` | Clear the admin auth and RCON auth lockouts for an IP address immediately; prints a warning if neither channel was locked (idempotent) |
-| `admin_auth_status` | — | Show per-IP lockout state for the MsgAdminCommand operator channel and (when RCON is enabled) the RCON TCP channel; both active lockouts and pending failure counts |
+| `admin_unlock` | `<IP>` | Clear the auth lockout for an IP on every registered admin channel immediately; reports which channels actually held one, or that none did (idempotent) |
+| `admin_auth_status` | — | Show per-IP lockout state for every registered admin channel — active lockouts and pending failure counts; a trusted local surface (`stdin`, `mission`) reports that it has no per-IP authentication rather than an empty section |
 | `set_weather` | `<preset>` | Change weather: `clear`, `partly_cloudy`, `overcast`, `rain`, `storm`, `snow`, `blizzard` |
 | `detonate` | `<x> <y> <z> <radius_m> <damage> [--nuclear]` | AoE warhead at a world position (#356); `--nuclear` adds the EMP ring at 4× the blast radius |
 | `set_time` | `<0–24>` | Set in-game time of day (float, hours) |

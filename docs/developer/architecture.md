@@ -370,6 +370,41 @@ artifacts move forward, and the scale gate is made honest (plan #1036 Stages 5�
 Architecture decisions D10–D23 arising from this review are recorded in #1036 and mirrored here
 individually by the stage PRs that implement them.
 
+**2026-08-12 — D14: one `AdminChannel` per admin frontend, and a registry that can enumerate them
+(#1079).** Six frontends — stdin, RCON, the ENet `MsgAdminCommand` path, the mission `do:` sink, HTTP
+REST and MCP — shared `CommandRegistry::dispatch` and forked everything around it: three `AuthTracker`
+instances with no registry, two hand-rolled 20 ms async-ack drains (and three frontends with none),
+and three callers on a capability-**bypassing** `dispatch(line)` overload. The reported failure was
+not the duplicated code. It was that `admin_unlock` and `admin_auth_status` had to *name* each
+channel, so a channel nobody remembered to name was invisible to an operator during an incident —
+`admin_unlock`'s own comment said unlocking two of three "would be worse than not unlocking at all".
+
+`engine/net/AdminChannel.h` bundles `{per-IP auth bookkeeping, dispatch-with-issuer, async-ack drain}`
+behind a constructor; `AdminChannelRegistry` is the enumerable list. Each frontend constructs one, and
+the two operator commands walk the registry — so a seventh frontend is visible for free, and neither
+command mentions a channel by name. Three consequences worth stating, because each is a place the
+obvious design is wrong:
+
+- **The credential ladder stays with the transport.** Checking an operator password by constant-time
+  compare, a bearer token against the `[http_admin]` table, or an RCON password is genuinely
+  per-transport; unifying it would produce one class with a mode switch per frontend. What is common
+  is the bookkeeping *around* the verdict — failure counting, lockout, being enumerable — and only
+  that moved. A channel reports its verdict through `recordAuthResult()`.
+- **Auth is mutex-guarded inside the channel; dispatch and the drain are not.** A transport thread
+  checks a credential while the sim thread runs `admin_unlock`, which is exactly why RCON and HTTP
+  each carried their own mutex. That mutex now lives once, next to the state. The drain is armed and
+  serviced by one thread — locking it would be a lie about a queue only one thread touches.
+- **MCP does not get its own channel: it shares the HTTP one.** It is a second protocol on the same
+  listener with the same token table and the same lockout — which `HttpAdminServer` already states as
+  an invariant. A separate `mcp` row in `admin_auth_status` would report zero lockouts for requests
+  that are in fact being locked out on the `http` channel, and a plausible wrong number is worse than
+  a missing one. A frontend with no per-IP credential at all (`stdin`, `mission`) *is* registered, and
+  reports a zero threshold rather than a default nothing can ever reach.
+
+`CommandRegistry::dispatch(line)` is deleted; every dispatch carries a `CommandIssuer`, with
+`fl::systemIssuer()` for the trusted local surfaces. Capability enforcement is a property of the
+command again, not of which frontend you arrived on.
+
 **2026-08-04 — D18: a format carries a checked version iff it crosses a machine or build boundary
 (#1068).** Six on-disk/on-wire formats each argued their versioning policy individually in a header
 comment, reaching three different answers by three different routes. The rule they were all

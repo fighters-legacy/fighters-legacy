@@ -849,8 +849,6 @@ int main(int argc, char** argv) {
     wbConfig.connectRateWindowS = cfg.connectRateLimitWindowS;
     wbConfig.floodMultiplier = cfg.packetFloodMultiplier;
     wbConfig.maxConnectionsPerIp = cfg.maxConnectionsPerIp;
-    wbConfig.adminAuthMaxFailures = cfg.adminAuthMaxFailures;
-    wbConfig.adminAuthLockoutSeconds = cfg.adminAuthLockoutSeconds;
     wbConfig.motd = cfg.motd;
     wbConfig.motdDisplaySeconds = cfg.motdDisplayS;
     wbConfig.operatorPassword = cfg.operatorPassword;
@@ -2003,6 +2001,49 @@ int main(int argc, char** argv) {
     // (RCON I/O thread stops while adminRegistry still alive), then adminShell, then adminRegistry.
     CommandRegistry adminRegistry;
     CommandShell adminShell(*log, adminRegistry);
+
+    // ---- Admin frontends: one AdminChannel each (#1079, D14) ----
+    // {auth, issuer resolution, dispatch-with-issuer, drain} behind a constructor, and an enumerable
+    // registry so admin_unlock / admin_auth_status reach every channel without naming any of them.
+    // Declared HERE, above rconServer/httpAdminServer, so LIFO destruction stops those transports
+    // before the channels they dispatch through are gone -- the same rule that puts them above
+    // gameLoop. The credential ladder stays with each transport; only the bookkeeping is shared.
+    const auto adminDispatch = [&adminRegistry](std::string_view cmd, const fl::CommandIssuer& issuer) {
+        // Permission-check the command against the issuer's granted capabilities (#946). A
+        // password-authenticated peer arrives with Admin caps and runs everything (the CI path); a
+        // grant-channel peer runs only what its caps allow.
+        return adminRegistry.dispatch(cmd, issuer);
+    };
+    const auto channelConfig = [](std::string name, int maxFailures, int lockoutSeconds, bool perIpAuth) {
+        fl::AdminChannel::Config c;
+        c.name = std::move(name);
+        c.maxAuthFailures = maxFailures;
+        c.lockoutSeconds = lockoutSeconds;
+        c.perIpAuth = perIpAuth;
+        return c;
+    };
+    fl::AdminChannelRegistry adminChannels;
+    // stdin and the mission `do:` sink present no credential -- their issuer is fl::systemIssuer(),
+    // because the operator started this process and chose to load that mission. They are registered
+    // anyway: the failure this issue fixes is a surface an operator cannot SEE, and "no per-IP auth"
+    // is a thing worth being able to read during an incident.
+    fl::AdminChannel stdinChannel(adminDispatch, channelConfig("stdin", 0, 0, /*perIpAuth=*/false),
+                                  fl::SystemClock::instance());
+    fl::AdminChannel missionChannel(adminDispatch, channelConfig("mission", 0, 0, /*perIpAuth=*/false),
+                                    fl::SystemClock::instance());
+    fl::AdminChannel enetChannel(adminDispatch,
+                                 channelConfig("enet", cfg.adminAuthMaxFailures, cfg.adminAuthLockoutSeconds, true),
+                                 fl::SystemClock::instance());
+    fl::AdminChannel rconChannel(adminDispatch,
+                                 channelConfig("rcon", cfg.rcon.maxAuthFailures, cfg.rcon.lockoutSeconds, true),
+                                 fl::SystemClock::instance());
+    // MCP shares this one: same listener, same token table, same lockout (see HttpAdminServer.h).
+    fl::AdminChannel httpChannel(
+        adminDispatch, channelConfig("http", cfg.httpAdmin.maxAuthFailures, cfg.httpAdmin.lockoutSeconds, true),
+        fl::SystemClock::instance());
+    adminChannels.add(stdinChannel);
+    adminChannels.add(missionChannel);
+
     // Declared here so rconServer outlives gameLoop but is destroyed before adminRegistry.
     std::unique_ptr<fl::RconServer> rconServer;
     // Same lifetime rule for the REST admin API (#233): its listener thread calls into adminRegistry.
@@ -2356,22 +2397,9 @@ int main(int argc, char** argv) {
         c.shutdown.minDelayS = static_cast<uint32_t>(cfg.minShutdownDelayS);
         c.shutdown.requireConfirm = cfg.shutdownRequireConfirm;
         c.rcon.shell = &adminShell;
-        c.rcon.clearRconLockout = [&rconServer](const std::string& ip) -> bool {
-            return rconServer ? rconServer->clearLockout(ip) : false;
-        };
-        c.rcon.getRconAuthSummary = [&rconServer]() -> fl::AuthLockoutSummary {
-            return rconServer ? rconServer->getRconAuthSummary() : fl::AuthLockoutSummary{};
-        };
-        // The REST channel's lockout, so admin_unlock / admin_auth_status cover all three (#233). Left
-        // unset when the API is disabled, which is what makes those commands omit its section entirely.
-        if (cfg.httpAdmin.enabled) {
-            c.httpAdmin.clearLockout = [&httpAdminServer](const std::string& ip) -> bool {
-                return httpAdminServer ? httpAdminServer->clearLockout(ip) : false;
-            };
-            c.httpAdmin.getAuthSummary = [&httpAdminServer]() -> fl::AuthLockoutSummary {
-                return httpAdminServer ? httpAdminServer->getAuthSummary() : fl::AuthLockoutSummary{};
-            };
-        }
+        // Every frontend at once (#1079). The three per-channel lockout hooks this replaced had to be
+        // added by hand for each new frontend, which is how a surface gets forgotten.
+        c.adminChannels = &adminChannels;
         return c;
     }());
 
@@ -2382,26 +2410,24 @@ int main(int argc, char** argv) {
     // `do: set_weather storm` runs the same set_weather command an operator would. dispatch() is const +
     // thread-safe; mutating commands (set_weather/set_time) enqueue onto the sim callback queue, so this
     // is safe to call from the mission evaluator on the sim thread. The result string is logged.
-    missionActionSink = [&adminRegistry, log](std::string_view action) {
+    missionActionSink = [&missionChannel, log](std::string_view action) {
         // Trusted YAML is still an issuer, just a privileged one (#1079): the operator chose to load
         // this mission, so its `do:` actions carry the operator's authority -- explicitly.
-        const std::string result = adminRegistry.dispatch(std::string(action), fl::systemIssuer());
+        const std::string result = missionChannel.dispatch(std::string(action), fl::systemIssuer());
         char m[288];
         std::snprintf(m, sizeof(m), "mission action '%.120s' -> %.140s", std::string(action).c_str(), result.c_str());
         log->log(LogLevel::Info, __FILE__, __LINE__, m);
     };
 
-    // MOTD and operator password were applied via applyConfig() above; the admin dispatcher needs
-    // adminRegistry (built just above) so it is wired here.
+    // MOTD and operator password were applied via applyConfig() above; the ENet admin channel is
+    // attached here because its dispatcher needs adminRegistry (built just above). Attaching it is
+    // what turns the frontend ON -- with no operator password the broadcaster holds no channel and
+    // discards MsgAdminCommand, exactly as an unset dispatcher did before.
     if (!cfg.operatorPassword.empty()) {
-        broadcaster.setAdminDispatch([&adminRegistry](std::string_view cmd, const fl::CommandIssuer& issuer) {
-            // Permission-check the command against the issuer's granted capabilities (#946). A
-            // password-authenticated peer arrives with Admin caps and runs everything (the CI
-            // path); a grant-channel peer runs only what its caps allow.
-            return adminRegistry.dispatch(cmd, issuer);
-        });
-        broadcaster.setAdminShell([&adminShell]() { return adminShell.mark(); },
-                                  [&adminShell](int m) { return adminShell.drainSince(m); });
+        enetChannel.setShellTap([&adminShell]() { return adminShell.mark(); },
+                                [&adminShell](int m) { return adminShell.drainSince(m); });
+        broadcaster.setAdminChannel(&enetChannel);
+        adminChannels.add(enetChannel);
         log->log(LogLevel::Info, __FILE__, __LINE__, "network admin commands: enabled");
     } else {
         log->log(LogLevel::Info, __FILE__, __LINE__,
@@ -2736,8 +2762,8 @@ int main(int argc, char** argv) {
     // ---- REST admin API + health probe (#233) ----
     // Started before RCON only so the two log lines read in config order; they are independent.
     if (cfg.httpAdmin.enabled) {
-        httpAdminServer =
-            std::make_unique<fl::HttpAdminServer>(adminRegistry, cfg.httpAdmin, *log, serverUptime, &adminShell);
+        httpAdminServer = std::make_unique<fl::HttpAdminServer>(httpChannel, cfg.httpAdmin, *log, serverUptime);
+        adminChannels.add(httpChannel);
 
         // ---- MCP surface (#601) ----
         // A second frontend on the listener above, so it is enabled before start() rather than
@@ -2777,7 +2803,10 @@ int main(int argc, char** argv) {
 
     // ---- RCON server (optional TCP remote admin channel) ----
     if (cfg.rcon.enabled) {
-        rconServer = std::make_unique<fl::RconServer>(adminRegistry, cfg.rcon, *log, &adminShell);
+        rconChannel.setShellTap([&adminShell]() { return adminShell.mark(); },
+                                [&adminShell](int m) { return adminShell.drainSince(m); });
+        rconServer = std::make_unique<fl::RconServer>(rconChannel, cfg.rcon, *log);
+        adminChannels.add(rconChannel);
         if (!rconServer->start()) {
             log->log(LogLevel::Warn, __FILE__, __LINE__, "RCON server failed to start; continuing without RCON");
             rconServer.reset();
@@ -2826,7 +2855,7 @@ int main(int argc, char** argv) {
             stdinLines.clear();
             stdinReader.drain(stdinLines);
             for (const std::string& line : stdinLines) {
-                std::string result = adminRegistry.dispatch(line, fl::systemIssuer());
+                std::string result = stdinChannel.dispatch(line, fl::systemIssuer());
                 if (!result.empty())
                     std::printf("[admin] %s\n", result.c_str());
             }

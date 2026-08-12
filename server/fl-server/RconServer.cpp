@@ -49,17 +49,14 @@ static void rconSetNonBlocking(RconSocket s) {
 }
 #endif
 
-#include "RconDrainHelper.h"
 #include "RconServer.h"
-#include <console/CommandRegistry.h>
-#include <console/CommandShell.h>
+#include <net/AdminChannel.h>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
-#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -132,35 +129,26 @@ std::vector<std::string> splitResponse(std::string_view body) {
     return chunks;
 }
 
-void checkAndFireDrains(std::vector<DrainClientInfo*>& clients, std::chrono::steady_clock::time_point now,
-                        fl::CommandShell* shell) {
-    if (!shell)
-        return;
-    for (auto* c : clients) {
-        if (!c->hasPendingDrain || !c->connected)
-            continue;
-        if (now < c->drainDeadline)
-            continue;
-        c->hasPendingDrain = false;
-        auto lines = shell->drainSince(c->drainMark);
-        if (lines.empty())
-            continue;
-        std::string combined;
-        for (const auto& l : lines) {
-            if (!combined.empty())
-                combined += '\n';
-            combined += l;
-        }
-        auto chunks = splitResponse(combined);
-        for (const auto& chunk : chunks) {
-            auto pkt = encodePacket(c->drainPacketId, kTypeResponseValue, chunk);
-            c->sendBuf.insert(c->sendBuf.end(), pkt.begin(), pkt.end());
-        }
-        if (chunks.size() > 1) {
-            auto pkt = encodePacket(c->drainPacketId, kTypeResponseValue, "");
-            c->sendBuf.insert(c->sendBuf.end(), pkt.begin(), pkt.end());
-        }
+std::vector<uint8_t> encodeDrainPackets(int32_t packetId, const std::vector<std::string>& lines) {
+    std::vector<uint8_t> out;
+    if (lines.empty())
+        return out;
+    std::string combined;
+    for (const auto& l : lines) {
+        if (!combined.empty())
+            combined += '\n';
+        combined += l;
     }
+    auto chunks = splitResponse(combined);
+    for (const auto& chunk : chunks) {
+        auto pkt = encodePacket(packetId, kTypeResponseValue, chunk);
+        out.insert(out.end(), pkt.begin(), pkt.end());
+    }
+    if (chunks.size() > 1) {
+        auto pkt = encodePacket(packetId, kTypeResponseValue, "");
+        out.insert(out.end(), pkt.begin(), pkt.end());
+    }
+    return out;
 }
 
 } // namespace fl::rcon
@@ -173,12 +161,16 @@ namespace fl {
 
 namespace {
 
-static constexpr int kDrainDelayMs = 20; // slightly more than one 60 Hz sim tick (~16.67 ms)
-
-struct ClientState : public fl::rcon::DrainClientInfo {
+struct ClientState {
+    // The AdminChannel drain token for this client. Monotonic and never reused, so a drain armed for a
+    // client that disconnects cannot be delivered to whoever takes its slot in the vector.
+    uint64_t id = 0;
     RconSocket fd = kInvalidSocket;
+    bool connected = false;
     std::string address;
     std::vector<uint8_t> recvBuf;
+    std::vector<uint8_t> sendBuf;
+    int32_t drainPacketId = 0; // reply id for the drain armed under `id`
     enum class Auth { Unauthenticated, Authenticated } authState = Auth::Unauthenticated;
 };
 
@@ -196,26 +188,37 @@ bool queueSend(ClientState& c, std::vector<uint8_t> data) {
 // ---------------------------------------------------------------------------
 
 struct RconServer::Impl {
-    const CommandRegistry& m_registry;
+    AdminChannel& m_channel;
     ServerConfig::RconConfig m_cfg;
     ILogger& m_log;
-    CommandShell* m_shell;
     std::atomic<bool> m_running{false};
     std::thread m_thread;
     RconSocket m_listenSock = kInvalidSocket;
-    std::mutex m_authTrackerMutex;
-    fl::AuthTracker m_authTracker;
+    uint64_t m_nextClientId = 1;
 
     const IClock* m_clock{&SystemClock::instance()};
 
-    Impl(const CommandRegistry& reg, const ServerConfig::RconConfig& cfg, ILogger& log, CommandShell* shell)
-        : m_registry(reg), m_cfg(cfg), m_log(log), m_shell(shell),
-          m_authTracker(cfg.maxAuthFailures, cfg.lockoutSeconds) {}
+    Impl(AdminChannel& channel, const ServerConfig::RconConfig& cfg, ILogger& log)
+        : m_channel(channel), m_cfg(cfg), m_log(log) {}
 
     void ioLoop();
     void setClock(const IClock& clock) {
         m_clock = &clock;
-        m_authTracker.setClock(clock);
+    }
+
+    // Turn the channel's (token, lines) into RESPONSE_VALUE packets on the right client's send buffer.
+    // A client that closed between arming and the deadline is simply not found -- the liveness check
+    // the old drain did with its own `connected` flag.
+    void serviceDrains(std::vector<ClientState>& clients) {
+        m_channel.serviceDrains([&clients](uint64_t token, const std::vector<std::string>& lines) {
+            for (auto& c : clients) {
+                if (c.id != token || !c.connected)
+                    continue;
+                auto bytes = fl::rcon::encodeDrainPackets(c.drainPacketId, lines);
+                c.sendBuf.insert(c.sendBuf.end(), bytes.begin(), bytes.end());
+                return;
+            }
+        });
     }
 };
 
@@ -248,15 +251,10 @@ void RconServer::Impl::ioLoop() {
         }
 
         int pollTimeoutMs = 100;
-        if (m_shell) {
-            auto now = m_clock->now();
-            for (const auto& c : clients) {
-                if (!c.hasPendingDrain || !c.connected)
-                    continue;
-                auto rawMs = std::chrono::duration_cast<std::chrono::milliseconds>(c.drainDeadline - now).count();
-                int clampedMs = rawMs <= 0 ? 0 : static_cast<int>(rawMs);
-                pollTimeoutMs = std::min(pollTimeoutMs, clampedMs);
-            }
+        if (const auto deadline = m_channel.nextDrainDeadline()) {
+            const auto rawMs =
+                std::chrono::duration_cast<std::chrono::milliseconds>(*deadline - m_clock->now()).count();
+            pollTimeoutMs = std::min(pollTimeoutMs, rawMs <= 0 ? 0 : static_cast<int>(rawMs));
         }
         int ready = RCON_POLL(fds.data(), static_cast<unsigned int>(fds.size()), pollTimeoutMs);
         if (ready < 0) {
@@ -264,18 +262,9 @@ void RconServer::Impl::ioLoop() {
                 continue;
             break; // fatal poll error
         }
-        if (m_shell) {
-            std::vector<fl::rcon::DrainClientInfo*> drainPtrs;
-            drainPtrs.reserve(clients.size());
-            for (auto& c : clients)
-                drainPtrs.push_back(&c);
-            fl::rcon::checkAndFireDrains(drainPtrs, m_clock->now(), m_shell);
-        }
+        serviceDrains(clients);
         if (ready == 0) {
-            {
-                std::lock_guard<std::mutex> lk(m_authTrackerMutex);
-                m_authTracker.pruneExpired();
-            }
+            m_channel.pruneExpiredLockouts();
             continue; // timeout — loop back and check m_running
         }
 
@@ -291,12 +280,7 @@ void RconServer::Impl::ioLoop() {
                 inet_ntop(AF_INET, &sin->sin_addr, ipBuf, sizeof(ipBuf));
                 std::string peerIp(ipBuf);
 
-                bool lockedOut;
-                {
-                    std::lock_guard<std::mutex> lk(m_authTrackerMutex);
-                    lockedOut = m_authTracker.isLockedOut(peerIp);
-                }
-                if (lockedOut) {
+                if (m_channel.lockedOut(peerIp)) {
                     // Reject before consuming a slot: AUTH_RESPONSE id=-1 then close.
                     auto pkt = rcon::encodePacket(-1, rcon::kTypeAuthResponse, "");
                     send(clientFd, reinterpret_cast<const char*>(pkt.data()), static_cast<int>(pkt.size()), 0);
@@ -316,6 +300,7 @@ void RconServer::Impl::ioLoop() {
                                sizeof(noSigPipe));
 #endif
                     ClientState cs;
+                    cs.id = m_nextClientId++;
                     cs.fd = clientFd;
                     cs.connected = true;
                     cs.address = peerIp;
@@ -326,8 +311,14 @@ void RconServer::Impl::ioLoop() {
         }
 
         // --- client sockets ---
+        // Only the clients that were in THIS round's pollfd array. A client accepted just above was
+        // appended to `clients` after `fds` was built, so walking clients.size() indexed one past the
+        // end of `fds` -- an out-of-range read of `revents` that a hardened build turns into an abort
+        // the moment anyone connects, and an unhardened one turns into acting on a garbage event mask
+        // for a brand-new socket. A new client is simply serviced on the next poll iteration.
+        const std::size_t polled = fds.size() - 1;
         bool needClean = false;
-        for (std::size_t i = 0; i < clients.size(); ++i) {
+        for (std::size_t i = 0; i < clients.size() && i < polled; ++i) {
             auto& c = clients[i];
             auto& revFd = fds[1 + i];
 
@@ -390,10 +381,7 @@ void RconServer::Impl::ioLoop() {
                     bool ok = m_cfg.password.empty() || (pkt.body == m_cfg.password);
                     if (ok) {
                         c.authState = Auth::Authenticated;
-                        {
-                            std::lock_guard<std::mutex> lk(m_authTrackerMutex);
-                            m_authTracker.recordSuccess(c.address);
-                        }
+                        m_channel.recordAuthResult(c.address, /*authenticated=*/true);
                         // Send empty RESPONSE_VALUE first (Valve convention), then AUTH_RESPONSE.
                         if (!queueSend(c, rcon::encodePacket(pkt.id, rcon::kTypeResponseValue, ""))) {
                             closeClient = true;
@@ -408,12 +396,7 @@ void RconServer::Impl::ioLoop() {
                         queueSend(c, rcon::encodePacket(pkt.id, rcon::kTypeResponseValue, ""));
                         queueSend(c, rcon::encodePacket(-1, rcon::kTypeAuthResponse, ""));
                         // Record failure; log if IP is now locked out.
-                        bool nowLocked;
-                        {
-                            std::lock_guard<std::mutex> lk(m_authTrackerMutex);
-                            nowLocked = m_authTracker.recordFailure(c.address);
-                        }
-                        if (nowLocked)
+                        if (m_channel.recordAuthResult(c.address, /*authenticated=*/false))
                             m_log.log(LogLevel::Warn, __FILE__, __LINE__,
                                       "RCON: IP locked out after repeated auth failures");
                         // Close after send; mark for cleanup.
@@ -430,7 +413,7 @@ void RconServer::Impl::ioLoop() {
                     // GameLoop::enqueueSimCallback (also thread-safe). An authenticated RCON client has
                     // operator authority -- unchanged, but now carried by an explicit issuer instead of
                     // by the capability-bypassing overload this frontend used to call (#1079).
-                    std::string response = m_registry.dispatch(pkt.body, fl::systemIssuer());
+                    std::string response = m_channel.dispatch(pkt.body, fl::systemIssuer());
                     auto chunks = rcon::splitResponse(response);
                     for (const auto& chunk : chunks) {
                         if (!queueSend(c, rcon::encodePacket(pkt.id, rcon::kTypeResponseValue, chunk))) {
@@ -446,11 +429,11 @@ void RconServer::Impl::ioLoop() {
                     // Set up async drain: mark taken AFTER dispatch() to skip sync shell.print()
                     // calls made during dispatch. The RCON thread will check back in kDrainDelayMs
                     // and send any newly-written ring entries as additional RESPONSE_VALUE packets.
-                    if (m_shell && !closeClient) {
-                        c.drainMark = m_shell->mark();
+                    if (!closeClient) {
                         c.drainPacketId = pkt.id;
-                        c.hasPendingDrain = true;
-                        c.drainDeadline = m_clock->now() + std::chrono::milliseconds(kDrainDelayMs);
+                        // No-op when the channel has no shell tap, which is the honest state of a
+                        // frontend with no deferred output rather than a second `if (m_shell)` here.
+                        m_channel.armDrain(c.id);
                     }
                 }
                 // Unknown types are silently dropped.
@@ -480,10 +463,16 @@ void RconServer::Impl::ioLoop() {
             }
         }
 
-        if (needClean)
+        if (needClean) {
+            // Drop any drain armed for a client that just went away, rather than letting it sit until
+            // its deadline and find nobody. Same intent as the old per-client `connected` guard.
+            for (const auto& c : clients)
+                if (c.fd == kInvalidSocket)
+                    m_channel.cancelDrainsWhere([id = c.id](uint64_t token) { return token == id; });
             clients.erase(std::remove_if(clients.begin(), clients.end(),
                                          [](const ClientState& c) { return c.fd == kInvalidSocket; }),
                           clients.end());
+        }
     }
 
     // Close all remaining client connections on exit.
@@ -496,9 +485,8 @@ void RconServer::Impl::ioLoop() {
 // RconServer public interface
 // ---------------------------------------------------------------------------
 
-RconServer::RconServer(const CommandRegistry& registry, const ServerConfig::RconConfig& cfg, ILogger& log,
-                       CommandShell* shell)
-    : m_impl(std::make_unique<Impl>(registry, cfg, log, shell)) {}
+RconServer::RconServer(AdminChannel& channel, const ServerConfig::RconConfig& cfg, ILogger& log)
+    : m_impl(std::make_unique<Impl>(channel, cfg, log)) {}
 
 RconServer::~RconServer() {
     stop();
@@ -558,28 +546,6 @@ void RconServer::stop() {
 
     if (m_impl->m_thread.joinable())
         m_impl->m_thread.join();
-}
-
-bool RconServer::clearLockout(const std::string& ip) {
-    if (!m_impl)
-        return false;
-    std::lock_guard<std::mutex> lock(m_impl->m_authTrackerMutex);
-    bool wasLocked = m_impl->m_authTracker.isLockedOut(ip);
-    m_impl->m_authTracker.clearLockout(ip);
-    return wasLocked;
-}
-
-fl::AuthLockoutSummary RconServer::getRconAuthSummary() {
-    if (!m_impl)
-        return {};
-    std::lock_guard<std::mutex> lock(m_impl->m_authTrackerMutex);
-    fl::AuthLockoutSummary s;
-    s.threshold = m_impl->m_authTracker.maxFailures();
-    s.entries = m_impl->m_authTracker.failureSummary();
-    for (const auto& e : s.entries)
-        if (e.lockedOut)
-            ++s.activeCount;
-    return s;
 }
 
 void RconServer::setClock(const IClock& clock) {

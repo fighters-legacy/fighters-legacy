@@ -214,7 +214,7 @@ the dedicated server defaulting to GNS and single-player/LAN able to stay on `en
 - **LAN discovery (`MsgLanBeacon`, `MsgId 0x10`):** stays a **raw UDP broadcast / IPv6 multicast
   outside the transport** and **plaintext** — it advertises presence only (name, port, player
   count, game-mode flags), no PII. It is not injected into a GNS connection. Unchanged.
-- **RCON:** stays a **separate TCP** channel with its own `AuthTracker` per-IP lockout; an optional
+- **RCON:** stays a **separate TCP** channel with its own `AdminChannel` per-IP lockout; an optional
   TLS wrapper is a later, independent hardening step. Unchanged by this selection.
 
 ## Build plan sketch (de-risks #509)

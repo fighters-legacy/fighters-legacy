@@ -4,14 +4,13 @@
 #include <ILogger.h>
 #include <cstdint>
 #include <memory>
-#include <net/AuthTracker.h>
+#include <net/AdminChannel.h>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace fl {
-class CommandRegistry;
-class CommandShell;
+class AdminChannel;
 } // namespace fl
 
 // ---------------------------------------------------------------------------
@@ -48,20 +47,28 @@ int decodePacket(const uint8_t* buf, int len, RconPacket& out);
 // Always returns at least one element (may be empty string for empty input).
 std::vector<std::string> splitResponse(std::string_view body);
 
+// Encode drained shell lines as RESPONSE_VALUE packets for `packetId`: joined with newlines, split at
+// kMaxBodyPerPacket, and terminated with an empty sentinel packet when the body needed more than one.
+// Returns no bytes for no lines. Pure logic -- the DEADLINE that decides when to call this belongs to
+// AdminChannel now (#1079); this is the half that is genuinely RCON's.
+std::vector<uint8_t> encodeDrainPackets(int32_t packetId, const std::vector<std::string>& lines);
+
 } // namespace fl::rcon
 
 // ---------------------------------------------------------------------------
 // RconServer -- TCP RCON listener (Source Engine RCON protocol).
-// Runs a background I/O thread; the caller's CommandRegistry is invoked
-// directly from that thread (safe: dispatch() is const and all mutating
-// handlers enqueue work through the thread-safe GameLoop::enqueueSimCallback).
+// Runs a background I/O thread and drives its AdminChannel from that thread: dispatch, the per-IP
+// lockout and the deferred shell drain all live on the channel, which is safe because dispatch is
+// const and mutating handlers enqueue through GameLoop::enqueueSimCallback (#1079).
 // ---------------------------------------------------------------------------
 namespace fl {
 
 class RconServer {
   public:
-    RconServer(const CommandRegistry& registry, const ServerConfig::RconConfig& cfg, ILogger& log,
-               CommandShell* shell = nullptr);
+    // `channel` is this frontend's AdminChannel: it carries the dispatcher, the lockout parameters and
+    // the shell tap, and must outlive the server. cfg is still needed for the port and the password --
+    // the credential LADDER is per-transport by design; only the bookkeeping around it is shared.
+    RconServer(AdminChannel& channel, const ServerConfig::RconConfig& cfg, ILogger& log);
     ~RconServer();
 
     // Bind the TCP listen socket and launch the background I/O thread.
@@ -72,16 +79,9 @@ class RconServer {
     // Safe to call even if start() was never called or returned false.
     void stop();
 
-    // Clear the RCON auth lockout for ip. Thread-safe; may be called from any thread.
-    // Returns true if a lockout was active and was cleared.
-    bool clearLockout(const std::string& ip);
-
-    // Read the current RCON auth lockout state. Thread-safe; acquires the internal mutex.
-    fl::AuthLockoutSummary getRconAuthSummary();
-
-    // Override the clock used for drain-deadline timing and auth-lockout expiry.
-    // Must be called before start(). The clock must outlive this server.
-    // Propagates to the internal AuthTracker.
+    // Override the clock used for the poll-timeout arithmetic. Must be called before start(); the clock
+    // must outlive this server. Lockout expiry and drain deadlines run on the channel's clock, which the
+    // channel takes at construction -- there is no second clock to keep in step any more.
     void setClock(const IClock& clock);
 
   private:

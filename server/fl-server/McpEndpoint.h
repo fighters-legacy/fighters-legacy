@@ -15,7 +15,7 @@
 #include <vector>
 
 namespace fl {
-class CommandRegistry;
+class AdminChannel;
 }
 
 // The MCP method dispatcher (#601) — everything between "an authenticated request arrived" and "here
@@ -27,7 +27,7 @@ class CommandRegistry;
 //
 // THE ONE INVARIANT WORTH STATING: this class never decides what a command is permitted to do. It
 // decides which TOOLS a token's autonomy tier may reach, and then hands the work to
-// CommandRegistry::dispatch(line, issuer), which applies the #945 capability mask exactly as it does
+// AdminChannel::dispatch(line, issuer), which applies the #945 capability mask exactly as it does
 // for the console, RCON, the ENet admin channel and REST. An `act`-tier moderator token is refused
 // `shutdown` by the capability check, not by anything here — and that refusal is the proof MCP is a
 // frontend rather than a parallel admin path.
@@ -36,7 +36,10 @@ namespace fl {
 
 class McpEndpoint {
   public:
-    McpEndpoint(const CommandRegistry& registry, const ServerConfig::McpConfig& cfg, ILogger& log, McpHooks hooks);
+    // `channel` is the HTTP frontend's AdminChannel -- MCP shares one listener, one credential table
+    // and one lockout with the REST routes (#1079), which is what keeps it a frontend rather than a
+    // parallel admin path.
+    McpEndpoint(const AdminChannel& channel, const ServerConfig::McpConfig& cfg, ILogger& log, McpHooks hooks);
 
     // Inject a clock for deterministic rate-limit and session-expiry tests. Call before use.
     void setClock(const IClock& clock);
@@ -86,7 +89,7 @@ class McpEndpoint {
     [[nodiscard]] std::string newSessionId();
     void evictIfNeeded();
 
-    const CommandRegistry& m_registry;
+    const AdminChannel& m_channel;
     ServerConfig::McpConfig m_cfg;
     ILogger& m_log;
     McpHooks m_hooks;
