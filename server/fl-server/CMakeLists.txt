@@ -15,6 +15,7 @@ target_include_directories(fl-server-config PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
 # code at all. platform-net is the backend-selecting facade (enet6 always, GNS when FL_ENABLE_GNS);
 # the transport is picked at runtime via createNetwork(cfg.network.transport).
 add_library(fl-server-lib STATIC
+    ServerRuntime.cpp
     ServerCommands.cpp
     ConfigReload.cpp
     IpListFile.cpp

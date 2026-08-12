@@ -370,6 +370,29 @@ artifacts move forward, and the scale gate is made honest (plan #1036 Stages 5�
 Architecture decisions D10–D23 arising from this review are recorded in #1036 and mirrored here
 individually by the stage PRs that implement them.
 
+**2026-08-12 — fl-server's lifetime is `ServerRuntime`, and declaration order is its teardown
+contract (#1084).** `main()` was a 2,680-line function holding ~65 objects in function scope whose
+only lifetime specification was a comment — *"Destruction order (LIFO): gameLoop first…, then
+rconServer…, then adminShell, then adminRegistry"* — which was also wrong: `stdinReader` and
+`replayRecorder` are declared *after* `gameLoop`, so they are destroyed *before* it. Teardown order
+in that file is load-bearing and has produced two bugs already (#1054, a double-free from voice
+capture destroyed after `SDL_Quit()`; #1038, a stdin reader that deadlocked exit).
+
+Those objects are now members of `ServerRuntime::Impl`, in the same order they were declared in
+`main()` — deliberately the same, because the sequence that works is the one already running and the
+change is about making it checkable. C++ destroys members in reverse declaration order, so the
+contract is enforced by the language, and `tools/lint_teardown_order.py` (in the `lint` job) pins the
+eleven orderings that encode a hazard somebody already hit. A C++ test cannot assert this — `Impl` is
+a pimpl and destructor ordering is not observable from outside without instrumenting the destructors
+— so the gate reads the source, like `docs_drift.py` and `lint_backend_seam.py` do.
+
+The init sequence is eight named phases (`initConfig`, `initNet`, `initContent`, `initWorld`,
+`initMission`, `initAdmin`, `initSystems`, `mainLoop`) and `main()` is 119 lines of argument parsing.
+An object whose constructor arguments are only known during a phase is held by `unique_ptr` and built
+there; the phase then binds `auto& name = *p_name;` so the moved code reads unchanged, which is what
+keeps a 2,400-line relocation reviewable. The client's `Game` pimpl with its named init phases is the
+in-repo template this follows.
+
 **2026-08-12 — D14: one `AdminChannel` per admin frontend, and a registry that can enumerate them
 (#1079).** Six frontends — stdin, RCON, the ENet `MsgAdminCommand` path, the mission `do:` sink, HTTP
 REST and MCP — shared `CommandRegistry::dispatch` and forked everything around it: three `AuthTracker`
