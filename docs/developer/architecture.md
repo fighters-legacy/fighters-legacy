@@ -473,6 +473,34 @@ The three governor values (`snapshotIntervalTicks`, `interestScale`, `loadFactor
 and also publishes them to its cross-thread mirrors, so passing them is what keeps the pass and the
 mirrors describing the same tick.
 
+**2026-08-12 — D13 completed: `SessionComms` is the third extraction, and Stage 8 takes
+`WorldBroadcaster.cpp` from 7,041 lines to 4,653 (#1087).** Everything the server *says* to players
+that is not world state moves out:
+text chat and its moderation veto, radio and ATC transmissions, the voice relay (net table, per-tick
+peer views, recipient selection, the concurrent-talker cap), the kill feed, the build-once
+scoreboard, the datalink fusion, and the MOTD and server notices — with the state only they touch.
+
+The veto stays a hook rather than becoming an event (D10): `chatModeration` RETURNS a decision, and
+an observer cannot refuse anything.
+
+Two seam details this one settled, because it is the extraction with the most cross-talk:
+
+- **The collaborators call each other through the owner, not directly.** `PeerAdmission` sends the
+  MOTD, the radio-net defs and the joiner's scoreboard, and invalidates the voice views — all four
+  are now `m_wb.m_comms.<public method>`. Both classes are friends of `WorldBroadcaster`, so a
+  sibling is reachable, but only through its PUBLIC surface. A collaborator never reaches into
+  another's private state.
+- **`buildRadioWire` is a free function in the header.** Two callers shape the same wire message from
+  different places — the ATC/voice paths in `SessionComms`, and the crew-chief reply in the
+  broadcaster's base-ops handler (#55). One copy, so a field added to the message cannot reach one
+  caller and not the other.
+
+What deliberately did NOT move: `m_scores` stays in `WorldBroadcaster`. It is written by admission
+(reconnect restore), by scoring (kill attribution) and read by the scoreboard — match state shared by
+three owners, not comms state. Only the scoreboard's dirty flag, build scratch and build counter
+moved. The shutdown countdown also stays: it shares `MsgServerNotice` with this class but it is the
+broadcaster's lifecycle.
+
 **2026-08-12 — D14: one `AdminChannel` per admin frontend, and a registry that can enumerate them
 (#1079).** Six frontends — stdin, RCON, the ENet `MsgAdminCommand` path, the mission `do:` sink, HTTP
 REST and MCP — shared `CommandRegistry::dispatch` and forked everything around it: three `AuthTracker`

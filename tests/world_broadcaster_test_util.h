@@ -762,3 +762,106 @@ inline InterestShedResult runInterestShedScenario(fl::JobSystem* jobs) {
         res.snaps[pid] = snapshotsFor(net, pid);
     return res;
 }
+
+// Build a MsgChat packet (header + NUL-terminated text).
+std::vector<uint8_t> makeChatPkt(fl::ChatChannel ch, std::string_view text) {
+    fl::MsgChatHeader hdr{};
+    hdr.channel = static_cast<uint8_t>(ch);
+    std::vector<uint8_t> pkt;
+    fl::appendMsg(pkt, hdr);
+    pkt.insert(pkt.end(), text.begin(), text.end());
+    pkt.push_back('\0');
+    return pkt;
+}
+
+int countChatEvents(const MockNetwork& net) {
+    int n = 0;
+    for (const auto& p : net.sends)
+        if (!p.empty() && p[0] == static_cast<uint8_t>(fl::MsgId::ChatEvent))
+            ++n;
+    return n;
+}
+
+// Return the decoded text of the last MsgChatEvent sent to `peerId`, or empty if none.
+std::string lastChatEventText(const MockNetwork& net, uint32_t peerId) {
+    for (auto it = net.perPeerSends.rbegin(); it != net.perPeerSends.rend(); ++it) {
+        const auto& [pid, pkt] = *it;
+        if (pid == peerId && !pkt.empty() && pkt[0] == static_cast<uint8_t>(fl::MsgId::ChatEvent) &&
+            pkt.size() >= sizeof(fl::MsgChatEventHeader)) {
+            std::string t(reinterpret_cast<const char*>(pkt.data()) + sizeof(fl::MsgChatEventHeader),
+                          pkt.size() - sizeof(fl::MsgChatEventHeader));
+            if (const auto z = t.find('\0'); z != std::string::npos)
+                t.resize(z);
+            return t;
+        }
+    }
+    return {};
+}
+
+// Find a packet by message id rather than by position. The connect handshake has grown a message
+// on nearly every epic (PlayerRoster #996, VoiceNetDef #532, ...), and every index-based assertion
+// broke each time while testing nothing about ordering.
+inline const std::vector<uint8_t>* findSend(const MockNetwork& net, fl::MsgId id) {
+    for (const auto& pkt : net.sends)
+        if (!pkt.empty() && pkt[0] == static_cast<uint8_t>(id))
+            return &pkt;
+    return nullptr;
+}
+
+inline std::string parseMotdText(const std::vector<uint8_t>& pkt) {
+    if (pkt.size() < sizeof(fl::MsgMotdHeader) + 1u || pkt[0] != static_cast<uint8_t>(fl::MsgId::Motd))
+        return {};
+    // exclude the 4-byte MsgMotdHeader and the trailing NUL.
+    return std::string(reinterpret_cast<const char*>(pkt.data() + sizeof(fl::MsgMotdHeader)),
+                       pkt.size() - sizeof(fl::MsgMotdHeader) - 1u);
+}
+
+inline fl::MsgRadioCommand makeRadioCmd(const char* text) {
+    fl::MsgRadioCommand cmd{};
+    std::snprintf(cmd.command, sizeof(cmd.command), "%s", text);
+    return cmd;
+}
+
+// Find the most recent RadioTransmission (#703) unicast to `peerId` in the tracked per-peer sends.
+inline std::optional<fl::MsgRadioTransmission> lastRadioTo(const MockNetwork& net, uint32_t peerId) {
+    std::optional<fl::MsgRadioTransmission> out;
+    for (const auto& [pid, pkt] : net.perPeerSends) {
+        if (pid != peerId || pkt.size() < sizeof(fl::MsgRadioTransmission))
+            continue;
+        if (pkt[0] != static_cast<uint8_t>(fl::MsgId::RadioTransmission))
+            continue;
+        fl::MsgRadioTransmission rt{};
+        std::memcpy(&rt, pkt.data(), sizeof(rt));
+        out = rt;
+    }
+    return out;
+}
+
+// All MsgCombatEvent packets broadcast so far, decoded into records.
+std::vector<fl::CombatEventRecord> combatBroadcasts(const MockNetwork& net) {
+    std::vector<fl::CombatEventRecord> out;
+    for (const auto& pkt : net.broadcasts) {
+        if (pkt.empty() || pkt[0] != static_cast<uint8_t>(fl::MsgId::CombatEvent))
+            continue;
+        fl::MsgCombatEventHeader hdr;
+        REQUIRE(fl::readMsg(pkt.data(), pkt.size(), hdr));
+        for (uint8_t i = 0; i < hdr.count; ++i) {
+            fl::CombatEventRecord rec;
+            REQUIRE(fl::readRecordAt(pkt.data(), pkt.size(), sizeof(hdr) + std::size_t(i) * sizeof(rec), rec));
+            out.push_back(rec);
+        }
+    }
+    return out;
+}
+
+// One 20 ms voice frame on `netId` with an opaque payload the server never decodes.
+inline std::vector<uint8_t> makeVoiceFrame(uint8_t netId, uint16_t seq, std::size_t payloadBytes = 40) {
+    fl::MsgVoiceFrameHeader hdr{};
+    hdr.netId = netId;
+    hdr.seq = seq;
+    hdr.payloadBytes = static_cast<uint16_t>(payloadBytes);
+    std::vector<uint8_t> pkt;
+    fl::appendMsg(pkt, hdr);
+    pkt.insert(pkt.end(), payloadBytes, uint8_t{0xA5});
+    return pkt;
+}

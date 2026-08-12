@@ -657,18 +657,8 @@ void PeerAdmission::handleConnectRequest(uint32_t peerId, const void* data, std:
 
     sendConnectAck(peerId, assigned, grantedRole);
 
-    // MOTD, unicast once on admission (moved from onConnect).
-    if (!m_wb.m_motd.empty()) {
-        const std::size_t textLen = std::min(m_wb.m_motd.size(), kMaxMotdBytes);
-        MsgMotdHeader mhdr{};
-        mhdr.displaySeconds = m_wb.m_motdDisplaySeconds;
-        std::vector<uint8_t> pkt;
-        pkt.reserve(sizeof(MsgMotdHeader) + textLen + 1);
-        appendMsg(pkt, mhdr);
-        pkt.insert(pkt.end(), m_wb.m_motd.c_str(), m_wb.m_motd.c_str() + textLen);
-        pkt.push_back(0u); // NUL terminator
-        m_net.send(peerId, pkt.data(), pkt.size(), /*reliable=*/true);
-    }
+    // MOTD, unicast once on admission (moved from onConnect; the banner itself is SessionComms', #1087).
+    m_wb.m_comms.sendMotdTo(peerId);
 
     // Missing-content notice (#872 warn policy): tell the admitted client which required packs it lacks,
     // so a content mismatch is visible instead of silent placeholders. Reuses the MsgServerNotice banner
@@ -734,15 +724,15 @@ void PeerAdmission::handleConnectRequest(uint32_t peerId, const void* data, std:
         s.losses = grace->losses;
         s.score = grace->score;
         s.dirty = true;
-        m_wb.m_scoreboardDirty = true;
+        m_wb.m_comms.markScoreboardDirty();
         m_disconnectGrace.erase(reconnectGuid);
     }
 
-    m_wb.m_voiceViewsValid = false; // #1090: a new admitted peer changes the voice recipient set
+    m_wb.m_comms.invalidateVoiceViews(); // #1090: a new admitted peer changes the voice recipient set
 
     // Match state + scoreboard for the late joiner (#523): the current phase/scores + everyone's row.
     m_wb.sendMatchStateTo(peerId);
-    m_wb.sendScoreboardTo(peerId);
+    m_wb.m_comms.sendScoreboardTo(peerId);
 }
 void PeerAdmission::sendConnectAck(uint32_t peerId, EntityId assigned, PeerRole grantedRole) {
     // Type-table skip (#1070). This function is re-sent on every seat change, role change, team change
@@ -871,7 +861,7 @@ void PeerAdmission::sendConnectAck(uint32_t peerId, EntityId assigned, PeerRole 
     // Radio-net table (#532): the client cannot key a mic until it knows which nets exist and what
     // each one sounds like. Sent beside the faction table for the same reason — both are small,
     // server-authoritative vocabularies the client needs before its first frame.
-    m_wb.sendVoiceNetDefs(peerId);
+    m_wb.m_comms.sendVoiceNetDefs(peerId);
 
     // Mission roster (#914): one reliable packet of concatenated MsgMissionRoster records mapping each
     // spawned mission object's entity idx/gen -> its mission object id, so the cinematic recorder (#909)
