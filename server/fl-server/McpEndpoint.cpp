@@ -3,7 +3,7 @@
 
 #include <console/CommandRegistry.h>
 #include <mission/MissionValidator.h>
-#include <net/WorldStateJson.h> // jsonEscape — one escaper for every JSON this server emits
+#include <util/Json.h> // json::escape — the one escaper for every JSON this server emits
 
 #include "Version.h" // FL_VERSION_STRING — reported to a client in initialize's serverInfo
 
@@ -153,7 +153,7 @@ std::string McpEndpoint::readResource(std::string_view uri, const httpadmin::Tok
 
 std::string McpEndpoint::handleToolCall(std::string_view params, const httpadmin::TokenGrant& grant,
                                         std::string_view id) {
-    const auto name = mcp::stringValue(mcp::objectMember(params, "name"));
+    const auto name = json::stringValue(json::member(params, "name"));
     if (!name)
         return mcp::errorResponse(id, mcp::RpcError::InvalidParams, "missing tool \"name\"");
 
@@ -171,7 +171,7 @@ std::string McpEndpoint::handleToolCall(std::string_view params, const httpadmin
                                       std::string(mcp::autonomyName(grant.autonomy)) + "'");
     }
 
-    const std::string_view args = mcp::objectMember(params, "arguments");
+    const std::string_view args = json::member(params, "arguments");
     const CommandIssuer issuer = httpadmin::issuerFor(grant);
 
     // Audit BEFORE dispatch, and record the attempt whatever its outcome: a refused agent action is
@@ -191,9 +191,9 @@ std::string McpEndpoint::handleToolCall(std::string_view params, const httpadmin
         std::string command = "events";
         long long after = 0;
         long long max = 0;
-        if (const auto v = mcp::intValue(mcp::objectMember(args, "after")); v && *v >= 0)
+        if (const auto v = json::intValue(json::member(args, "after")); v && *v >= 0)
             after = *v;
-        if (const auto v = mcp::intValue(mcp::objectMember(args, "max")); v && *v > 0)
+        if (const auto v = json::intValue(json::member(args, "max")); v && *v > 0)
             max = *v > kMaxEventsPerCall ? kMaxEventsPerCall : *v;
         // The command takes positionals, so `max` alone still has to pass an `after` of 0.
         if (after > 0 || max > 0) {
@@ -207,7 +207,7 @@ std::string McpEndpoint::handleToolCall(std::string_view params, const httpadmin
     }
 
     if (*name == "submit_mission") {
-        const std::string_view yamlSpan = mcp::objectMember(args, "yaml");
+        const std::string_view yamlSpan = json::member(args, "yaml");
         if (yamlSpan.empty())
             return mcp::errorResponse(id, mcp::RpcError::InvalidParams, "missing \"yaml\" argument");
         // Bound the RAW span, before decoding: an over-long document is refused without allocating
@@ -216,7 +216,7 @@ std::string McpEndpoint::handleToolCall(std::string_view params, const httpadmin
         // have said.
         if (yamlSpan.size() > kMaxMissionYamlBytes)
             return mcp::resultResponse(id, mcp::toolResult("mission document too large", {}, true));
-        const auto yaml = mcp::stringValue(yamlSpan, kMaxMissionYamlBytes);
+        const auto yaml = json::stringValue(yamlSpan, kMaxMissionYamlBytes);
         if (!yaml)
             return mcp::errorResponse(id, mcp::RpcError::InvalidParams, "\"yaml\" is not a valid JSON string");
 
@@ -225,10 +225,10 @@ std::string McpEndpoint::handleToolCall(std::string_view params, const httpadmin
         structured += v.ok ? "true" : "false";
         structured += ", \"errors\": [";
         for (std::size_t i = 0; i < v.errors.size(); ++i)
-            structured += (i ? ", \"" : "\"") + jsonEscape(v.errors[i]) + "\"";
+            structured += (i ? ", \"" : "\"") + json::escape(v.errors[i]) + "\"";
         structured += "], \"warnings\": [";
         for (std::size_t i = 0; i < v.warnings.size(); ++i)
-            structured += (i ? ", \"" : "\"") + jsonEscape(v.warnings[i]) + "\"";
+            structured += (i ? ", \"" : "\"") + json::escape(v.warnings[i]) + "\"";
         structured += "]}";
 
         std::string text = v.ok ? "mission is valid" : "mission is invalid";
@@ -242,7 +242,7 @@ std::string McpEndpoint::handleToolCall(std::string_view params, const httpadmin
     }
 
     if (*name == "admin_command") {
-        const auto command = mcp::stringValue(mcp::objectMember(args, "command"));
+        const auto command = json::stringValue(json::member(args, "command"));
         if (!command || command->empty())
             return mcp::errorResponse(id, mcp::RpcError::InvalidParams, "missing \"command\" argument");
         if (!mcp::commandAllowed(m_cfg.allowlist, *command)) {
@@ -254,7 +254,8 @@ std::string McpEndpoint::handleToolCall(std::string_view params, const httpadmin
         // narrows what MCP may attempt; the capability mask inside still decides what it may do.
         const std::string result = m_registry.dispatch(*command, issuer);
         const bool failed = isPermissionDenied(result) || isUnknownCommand(result);
-        return mcp::resultResponse(id, mcp::toolResult(result, "{\"result\": \"" + jsonEscape(result) + "\"}", failed));
+        return mcp::resultResponse(id,
+                                   mcp::toolResult(result, "{\"result\": \"" + json::escape(result) + "\"}", failed));
     }
 
     return mcp::errorResponse(id, mcp::RpcError::Internal, "tool '" + *name + "' has no handler");
@@ -308,7 +309,7 @@ McpEndpoint::RpcOutcome McpEndpoint::handle(std::string_view body, const httpadm
                   "\"serverInfo\": {\"name\": \"";
         result += mcp::kServerName;
         result += "\", \"version\": \"";
-        result += jsonEscape(FL_VERSION_STRING);
+        result += json::escape(FL_VERSION_STRING);
         result += "\"}}";
         out.body = mcp::resultResponse(req.id, result);
         out.newSessionId = std::move(id);
@@ -370,7 +371,7 @@ McpEndpoint::RpcOutcome McpEndpoint::handle(std::string_view body, const httpadm
             result += "\", \"title\": \"";
             result += t.title;
             result += "\", \"description\": \"";
-            result += jsonEscape(t.description);
+            result += json::escape(t.description);
             result += "\", \"inputSchema\": ";
             result += t.inputSchema;
             if (!t.outputSchema.empty()) {
@@ -401,7 +402,7 @@ McpEndpoint::RpcOutcome McpEndpoint::handle(std::string_view body, const httpadm
             result += "\", \"name\": \"";
             result += r.name;
             result += "\", \"description\": \"";
-            result += jsonEscape(r.description);
+            result += json::escape(r.description);
             result += "\", \"mimeType\": \"";
             result += r.mimeType;
             result += "\"}";
@@ -412,7 +413,7 @@ McpEndpoint::RpcOutcome McpEndpoint::handle(std::string_view body, const httpadm
     }
 
     if (req.method == "resources/read") {
-        const auto uri = mcp::stringValue(mcp::objectMember(req.params, "uri"));
+        const auto uri = json::stringValue(json::member(req.params, "uri"));
         if (!uri)
             out.body = mcp::errorResponse(req.id, mcp::RpcError::InvalidParams, "missing \"uri\"");
         else if (!mcp::findResource(*uri))
@@ -426,7 +427,7 @@ McpEndpoint::RpcOutcome McpEndpoint::handle(std::string_view body, const httpadm
                 std::string result = "{\"contents\": [{\"uri\": \"";
                 result += *uri;
                 result += "\", \"mimeType\": \"application/json\", \"text\": \"";
-                result += jsonEscape(text);
+                result += json::escape(text);
                 result += "\"}]}";
                 out.body = mcp::resultResponse(req.id, result);
             }
@@ -435,7 +436,7 @@ McpEndpoint::RpcOutcome McpEndpoint::handle(std::string_view body, const httpadm
     }
 
     if (req.method == "resources/subscribe" || req.method == "resources/unsubscribe") {
-        const auto uri = mcp::stringValue(mcp::objectMember(req.params, "uri"));
+        const auto uri = json::stringValue(json::member(req.params, "uri"));
         if (!uri || !mcp::findResource(*uri)) {
             out.body = mcp::errorResponse(req.id, mcp::RpcError::InvalidParams, "unknown or missing \"uri\"");
             return out;

@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <util/Json.h>
 
 #include <McpProtocol.h>
 
@@ -27,17 +28,17 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     std::string errorBody;
     if (fl::mcp::parseRequest(body, req, errorBody)) {
         for (const char* key : {"name", "arguments", "uri", "absent"}) {
-            const std::string_view span = fl::mcp::objectMember(req.params, key);
-            (void)fl::mcp::stringValue(span);
-            (void)fl::mcp::intValue(span);
-            (void)fl::mcp::boolValue(span);
+            const std::string_view span = fl::json::member(req.params, key);
+            (void)fl::json::stringValue(span);
+            (void)fl::json::intValue(span);
+            (void)fl::json::boolValue(span);
         }
         // Two levels deep, which is as far as any real tool reads.
-        const std::string_view args = fl::mcp::objectMember(req.params, "arguments");
+        const std::string_view args = fl::json::member(req.params, "arguments");
         for (const char* key : {"command", "yaml", "after", "max"}) {
-            const std::string_view span = fl::mcp::objectMember(args, key);
-            (void)fl::mcp::stringValue(span);
-            (void)fl::mcp::intValue(span);
+            const std::string_view span = fl::json::member(args, key);
+            (void)fl::json::stringValue(span);
+            (void)fl::json::intValue(span);
         }
         // Echoing an attacker-supplied id back into a response is a real path: the id token is
         // copied verbatim, so anything that could break out of the JSON would do it here.
@@ -48,9 +49,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     // Scan the raw bytes as an object too, so malformed inputs that parseRequest rejects early still
     // exercise the scanner itself rather than stopping at the envelope check.
     for (const char* key : {"jsonrpc", "id", "method", "params"})
-        (void)fl::mcp::objectMember(body, key);
-    (void)fl::mcp::stringValue(body);
-    (void)fl::mcp::isObject(body);
+        (void)fl::json::member(body, key);
+    (void)fl::json::stringValue(body);
+    (void)fl::json::isObject(body);
 
     // The allowlist takes the decoded command line, which is attacker-influenced whenever a token is
     // compromised -- and it is the last check before dispatch.

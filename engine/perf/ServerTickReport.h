@@ -15,6 +15,7 @@
 #include "JsonScan.h"
 #include "Stats.h"
 #include "TickProfiler.h"
+#include "util/Json.h"
 
 #include <array>
 #include <cstdint>
@@ -235,91 +236,100 @@ inline std::string toJson(const ServerTickReport& r, int indentSpaces = 0) {
 }
 
 // Parses a report from JSON (tolerant). Returns false if no recognisable fields were found.
-inline bool fromJson(std::string_view json, ServerTickReport& out) {
+//
+// Accepts EITHER a bare tick report or a document that embeds one under "server_tick" — which is what
+// bot_swarm's report does, and what scale_gate.py reads. That used to work by accident: the old
+// find-based reader located a key at any depth, so handing it a swarm report happened to find the
+// nested fields. It also meant an outer field sharing a name with an inner one silently won by document
+// order. The unified structural reader (#1080) looks at one object level, so the nesting is stated here
+// instead of being a property of the scanner.
+inline bool fromJson(std::string_view document, ServerTickReport& out) {
+    const std::string_view embedded = json::member(document, "server_tick");
+    const std::string_view json = json::isObject(embedded) ? embedded : document;
     bool any = false;
-    if (auto v = detail::findNumber(json, "schema_version")) {
+    if (auto v = json::numberField(json, "schema_version")) {
         out.schemaVersion = static_cast<int>(*v);
         any = true;
     }
-    if (auto v = detail::findNumber(json, "tick_hz")) {
+    if (auto v = json::numberField(json, "tick_hz")) {
         out.tickHz = *v;
         any = true;
     }
-    if (auto v = detail::findNumber(json, "ticks_sampled")) {
+    if (auto v = json::numberField(json, "ticks_sampled")) {
         out.ticksSampled = static_cast<uint64_t>(*v);
         any = true;
     }
-    if (auto v = detail::findNumber(json, "ticks_total")) {
+    if (auto v = json::numberField(json, "ticks_total")) {
         out.ticksTotal = static_cast<uint64_t>(*v);
         any = true;
     }
-    if (auto v = detail::findNumber(json, "window_s")) {
+    if (auto v = json::numberField(json, "window_s")) {
         out.windowSeconds = *v;
         any = true;
     }
-    if (auto v = detail::findNumber(json, "peers")) {
+    if (auto v = json::numberField(json, "peers")) {
         out.peers = static_cast<int>(*v);
         any = true;
     }
-    if (auto v = detail::findNumber(json, "voice_relay_sends"))
+    if (auto v = json::numberField(json, "voice_relay_sends"))
         out.voiceRelaySends = static_cast<uint64_t>(*v);
-    if (auto v = detail::findNumber(json, "entities")) {
+    if (auto v = json::numberField(json, "entities")) {
         out.entities = static_cast<uint32_t>(*v);
         any = true;
     }
-    if (auto v = detail::findNumber(json, "entity_soft_cap")) {
+    if (auto v = json::numberField(json, "entity_soft_cap")) {
         out.entitySoftCap = static_cast<uint32_t>(*v);
         any = true;
     }
-    if (auto v = detail::findNumber(json, "entity_cap_refusals")) {
+    if (auto v = json::numberField(json, "entity_cap_refusals")) {
         out.entityCapRefusals = static_cast<uint64_t>(*v);
         any = true;
     }
-    if (auto v = detail::findNumber(json, "load_factor")) {
+    if (auto v = json::numberField(json, "load_factor")) {
         out.loadFactor = *v;
         any = true;
     }
-    if (auto v = detail::findNumber(json, "interest_scale")) {
+    if (auto v = json::numberField(json, "interest_scale")) {
         out.interestScale = *v;
         any = true;
     }
-    if (auto v = detail::findNumber(json, "dropped_ticks")) {
+    if (auto v = json::numberField(json, "dropped_ticks")) {
         out.droppedTicks = static_cast<uint64_t>(*v);
         any = true;
     }
-    if (auto v = detail::findNumber(json, "rss_kb")) {
+    if (auto v = json::numberField(json, "rss_kb")) {
         out.rssKb = static_cast<uint64_t>(*v);
         any = true;
     }
-    if (auto v = detail::findNumber(json, "rss_startup_kb")) {
+    if (auto v = json::numberField(json, "rss_startup_kb")) {
         out.rssStartupKb = static_cast<uint64_t>(*v);
         any = true;
     }
-    if (auto v = detail::findNumber(json, "congestion_min_send_hz")) {
+    if (auto v = json::numberField(json, "congestion_min_send_hz")) {
         out.congestionMinSendHz = *v;
         any = true;
     }
-    if (auto v = detail::findNumber(json, "congestion_recovered_send_hz")) {
+    if (auto v = json::numberField(json, "congestion_recovered_send_hz")) {
         out.congestionRecoveredSendHz = *v;
         any = true;
     }
-    if (auto v = detail::findNumber(json, "congestion_max_loss")) {
+    if (auto v = json::numberField(json, "congestion_max_loss")) {
         out.congestionMaxLoss = *v;
         any = true;
     }
-    if (auto v = detail::findNumber(json, "wire_out_kbs")) {
+    if (auto v = json::numberField(json, "wire_out_kbs")) {
         out.wireOutKbs = *v;
         any = true;
     }
-    if (auto v = detail::findNumber(json, "wire_in_kbs")) {
+    if (auto v = json::numberField(json, "wire_in_kbs")) {
         out.wireInKbs = *v;
         any = true;
     }
-    if (auto v = detail::findNumber(json, "wire_out_pps")) {
+    if (auto v = json::numberField(json, "wire_out_pps")) {
         out.wireOutPacketsPerSec = *v;
         any = true;
     }
-    if (auto v = detail::findNumber(json, "wire_peers")) {
+    if (auto v = json::numberField(json, "wire_peers")) {
         out.wirePeers = static_cast<int>(*v);
         any = true;
     }

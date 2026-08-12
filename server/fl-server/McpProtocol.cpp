@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "McpProtocol.h"
 
-#include <net/WorldStateJson.h> // jsonEscape — one escaper for every JSON this server emits
+#include <util/Json.h> // json::escape — the one escaper for every JSON this server emits
 
 #include <array>
 #include <cctype>
@@ -36,235 +36,11 @@ std::string_view autonomyName(Autonomy a) noexcept {
 }
 
 // ---------------------------------------------------------------------------
-// Scanner
-// ---------------------------------------------------------------------------
-
-namespace {
-
-[[nodiscard]] bool isWs(char c) noexcept {
-    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
-}
-
-[[nodiscard]] std::string_view trim(std::string_view s) noexcept {
-    std::size_t b = 0;
-    std::size_t e = s.size();
-    while (b < e && isWs(s[b]))
-        ++b;
-    while (e > b && isWs(s[e - 1]))
-        --e;
-    return s.substr(b, e - b);
-}
-
-// Index just past the string literal starting at `i` (which must be its opening quote), or npos if
-// it never terminates. Escapes are skipped as a unit so a `\"` does not end the string.
-[[nodiscard]] std::size_t skipString(std::string_view s, std::size_t i) noexcept {
-    ++i; // opening quote
-    while (i < s.size()) {
-        if (s[i] == '\\') {
-            i += 2; // the escape and whatever it escapes
-            continue;
-        }
-        if (s[i] == '"')
-            return i + 1;
-        ++i;
-    }
-    return std::string_view::npos;
-}
-
-// Index just past the JSON value starting at `i`, or npos. Handles the four shapes that can appear
-// as a member value; a scalar simply runs to the next delimiter at depth 0.
-[[nodiscard]] std::size_t skipValue(std::string_view s, std::size_t i) noexcept {
-    if (i >= s.size())
-        return std::string_view::npos;
-    if (s[i] == '"')
-        return skipString(s, i);
-    if (s[i] == '{' || s[i] == '[') {
-        int depth = 0;
-        while (i < s.size()) {
-            const char c = s[i];
-            if (c == '"') {
-                i = skipString(s, i);
-                if (i == std::string_view::npos)
-                    return std::string_view::npos;
-                continue;
-            }
-            if (c == '{' || c == '[')
-                ++depth;
-            else if (c == '}' || c == ']') {
-                --depth;
-                if (depth == 0)
-                    return i + 1;
-                if (depth < 0)
-                    return std::string_view::npos;
-            }
-            ++i;
-        }
-        return std::string_view::npos;
-    }
-    // Scalar: number, true, false, null.
-    const std::size_t start = i;
-    while (i < s.size() && s[i] != ',' && s[i] != '}' && s[i] != ']' && !isWs(s[i]))
-        ++i;
-    return i > start ? i : std::string_view::npos;
-}
-
-} // namespace
-
-bool isObject(std::string_view span) noexcept {
-    const std::string_view t = trim(span);
-    return t.size() >= 2 && t.front() == '{' && t.back() == '}';
-}
-
-std::string_view objectMember(std::string_view obj, std::string_view key) noexcept {
-    const std::string_view s = trim(obj);
-    if (s.empty() || s.front() != '{')
-        return {};
-
-    std::size_t i = 1; // past '{'
-    while (i < s.size()) {
-        while (i < s.size() && (isWs(s[i]) || s[i] == ','))
-            ++i;
-        if (i >= s.size() || s[i] == '}')
-            return {};
-        if (s[i] != '"')
-            return {}; // a key must be a string; anything else means malformed, so fail closed
-
-        const std::size_t keyStart = i + 1;
-        const std::size_t afterKey = skipString(s, i);
-        if (afterKey == std::string_view::npos)
-            return {};
-        // Compare the RAW key bytes. Every key this server looks for is plain ASCII with no escapes,
-        // so an escaped spelling of one is not a match we want to honour.
-        const std::string_view thisKey = s.substr(keyStart, afterKey - keyStart - 1);
-
-        i = afterKey;
-        while (i < s.size() && isWs(s[i]))
-            ++i;
-        if (i >= s.size() || s[i] != ':')
-            return {};
-        ++i;
-        while (i < s.size() && isWs(s[i]))
-            ++i;
-
-        const std::size_t valStart = i;
-        const std::size_t valEnd = skipValue(s, i);
-        if (valEnd == std::string_view::npos)
-            return {};
-        if (thisKey == key)
-            return trim(s.substr(valStart, valEnd - valStart));
-        i = valEnd;
-    }
-    return {};
-}
-
-std::optional<std::string> stringValue(std::string_view span, std::size_t maxLen) {
-    const std::string_view s = trim(span);
-    if (s.size() < 2 || s.front() != '"' || s.back() != '"')
-        return std::nullopt;
-    std::string out;
-    for (std::size_t i = 1; i + 1 < s.size(); ++i) {
-        if (out.size() > maxLen)
-            return std::nullopt; // over-long: refuse rather than truncate into something plausible
-        const char c = s[i];
-        if (c != '\\') {
-            out += c;
-            continue;
-        }
-        if (++i + 1 > s.size() - 1)
-            return std::nullopt;
-        switch (s[i]) {
-        case 'n':
-            out += '\n';
-            break;
-        case 'r':
-            out += '\r';
-            break;
-        case 't':
-            out += '\t';
-            break;
-        case 'b':
-            out += '\b';
-            break;
-        case 'f':
-            out += '\f';
-            break;
-        case '"':
-            out += '"';
-            break;
-        case '\\':
-            out += '\\';
-            break;
-        case '/':
-            out += '/';
-            break;
-        case 'u': {
-            // \uXXXX. Only the BMP, encoded as UTF-8; a lone surrogate becomes U+FFFD rather than
-            // producing invalid UTF-8 that some downstream consumer chokes on.
-            if (i + 4 >= s.size() - 1)
-                return std::nullopt;
-            unsigned cp = 0;
-            for (int k = 1; k <= 4; ++k) {
-                const char h = s[i + static_cast<std::size_t>(k)];
-                cp <<= 4;
-                if (h >= '0' && h <= '9')
-                    cp |= static_cast<unsigned>(h - '0');
-                else if (h >= 'a' && h <= 'f')
-                    cp |= static_cast<unsigned>(h - 'a' + 10);
-                else if (h >= 'A' && h <= 'F')
-                    cp |= static_cast<unsigned>(h - 'A' + 10);
-                else
-                    return std::nullopt;
-            }
-            i += 4;
-            if (cp >= 0xD800 && cp <= 0xDFFF)
-                cp = 0xFFFD;
-            if (cp < 0x80) {
-                out += static_cast<char>(cp);
-            } else if (cp < 0x800) {
-                out += static_cast<char>(0xC0 | (cp >> 6));
-                out += static_cast<char>(0x80 | (cp & 0x3F));
-            } else {
-                out += static_cast<char>(0xE0 | (cp >> 12));
-                out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
-                out += static_cast<char>(0x80 | (cp & 0x3F));
-            }
-            break;
-        }
-        default:
-            return std::nullopt; // an unknown escape is malformed, not a literal
-        }
-    }
-    return out;
-}
-
-std::optional<long long> intValue(std::string_view span) noexcept {
-    const std::string_view s = trim(span);
-    if (s.empty())
-        return std::nullopt;
-    long long v = 0;
-    const auto* first = s.data();
-    const auto* last = s.data() + s.size();
-    const auto res = std::from_chars(first, last, v);
-    if (res.ec != std::errc{} || res.ptr != last)
-        return std::nullopt;
-    return v;
-}
-
-std::optional<bool> boolValue(std::string_view span) noexcept {
-    const std::string_view s = trim(span);
-    if (s == "true")
-        return true;
-    if (s == "false")
-        return false;
-    return std::nullopt;
-}
-
-// ---------------------------------------------------------------------------
 // Envelope
 // ---------------------------------------------------------------------------
 
 bool parseRequest(std::string_view body, Request& out, std::string& errorBody) {
-    const std::string_view s = trim(body);
+    const std::string_view s = json::trim(body);
     if (s.empty()) {
         errorBody = errorResponse({}, RpcError::ParseError, "empty request body");
         return false;
@@ -276,34 +52,34 @@ bool parseRequest(std::string_view body, Request& out, std::string& errorBody) {
                                   "JSON-RPC batching is not supported in MCP revision 2025-06-18");
         return false;
     }
-    if (!isObject(s)) {
+    if (!json::isObject(s)) {
         errorBody = errorResponse({}, RpcError::ParseError, "request must be a JSON object");
         return false;
     }
 
-    const std::string_view ver = objectMember(s, "jsonrpc");
-    const auto verStr = stringValue(ver);
+    const std::string_view ver = json::member(s, "jsonrpc");
+    const auto verStr = json::stringValue(ver);
     if (!verStr || *verStr != "2.0") {
         errorBody = errorResponse({}, RpcError::InvalidRequest, "expected \"jsonrpc\": \"2.0\"");
         return false;
     }
 
-    const std::string_view idSpan = objectMember(s, "id");
+    const std::string_view idSpan = json::member(s, "id");
     out.id.assign(idSpan);
     // No id, or an explicit null id, means a notification: no response is emitted at all.
     out.isNotification = out.id.empty() || out.id == "null";
     if (out.isNotification)
         out.id.clear();
 
-    const auto method = stringValue(objectMember(s, "method"));
+    const auto method = json::stringValue(json::member(s, "method"));
     if (!method || method->empty()) {
         errorBody = errorResponse(out.id, RpcError::InvalidRequest, "missing \"method\"");
         return false;
     }
     out.method = *method;
 
-    const std::string_view params = objectMember(s, "params");
-    if (!params.empty() && !isObject(params)) {
+    const std::string_view params = json::member(s, "params");
+    if (!params.empty() && !json::isObject(params)) {
         errorBody = errorResponse(out.id, RpcError::InvalidParams, "\"params\" must be an object");
         return false;
     }
@@ -326,14 +102,14 @@ std::string errorResponse(std::string_view id, RpcError code, std::string_view m
     s += ", \"error\": {\"code\": ";
     s += std::to_string(static_cast<int>(code));
     s += ", \"message\": \"";
-    s += jsonEscape(message);
+    s += json::escape(message);
     s += "\"}}";
     return s;
 }
 
 std::string toolResult(std::string_view text, std::string_view structured, bool isError) {
     std::string s = "{\"content\": [{\"type\": \"text\", \"text\": \"";
-    s += jsonEscape(text);
+    s += json::escape(text);
     s += "\"}]";
     if (!structured.empty()) {
         s += ", \"structuredContent\": ";
@@ -429,10 +205,10 @@ const ResourceDesc* findResource(std::string_view uri) noexcept {
 
 std::string_view commandVerb(std::string_view line) noexcept {
     std::size_t b = 0;
-    while (b < line.size() && isWs(line[b]))
+    while (b < line.size() && json::isWs(line[b]))
         ++b;
     std::size_t e = b;
-    while (e < line.size() && !isWs(line[e]))
+    while (e < line.size() && !json::isWs(line[e]))
         ++e;
     return line.substr(b, e - b);
 }

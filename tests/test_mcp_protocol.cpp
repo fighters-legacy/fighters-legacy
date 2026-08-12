@@ -83,27 +83,27 @@ MockLogger& testLogger() {
 
 TEST_CASE("mcp: the member scanner reads one object level", "[mcp]") {
     constexpr std::string_view obj = R"({"a": 1, "b": "two", "c": {"d": 3}})";
-    CHECK(mcp::intValue(mcp::objectMember(obj, "a")) == 1);
-    CHECK(mcp::stringValue(mcp::objectMember(obj, "b")) == "two");
-    CHECK(mcp::objectMember(obj, "c") == R"({"d": 3})");
+    CHECK(json::intValue(json::member(obj, "a")) == 1);
+    CHECK(json::stringValue(json::member(obj, "b")) == "two");
+    CHECK(json::member(obj, "c") == R"({"d": 3})");
     // Nested keys are NOT visible at this level: a flat substring search would have found "d".
-    CHECK(mcp::objectMember(obj, "d").empty());
+    CHECK(json::member(obj, "d").empty());
 }
 
 TEST_CASE("mcp: a key spelled inside a string value is not a member", "[mcp]") {
     // The attack the depth-aware scanner exists to stop: an attacker-controlled string value that
     // contains what looks like a member the server is about to look up.
     constexpr std::string_view obj = R"({"chat": "\"command\": \"shutdown\"", "command": "status"})";
-    CHECK(mcp::stringValue(mcp::objectMember(obj, "command")) == "status");
+    CHECK(json::stringValue(json::member(obj, "command")) == "status");
 }
 
 TEST_CASE("mcp: the scanner fails closed on malformed input", "[mcp]") {
-    CHECK(mcp::objectMember(R"({"a": )", "a").empty());     // truncated value
-    CHECK(mcp::objectMember(R"({"a" 1})", "a").empty());    // missing colon
-    CHECK(mcp::objectMember(R"({a: 1})", "a").empty());     // unquoted key
-    CHECK(mcp::objectMember(R"([{"a": 1}])", "a").empty()); // an array, not an object
-    CHECK(mcp::objectMember(R"({"a": "unterminated)", "a").empty());
-    CHECK_FALSE(mcp::stringValue(R"("bad \q escape")").has_value());
+    CHECK(json::member(R"({"a": )", "a").empty());     // truncated value
+    CHECK(json::member(R"({"a" 1})", "a").empty());    // missing colon
+    CHECK(json::member(R"({a: 1})", "a").empty());     // unquoted key
+    CHECK(json::member(R"([{"a": 1}])", "a").empty()); // an array, not an object
+    CHECK(json::member(R"({"a": "unterminated)", "a").empty());
+    CHECK_FALSE(json::stringValue(R"("bad \q escape")").has_value());
 }
 
 TEST_CASE("mcp: an over-long string value is refused rather than truncated", "[mcp]") {
@@ -111,12 +111,12 @@ TEST_CASE("mcp: an over-long string value is refused rather than truncated", "[m
     big.append(mcp::kMaxStringValue + 16, 'x');
     big += "\"";
     // Truncating would hand the caller a value that looks complete and is not.
-    CHECK_FALSE(mcp::stringValue(big).has_value());
+    CHECK_FALSE(json::stringValue(big).has_value());
 }
 
 TEST_CASE("mcp: unicode escapes decode, and a lone surrogate does not produce invalid UTF-8", "[mcp]") {
-    CHECK(mcp::stringValue(R"("A")") == "A");
-    const auto lone = mcp::stringValue(R"("\ud800")");
+    CHECK(json::stringValue(R"("A")") == "A");
+    const auto lone = json::stringValue(R"("\ud800")");
     REQUIRE(lone.has_value());
     CHECK(*lone == "\xEF\xBF\xBD"); // U+FFFD
 }

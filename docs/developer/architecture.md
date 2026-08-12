@@ -213,6 +213,38 @@ OpenAL Soft instead.
   `ldd` output of their own, which is exactly why the configure-time rules name the product libraries
   directly rather than relying on this step to catch a bad edge.
 
+## JSON in the Engine
+
+`engine/util/Json.h` is the engine's **one** JSON escaper, writer set and reader (#1080). Hand-rolled
+is deliberate: the schemas are small, deterministic output matters, and a JSON library in `engine-*`
+would be a dependency bought for very little — `engine-protocol` links nothing but the stdlib. Before
+this header there were **two escapers, six independent `toJson` bodies and five independent readers**
+(`JsonScan`, `ServerTickReport::fromJson`, `HttpAdminAuth`'s field pair, `McpProtocol`'s member scanner,
+`LobbyListClient::parseJsonString`). Escaping is the part that matters: `MatchEvent::text` is
+attacker-controlled and reaches `/events`, the MCP audit mirror and the `.flrep` recorder, so two
+escapers meant two chances to get it wrong and one place to fix it.
+
+**The reader promoted was the structural one, not the simplest one.** Four of the five located a key
+with `find("\"key\"")`, which matches a key nested inside a sub-object — or one that merely appears
+inside a string *value*: `{"note": "\"admin\": true"}` satisfied a find-based lookup for `admin`.
+`json::member` walks the object, reads keys at the level asked for, compares raw key bytes (so
+`\u0061dmin` is not a match for `admin`), and fails closed on malformed input. Promoting the weakest
+reader would have spread that hole to the untrusted REST bodies instead of closing it.
+
+Two behaviours that were previously accidents are now stated explicitly, because the structural reader
+does not provide them for free:
+
+- `ServerTickReport::fromJson` accepts a bare tick report **or** a document embedding one under
+  `"server_tick"` — which is what bot_swarm's report does and what `scale_gate.py` reads. Under the old
+  flat find it worked by accident, and an outer field sharing a name with an inner one silently won by
+  document order.
+- `json::stringValue` refuses an escape JSON does not define rather than passing the character through.
+  A reader that silently accepts `\q` accepts a document no writer produced.
+
+Header-only and stdlib-only, so a consumer gains no link edge across a layer boundary — the
+`Capability.h` pattern. Numbers go through `strtod`, never `std::from_chars`: Apple Clang has no
+floating-point `from_chars`.
+
 ## Thread-Ownership Assertions
 
 Several engine classes document a threading contract in a header comment and enforce it with nothing.

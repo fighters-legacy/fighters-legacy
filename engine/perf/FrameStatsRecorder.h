@@ -30,6 +30,7 @@
 
 #include "JsonScan.h"
 #include "Stats.h"
+#include "util/Json.h"
 
 #include "RenderTypes.h"
 
@@ -140,42 +141,6 @@ class FrameStatsRecorder {
     double m_lastFlushMs{0.0};
 };
 
-namespace detail {
-
-// Minimal JSON string escaping for the provenance fields (device names carry parentheses and the
-// odd backslash on Windows; a raw quote would corrupt the document).
-inline std::string jsonEscape(std::string_view s) {
-    std::string out;
-    out.reserve(s.size() + 8);
-    for (const char c : s) {
-        switch (c) {
-        case '"':
-            out += "\\\"";
-            break;
-        case '\\':
-            out += "\\\\";
-            break;
-        case '\n':
-            out += "\\n";
-            break;
-        case '\r':
-            out += "\\r";
-            break;
-        case '\t':
-            out += "\\t";
-            break;
-        default:
-            if (static_cast<unsigned char>(c) < 0x20)
-                out += ' ';
-            else
-                out += c;
-        }
-    }
-    return out;
-}
-
-} // namespace detail
-
 inline std::string FrameStatsRecorder::toJson() const {
     // computeStats sorts in place, so build throwaway copies of each series.
     std::vector<double> frameMs, gpuMs, memMb;
@@ -210,8 +175,8 @@ inline std::string FrameStatsRecorder::toJson() const {
                   "  \"hitches_over_33ms\": %llu,\n"
                   "  \"stalls_over_50ms\": %llu,\n",
                   kFrameStatsSchemaVersion, m_startedEpochMs, durationS,
-                  static_cast<unsigned long long>(m_samples.size()), detail::jsonEscape(m_gpuInfo).c_str(),
-                  detail::jsonEscape(m_scene).c_str(), m_gpuMemBudgetMb, static_cast<unsigned long long>(hitches),
+                  static_cast<unsigned long long>(m_samples.size()), json::escape(m_gpuInfo).c_str(),
+                  json::escape(m_scene).c_str(), m_gpuMemBudgetMb, static_cast<unsigned long long>(hitches),
                   static_cast<unsigned long long>(stalls));
     std::string out = head;
 
@@ -252,7 +217,7 @@ inline std::string FrameStatsRecorder::toJson() const {
 inline bool parseFrameStats(std::string_view json, FrameStatsSummary& out) {
     bool any = false;
     auto num = [&](std::string_view key, auto&& assign) {
-        if (auto v = detail::findNumber(json, key)) {
+        if (auto v = json::numberField(json, key)) {
             assign(*v);
             any = true;
         }
