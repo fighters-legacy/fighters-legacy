@@ -2255,11 +2255,6 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     m_tickProfiler.addPhaseSample(TickPhase::Serialize,
                                   std::chrono::duration<double, std::milli>(m_clock->now() - tSerializeStart).count());
     m_tickProfiler.endTick();
-
-    // Mission objective/trigger evaluation (#633), after the world has fully stepped this tick. Runs at
-    // its own second-scale cadence internally; unset unless a mission is loaded.
-    if (m_missionTickHook)
-        m_missionTickHook(tickIndex);
 }
 
 void WorldBroadcaster::onConnect(uint32_t peerId) {
@@ -3431,7 +3426,7 @@ void WorldBroadcaster::runWeaponsPass(double simDt, uint64_t tickIndex) {
                             st->transform.pos);
         }
     }
-    m_countermeasures.step(tickIndex, static_cast<float>(simDt));
+    m_countermeasures.onTick(simDt, tickIndex);
 
     if (!m_weaponRegistry)
         return; // no vocabulary, no fire path — trigger intent is read and discarded (pre-#583)

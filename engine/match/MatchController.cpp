@@ -121,7 +121,7 @@ void MatchController::forceEnd(std::optional<uint16_t> winner) {
     m_pendingForceEnd = true;
 }
 
-void MatchController::step(uint64_t tick) {
+void MatchController::onTick(double /*simDt*/, uint64_t tick) {
     // Idle -> Warmup on the first human participant.
     if (m_phase == MatchPhase::Idle) {
         if (m_humans > 0)

@@ -82,7 +82,7 @@ TEST_CASE("CountermeasureSystem: decoys expire and stop seducing", "[countermeas
 
     // Age past the lifetime (~4 s at 60 Hz = 240 ticks). The decoy is gone.
     for (uint64_t t = 1; t <= 300; ++t)
-        cm.step(t, 1.f / 60.f);
+        cm.onTick(1.0 / 60.0, t);
     CHECK(cm.liveDecoyCount() == 0u);
     CHECK_FALSE(cm.seduces(7, targetPos, sensor::SensorType::Ir, susc(0.f, 1.f), 301));
 }

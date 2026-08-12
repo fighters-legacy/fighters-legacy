@@ -27,6 +27,7 @@
 #include "StdinCommandReader.h"
 #include "StdoutLogger.h"
 #include "TestSpawn.h"
+#include "WorldStateBridge.h"
 #include "bots.h"
 #include "http/CurlHttpClientFactory.h" // #143 lobby registration HTTP backend
 #include "match/MatchController.h"
@@ -1961,57 +1962,20 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Composite per-tick hook (#523): step the mission runtime (if any) AND the match controller every
-    // tick, then publish MsgMatchState whenever the controller's state version changes (a phase
-    // transition or a team score). Reading the mode fields from the controller keeps it correct across
-    // a rotation. Runs at the end of onTick on the sim thread.
-    broadcaster.setMissionTickHook([rt = missionRuntime.get(), &matchController, &broadcaster, &botRoster, &alertSystem,
-                                    &loadedMissionName, simDt = 1.0 / kSimTickRateHz,
-                                    lastVer = uint64_t{0}](uint64_t t) mutable {
-        if (rt)
-            rt->step(t);
-        matchController.step(t);
-        // Airspace enforcement (#162). Runs at the END of the tick, on the stepped world, so a zone
-        // test sees where everyone actually is this tick rather than where they were last tick.
-        alertSystem.onTick(simDt, t);
-        // AI bot backfill (#87), stepped ~1 Hz. humans ~= connected peers.
-        if (botRoster && t % 60u == 0u)
-            botRoster->step(static_cast<int>(broadcaster.getPeerCount()));
-        // Mission/objective state into the ~1 Hz world-state snapshot (#600). Pushed rather than
-        // pulled because engine-net does not link engine-mission. Refreshed just under the rebuild
-        // cadence so the snapshot never carries a stale outcome.
-        if (rt && t % 30u == 0u) {
-            const fl::MissionOutcome& mo = rt->outcome();
-            fl::WorldStateMission wm;
-            wm.active = true;
-            wm.name = loadedMissionName;
-            // MissionState {Active, Complete, Failed} maps onto the MissionResultCode the wire and
-            // the debrief already use, so an agent reading the snapshot and a client reading
-            // MsgMissionOutcome see the same vocabulary rather than two spellings of one fact.
-            wm.outcome =
-                static_cast<uint8_t>(mo.state == fl::MissionState::Complete ? fl::MissionResultCode::Success
-                                     : mo.state == fl::MissionState::Failed ? fl::MissionResultCode::Failure
-                                                                            : fl::MissionResultCode::Incomplete);
-            wm.triggersFired = mo.triggersFired;
-            wm.elapsedSeconds = mo.elapsedSeconds;
-            broadcaster.setWorldStateMission(std::move(wm));
-        }
-        {
-            const uint64_t ver = matchController.stateVersion();
-            if (ver != lastVer) {
-                lastVer = ver;
-                fl::WorldBroadcaster::MatchStatePod pod;
-                pod.phase = static_cast<uint8_t>(matchController.phase());
-                pod.scoreLimit = static_cast<uint16_t>(std::clamp(matchController.scoreLimit(), 0, 65535));
-                pod.phaseEndTick = matchController.phaseEndTick();
-                pod.modeId = matchController.modeId();
-                pod.modeName = matchController.modeName();
-                for (const fl::TeamScore& ts : matchController.teamScores())
-                    pod.teamScores.emplace_back(ts.factionIndex, ts.score);
-                broadcaster.setMatchState(pod);
-            }
-        }
-    });
+    // The sim systems are a REGISTERED, ORDERED LIST on the GameLoop (#1078), not a composite lambda
+    // behind setMissionTickHook. Registration order below IS execution order, and it reproduces the old
+    // lambda's order exactly: the broadcaster first (it is the loop's first system), then the mission
+    // runtime, the match controller, airspace enforcement, bot backfill and the world-state bridge.
+    //
+    // Position in the tick is unchanged. The old hook fired at the very end of WorldBroadcaster::onTick,
+    // after the snapshot flush and net.service(); these run immediately after that call returns, which is
+    // the same point. Airspace enforcement in particular must stay after the world has stepped, so a zone
+    // test sees where everyone actually is this tick rather than where they were last tick.
+    //
+    // Each system owns its own sub-rate cadence now: BotRoster steps itself at ~1 Hz, WorldStateBridge
+    // pushes the mission block every 30 ticks and MsgMatchState on a version change. The caller no longer
+    // knows or cares.
+    fl::WorldStateBridge worldStateBridge(broadcaster, matchController, missionRuntime.get(), loadedMissionName);
 
     if (!cfg.trace.inputTraceDir.empty()) {
         broadcaster.setInputTraceDir(cfg.trace.inputTraceDir);
@@ -2064,6 +2028,18 @@ int main(int argc, char** argv) {
     std::unique_ptr<fl::atc::AtcService> atcService;
 
     GameLoop gameLoop(broadcaster, *log, kSimTickRateHz, cfg.maxCatchupTicks);
+
+    // The ordered sim-system list (#1078). Registration order is execution order; see the note above
+    // the WorldStateBridge construction. Each of these implements ISimUpdate, so a new sim system is a
+    // line here rather than a branch inside a lambda -- and AlertSystem's "why I am not registered with
+    // the loop I implement the interface for" comment is gone along with the reason for it.
+    if (missionRuntime)
+        gameLoop.addSimUpdate(*missionRuntime);
+    gameLoop.addSimUpdate(matchController);
+    gameLoop.addSimUpdate(alertSystem);
+    if (botRoster)
+        gameLoop.addSimUpdate(*botRoster);
+    gameLoop.addSimUpdate(worldStateBridge);
 
     // Match rotation (#523): on match end, reset the world, advance to the next rotation item's mode,
     // and re-admit the connected pilots — all serial on the sim thread via enqueueSimCallback (hence
@@ -2453,9 +2429,12 @@ int main(int argc, char** argv) {
         for (uint64_t tick = 1; tick <= kMaxReportTicks; ++tick) {
             // Run admin-dispatched trigger effects (detonate / atc_scramble / spawn) that the mission's
             // `do:` actions enqueued last tick — the sim thread would drain these at the top of each
-            // tick, but this loop steps onTick() directly, so drain them here to keep the report faithful.
+            // tick, but this loop drives ticks itself, so drain them here to keep the report faithful.
             gameLoop.drainSimCallbacks();
-            broadcaster.onTick(kSimDt, tick);
+            // Every registered system, in the loop's own order (#1078). Stepping the broadcaster alone
+            // was enough while the mission runtime hung off setMissionTickHook inside it; it is not now,
+            // and a report whose tick order differs from production's would not be worth generating.
+            gameLoop.stepOnce(kSimDt, tick);
             ranTicks = tick;
             if (missionRuntime->done())
                 break;

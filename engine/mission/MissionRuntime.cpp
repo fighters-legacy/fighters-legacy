@@ -93,7 +93,7 @@ bool MissionRuntime::executeAction(const std::string& doAction) {
     return false;
 }
 
-void MissionRuntime::step(uint64_t tickIndex) {
+void MissionRuntime::onTick(double /*simDt*/, uint64_t tickIndex) {
     if (!m_started) {
         m_started = true;
         m_startTick = tickIndex;

@@ -23,10 +23,17 @@ class ISimUpdate;
 
 // Manages the fixed-timestep sim thread and coordinates with the main (render) thread.
 //
+// Drives an ORDERED LIST of ISimUpdate systems (#1078): registration order IS execution order, so the
+// tick order is data the loop holds rather than the body of a lambda somewhere else. It took exactly
+// one system before, which is why the server hand-sequenced its five sim systems inside a single
+// setMissionTickHook lambda across three different step signatures -- and why AlertSystem implemented
+// ISimUpdate while carrying a comment explaining that it was not registered with the loop it
+// implements the interface for.
+//
 // Threading model:
-//   Main thread   — calls start(), stop(), shellTick(), setRate(). Owns all HAL.
-//   Sim thread    — owned by GameLoop; calls ISimUpdate::onTick() at fixed rate.
-//                   Must never call any HAL method except ILogger::log().
+//   Main thread   — calls start(), stop(), shellTick(), setRate(), addSimUpdate(). Owns all HAL.
+//   Sim thread    — owned by GameLoop; calls ISimUpdate::onTick() on each registered system, in order,
+//                   at fixed rate. Must never call any HAL method except ILogger::log().
 //
 // Shared state between threads:
 //   m_running          atomic<bool>     stop signal (release/relaxed)
@@ -41,6 +48,8 @@ class GameLoop {
     // single iteration falls more than this many ticks behind (e.g. a CPU spike under 128-player load),
     // the excess is discarded (sim time dilates) rather than spiralling; the count is exposed via
     // totalDroppedTicks(). Range [1, 64]; default 8.
+    // The first system registered. Additional ones go through addSimUpdate() in the order they must
+    // run; a loop with one system is the common case (the client) and reads as it always did.
     GameLoop(ISimUpdate& sim, ILogger& logger, double tickRate = 60.0, int maxCatchupTicks = 8);
 
     // Destructor calls stop() as a safety net; prefer an explicit stop() before
@@ -55,6 +64,15 @@ class GameLoop {
     // -----------------------------------------------------------------------
     // Lifecycle — main thread only.
     // -----------------------------------------------------------------------
+
+    // Register a system to run after the ones already registered. Main thread, BEFORE start() —
+    // asserted, because the sim thread iterates the list without a lock, and because a system added
+    // mid-run would begin at an arbitrary point in a tick.
+    void addSimUpdate(ISimUpdate& sim);
+
+    [[nodiscard]] std::size_t simUpdateCount() const noexcept {
+        return m_systems.size();
+    }
 
     // Starts the sim thread. Log: "game loop started".
     void start();
@@ -77,10 +95,19 @@ class GameLoop {
     void enqueueSimCallback(std::function<void()> fn);
 
     // Run and clear all queued sim callbacks now, on the calling thread. The sim thread calls this
-    // once at the top of each iteration; a harness that steps ISimUpdate::onTick() directly (e.g. the
-    // deterministic --mission-report loop) must call it before each onTick() so admin-dispatched
-    // trigger effects (detonate / atc_scramble / spawn) actually run instead of piling up unexecuted.
+    // once at the top of each iteration; a harness that drives ticks itself (e.g. the deterministic
+    // --mission-report loop) must call it before each stepOnce() so admin-dispatched trigger effects
+    // (detonate / atc_scramble / spawn) actually run instead of piling up unexecuted.
     void drainSimCallbacks();
+
+    // Advance every registered system, in order, on the CALLING thread. This is the body of one sim
+    // tick with the timing removed, for a harness that owns its own tick loop — the deterministic
+    // --mission-report run and the replay/determinism gate.
+    //
+    // It exists so there is exactly ONE definition of tick order (#1078). A harness that walked the
+    // systems itself would be a second copy of that order, and a determinism harness whose tick order
+    // can differ from production's is measuring the wrong thing. Do not call while the loop is running.
+    void stepOnce(double simDt, uint64_t tickIndex);
 
     // -----------------------------------------------------------------------
     // Time compression — main thread only.
@@ -99,8 +126,11 @@ class GameLoop {
 
   private:
     void simThreadFunc();
+    // The ordered walk, shared by the sim thread and stepOnce() so there is one definition of it.
+    void stepSystems(double simDt, uint64_t tickIndex);
 
-    ISimUpdate& m_sim;
+    // Ordered, and frozen by start(): the sim thread walks it every tick without a lock.
+    std::vector<ISimUpdate*> m_systems;
     ILogger& m_logger;
     double m_tickRate;
     int m_maxCatchupTicks;

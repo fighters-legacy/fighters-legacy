@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "loop/ISimUpdate.h"
+
 // The mission objective / trigger evaluator (#633). It runs server-authoritatively at a second-scale
 // cadence (NOT every 60 Hz tick): each trigger's `on` predicate is tested in declaration order, and the
 // first time it becomes true its `do` action fires exactly once. mission_success / mission_failure drive
@@ -36,7 +38,7 @@ struct MissionOutcome {
     uint32_t triggersFired{0};
 };
 
-class MissionRuntime {
+class MissionRuntime : public ISimUpdate {
   public:
     // A non-terminal `do` action (spawn / message / weather / music ...) the runtime cannot resolve
     // itself. fl-server wires this to the admin command dispatch; unset = the action is logged-and-
@@ -51,7 +53,7 @@ class MissionRuntime {
 
     // Call once per sim tick with the monotonically increasing tick index. Evaluates triggers only
     // every `evalIntervalTicks` (and on the first call), so predicate checks run at ~1 Hz, not 60 Hz.
-    void step(uint64_t tickIndex);
+    void onTick(double simDt, uint64_t tickIndex) override;
 
     // Bind a mission object id to a live entity, or unbind it with an invalid EntityId (#884). The
     // caller (fl-server) wires this to the connect handshake so a pilot claiming a player slot registers

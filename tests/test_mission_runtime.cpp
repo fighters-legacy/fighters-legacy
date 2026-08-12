@@ -27,6 +27,9 @@
 
 using namespace fl;
 
+// The fixed step every ISimUpdate receives; MissionRuntime gates on the tick, not on dt.
+constexpr double kDt = 1.0 / 60.0;
+
 namespace {
 
 const char* kValidMission = R"yaml(
@@ -597,7 +600,7 @@ TEST_CASE("MissionRuntime: mission_start fires immediately and completes the obj
     bool ended = false;
     MissionRuntime rt(m, {}, em);
     rt.setOnEnd([&](const MissionOutcome&) { ended = true; });
-    rt.step(0);
+    rt.onTick(kDt, 0);
 
     CHECK(rt.done());
     CHECK(rt.outcome().state == MissionState::Complete);
@@ -616,10 +619,10 @@ TEST_CASE("MissionRuntime: timer(n) fires after n seconds of elapsed sim time", 
     rt.setSimDt(1.0 / 60.0);
 
     for (uint64_t t = 0; t < 120; ++t) {
-        rt.step(t);
+        rt.onTick(kDt, t);
         CHECK(rt.outcome().state == MissionState::Active); // < 2.0 s
     }
-    rt.step(120); // elapsed = 120/60 = 2.0 s
+    rt.onTick(kDt, 120); // elapsed = 120/60 = 2.0 s
     CHECK(rt.outcome().state == MissionState::Failed);
 }
 
@@ -637,12 +640,12 @@ TEST_CASE("MissionRuntime: destroy(<id>) fires when the object's entity dies", "
     MissionRuntime rt(m, {{"bandit", bandit}}, em);
     rt.setEvalIntervalTicks(1);
 
-    rt.step(0);
+    rt.onTick(kDt, 0);
     CHECK(rt.outcome().state == MissionState::Active); // still alive
 
     em.kill(bandit);
     em.onTick(1.0 / 60.0, 1); // reap the killed entity
-    rt.step(1);
+    rt.onTick(kDt, 1);
     CHECK(rt.outcome().state == MissionState::Complete);
 }
 
@@ -658,7 +661,7 @@ TEST_CASE("MissionRuntime: destroy(<player-slot>) tracks the bound pilot, not t=
     MissionRuntime rt(m, {{"player1", EntityId{}}}, em);
     rt.setEvalIntervalTicks(1);
 
-    rt.step(0);
+    rt.onTick(kDt, 0);
     CHECK(rt.outcome().state == MissionState::Active); // unoccupied slot != destroyed
 
     // A pilot claims the slot: bind its aircraft; destroy() stays false while it lives.
@@ -666,19 +669,19 @@ TEST_CASE("MissionRuntime: destroy(<player-slot>) tracks the bound pilot, not t=
     const EntityId pilot = em.spawn("test:fighter", t);
     REQUIRE(pilot.valid());
     rt.registerObjectEntity("player1", pilot);
-    rt.step(60);
+    rt.onTick(kDt, 60);
     CHECK(rt.outcome().state == MissionState::Active);
 
     // The pilot disconnects: the slot is unbound and reads as unoccupied again (not destroyed).
     rt.registerObjectEntity("player1", EntityId{});
-    rt.step(120);
+    rt.onTick(kDt, 120);
     CHECK(rt.outcome().state == MissionState::Active);
 
     // A pilot re-occupies the slot and is then destroyed -> the failure fires.
     rt.registerObjectEntity("player1", pilot);
     em.kill(pilot);
     em.onTick(1.0 / 60.0, 181);
-    rt.step(180);
+    rt.onTick(kDt, 180);
     CHECK(rt.outcome().state == MissionState::Failed);
 }
 
@@ -690,7 +693,7 @@ TEST_CASE("MissionRuntime: triggers fire in declaration order; non-terminal acti
 
     std::vector<std::string> dispatched;
     MissionRuntime rt(m, {}, em, [&](std::string_view a) { dispatched.emplace_back(a); });
-    rt.step(0);
+    rt.onTick(kDt, 0);
 
     REQUIRE(dispatched.size() == 1); // the spawn action routed through the dispatcher
     CHECK(dispatched[0] == "spawn(Su27,red,0,0,0)");
@@ -710,12 +713,12 @@ TEST_CASE("MissionRuntime: a weather trigger action is dispatched verbatim for t
 
     std::vector<std::string> dispatched;
     MissionRuntime rt(m, {}, em, [&](std::string_view a) { dispatched.emplace_back(a); });
-    rt.step(0);
+    rt.onTick(kDt, 0);
     REQUIRE(dispatched.size() == 1u);
     CHECK(dispatched[0] == "set_weather storm"); // verbatim → adminRegistry.dispatch tokenizes it
     CHECK(rt.outcome().state == MissionState::Active);
 
-    rt.step(60 * 6); // past timer(5)
+    rt.onTick(kDt, 60 * 6); // past timer(5)
     CHECK(rt.outcome().state == MissionState::Complete);
 }
 
@@ -734,7 +737,7 @@ TEST_CASE("MissionRuntime::forceOutcome ends the mission from outside the trigge
         ++ends;
         captured = o;
     });
-    rt.step(0);
+    rt.onTick(kDt, 0);
     CHECK(rt.outcome().state == MissionState::Active);
 
     rt.forceOutcome(false); // a Lua script calls world.mission_failure()
@@ -758,7 +761,7 @@ TEST_CASE("MissionRuntime: a trigger fires exactly once (edge), not every tick",
     MissionRuntime rt(m, {}, em, [&](std::string_view a) { dispatched.emplace_back(a); });
     rt.setEvalIntervalTicks(1);
     for (uint64_t t = 0; t < 10; ++t)
-        rt.step(t);
+        rt.onTick(kDt, t);
 
     CHECK(dispatched.size() == 1u); // fired on the first evaluation and never again
     CHECK(rt.outcome().state == MissionState::Active);

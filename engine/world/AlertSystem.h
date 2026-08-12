@@ -48,10 +48,12 @@ struct ZoneIntruderState {
 // FactionRegistry) selects which dwell row applies -- so raising a faction's alert level tightens
 // every zone it owns at once.
 //
-// This is NOT registered with GameLoop: WorldBroadcaster is the engine's single ISimUpdate, and
-// fl-server drives second sim-side consumers from the end-of-tick setMissionTickHook seam. It
-// implements the interface anyway because the contract (fixed timestep, sim thread, no HAL) is
-// exactly the one it needs, and that makes the requirement checkable rather than commented.
+// Registered with GameLoop like every other sim system (#1078). It implemented ISimUpdate from the
+// start, with a comment explaining why it was NOT registered with the loop it implemented the interface
+// for -- WorldBroadcaster was the engine's single ISimUpdate, so fl-server drove second consumers from
+// an end-of-tick hook instead. The loop drives an ordered list now, so the interface means what it says.
+// Order matters here and is data: this must run AFTER the world has stepped, so a zone test sees where
+// everyone actually is this tick rather than where they were last tick.
 //
 // Threading: onTick() and every query run on the sim thread. setAlertLevel() delegates to
 // FactionRegistry, whose alert-level storage is mutex-guarded for the network/main thread -- but the

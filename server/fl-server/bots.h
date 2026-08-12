@@ -2,6 +2,7 @@
 #pragma once
 
 #include "entity/EntityId.h"
+#include "loop/ISimUpdate.h"
 #include "match/BotFillPolicy.h"
 #include "match/TeamBalancer.h"
 #include "net/GameProtocol.h" // kBotParticipantBase
@@ -18,7 +19,7 @@ namespace fl {
 // network peers — the transport never sees them. This owns the bot lifecycle (spawn / retire / respawn)
 // and registers each as a scoreboard participant; fl-server supplies the spawn/kill/liveness seams
 // (they need engine-ai + engine-script, which engine-net does not link).
-class BotRoster {
+class BotRoster final : public ISimUpdate {
   public:
     struct Config {
         int fill{0};     // desired total participants (humans + bots); 0 = bots disabled
@@ -37,8 +38,18 @@ class BotRoster {
         : m_b(b), m_cfg(cfg), m_teams(std::move(teams)), m_spawn(std::move(spawn)), m_kill(std::move(kill)),
           m_alive(std::move(alive)) {}
 
-    // Called ~1 Hz. Reaps dead bots, then spawns/retires to reach the fill target. `humans` = current
-    // human participant count. Gentle churn: at most one add or remove per call.
+    // Registered with GameLoop (#1078). The ~1 Hz cadence is this system's own concern, not its
+    // caller's, and the human count comes from the broadcaster it already holds -- so a bot roster is a
+    // registration rather than two lines inside somebody else's lambda.
+    void onTick(double /*simDt*/, uint64_t tick) override {
+        if (tick % kStepIntervalTicks != 0)
+            return;
+        step(static_cast<int>(m_b.getPeerCount()));
+    }
+
+    // Reaps dead bots, then spawns/retires to reach the fill target. `humans` = current human
+    // participant count. Gentle churn: at most one add or remove per call. Public so a test can drive
+    // one step with an explicit human count.
     void step(int humans) {
         // 1. Reap dead bots (killed in combat).
         for (auto it = m_bots.begin(); it != m_bots.end();) {
@@ -74,6 +85,9 @@ class BotRoster {
     }
 
   private:
+    // ~1 Hz at the 60 Hz sim rate. Bot churn is a match-shaping decision, not a per-tick one.
+    static constexpr uint64_t kStepIntervalTicks = 60;
+
     struct Bot {
         uint32_t pid{0};
         EntityId eid{};
