@@ -1299,6 +1299,12 @@ target_link_libraries(test_snapshot_pipeline PRIVATE Catch2::Catch2WithMain engi
     engine-bootstrap)
 catch_discover_tests(test_snapshot_pipeline)
 
+# The comms half (#1087), same arrangement.
+add_executable(test_session_comms test_session_comms.cpp)
+target_link_libraries(test_session_comms PRIVATE Catch2::Catch2WithMain engine-net engine-weather
+    engine-bootstrap)
+catch_discover_tests(test_session_comms)
+
 add_executable(test_weather test_weather.cpp)
 target_link_libraries(test_weather PRIVATE Catch2::Catch2WithMain engine-weather)
 

@@ -11,6 +11,7 @@
 #include "MatchEventLog.h" // the one append-only match record (#600)
 #include "PeerAdmission.h" // whether and how a peer enters the world (#1085) — owned by value below
 #include "RequiredPackPolicy.h"
+#include "SessionComms.h"     // everything the server says that is not world state (#1087)
 #include "SnapshotPipeline.h" // the per-tick snapshot path (#1086) — owned by value below
 #include "SnapshotScheduler.h"
 #include "TickGovernor.h"
@@ -1030,10 +1031,10 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Enable/disable the chat channel (default enabled) and set the per-peer rate limit (lines/second).
     // Call before gameLoop.start(); hot-reloadable via reload_config.
     void setChatEnabled(bool enabled) noexcept {
-        m_chatEnabled = enabled;
+        m_comms.setChatEnabled(enabled);
     }
     void setChatRateLimit(int perSecond) noexcept {
-        m_chatRateLimit = perSecond < 1 ? 1 : perSecond;
+        m_comms.setChatRateLimit(perSecond);
     }
     // Moderation hook: return false to suppress a line (fl-server default logs an audit line + allows).
     // Unset ⇒ every line passes. Sim-thread; wired before gameLoop.start().
@@ -1078,11 +1079,14 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // How many times the scoreboard packet set has been BUILT (#1091). Before the broadcast built
     // once, this rose by one per connected peer per dirty window; now it rises by one per window.
     [[nodiscard]] uint64_t scoreboardBuildCount() const noexcept {
-        return m_scoreboardBuilds;
+        return m_comms.scoreboardBuilds();
     }
 
     // Session-scoped mute for a peer (admin mute/unmute). Sim-thread. Returns false if the peer is
     // unknown. A muted peer's chat lines are dropped silently (no rate-limit warning).
+    void sendNoticeTo(uint32_t peerId, const char* text) {
+        m_comms.sendNoticeTo(peerId, text);
+    }
     bool setPeerMuted(uint32_t peerId, bool muted);
     [[nodiscard]] bool isPeerMuted(uint32_t peerId) const;
     // Participant ids of every currently muted peer (for the admin `mutes` command). Sim-thread.
@@ -1097,25 +1101,25 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // configures nothing still has a working radio.
     void setRadioNets(RadioNetTable nets);
     [[nodiscard]] const RadioNetTable& radioNets() const noexcept {
-        return m_radioNets;
+        return m_comms.radioNets();
     }
     void setVoiceEnabled(bool enabled) noexcept {
-        m_voiceEnabled = enabled;
+        m_comms.setVoiceEnabled(enabled);
     }
     [[nodiscard]] bool voiceEnabled() const noexcept {
-        return m_voiceEnabled;
+        return m_comms.voiceEnabled();
     }
     // Per-peer frame cap per second. 50 frames/s is one continuous 20 ms transmission, so the default
     // 52 sits just above the codec rate and binds; the previous 60 sat above what a well-behaved
     // client could even produce and therefore capped nothing (#1090).
     void setVoiceFrameRateLimit(int framesPerSecond) noexcept {
-        m_voiceFrameRateLimit = framesPerSecond < 1 ? 1 : framesPerSecond;
+        m_comms.setVoiceFrameRateLimit(framesPerSecond);
     }
 
     // Total sendChannel calls the voice relay has made (#1090). The fan-out — not the frame count —
     // is what voice actually costs the server, so this is the number a worst-case bound asserts on.
     [[nodiscard]] uint64_t voiceRelaySendCount() const noexcept {
-        return m_voiceRelaySends;
+        return m_comms.voiceRelaySends();
     }
     // Session-scoped transmit mute (admin voice_mute/voice_unmute). Returns false if peer unknown.
     bool setPeerVoiceMuted(uint32_t peerId, bool muted);
@@ -1234,7 +1238,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     //
     // Extracted because three call sites had already open-coded the same three lines, and #611 would
     // have been the fourth.
-    void sendNoticeTo(uint32_t peerId, const char* text);
 
     // Issue a wingman order on behalf of `peerId` — the SAME path MsgWingmanCommand takes, minus the
     // wire parsing, the sequence guard and the per-peer order rate limit that only a packet needs.
@@ -1477,6 +1480,11 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     SnapshotPipeline m_snapshots;
     friend class SnapshotPipeline;
 
+    // Everything the server SAYS to players that is not world state (#1087, D13): chat, radio/ATC,
+    // the voice relay, the scoreboard and kill feed, the datalink and the MOTD. Same ownership rule.
+    SessionComms m_comms;
+    friend class SessionComms;
+
     // Shared spawn core for a pilot peer: spawn `entityType` at `t`, record m_peerEntities, stamp
     // `faction` (0 = leave neutral), resolve the flight model, and register the PeerController. Used by
     // both admitPilot (round-robin path) and the mission-slot path. Sim-thread.
@@ -1513,28 +1521,21 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
 
     // Player radio channel (#703). Sim-thread only (called from onReceive). Parses the verb, rate-
     // limits per peer, dispatches to the ATC service, and sends an immediate acknowledgement.
-    void handleRadioCommand(uint32_t peerId, const void* data, std::size_t size);
 
     // Text chat channel (#646). Sim-thread only (called from onReceive). Handshake-gated; sanitizes the
     // text (BMP UTF-8, control chars stripped, truncated on a codepoint boundary), per-peer rate-limits,
     // honors mute + the moderation hook, then routes a MsgChatEvent to the channel's recipients.
-    void handleChat(uint32_t peerId, const void* data, std::size_t size);
     // Voice (#532): relay one received frame to the net's recipient set, and send a peer the net
     // table at admit time.
-    void handleVoiceFrame(uint32_t peerId, const void* data, std::size_t size);
-    void sendVoiceNetDefs(uint32_t peerId);
     // Snapshot every admitted peer into the flat view the pure router consumes.
-    void buildVoicePeerViews(std::vector<VoicePeerView>& out) const;
     [[nodiscard]] VoicePeerView voicePeerView(uint32_t peerId) const;
     // Build + send one MsgChatEvent to a single peer. Sim-thread.
-    void sendChatEvent(uint32_t peerId, uint8_t channel, uint32_t senderPeerId, std::string_view text);
 
     // Push a positional snapshot onto a spectator peer's delay queue (#403), evicting the oldest when the
     // 4 MB/peer cap is exceeded (warn once). Sim-thread.
     void enqueueDelayedSnapshot(PeerInputState& pin, uint64_t dueTick, const std::vector<uint8_t>& payload);
     // Convert an ATC RadioTransmission to the wire message and send it: unicast to the peer owning the
     // target entity if one does, else broadcast to every peer (so nearby players hear an AI's clearance).
-    void sendRadioTransmission(const fl::atc::RadioTransmission& tx);
     // Log, send a MsgConnectRefusal with the reason text for `code`, and disconnect the peer.
     // Centralizes the five onConnect rejection paths.
     void rejectConnection(uint32_t peerId, const std::string& ip, ConnectRefusalCode code);
@@ -1598,46 +1599,16 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // The player faction, the pilot spawn default, the observer gate and the required-pack policy moved
     // to PeerAdmission (#1085): each is consulted only while deciding how a joining peer enters.
     int m_flightCmdRateLimit{4}; // orders per second per peer
-    bool m_chatEnabled{true};    // #646: false = drop all chat
-    int m_chatRateLimit{2};      // #646: chat lines per second per peer
     // World-mutating request limits (#1069). Seat and team requests each cost a despawn/respawn plus
     // a full ConnectAck on grant; heartbeats each cost a MsgPeerDelay reply.
     // The rate this server actually steps at, and the value MsgConnectAck advertises (#1075). Fixed
     // at 60: physics, prediction, lag compensation and the scale gate all assume it. It is a value
     // rather than a literal so the wire field is honest and every tick<->ms conversion has one source.
     TickRate m_tickRate{kServerTickRate};
-    std::string m_buildVersion; // #1074: advertised in MsgHello / the beacon / the query reply
-    // Scoreboard build scratch + a build counter (#1091). The counter is what a test asserts on: the
-    // defect was the NUMBER of builds, so "one per window" is the property, not the bytes.
-    std::vector<std::vector<uint8_t>> m_scoreboardScratch;
-    uint64_t m_scoreboardBuilds{0};
-    int m_seatRequestRateLimit{2}; // seat requests per second per peer
-    int m_teamSwitchCooldownS{5};  // seconds between accepted team switches per peer; 0 = no cooldown
-    int m_heartbeatRateLimit{4};   // heartbeats per second per peer that draw a reply
-    // Voice comms (#532). The table is server-authoritative and replicated at admit time.
-    RadioNetTable m_radioNets;
-    bool m_voiceEnabled{true};
-    // frames/s/peer. 52, not 60 (#1090): the codec produces 50 frames/s, so a 60/s limit sat ABOVE
-    // the rate a well-behaved client can reach and therefore capped nothing at all. 52 leaves two
-    // frames of jitter headroom and actually binds.
-    int m_voiceFrameRateLimit{52};
-    // Per-tick voice peer views (#1090). buildVoicePeerViews is an O(P) walk and it ran on EVERY
-    // RECEIVED FRAME — at 50 frames/s per talker that is the same list rebuilt tens of thousands of
-    // times a second for a picture that changes once per tick. Rebuilt at most once per tick now,
-    // plus whenever membership changes within a tick (a join/leave/mute must not be missed).
-    uint64_t m_voiceViewsTick{0};
-    bool m_voiceViewsValid{false};
-    // Per-net active-talker tracking for the concurrent-speaker cap (D20). Keyed netId -> (peerId ->
-    // last frame time). A talker keeps its slot through a brief gap (kVoiceTalkerHoldMs) so a pause
-    // for breath does not drop it mid-sentence and hand the slot to someone else.
-    std::unordered_map<uint8_t, std::unordered_map<uint32_t, std::chrono::steady_clock::time_point>> m_voiceTalkers;
-    // Relay fan-out counter (#1090): sendChannel calls made by the voice relay. Name-keyed additive
-    // metric; ServerTickReport's schema version stays frozen at 6 (D18 / #686).
-    uint64_t m_voiceRelaySends{0};
-    // Scratch reused by the relay path so a 50 Hz hot path does not allocate per frame.
-    mutable std::vector<VoicePeerView> m_voicePeerScratch;
-    mutable std::vector<uint32_t> m_voiceRecipientScratch;
-    std::vector<uint8_t> m_voiceRelayScratch;
+    std::string m_buildVersion;       // #1074: advertised in MsgHello / the beacon / the query reply
+    int m_seatRequestRateLimit{2};    // seat requests per second per peer
+    int m_teamSwitchCooldownS{5};     // seconds between accepted team switches per peer; 0 = no cooldown
+    int m_heartbeatRateLimit{4};      // heartbeats per second per peer that draw a reply
     uint32_t m_spectateDelayTicks{0}; // #403: spectator snapshot delay; 0 = off
     // EntityId.index -> {sim, controller}. Replaces the old peerId-keyed flight-sim map: any control
     // source (peer, AI, script) registers here and is stepped uniformly in onTick.
@@ -1703,7 +1674,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         bool dirty{false}; // a Stats record is owed to this peer in the next serialize
     };
     std::unordered_map<uint32_t, PeerScore> m_scores; // keyed by participantId; erased on disconnect
-    std::vector<CombatEventRecord> m_pendingKillEvents;
     DamageRules m_damageRules{};
 
     // ── match lifecycle + scoring (#523) — sim-thread only ───────────────────
@@ -1711,7 +1681,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     bool m_haveMatchState{false};     // false until fl-server pushes the first state
     bool m_combatFrozen{false};       // true in Ending/PostMatch — gates fire input + kill scoring
     uint64_t m_lastScoreboardTick{0}; // last tick a periodic MsgScoreboard went out
-    bool m_scoreboardDirty{false};    // a score changed since the last broadcast
 
     // ~1 Hz aggregated world-state surface (#600 / #861). Rebuilt in the Serialize phase from a cheap
     // sim-thread copy of entity/formation/peer state; the GM-map feed (and later the Epic M read API)
@@ -1785,12 +1754,10 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // (kBotParticipantBase + n) via m_botEntities (#87). kNoOwningPeer for AI/mission/environment.
     [[nodiscard]] uint32_t participantForEntity(EntityId id) const noexcept;
     std::unordered_map<uint32_t /*entityIdx*/, uint32_t /*participantId*/> m_botEntities; // #87 bot scoring
-    void flushCombatEvents();
 
     // Datalink / shared team track picture (#528). Fuses each pilot peer's own contacts with every
     // same-faction teammate's, and sends the peer a MsgDatalink (unreliable) with its team picture +
     // RWR. Sim-thread only; called from onTick every kDatalinkIntervalTicks.
-    void broadcastDatalink(uint64_t tickIndex);
     static constexpr uint64_t kDatalinkIntervalTicks = 10; // ~6 Hz at 60 Hz sim
 
     std::atomic<int> m_activePeerCount{0};
@@ -1892,8 +1859,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     const IClock* m_clock{&SystemClock::instance()};
 
     // MOTD state (set before gameLoop.start() or via enqueueSimCallback; read on sim thread only).
-    std::string m_motd;               // empty = no MOTD sent
-    uint16_t m_motdDisplaySeconds{0}; // 0 = client default
 
     // Resolves EntityDef::flightModelAsset -> FlightModelData at spawn (null = always builtin model).
 
