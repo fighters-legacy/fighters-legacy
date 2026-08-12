@@ -25,6 +25,7 @@
 #include "flight/StallBuffet.h"
 #include "job/JobSystem.h"
 #include "net/AckWindow.h"
+#include "net/AdminChannel.h" // the one admin frontend object: auth, dispatch, drain (#1079)
 #include "net/BitStream.h"
 #include "net/GameProtocol.h"
 #include "net/NetworkUtils.h"
@@ -483,23 +484,6 @@ void WorldBroadcaster::unbanAddress(const std::string& ip) {
     m_bannedAddresses.erase(fl::normalizeIp(ip));
 }
 
-bool WorldBroadcaster::unlockAdminAuth(const std::string& ip) {
-    std::string norm = fl::normalizeIp(ip);
-    bool wasLocked = m_adminAuthTracker.isLockedOut(norm);
-    m_adminAuthTracker.clearLockout(norm);
-    return wasLocked;
-}
-
-AuthLockoutSummary WorldBroadcaster::getAuthLockoutSummary() const {
-    AuthLockoutSummary s;
-    s.threshold = m_adminAuthTracker.maxFailures();
-    s.entries = m_adminAuthTracker.failureSummary();
-    for (const auto& e : s.entries)
-        if (e.lockedOut)
-            ++s.activeCount;
-    return s;
-}
-
 void WorldBroadcaster::setBannedAddresses(std::unordered_set<std::string> addrs) {
     m_bannedAddresses = std::move(addrs);
 }
@@ -528,7 +512,6 @@ void WorldBroadcaster::setSpawnPoints(std::vector<std::array<double, 3>> points)
 
 void WorldBroadcaster::setClock(const IClock& clock) {
     m_clock = &clock;
-    m_adminAuthTracker.setClock(clock);
     m_tickProfiler.setClock(clock);
 }
 
@@ -611,19 +594,8 @@ void WorldBroadcaster::setOperatorPassword(std::string password) {
     m_operatorPassword = std::move(password);
 }
 
-void WorldBroadcaster::setAdminDispatch(std::function<std::string(std::string_view, const CommandIssuer&)> fn) {
-    m_adminDispatch = std::move(fn);
-}
-
-void WorldBroadcaster::setAdminShell(std::function<int()> markFn,
-                                     std::function<std::vector<std::string>(int)> drainFn) {
-    m_adminShellMark = std::move(markFn);
-    m_adminShellDrain = std::move(drainFn);
-}
-
-void WorldBroadcaster::setAdminAuthParams(int maxFailures, int lockoutSeconds) {
-    m_adminAuthTracker = AuthTracker(maxFailures, lockoutSeconds);
-    m_adminAuthTracker.setClock(*m_clock);
+void WorldBroadcaster::setAdminChannel(AdminChannel* channel) noexcept {
+    m_adminChannel = channel;
 }
 
 void WorldBroadcaster::setGravityField(const IGravityField& field, float planetRadiusKm) noexcept {
@@ -645,7 +617,6 @@ void WorldBroadcaster::setGroundSurfaceQuery(std::function<SurfaceType(glm::dvec
 void WorldBroadcaster::applyConfig(const WorldBroadcasterConfig& cfg) {
     setRateLimitParams(cfg.connectRateLimit, cfg.connectRateWindowS, cfg.floodMultiplier);
     setMaxConnectionsPerIp(cfg.maxConnectionsPerIp);
-    setAdminAuthParams(cfg.adminAuthMaxFailures, cfg.adminAuthLockoutSeconds);
     setMotd(cfg.motd);
     setMotdDisplaySeconds(cfg.motdDisplaySeconds);
     setOperatorPassword(cfg.operatorPassword);
@@ -792,7 +763,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             else
                 ++it;
         }
-        m_adminAuthTracker.pruneExpired();
+        if (m_adminChannel)
+            m_adminChannel->pruneExpiredLockouts();
         // Reconnection grace (#524): purge expired held identities.
         for (auto it = m_disconnectGrace.begin(); it != m_disconnectGrace.end();) {
             if (m_currentTick > it->second.expiresTick)
@@ -817,35 +789,28 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         }
     }
 
-    // Fire deferred admin drains: deliver CommandShell output written by enqueueSimCallback
-    // lambdas as follow-on MsgAdminResponseChunk packets. Uses a wall-clock deadline (20 ms,
-    // matching the RCON drain) rather than a tick index, so drain timing is immune to
-    // GameLoop tick-batch catch-up (up to kMaxTicksPerIteration ticks per iteration).
-    if (!m_pendingAdminDrains.empty() && m_adminShellDrain) {
-        auto it = m_pendingAdminDrains.begin();
-        while (it != m_pendingAdminDrains.end()) {
-            if (m_clock->now() < it->drainDeadline) {
-                ++it;
-                continue;
-            }
-            if (m_peerEntities.count(it->peerId)) {
-                auto lines = m_adminShellDrain(it->shellMark);
-                if (!lines.empty()) {
-                    std::string payload;
-                    for (const auto& ln : lines) {
-                        if (!ln.empty()) {
-                            payload += ln;
-                            payload += '\n';
-                        }
-                    }
-                    if (!payload.empty())
-                        payload.pop_back(); // trim trailing newline
-                    if (!payload.empty())
-                        sendAdminResponse(m_net, it->peerId, it->reqId, payload);
+    // Fire deferred admin drains: deliver CommandShell output written by enqueueSimCallback lambdas as
+    // follow-on MsgAdminResponseChunk packets. The wall-clock deadline lives in AdminChannel now (#1079)
+    // — it is 20 ms there for both this frontend and RCON, which each hand-rolled the same number.
+    if (m_adminChannel) {
+        m_adminChannel->serviceDrains([this](uint64_t token, const std::vector<std::string>& lines) {
+            // The liveness check the transport-agnostic channel deliberately does not have: a peer that
+            // left between dispatch and the deadline has no session to answer.
+            const uint32_t peerId = adminDrainPeer(token);
+            if (!m_peerEntities.count(peerId))
+                return;
+            std::string payload;
+            for (const auto& ln : lines) {
+                if (!ln.empty()) {
+                    payload += ln;
+                    payload += '\n';
                 }
             }
-            it = m_pendingAdminDrains.erase(it);
-        }
+            if (!payload.empty())
+                payload.pop_back(); // trim trailing newline
+            if (!payload.empty())
+                sendAdminResponse(m_net, peerId, adminDrainReqId(token), payload);
+        });
     }
 
     // Rebuild spatial index from entity positions at tick start (previous-tick state).
@@ -2305,7 +2270,7 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
     }
 
     // Admin auth lockout — refuse reconnections from IPs with an active lockout.
-    if (!ip.empty() && m_adminAuthTracker.isLockedOut(ip)) {
+    if (m_adminChannel && m_adminChannel->lockedOut(ip)) {
         rejectConnection(peerId, ip, ConnectRefusalCode::AdminLockout);
         return;
     }
@@ -3165,9 +3130,8 @@ void WorldBroadcaster::onDisconnect(uint32_t peerId) {
     m_respawn.erase(peerId); // drop any pending respawn (#648)
     m_activePeerCount.fetch_sub(1, std::memory_order_relaxed);
 
-    m_pendingAdminDrains.erase(std::remove_if(m_pendingAdminDrains.begin(), m_pendingAdminDrains.end(),
-                                              [peerId](const PendingAdminDrain& d) { return d.peerId == peerId; }),
-                               m_pendingAdminDrains.end());
+    if (m_adminChannel)
+        m_adminChannel->cancelDrainsWhere([peerId](uint64_t token) { return adminDrainPeer(token) == peerId; });
 }
 
 const FlightIntegrator* WorldBroadcaster::integratorFor(uint32_t entityIdx) const noexcept {
@@ -4570,7 +4534,7 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         // issuer (#946): (1) the operator password grants Admin caps for this command; (2) an
         // empty-token peer is authenticated by its GRANTED caps (the grant channel). With neither a
         // password set nor any peer granted caps, the channel is effectively off.
-        if (!m_adminDispatch)
+        if (!m_adminChannel)
             return;
 
         // The peer's IP — used for both failure and success tracking below. Resolved once at connect
@@ -4612,14 +4576,13 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
             if (diff == 0) {
                 issuer = CommandIssuer{peerId, kAdminCaps, factionForPeer(peerId)};
                 authorized = true;
-                if (!adminIp.empty())
-                    m_adminAuthTracker.recordSuccess(adminIp);
+                m_adminChannel->recordAuthResult(adminIp, /*authenticated=*/true);
             } else if (!tokenAllZero) {
                 // A non-empty wrong token is a brute-force attempt: log + lockout, exactly as before.
                 char lmsg[96];
                 std::snprintf(lmsg, sizeof(lmsg), "peer %u: MsgAdminCommand bad token — discarding", peerId);
                 m_logger.log(LogLevel::Warn, __FILE__, __LINE__, lmsg);
-                if (!adminIp.empty() && m_adminAuthTracker.recordFailure(adminIp)) {
+                if (m_adminChannel->recordAuthResult(adminIp, /*authenticated=*/false)) {
                     char lk[128];
                     std::snprintf(lk, sizeof(lk), "peer %u (%s): admin auth lockout triggered — kicking", peerId,
                                   adminIp.c_str());
@@ -4672,7 +4635,7 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         // Dispatch on the sim thread (same as stdin admin loop). The registry permission-checks the
         // command against issuer.caps and refuses with a clear message when insufficient.
         // Mutating commands enqueue via gameLoop.enqueueSimCallback() internally.
-        std::string result = m_adminDispatch(cmdView, issuer);
+        std::string result = m_adminChannel->dispatch(cmdView, issuer);
 
         // The audit record docs/developer/ai-architecture.md §4 requires (#600): until now the only trace an admin
         // command left was the Info log line below, which no consumer can read.
@@ -4698,9 +4661,7 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         // Queue a wall-clock-deferred drain: mark taken after dispatch (skips any sync
         // shell.print() calls made during dispatch); fires after kENetAdminDrainDelayMs ms,
         // giving enqueueSimCallback lambdas time to run regardless of tick-batch catch-up.
-        if (m_adminShellMark && m_adminShellDrain)
-            m_pendingAdminDrains.push_back({peerId, reqId, m_adminShellMark(),
-                                            m_clock->now() + std::chrono::milliseconds(kENetAdminDrainDelayMs)});
+        m_adminChannel->armDrain(adminDrainToken(peerId, reqId));
     } else if (msgId == static_cast<uint8_t>(MsgId::Heartbeat)) {
         MsgHeartbeat hb;
         if (!readMsg(data, size, hb))

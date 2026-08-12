@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
-#include "AuthTracker.h"
 #include "Capability.h" // per-peer granted authority (#945/#944)
 #include "CongestionController.h"
 #include "CrewState.h" // per-seat crew control frame (#966/#969)
@@ -53,6 +52,7 @@
 
 namespace fl {
 class ILogger;
+class AdminChannel; // engine/net/AdminChannel.h — this server's ENet admin frontend (#1079)
 class EntityManager;
 class FlightIntegrator; // full definition in WorldBroadcaster.cpp
 class JobSystem;        // engine/job/JobSystem.h — full definition in WorldBroadcaster.cpp
@@ -284,16 +284,17 @@ struct ControlledEntity {
 };
 
 // Pre-start scalar configuration. Bundles the init-time setters so callers configure rate limiting,
-// the per-IP cap, admin-auth lockout, MOTD, and the operator password in one applyConfig() call
-// instead of remembering six separate "call before gameLoop.start()" setters. The hot-reload setters
-// (setMotd, setBannedAddresses, setAllowedAddresses, ...) remain available for runtime changes.
+// the per-IP cap, MOTD, and the operator password in one applyConfig() call instead of remembering
+// six separate "call before gameLoop.start()" setters. The hot-reload setters (setMotd,
+// setBannedAddresses, setAllowedAddresses, ...) remain available for runtime changes.
+//
+// admin_auth_max_failures / admin_auth_lockout_seconds are NOT here any more (#1079): the lockout
+// they configure belongs to the AdminChannel, which is constructed with them.
 struct WorldBroadcasterConfig {
     int connectRateLimit{5};                              // max connects per window per IP
     int connectRateWindowS{10};                           // sliding-window length (seconds)
     int floodMultiplier{3};                               // MsgClientInput flood threshold multiplier
     int maxConnectionsPerIp{0};                           // simultaneous connections per IP; 0 = unlimited
-    int adminAuthMaxFailures{5};                          // wrong operator passwords before per-IP lockout
-    int adminAuthLockoutSeconds{300};                     // lockout duration (seconds)
     std::string motd;                                     // empty = no MOTD
     uint16_t motdDisplaySeconds{0};                       // 0 = client default
     std::string operatorPassword;                         // empty = network admin channel disabled
@@ -524,11 +525,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Remove an IP from the ban set (same normalization rules as banAddress).
     void unbanAddress(const std::string& ip);
 
-    // Clear the admin auth lockout for an IP immediately. Normalizes the IP.
-    // Call from the sim thread (via GameLoop::enqueueSimCallback).
-    // Returns true if a lockout was active and was cleared; false if the IP was not locked.
-    bool unlockAdminAuth(const std::string& ip);
-
     // Iterate all connected peers. fn receives a PeerInfo snapshot for each peer; the address
     // string is copied per entry — safe despite INetwork::getPeerAddress() returning a single
     // overwrite buffer. Sim-thread only (called from enqueueSimCallback or onTick context).
@@ -542,10 +538,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
 
     // Return a copy of the current ban set (called from sim thread to save to file).
     std::unordered_set<std::string> getBannedAddresses() const;
-
-    // Snapshot of admin auth lockout state — sim-thread-only read (acceptable monitoring
-    // race, same pattern as getBannedAddresses() / liveCount()).
-    AuthLockoutSummary getAuthLockoutSummary() const;
 
     // Snapshot of the rolling per-phase tick budget (integrate / ai / collision / serialize /
     // total). Thread-safe (mutex-guarded inside TickProfiler) — safe to call from any thread;
@@ -1272,30 +1264,23 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         return !m_joinPassword.empty();
     }
 
-    // Attach the admin command dispatcher for MsgAdminCommand handling. The dispatcher receives the
-    // command string AND a CommandIssuer describing who sent it (#946) — the peer id, its capability
-    // mask, and its faction binding — so the registry can permission-check.
-    // Typically: [&adminRegistry](std::string_view cmd, const CommandIssuer& iss){
-    //                return adminRegistry.dispatch(cmd, iss); }
-    // Call before gameLoop.start(). Does not take ownership.
-    void setAdminDispatch(std::function<std::string(std::string_view, const CommandIssuer&)> fn);
+    // Attach this server's ENet admin frontend: the MsgAdminCommand channel (#1079, D14). The channel
+    // owns the dispatcher, the per-IP failed-auth lockout and the deferred shell drain that used to be
+    // three separate setters and four members here.
+    //
+    // Null (the default) = the channel is OFF and MsgAdminCommand is discarded, exactly as an unset
+    // dispatcher did. The channel must outlive this broadcaster; fl-server declares it above the
+    // broadcaster's consumers. Call before gameLoop.start(); dispatch, drain and the connect-gate
+    // lockout check all run on the sim thread.
+    //
+    // A setter and not a constructor argument on purpose: the dispatcher needs the CommandRegistry,
+    // which fl-server cannot build until the broadcaster exists. #1082 folds this into the
+    // construction-time hooks struct, which is where the ordering spine puts it.
+    void setAdminChannel(AdminChannel* channel) noexcept;
 
-    // Wire CommandShell mark/drainSince callbacks so that output written inside
-    // enqueueSimCallback lambdas is forwarded to the requesting peer as follow-on
-    // MsgAdminResponseChunk packets on the next sim tick. Null functions (the default)
-    // disable deferred output forwarding. Call before gameLoop.start().
-    // Pattern mirrors setAdminDispatch to avoid coupling engine-net to engine-console.
-    void setAdminShell(std::function<int()> markFn, std::function<std::vector<std::string>(int)> drainFn);
-
-    // Configure per-IP failed-auth lockout for the operator network admin channel.
-    // After maxFailures consecutive wrong passwords from the same IP the peer is kicked
-    // and reconnections from that IP are refused for lockoutSeconds seconds.
-    // Call before gameLoop.start().
-    void setAdminAuthParams(int maxFailures, int lockoutSeconds);
-
-    // Apply all pre-start scalar configuration in one call (rate limiting, per-IP cap, admin-auth
-    // lockout, MOTD, operator password). Equivalent to the corresponding individual setters.
-    // Call before gameLoop.start(). The admin dispatcher (setAdminDispatch) is wired separately.
+    // Apply all pre-start scalar configuration in one call (rate limiting, per-IP cap, MOTD, operator
+    // password). Equivalent to the corresponding individual setters. Call before gameLoop.start().
+    // The admin channel (setAdminChannel) is wired separately.
     void applyConfig(const WorldBroadcasterConfig& cfg);
 
     // Disconnect peers that send no MsgClientInput and no MsgHeartbeat for this many seconds.
@@ -1972,26 +1957,27 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Network admin channel state (set before gameLoop.start(); read on sim thread only).
     std::string m_operatorPassword; // empty = admin channel disabled
     std::string m_joinPassword;     // #998: empty = open server
-    std::function<std::string(std::string_view, const CommandIssuer&)> m_adminDispatch; // null = admin channel disabled
-    AuthTracker m_adminAuthTracker{5, 300}; // per-IP failed-auth lockout (defaults: 5 attempts, 5 min)
+    // The ENet frontend's channel: dispatcher, per-IP lockout and deferred shell drain in one object
+    // shared with the other five frontends (#1079). Null = MsgAdminCommand discarded.
+    AdminChannel* m_adminChannel{nullptr};
 
-    // Deferred admin shell drain: one entry per in-flight MsgAdminCommand; fires after a 20 ms
-    // wall-clock deadline (matching the RCON drain) so enqueueSimCallback lambdas have run and
-    // shell output is available. Wall-clock is immune to GameLoop tick-batch catch-up.
-    static constexpr int kENetAdminDrainDelayMs = 20;
     // Rate cap for the unauthenticated (grant-channel) admin path (#946): commands/second per peer
     // beyond which they are silently dropped, so a zero-cap peer cannot flood the permission-denied
     // response path. The password-authenticated path is not capped (an operator is trusted).
     static constexpr uint32_t kUnauthAdminCmdsPerSecond = 8;
-    struct PendingAdminDrain {
-        uint32_t peerId;
-        uint16_t reqId;
-        int shellMark;
-        std::chrono::steady_clock::time_point drainDeadline;
-    };
-    std::vector<PendingAdminDrain> m_pendingAdminDrains;
-    std::function<int()> m_adminShellMark;                          // null = drain disabled
-    std::function<std::vector<std::string>(int)> m_adminShellDrain; // null = drain disabled
+
+    // A drain token addresses one in-flight MsgAdminCommand reply: the peer to send it to and the
+    // reqId to correlate it with. AdminChannel is transport-agnostic and carries an opaque uint64_t,
+    // so the packing lives here, with the transport that knows what it means.
+    static constexpr uint64_t adminDrainToken(uint32_t peerId, uint16_t reqId) noexcept {
+        return (static_cast<uint64_t>(peerId) << 16) | reqId;
+    }
+    static constexpr uint32_t adminDrainPeer(uint64_t token) noexcept {
+        return static_cast<uint32_t>(token >> 16);
+    }
+    static constexpr uint16_t adminDrainReqId(uint64_t token) noexcept {
+        return static_cast<uint16_t>(token & 0xFFFFu);
+    }
 
     SpatialIndex m_spatialIndex; // rebuilt at the start of each onTick; default 10 km cell size
 

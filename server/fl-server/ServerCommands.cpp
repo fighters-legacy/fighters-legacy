@@ -158,10 +158,16 @@ static std::string formatSecs(long long secs) {
     return buf;
 }
 
-static std::string formatAuthSection(const char* label, const fl::AuthLockoutSummary& s) {
+static std::string formatAuthSection(const std::string& label, const fl::AuthLockoutSummary& s, bool perIpAuth = true) {
     char buf[256];
-    std::snprintf(buf, sizeof(buf), "[admin] %s:", label);
+    std::snprintf(buf, sizeof(buf), "[admin] %s:", label.c_str());
     std::string out(buf);
+    // A trusted local surface (stdin, the mission `do:` sink) has no credential to fail. Say so, rather
+    // than printing an empty section an operator has to interpret as either "clean" or "not wired".
+    if (!perIpAuth) {
+        out += "\n[admin]   no per-IP authentication (trusted local surface)";
+        return out;
+    }
     for (const auto& e : s.entries) {
         out += '\n';
         if (e.lockedOut)
@@ -226,11 +232,13 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
             std::snprintf(ovbuf, sizeof(ovbuf), "  load: %.0f%%  interest: %.0f%%%s", ov.loadFactor * 100.0,
                           ov.interestScale * 100.0, ov.degraded ? " [DEGRADED]" : "");
             out += ovbuf;
-            auto ls = ctx->sim.broadcaster->getAuthLockoutSummary();
-            if (ls.activeCount > 0) {
+            // Across EVERY admin frontend, not just the ENet one (#1079). The old count read one of
+            // three trackers, so an operator locked out of RCON saw a clean `status`.
+            const int lockouts = ctx->adminChannels ? ctx->adminChannels->activeLockoutCount() : 0;
+            if (lockouts > 0) {
                 char lbuf[96];
                 std::snprintf(lbuf, sizeof(lbuf),
-                              "\nadmin auth lockouts: %d active (use admin_auth_status for details)", ls.activeCount);
+                              "\nadmin auth lockouts: %d active (use admin_auth_status for details)", lockouts);
                 out += lbuf;
             }
             return out;
@@ -921,30 +929,31 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
 
     // admin_unlock <IP>
     registry.registerCommand(
-        "admin_unlock", "admin_unlock <IP>  -- clear admin and RCON auth lockouts for an IP address",
+        "admin_unlock", "admin_unlock <IP>  -- clear the auth lockout for an IP on every admin channel",
         [ctx](std::span<std::string_view> args) -> std::string {
             if (args.empty())
                 return "usage: admin_unlock <IP>";
-            if (!ctx->sim.broadcaster || !ctx->sim.gameLoop)
+            if (!ctx->adminChannels || !ctx->sim.gameLoop)
                 return "admin_unlock: not available";
             std::string ip = normalizeIp(args[0]);
             ctx->sim.gameLoop->enqueueSimCallback([ctx, ip]() {
-                bool adminWasLocked = ctx->sim.broadcaster->unlockAdminAuth(ip);
-                bool rconWasLocked = ctx->rcon.clearRconLockout ? ctx->rcon.clearRconLockout(ip) : false;
-                // The REST channel keeps its own per-IP lockout (#233); unlocking an operator on two
-                // of three channels and leaving the third would be worse than not unlocking at all.
-                bool httpWasLocked = ctx->httpAdmin.clearLockout ? ctx->httpAdmin.clearLockout(ip) : false;
-                bool anyWasLocked = adminWasLocked || rconWasLocked || httpWasLocked;
-                char m[160];
-                if (anyWasLocked) {
-                    std::string channels = "admin";
-                    if (ctx->rcon.clearRconLockout)
-                        channels += " + RCON";
-                    if (ctx->httpAdmin.clearLockout)
-                        channels += " + HTTP";
-                    std::snprintf(m, sizeof(m), "[admin] unlocked %s (%s)", ip.c_str(), channels.c_str());
+                // Every registered channel, whatever it is (#1079). This used to name three by hand and
+                // its own comment admitted that unlocking two of three "would be worse than not
+                // unlocking at all" -- a fourth frontend would have been silently skipped.
+                const std::vector<std::string> cleared = ctx->adminChannels->clearLockoutEverywhere(ip);
+                char m[256];
+                if (!cleared.empty()) {
+                    // The channels that ACTUALLY held a lockout, not the fixed list of wired ones: the
+                    // operator is told what changed.
+                    std::string names;
+                    for (const std::string& n : cleared) {
+                        if (!names.empty())
+                            names += " + ";
+                        names += n;
+                    }
+                    std::snprintf(m, sizeof(m), "[admin] unlocked %s (%s)", ip.c_str(), names.c_str());
                 } else {
-                    std::snprintf(m, sizeof(m), "[admin] admin_unlock: %s was not locked", ip.c_str());
+                    std::snprintf(m, sizeof(m), "[admin] admin_unlock: %s was not locked on any channel", ip.c_str());
                 }
                 std::printf("%s\n", m);
                 if (ctx->rcon.shell)
@@ -956,23 +965,20 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
 
     // admin_auth_status
     registry.registerCommand(
-        "admin_auth_status",
-        "admin_auth_status  -- show per-IP auth lockout state for the admin, RCON and HTTP channels",
+        "admin_auth_status", "admin_auth_status  -- show per-IP auth lockout state for every admin channel",
         [ctx](std::span<std::string_view>) -> std::string {
-            if (!ctx->sim.broadcaster)
+            if (!ctx->adminChannels)
                 return "admin_auth_status: not available";
-            auto adminS = ctx->sim.broadcaster->getAuthLockoutSummary();
-            bool hasRcon = static_cast<bool>(ctx->rcon.getRconAuthSummary);
-            auto rconS = hasRcon ? ctx->rcon.getRconAuthSummary() : fl::AuthLockoutSummary{};
-
-            std::string detail = formatAuthSection("MsgAdminCommand channel", adminS);
-            if (hasRcon) {
-                detail += "\n\n";
-                detail += formatAuthSection("RCON channel", rconS);
-            }
-            if (ctx->httpAdmin.getAuthSummary) {
-                detail += "\n\n";
-                detail += formatAuthSection("HTTP admin channel", ctx->httpAdmin.getAuthSummary());
+            const auto& channels = ctx->adminChannels->channels();
+            if (channels.empty())
+                return "[admin] no admin channels registered";
+            // Registration order, one section per channel. Nothing here knows what the channels ARE,
+            // which is the property that makes a seventh frontend visible for free.
+            std::string detail;
+            for (const fl::AdminChannel* c : channels) {
+                if (!detail.empty())
+                    detail += "\n\n";
+                detail += formatAuthSection(c->name() + " channel", c->authSummary(), c->hasPerIpAuth());
             }
             std::printf("%s\n", detail.c_str());
             std::fflush(stdout);

@@ -10,6 +10,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <chrono>
+#include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
@@ -242,4 +244,113 @@ TEST_CASE("AdminChannel: a channel with no shell tap simply has no drain", "[adm
     int emitCount = 0;
     channel.serviceDrains([&emitCount](uint64_t, const std::vector<std::string>&) { ++emitCount; });
     CHECK(emitCount == 0);
+}
+
+// ---------------------------------------------------------------------------
+// Trusted local surfaces, and the drain APIs the two transports needed
+// ---------------------------------------------------------------------------
+
+TEST_CASE("AdminChannel: a channel with no per-IP credential never accumulates lockout state", "[admin_channel]") {
+    // stdin and the mission `do:` sink present nothing to fail. Their summary reports a ZERO
+    // threshold: printing the default 5 would tell an operator a surface is protected by a counter
+    // nothing can ever increment.
+    ManualClock clock;
+    RecordingDispatcher d;
+    AdminChannel::Config c = cfg("stdin", /*maxFailures=*/1);
+    c.perIpAuth = false;
+    AdminChannel channel(d.fn(), c, clock);
+
+    CHECK_FALSE(channel.hasPerIpAuth());
+    CHECK_FALSE(channel.recordAuthResult("10.0.0.1", /*authenticated=*/false));
+    CHECK_FALSE(channel.lockedOut("10.0.0.1"));
+    CHECK_FALSE(channel.clearLockout("10.0.0.1"));
+
+    const AuthLockoutSummary s = channel.authSummary();
+    CHECK(s.threshold == 0);
+    CHECK(s.activeCount == 0);
+    CHECK(s.entries.empty());
+}
+
+TEST_CASE("AdminChannel: a trusted surface still dispatches, and is still enumerable", "[admin_channel]") {
+    // No credential is not the same as no frontend: it must appear in the registry, because a surface
+    // an operator cannot see is the failure this issue exists to fix.
+    ManualClock clock;
+    RecordingDispatcher d;
+    AdminChannel::Config c = cfg("mission");
+    c.perIpAuth = false;
+    AdminChannel channel(d.fn(), c, clock);
+    AdminChannelRegistry registry;
+    registry.add(channel);
+
+    CHECK(channel.dispatch("set_weather storm", systemIssuer()) == "ok: set_weather storm");
+    REQUIRE(registry.summaries().size() == 1u);
+    CHECK(registry.summaries()[0].first == "mission");
+    CHECK(registry.activeLockoutCount() == 0);
+}
+
+TEST_CASE("AdminChannel: cancelDrainsWhere drops only the tokens the transport names", "[admin_channel][drain]") {
+    // Both hand-rolled drains had an erase-if for a peer that left before the deadline; the packing of
+    // the token is the transport's business, so the predicate is too.
+    ManualClock clock;
+    RecordingDispatcher d;
+    AdminChannel channel(d.fn(), cfg("enet"), clock);
+    std::vector<std::string> lines{"late output"};
+    channel.setShellTap([]() { return 0; }, [&lines](int) { return lines; });
+
+    channel.armDrain(0x0001'0000ull | 7); // peer 1, reqId 7
+    channel.armDrain(0x0001'0000ull | 8); // peer 1, reqId 8
+    channel.armDrain(0x0002'0000ull | 9); // peer 2, reqId 9
+    REQUIRE(channel.pendingDrainCount() == 3u);
+
+    // Peer 1 disconnects.
+    channel.cancelDrainsWhere([](uint64_t token) { return (token >> 16) == 1u; });
+    CHECK(channel.pendingDrainCount() == 1u);
+
+    clock.advance(std::chrono::milliseconds(20));
+    std::vector<uint64_t> fired;
+    channel.serviceDrains([&fired](uint64_t token, const std::vector<std::string>&) { fired.push_back(token); });
+    REQUIRE(fired.size() == 1u);
+    CHECK((fired[0] >> 16) == 2u);
+}
+
+TEST_CASE("AdminChannel: nextDrainDeadline reports the soonest armed deadline", "[admin_channel][drain]") {
+    // RCON's poll loop clamps its 100 ms timeout to this; without it a drain waits for the next poll
+    // wakeup instead of its own deadline.
+    ManualClock clock;
+    RecordingDispatcher d;
+    AdminChannel channel(d.fn(), cfg("rcon"), clock);
+    channel.setShellTap([]() { return 0; }, [](int) { return std::vector<std::string>{}; });
+
+    CHECK_FALSE(channel.nextDrainDeadline().has_value());
+
+    channel.armDrain(1);
+    const auto first = channel.nextDrainDeadline();
+    REQUIRE(first.has_value());
+
+    clock.advance(std::chrono::milliseconds(5));
+    channel.armDrain(2); // armed later, so its deadline is later
+    CHECK(channel.nextDrainDeadline() == first);
+
+    channel.cancelDrain(1);
+    REQUIRE(channel.nextDrainDeadline().has_value());
+    CHECK(*channel.nextDrainDeadline() > *first);
+}
+
+TEST_CASE("AdminChannelRegistry: activeLockoutCount sums every channel, not the first one", "[admin_channel]") {
+    // The `status` command used to read one of three trackers, so an operator locked out of RCON saw a
+    // clean line.
+    ManualClock clock;
+    RecordingDispatcher d;
+    AdminChannel enet(d.fn(), cfg("enet", 1), clock);
+    AdminChannel rcon(d.fn(), cfg("rcon", 1), clock);
+    AdminChannel http(d.fn(), cfg("http", 1), clock);
+    AdminChannelRegistry registry;
+    registry.add(enet);
+    registry.add(rcon);
+    registry.add(http);
+
+    CHECK(registry.activeLockoutCount() == 0);
+    CHECK(rcon.recordAuthResult("10.0.0.1", /*authenticated=*/false));
+    CHECK(http.recordAuthResult("10.0.0.2", /*authenticated=*/false));
+    CHECK(registry.activeLockoutCount() == 2);
 }

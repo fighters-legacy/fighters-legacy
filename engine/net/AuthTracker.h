@@ -14,8 +14,8 @@ namespace fl {
 // enforces a TTL lockout after a configurable threshold is reached. Single-
 // threaded — callers are responsible for serialization.
 //
-// Used by WorldBroadcaster (MsgAdminCommand operator channel) and RconServer
-// (Source Engine RCON TCP channel).
+// Owned by AdminChannel (#1079), one per admin frontend; the mutex that makes it safe to read from
+// the sim thread while a transport thread authenticates lives there, next to this.
 class AuthTracker {
   public:
     struct FailureEntry {
@@ -117,8 +117,8 @@ class AuthTracker {
     const IClock* m_clock{&SystemClock::instance()};
 };
 
-// Snapshot of auth lockout state. Returned by WorldBroadcaster::getAuthLockoutSummary()
-// and RconServer::getRconAuthSummary().
+// Snapshot of auth lockout state. Returned by AdminChannel::authSummary(), one per admin frontend
+// (#1079) -- there is no longer a per-transport accessor for each of them.
 struct AuthLockoutSummary {
     int activeCount{0};                             // non-expired lockout count
     int threshold{0};                               // configured maxFailures value

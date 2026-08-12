@@ -17,6 +17,7 @@
 #include "entity/EntityDef.h"
 #include "entity/EntityManager.h"
 #include "entity/EntityTypeRegistry.h"
+#include "net/AdminChannel.h"
 #include "net/WorldBroadcaster.h"
 
 #include "FuzzFrames.h"
@@ -54,7 +55,12 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setClock(clock);
     broadcaster.setOperatorPassword("fz"); // enable the admin channel (dispatch reachable via a seed's token)
-    broadcaster.setAdminDispatch([](std::string_view cmd, const fl::CommandIssuer&) { return std::string(cmd); });
+    // The ENet frontend's AdminChannel (#1079): dispatch, the per-IP lockout and the drain in one
+    // object. A local, like the broadcaster it serves — one fresh pair per input, so a lockout cannot
+    // carry across runs and make a crash depend on execution order.
+    fl::AdminChannel adminChannel([](std::string_view cmd, const fl::CommandIssuer&) { return std::string(cmd); },
+                                  fl::AdminChannel::Config{"enet"}, clock);
+    broadcaster.setAdminChannel(&adminChannel);
 
     // Wingman/flight order channel (#610). Without these hooks installed the MsgWingmanCommand branch
     // discards early and the whole path would be fuzzed as a no-op — so wire the same seams fl-server

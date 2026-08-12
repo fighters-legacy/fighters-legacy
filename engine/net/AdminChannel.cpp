@@ -19,12 +19,16 @@ std::string AdminChannel::dispatch(std::string_view line, const CommandIssuer& i
 }
 
 bool AdminChannel::lockedOut(const std::string& ip) {
-    return !ip.empty() && m_auth.isLockedOut(ip);
+    if (!m_config.perIpAuth || ip.empty())
+        return false;
+    std::lock_guard<std::mutex> lk(m_authMutex);
+    return m_auth.isLockedOut(ip);
 }
 
 bool AdminChannel::recordAuthResult(const std::string& ip, bool authenticated, bool attempted) {
-    if (ip.empty())
+    if (!m_config.perIpAuth || ip.empty())
         return false;
+    std::lock_guard<std::mutex> lk(m_authMutex);
     if (authenticated) {
         m_auth.recordSuccess(ip);
         return false;
@@ -37,17 +41,28 @@ bool AdminChannel::recordAuthResult(const std::string& ip, bool authenticated, b
 }
 
 bool AdminChannel::clearLockout(const std::string& ip) {
+    if (!m_config.perIpAuth)
+        return false;
+    std::lock_guard<std::mutex> lk(m_authMutex);
     const bool wasLocked = m_auth.isLockedOut(ip);
     m_auth.clearLockout(ip);
     return wasLocked;
 }
 
 void AdminChannel::pruneExpiredLockouts() {
+    if (!m_config.perIpAuth)
+        return;
+    std::lock_guard<std::mutex> lk(m_authMutex);
     m_auth.pruneExpired();
 }
 
 AuthLockoutSummary AdminChannel::authSummary() const {
     AuthLockoutSummary s;
+    // A channel with no credential reports a zero threshold rather than the default 5: a threshold
+    // nothing can ever reach reads as "protected" to the operator scanning this during an incident.
+    if (!m_config.perIpAuth)
+        return s;
+    std::lock_guard<std::mutex> lk(m_authMutex);
     s.threshold = m_auth.maxFailures();
     s.activeCount = m_auth.lockedOutCount();
     s.entries = m_auth.failureSummary();
@@ -70,6 +85,20 @@ void AdminChannel::cancelDrain(uint64_t token) {
     m_pending.erase(
         std::remove_if(m_pending.begin(), m_pending.end(), [token](const Pending& p) { return p.token == token; }),
         m_pending.end());
+}
+
+void AdminChannel::cancelDrainsWhere(const std::function<bool(uint64_t token)>& pred) {
+    m_pending.erase(
+        std::remove_if(m_pending.begin(), m_pending.end(), [&pred](const Pending& p) { return pred(p.token); }),
+        m_pending.end());
+}
+
+std::optional<std::chrono::steady_clock::time_point> AdminChannel::nextDrainDeadline() const {
+    if (m_pending.empty())
+        return std::nullopt;
+    auto it = std::min_element(m_pending.begin(), m_pending.end(),
+                               [](const Pending& a, const Pending& b) { return a.deadline < b.deadline; });
+    return it->deadline;
 }
 
 void AdminChannel::serviceDrains(

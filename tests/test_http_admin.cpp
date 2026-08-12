@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "HttpAdminServer.h"
+
 #include "console/CommandRegistry.h"
 #include "mock_hal.h"
 #include "server_config.h"
+#include <net/AdminChannel.h>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -160,6 +162,29 @@ TEST_CASE("http_admin: error bodies are escaped JSON", "[http_admin][json]") {
     CHECK(ha::errorJson("a\nb") == R"({"error": "a\nb"})");
 }
 
+namespace {
+
+// The HTTP frontend's AdminChannel, wired to a registry the way fl-server wires it (#1079). Every
+// route dispatches through this and obeys its lockout; so does MCP, which shares the listener.
+struct HttpChannel {
+    AdminChannel ch;
+
+    explicit HttpChannel(const CommandRegistry& reg, int maxFailures = 5, int lockoutSeconds = 300)
+        : ch([&reg](std::string_view line, const CommandIssuer& issuer) { return reg.dispatch(line, issuer); },
+             makeCfg(maxFailures, lockoutSeconds), SystemClock::instance()) {}
+
+  private:
+    static AdminChannel::Config makeCfg(int maxFailures, int lockoutSeconds) {
+        AdminChannel::Config c;
+        c.name = "http";
+        c.maxAuthFailures = maxFailures;
+        c.lockoutSeconds = lockoutSeconds;
+        return c;
+    }
+};
+
+} // namespace
+
 // ── server object without sockets ───────────────────────────────────────────────────────────────
 
 TEST_CASE("http_admin: an unauthenticated API refuses to start", "[http_admin]") {
@@ -167,7 +192,8 @@ TEST_CASE("http_admin: an unauthenticated API refuses to start", "[http_admin]")
     CommandRegistry reg;
     ServerConfig::HttpAdminConfig cfg;
     cfg.enabled = true; // but no tokens
-    HttpAdminServer srv(reg, cfg, log, ServerUptime{});
+    HttpChannel channel(reg);
+    HttpAdminServer srv(channel.ch, cfg, log, ServerUptime{});
     CHECK_FALSE(srv.start()); // an open admin API is refused, not warned about
     CHECK(srv.boundPort() == 0);
 }
@@ -175,17 +201,20 @@ TEST_CASE("http_admin: an unauthenticated API refuses to start", "[http_admin]")
 TEST_CASE("http_admin: a bad role preset stops the server starting", "[http_admin]") {
     MockLogger log;
     CommandRegistry reg;
-    HttpAdminServer srv(reg, cfgWith({{"tok", "sysadmin", -1, ""}}), log, ServerUptime{});
+    HttpChannel channel(reg);
+    HttpAdminServer srv(channel.ch, cfgWith({{"tok", "sysadmin", -1, ""}}), log, ServerUptime{});
     CHECK_FALSE(srv.start());
 }
 
-TEST_CASE("http_admin: lockout accessors work with no listener open", "[http_admin]") {
+TEST_CASE("http_admin: its lockout is the channel's, readable with no listener open", "[http_admin]") {
     MockLogger log;
     CommandRegistry reg;
-    // start() is never called, so no socket exists; this exercises the pimpl + mutex paths only.
-    HttpAdminServer srv(reg, cfgWith({{"tok", "admin", -1, ""}}), log, ServerUptime{});
-    CHECK_FALSE(srv.clearLockout("1.2.3.4"));
-    const AuthLockoutSummary s = srv.getAuthSummary();
+    // start() is never called, so no socket exists. The server owns no AuthTracker any more (#1079):
+    // admin_unlock and admin_auth_status read exactly this state through the channel registry.
+    HttpChannel channel(reg);
+    HttpAdminServer srv(channel.ch, cfgWith({{"tok", "admin", -1, ""}}), log, ServerUptime{});
+    CHECK_FALSE(channel.ch.clearLockout("1.2.3.4"));
+    const AuthLockoutSummary s = channel.ch.authSummary();
     CHECK(s.activeCount == 0);
     CHECK(s.threshold == 5);
 }
@@ -349,7 +378,8 @@ TEST_CASE("http_admin: a live server enforces auth and routes to the command reg
     cfg.bindAddress = "127.0.0.1";
     cfg.port = 0; // let the OS pick, so the test never fights over a fixed port
 
-    HttpAdminServer srv(reg, cfg, log, uptime);
+    HttpChannel channel(reg);
+    HttpAdminServer srv(channel.ch, cfg, log, uptime);
     REQUIRE(srv.start());
     const uint16_t port = srv.boundPort();
     REQUIRE(port != 0);
@@ -447,7 +477,8 @@ TEST_CASE("http_admin: repeated bad tokens lock the source IP out", "[http_admin
     cfg.maxAuthFailures = 3;
     cfg.lockoutSeconds = 300;
 
-    HttpAdminServer srv(reg, cfg, log, ServerUptime{});
+    HttpChannel channel(reg, cfg.maxAuthFailures, cfg.lockoutSeconds);
+    HttpAdminServer srv(channel.ch, cfg, log, ServerUptime{});
     REQUIRE(srv.start());
 
     httplib::Client cli("127.0.0.1", srv.boundPort());
@@ -468,10 +499,11 @@ TEST_CASE("http_admin: repeated bad tokens lock the source IP out", "[http_admin
     REQUIRE(locked);
     CHECK(locked->status == 429);
 
-    CHECK(srv.getAuthSummary().activeCount == 1);
+    CHECK(channel.ch.authSummary().activeCount == 1);
 
-    // An operator clearing the lockout restores access — the admin_unlock path.
-    CHECK(srv.clearLockout("127.0.0.1"));
+    // An operator clearing the lockout restores access — the admin_unlock path, which now reaches this
+    // channel through the registry rather than through a hook named "httpAdmin".
+    CHECK(channel.ch.clearLockout("127.0.0.1"));
     auto after = cli.Get("/status", good);
     REQUIRE(after);
     CHECK(after->status == 200);

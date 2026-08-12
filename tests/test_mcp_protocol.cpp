@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "HttpAdminServer.h"
 #include "McpEndpoint.h"
+
 #include "McpProtocol.h"
 #include "console/CommandRegistry.h"
 #include "mock_hal.h"
 #include "server_config.h"
+#include <net/AdminChannel.h>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -42,12 +44,18 @@ class Fixture {
         });
     }
 
-    [[nodiscard]] CommandRegistry& registry() {
-        return m_registry;
+    // MCP dispatches through the HTTP frontend's AdminChannel (#1079) -- one listener, one credential
+    // table, one lockout shared with the REST routes. It is still the same capability-checked
+    // CommandRegistry underneath, which is what these tests are about.
+    [[nodiscard]] AdminChannel& channel() {
+        return m_channel;
     }
 
   private:
     CommandRegistry m_registry;
+    AdminChannel m_channel{
+        [this](std::string_view line, const CommandIssuer& issuer) { return m_registry.dispatch(line, issuer); },
+        AdminChannel::Config{"http"}, SystemClock::instance()};
 };
 
 // One logger for the whole file; nothing here asserts on its contents.
@@ -240,7 +248,7 @@ TEST_CASE("mcp: a row with no autonomy inherits the default", "[mcp]") {
 
 TEST_CASE("mcp: initialize reports the pinned revision and opens a session", "[mcp]") {
     Fixture f;
-    McpEndpoint ep(f.registry(), cfgWith({}), testLogger(), {});
+    McpEndpoint ep(f.channel(), cfgWith({}), testLogger(), {});
     const auto out =
         ep.handle(R"({"jsonrpc": "2.0", "id": 1, "method": "initialize"})", grantAt(mcp::Autonomy::Observe), {});
     CHECK(out.httpStatus == 200);
@@ -252,7 +260,7 @@ TEST_CASE("mcp: initialize reports the pinned revision and opens a session", "[m
 
 TEST_CASE("mcp: a call without a session is refused", "[mcp]") {
     Fixture f;
-    McpEndpoint ep(f.registry(), cfgWith({}), testLogger(), {});
+    McpEndpoint ep(f.channel(), cfgWith({}), testLogger(), {});
     // A bearer token alone must not be enough to start calling tools: the handshake is where the
     // revision is agreed and the session is bound.
     const auto out =
@@ -263,7 +271,7 @@ TEST_CASE("mcp: a call without a session is refused", "[mcp]") {
 
 TEST_CASE("mcp: tools/list hides tools the caller's tier can never reach", "[mcp]") {
     Fixture f;
-    McpEndpoint ep(f.registry(), cfgWith({"status"}), testLogger(), {});
+    McpEndpoint ep(f.channel(), cfgWith({"status"}), testLogger(), {});
     const auto g = grantAt(mcp::Autonomy::Observe);
     const std::string sid = openSession(ep, g);
 
@@ -277,7 +285,7 @@ TEST_CASE("mcp: tools/list hides tools the caller's tier can never reach", "[mcp
 
 TEST_CASE("mcp: an observe token cannot call admin_command", "[mcp]") {
     Fixture f;
-    McpEndpoint ep(f.registry(), cfgWith({"status"}), testLogger(), {});
+    McpEndpoint ep(f.channel(), cfgWith({"status"}), testLogger(), {});
     const auto g = grantAt(mcp::Autonomy::Observe);
     const std::string sid = openSession(ep, g);
 
@@ -291,7 +299,7 @@ TEST_CASE("mcp: an observe token cannot call admin_command", "[mcp]") {
 
 TEST_CASE("mcp: an act token still cannot run a command off the allowlist", "[mcp]") {
     Fixture f;
-    McpEndpoint ep(f.registry(), cfgWith({"status"}), testLogger(), {});
+    McpEndpoint ep(f.channel(), cfgWith({"status"}), testLogger(), {});
     const auto g = grantAt(mcp::Autonomy::Act);
     const std::string sid = openSession(ep, g);
 
@@ -307,7 +315,7 @@ TEST_CASE("mcp: the capability mask refuses even when tier and allowlist both pe
     // THE test for "MCP is a frontend, not a parallel admin path". Everything MCP owns says yes;
     // the #945 capability check inside CommandRegistry::dispatch is what says no.
     Fixture f;
-    McpEndpoint ep(f.registry(), cfgWith({"shutdown"}), testLogger(), {});
+    McpEndpoint ep(f.channel(), cfgWith({"shutdown"}), testLogger(), {});
     const auto g = grantAt(mcp::Autonomy::Act, kModeratorCaps);
     const std::string sid = openSession(ep, g);
 
@@ -321,7 +329,7 @@ TEST_CASE("mcp: the capability mask refuses even when tier and allowlist both pe
 
 TEST_CASE("mcp: an allowlisted command a capable token runs succeeds", "[mcp]") {
     Fixture f;
-    McpEndpoint ep(f.registry(), cfgWith({"shutdown"}), testLogger(), {});
+    McpEndpoint ep(f.channel(), cfgWith({"shutdown"}), testLogger(), {});
     const auto g = grantAt(mcp::Autonomy::Act, kAdminCaps);
     const std::string sid = openSession(ep, g);
 
@@ -335,7 +343,7 @@ TEST_CASE("mcp: an allowlisted command a capable token runs succeeds", "[mcp]") 
 
 TEST_CASE("mcp: world_state comes back as structured content", "[mcp]") {
     Fixture f;
-    McpEndpoint ep(f.registry(), cfgWith({}), testLogger(), {});
+    McpEndpoint ep(f.channel(), cfgWith({}), testLogger(), {});
     const auto g = grantAt(mcp::Autonomy::Observe);
     const std::string sid = openSession(ep, g);
 
@@ -348,7 +356,7 @@ TEST_CASE("mcp: world_state comes back as structured content", "[mcp]") {
 
 TEST_CASE("mcp: an unknown tool and an unknown method are distinct errors", "[mcp]") {
     Fixture f;
-    McpEndpoint ep(f.registry(), cfgWith({}), testLogger(), {});
+    McpEndpoint ep(f.channel(), cfgWith({}), testLogger(), {});
     const auto g = grantAt(mcp::Autonomy::Act);
     const std::string sid = openSession(ep, g);
 
@@ -362,7 +370,7 @@ TEST_CASE("mcp: an unknown tool and an unknown method are distinct errors", "[mc
 
 TEST_CASE("mcp: submit_mission validates without loading", "[mcp]") {
     Fixture f;
-    McpEndpoint ep(f.registry(), cfgWith({}), testLogger(), {});
+    McpEndpoint ep(f.channel(), cfgWith({}), testLogger(), {});
     const auto g = grantAt(mcp::Autonomy::Recommend);
     const std::string sid = openSession(ep, g);
 
@@ -385,7 +393,7 @@ TEST_CASE("mcp: submit_mission validates without loading", "[mcp]") {
 
 TEST_CASE("mcp: an oversized mission document is refused before parsing", "[mcp]") {
     Fixture f;
-    McpEndpoint ep(f.registry(), cfgWith({}), testLogger(), {});
+    McpEndpoint ep(f.channel(), cfgWith({}), testLogger(), {});
     const auto g = grantAt(mcp::Autonomy::Recommend);
     const std::string sid = openSession(ep, g);
 
@@ -404,7 +412,7 @@ TEST_CASE("mcp: a subscriber is notified when the world snapshot advances", "[mc
     uint64_t tick = 0;
     McpHooks hooks;
     hooks.worldStateTick = [&tick] { return tick; };
-    McpEndpoint ep(f.registry(), cfgWith({}), testLogger(), std::move(hooks));
+    McpEndpoint ep(f.channel(), cfgWith({}), testLogger(), std::move(hooks));
     const auto g = grantAt(mcp::Autonomy::Observe);
     const std::string sid = openSession(ep, g);
 
@@ -434,7 +442,7 @@ TEST_CASE("mcp: unsubscribing stops the notifications", "[mcp]") {
     uint64_t tick = 10;
     McpHooks hooks;
     hooks.worldStateTick = [&tick] { return tick; };
-    McpEndpoint ep(f.registry(), cfgWith({}), testLogger(), std::move(hooks));
+    McpEndpoint ep(f.channel(), cfgWith({}), testLogger(), std::move(hooks));
     const auto g = grantAt(mcp::Autonomy::Observe);
     const std::string sid = openSession(ep, g);
 
@@ -457,14 +465,14 @@ TEST_CASE("mcp: unsubscribing stops the notifications", "[mcp]") {
 
 TEST_CASE("mcp: polling an unknown session yields nothing", "[mcp]") {
     Fixture f;
-    McpEndpoint ep(f.registry(), cfgWith({}), testLogger(), {});
+    McpEndpoint ep(f.channel(), cfgWith({}), testLogger(), {});
     CHECK_FALSE(ep.sessionExists("nope"));
     CHECK(ep.pollNotifications("nope").empty());
 }
 
 TEST_CASE("mcp: subscribing to an unknown resource is refused", "[mcp]") {
     Fixture f;
-    McpEndpoint ep(f.registry(), cfgWith({}), testLogger(), {});
+    McpEndpoint ep(f.channel(), cfgWith({}), testLogger(), {});
     const auto g = grantAt(mcp::Autonomy::Observe);
     const std::string sid = openSession(ep, g);
     const auto out = ep.handle(
@@ -478,7 +486,7 @@ TEST_CASE("mcp: sessions are capped and the idlest is evicted", "[mcp]") {
     ServerConfig::McpConfig cfg = cfgWith({});
     cfg.maxSessions = 2;
     ManualClock clock;
-    McpEndpoint ep(f.registry(), cfg, testLogger(), {});
+    McpEndpoint ep(f.channel(), cfg, testLogger(), {});
     ep.setClock(clock);
     const auto g = grantAt(mcp::Autonomy::Observe);
 
@@ -532,7 +540,7 @@ TEST_CASE("mcp: a rate-limited call is refused with 429", "[mcp]") {
     Fixture f;
     ServerConfig::McpConfig cfg = cfgWith({});
     cfg.rateLimitPerMin = 1;
-    McpEndpoint ep(f.registry(), cfg, testLogger(), {});
+    McpEndpoint ep(f.channel(), cfg, testLogger(), {});
     const auto g = grantAt(mcp::Autonomy::Observe);
 
     // initialize consumes the one call this token gets.
@@ -546,7 +554,7 @@ TEST_CASE("mcp: a rate-limited call is refused with 429", "[mcp]") {
 
 TEST_CASE("mcp: every catalogued tool has a handler and a schema", "[mcp]") {
     Fixture f;
-    McpEndpoint ep(f.registry(), cfgWith({"status"}), testLogger(), {});
+    McpEndpoint ep(f.channel(), cfgWith({"status"}), testLogger(), {});
     const auto g = grantAt(mcp::Autonomy::Act);
     const std::string sid = openSession(ep, g);
 
@@ -577,7 +585,7 @@ TEST_CASE("mcp: a session is bound to the token that opened it", "[mcp]") {
     // escalate anything — but one token driving another's subscription state is a confusion worth
     // refusing outright rather than reasoning about later.
     Fixture f;
-    McpEndpoint ep(f.registry(), cfgWith({}), testLogger(), {});
+    McpEndpoint ep(f.channel(), cfgWith({}), testLogger(), {});
 
     auto alice = grantAt(mcp::Autonomy::Observe);
     alice.token = "alice";

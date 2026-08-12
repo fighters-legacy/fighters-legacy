@@ -7,6 +7,8 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -53,6 +55,16 @@ namespace fl {
 // why setAdminDispatch was a std::function in the first place, and consolidating auth is not a reason to
 // invert a layer boundary. The invariant that every dispatch carries an issuer is enforced where it can
 // be -- CommandRegistry::dispatch(line) is DELETED -- rather than by this signature alone.
+//
+// THREAD OWNERSHIP, because the three live channels do not share one:
+//
+//   * AUTH is cross-thread and is mutex-guarded here. A transport thread checks a credential while the
+//     sim thread runs `admin_unlock` or `admin_auth_status` over the registry -- which is exactly why
+//     RconServer and HttpAdminServer each carried their own mutex around their own AuthTracker. That
+//     mutex now lives once, next to the state it protects, instead of once per frontend.
+//   * DISPATCH and the DRAIN belong to the frontend that owns the channel: it arms and services on the
+//     same thread (the sim thread for ENet, the I/O thread for RCON). They are deliberately not
+//     locked -- a lock there would be a lie about a queue only one thread ever touches.
 class AdminChannel {
   public:
     // Bound to CommandRegistry::dispatch(line, issuer) by whoever owns the registry.
@@ -64,6 +76,12 @@ class AdminChannel {
         std::string name;
         int maxAuthFailures{5};
         int lockoutSeconds{300};
+        // False for a frontend that presents no per-IP credential -- stdin and the mission `do:` sink
+        // are trusted local surfaces whose issuer is fl::systemIssuer(). Such a channel reports a zero
+        // threshold and never accumulates entries, so an operator reading admin_auth_status sees "this
+        // surface exists and has no lockout" rather than a threshold that nothing can ever reach. It is
+        // still registered: the failure mode this issue fixes is a surface an operator cannot SEE.
+        bool perIpAuth{true};
         // How long after a dispatch the channel waits before delivering shell output the command
         // produced asynchronously (via GameLoop::enqueueSimCallback). Wall-clock, not ticks, so drain
         // timing is immune to sim rate -- the property both hand-rolled drains had and neither stated.
@@ -74,6 +92,11 @@ class AdminChannel {
 
     [[nodiscard]] const std::string& name() const noexcept {
         return m_config.name;
+    }
+
+    // False = this frontend has no per-IP credential to fail; see Config::perIpAuth.
+    [[nodiscard]] bool hasPerIpAuth() const noexcept {
+        return m_config.perIpAuth;
     }
 
     // ---- dispatch ------------------------------------------------------------------------------
@@ -115,8 +138,18 @@ class AdminChannel {
     void armDrain(uint64_t token);
     void cancelDrain(uint64_t token);
 
+    // Drop every armed drain whose token matches. The transports address a reply to something that can
+    // go away before the deadline -- an ENet peer disconnects, an RCON client closes its socket -- and
+    // both hand-rolled drains had their own erase-if for exactly that. Tokens are packed by the
+    // transport, so the predicate is the transport's too.
+    void cancelDrainsWhere(const std::function<bool(uint64_t token)>& pred);
+
     // Deliver every armed drain whose deadline has passed. `emit(token, lines)` is the transport.
     void serviceDrains(const std::function<void(uint64_t token, const std::vector<std::string>& lines)>& emit);
+
+    // The soonest armed deadline, or nullopt when nothing is armed. RCON's poll loop clamps its
+    // timeout to this so a drain fires on time instead of on the next 100 ms poll wakeup.
+    [[nodiscard]] std::optional<std::chrono::steady_clock::time_point> nextDrainDeadline() const;
 
     [[nodiscard]] std::size_t pendingDrainCount() const noexcept {
         return m_pending.size();
@@ -132,6 +165,8 @@ class AdminChannel {
     Dispatcher m_dispatch;
     Config m_config;
     const IClock* m_clock;
+
+    mutable std::mutex m_authMutex; // guards m_auth only; see THREAD OWNERSHIP above
     AuthTracker m_auth;
 
     std::function<int()> m_mark;
@@ -144,6 +179,10 @@ class AdminChannel {
 // This is the registry ServerCommands.h asked for by warning about its absence. admin_auth_status and
 // admin_unlock walk it instead of naming channels, so a new channel cannot be invisible during an
 // incident -- which was the actual failure mode, not the duplicated code.
+//
+// The channel LIST is written only during init, before any frontend starts, and read-only afterwards;
+// the per-channel state the reads reach is mutex-guarded by AdminChannel. So walking the registry from
+// the sim thread while a transport thread authenticates is safe, which is the whole point of it.
 class AdminChannelRegistry {
   public:
     // The channel must outlive the registry. Registered at construction time in fl-server's init.

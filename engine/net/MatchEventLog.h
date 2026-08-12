@@ -30,7 +30,7 @@
 //
 //   * ChatModerationHook and TeamSwitchGuard return a decision -- they are VETOES, not observations.
 //     An observer cannot refuse anything, so making them subscribers would silently drop the refusal.
-//   * setAdminDispatch / setAdminShell return a response body -- that is RPC, and a bus has nowhere to
+//   * AdminChannel::dispatch returns a response body -- that is RPC, and a bus has nowhere to
 //     put a reply.
 //   * setReplaySink stays a dedicated high-bandwidth tap: a whole-world quantized stream is not an
 //     event, and putting 60 Hz of world state through a per-record notification would be a category

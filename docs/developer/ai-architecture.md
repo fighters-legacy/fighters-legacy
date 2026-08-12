@@ -102,7 +102,7 @@ A structured, read-only, out-of-band surface:
 >   chat-intent hook were `WorldBroadcaster` setters and are subscribers now; those setters are gone.
 >   `recordParticipant` used to fire a sink AND append a Join/Leave — every participant event wired
 >   twice, and every future event type would have been too. Vetoes (`ChatModerationHook`,
->   `TeamSwitchGuard`) and RPC (`setAdminDispatch`) stay off the bus deliberately: an observer cannot
+>   `TeamSwitchGuard`) and RPC (`AdminChannel::dispatch`) stay off the bus deliberately: an observer cannot
 >   refuse anything and a bus has nowhere to put a reply. `setReplaySink` stays a dedicated tap — a
 >   whole-world quantized stream at 60 Hz is not an event.
 > - **The log stamps `tick`, not the caller (#1076).** `WorldBroadcaster::onTick` advances the log's

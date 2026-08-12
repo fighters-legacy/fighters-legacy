@@ -3,8 +3,7 @@
 
 #include "McpEndpoint.h"
 
-#include <console/CommandRegistry.h>
-#include <console/CommandShell.h>
+#include <net/AdminChannel.h>
 #include <util/Json.h> // json::escape — the one escaper for every JSON this server emits
 
 #include <httplib.h>
@@ -21,15 +20,9 @@
 namespace fl {
 
 struct HttpAdminServer::Impl {
-    const CommandRegistry& registry;
+    AdminChannel& channel;
     ServerConfig::HttpAdminConfig cfg;
     ILogger& log;
-    // Held but not yet read. RCON needs it because a mutating command's real confirmation lands on
-    // the shell ring a tick after dispatch returns, and RCON can keep sending packets; HTTP answers
-    // the synchronous ack and closes the exchange. Kept because #601's MCP surface shares this
-    // listener and will want the deferred output.
-    CommandShell* shell;
-
     std::vector<httpadmin::TokenGrant> tokens;
     httplib::Server server;
     std::thread thread;
@@ -41,8 +34,6 @@ struct HttpAdminServer::Impl {
     ServerConfig::McpConfig mcpCfg;
     std::unique_ptr<McpEndpoint> mcp;
 
-    std::mutex authMutex;
-    AuthTracker auth;
     const IClock* clock{&SystemClock::instance()};
     // The server's start instant, shared with every other frontend rather than captured here (#1048).
     // Deliberately NOT re-pointed by setClock(): it carries the clock it was started on, so a test
@@ -50,9 +41,8 @@ struct HttpAdminServer::Impl {
     // instants from different clocks.
     ServerUptime uptime;
 
-    Impl(const CommandRegistry& reg, const ServerConfig::HttpAdminConfig& c, ILogger& l, const ServerUptime& up,
-         CommandShell* sh)
-        : registry(reg), cfg(c), log(l), shell(sh), auth(c.maxAuthFailures, c.lockoutSeconds), uptime(up) {}
+    Impl(AdminChannel& ch, const ServerConfig::HttpAdminConfig& c, ILogger& l, const ServerUptime& up)
+        : channel(ch), cfg(c), log(l), uptime(up) {}
 
     // Resolve a request to the GRANT behind it, applying the per-IP lockout. Returns nullptr and
     // fills `status`/`body` when the request must be refused.
@@ -62,34 +52,23 @@ struct HttpAdminServer::Impl {
     // lockout policy rather than growing a second one.
     const httpadmin::TokenGrant* authorizeGrant(const httplib::Request& req, int& status, std::string& body) {
         const std::string ip = req.remote_addr;
-        {
-            std::lock_guard<std::mutex> lk(authMutex);
-            if (auth.isLockedOut(ip)) {
-                status = 429;
-                body = httpadmin::errorJson("too many failed authentications; try again later");
-                return nullptr;
-            }
+        if (channel.lockedOut(ip)) {
+            status = 429;
+            body = httpadmin::errorJson("too many failed authentications; try again later");
+            return nullptr;
         }
 
         const std::string presented = httpadmin::extractBearer(req.get_header_value("Authorization"));
         const httpadmin::TokenGrant* grant = httpadmin::resolveToken(tokens, presented);
         if (!grant) {
-            bool nowLocked = false;
-            {
-                std::lock_guard<std::mutex> lk(authMutex);
-                nowLocked = auth.recordFailure(ip);
-            }
-            if (nowLocked)
+            if (channel.recordAuthResult(ip, /*authenticated=*/false))
                 log.log(LogLevel::Warn, __FILE__, __LINE__, "http_admin: IP locked out after repeated auth failures");
             status = 401;
             body = httpadmin::errorJson("unauthorized");
             return nullptr;
         }
 
-        {
-            std::lock_guard<std::mutex> lk(authMutex);
-            auth.recordSuccess(ip);
-        }
+        channel.recordAuthResult(ip, /*authenticated=*/true);
         return grant;
     }
 
@@ -105,7 +84,7 @@ struct HttpAdminServer::Impl {
     // answers a refusal as a plain string, so map that onto 403 rather than reporting success with a
     // body that says "permission denied" — an HTTP client should not have to read prose to find out.
     void dispatchAsResponse(const CommandIssuer& issuer, const std::string& command, httplib::Response& res) {
-        const std::string result = registry.dispatch(command, issuer);
+        const std::string result = channel.dispatch(command, issuer);
         if (result.rfind("permission denied", 0) == 0) {
             res.status = 403;
             res.set_content(httpadmin::errorJson(result), "application/json");
@@ -124,7 +103,7 @@ struct HttpAdminServer::Impl {
     // wrapped in {"result": "..."} — a client asking for world state wants an object, not a string
     // containing one.
     void dispatchRawJson(const CommandIssuer& issuer, const std::string& command, httplib::Response& res) {
-        const std::string result = registry.dispatch(command, issuer);
+        const std::string result = channel.dispatch(command, issuer);
         if (result.empty() || result.front() != '{') {
             // The command declined (no snapshot yet, or a refusal). Report it as an error object so
             // the response is always JSON.
@@ -342,9 +321,9 @@ void HttpAdminServer::Impl::installMcpRoutes() {
     });
 }
 
-HttpAdminServer::HttpAdminServer(const CommandRegistry& registry, const ServerConfig::HttpAdminConfig& cfg,
-                                 ILogger& log, const ServerUptime& uptime, CommandShell* shell)
-    : m_impl(std::make_unique<Impl>(registry, cfg, log, uptime, shell)) {}
+HttpAdminServer::HttpAdminServer(AdminChannel& channel, const ServerConfig::HttpAdminConfig& cfg, ILogger& log,
+                                 const ServerUptime& uptime)
+    : m_impl(std::make_unique<Impl>(channel, cfg, log, uptime)) {}
 
 HttpAdminServer::~HttpAdminServer() {
     stop();
@@ -352,7 +331,9 @@ HttpAdminServer::~HttpAdminServer() {
 
 void HttpAdminServer::enableMcp(const ServerConfig::McpConfig& cfg, McpHooks hooks) {
     m_impl->mcpCfg = cfg;
-    m_impl->mcp = std::make_unique<McpEndpoint>(m_impl->registry, cfg, m_impl->log, std::move(hooks));
+    // The SAME channel the REST routes use: MCP is a second protocol on one listener with one
+    // credential table, not a sixth auth surface an operator would have to know to check.
+    m_impl->mcp = std::make_unique<McpEndpoint>(m_impl->channel, cfg, m_impl->log, std::move(hooks));
     m_impl->mcp->setClock(*m_impl->clock);
 }
 
@@ -423,31 +404,12 @@ void HttpAdminServer::stop() {
         m_impl->thread.join();
 }
 
-bool HttpAdminServer::clearLockout(const std::string& ip) {
-    std::lock_guard<std::mutex> lk(m_impl->authMutex);
-    // Report whether a lockout was actually active, so `admin_unlock` can tell the operator it did
-    // something rather than always claiming success (the RconServer::clearLockout contract).
-    const bool wasLockedOut = m_impl->auth.isLockedOut(ip);
-    m_impl->auth.clearLockout(ip);
-    return wasLockedOut;
-}
-
-AuthLockoutSummary HttpAdminServer::getAuthSummary() {
-    std::lock_guard<std::mutex> lk(m_impl->authMutex);
-    AuthLockoutSummary s;
-    s.activeCount = m_impl->auth.lockedOutCount();
-    s.threshold = m_impl->auth.maxFailures();
-    s.entries = m_impl->auth.failureSummary();
-    return s;
-}
-
 uint16_t HttpAdminServer::boundPort() const noexcept {
     return m_impl->port.load(std::memory_order_relaxed);
 }
 
 void HttpAdminServer::setClock(const IClock& clock) {
     m_impl->clock = &clock;
-    m_impl->auth.setClock(clock);
     // Forward to MCP too, whichever order the two setters were called in — otherwise a test that
     // enables MCP first ends up with a rate limiter on the real clock and no way to advance it.
     if (m_impl->mcp)
