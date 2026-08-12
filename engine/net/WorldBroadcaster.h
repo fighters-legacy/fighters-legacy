@@ -11,6 +11,7 @@
 #include "MatchEventLog.h" // the one append-only match record (#600)
 #include "PeerAdmission.h" // whether and how a peer enters the world (#1085) — owned by value below
 #include "RequiredPackPolicy.h"
+#include "SnapshotPipeline.h" // the per-tick snapshot path (#1086) — owned by value below
 #include "SnapshotScheduler.h"
 #include "TickGovernor.h"
 #include "TransformHistory.h"          // lag-compensation rewind ring (#425)
@@ -1470,6 +1471,12 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     PeerAdmission m_admission;
     friend class PeerAdmission;
 
+    // The per-tick snapshot path (#1086, D13): encode-once, the replay tap, the per-peer parallel
+    // build and its flush, with the per-peer baselines and despawn queues. Same ownership rule as
+    // m_admission — declared after m_hooks, which it binds by reference.
+    SnapshotPipeline m_snapshots;
+    friend class SnapshotPipeline;
+
     // Shared spawn core for a pilot peer: spawn `entityType` at `t`, record m_peerEntities, stamp
     // `faction` (0 = leave neutral), resolve the flight model, and register the PeerController. Used by
     // both admitPilot (round-robin path) and the mission-slot path. Sim-thread.
@@ -1550,7 +1557,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Run a per-peer pass over [0, count): same dispatch as runEntityPass but with a finer grain
     // (each peer is a heavy, heterogeneous-cost unit — interest query + scheduler + bitstream encode).
     // Used to build per-peer snapshot buffers in parallel; the sim thread flushes them serially.
-    void runPeerPass(std::size_t count, const std::function<void(std::size_t, std::size_t)>& fn);
 
     // Turbulence is seeded per (entityIdx, tickIndex) so the integrate step is deterministic and
     // parallel-safe — no shared RNG state mutated across entities.
@@ -1717,13 +1723,10 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     MatchEventLog m_matchEventLog;             // #600: the one append-only match record
 
     // ── replay tap state (#643) — sim-thread only ───────────────────────────
-    uint32_t m_replayKeyframeInterval{120};
-    bool m_replayForceKeyframe{true};
     // entityIdx -> generation last recorded. A record is full on a keyframe tick, for an entity the
     // recording has not seen, or when its generation changed (a pool slot reused for a new entity) --
     // the same three reasons the per-peer path sends a full, minus everything about acks, because a
     // file never drops a packet.
-    std::unordered_map<uint32_t, uint16_t> m_replayKnownGens;
 
     void rebuildWorldState(uint64_t tickIndex); // gather peers + weather, call buildWorldStateSnapshot
     void broadcastGmWorldState();               // #861: chunked GM-map feed to peers holding GmMap
@@ -1983,12 +1986,9 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // behaviour used by unit tests). fl-server sets a real budget; atomic so reload_config can mutate
     // it (the read happens on the sim thread). The scheduler ranks visible entities by relevance and
     // sends only the highest-priority set that fits.
-    std::atomic<uint32_t> m_snapshotBudgetBytes{0};
     // Snapshot payload compression (#775): internal default OFF (unit tests assert raw byte shapes);
     // fl-server config default ON. Atomic for reload_config; frozen into a local before the parallel
     // per-peer pass.
-    std::atomic<bool> m_compressSnapshots{false};
-    SchedulerWeights m_schedulerWeights{};     // relevance weights (tuned defaults; sim-thread only)
     std::atomic<uint32_t> m_jitterMaxDepth{4}; // global cap for per-peer jitter buffer initialization
     // Adaptive resize parameters — sim-thread only; hot-reloadable via enqueueSimCallback.
     uint32_t m_jitterAdaptWindow{60}; // EWMA smoothing window; alpha = 1/window
@@ -2001,82 +2001,8 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // peer at the full 60 Hz / full budget, so existing per-tick-send tests are unaffected.
     CongestionParams m_congestionParams{};
 
-    // Per-peer entity tracking: peerId → (entityIdx → record). Drives client-acked delta baselines:
-    //   * gen           — full vs delta on respawn (generation change forces a full).
-    //   * lastSentTick  — scheduler recency term + the kSnapshotRetentionTicks force-full (the
-    //                     interest-out / client-evicted re-entry case) + the knownGens GC prune.
-    //   * fullStreakTick— tick the CURRENT contiguous run of full records started on (0 = never sent
-    //                     a full). The entity is sent full every tick until the peer confirms it decoded
-    //                     fullStreakTick (selective-ack, #566); freezing the streak start (rather than
-    //                     advancing it each tick) lets it converge to deltas in one RTT rather than
-    //                     re-fulling forever (the confirm target must be a fixed tick the ack can catch).
-    //   * lastWasFull   — whether the last record sent for this entity was a full (detects a
-    //                     contiguous full run together with lastSentTick).
-    // Erased in full on peer disconnect; pruned per-tick once stale past kSnapshotRetentionTicks.
-    struct PeerEntityRec {
-        uint16_t gen{0};
-        uint64_t lastSentTick{0};
-        uint64_t fullStreakTick{0};
-        bool lastWasFull{false};
-        // Articulation send policy (#843): the last channel set this peer was sent for this entity,
-        // and when. Sent on CHANGE plus a periodic refresh, so a steady-state aircraft costs zero
-        // articulation bytes between refreshes. artSentTick == 0 means "never sent".
-        uint32_t artHash{0};
-        uint64_t artSentTick{0};
-    };
-    std::unordered_map<uint32_t, std::unordered_map<uint32_t, PeerEntityRec>> m_peerKnownGens;
-
-    // Per-peer pending explicit despawns (#516): peerId → (entityIdx → remaining repeat ticks). An
-    // entity the peer knew that left the sim entirely (kill/despawn) is queued here and emitted in the
-    // SnapshotDespawn TLV for kDespawnRepeatTicks ticks (drop tolerance on the unreliable channel).
-    // Erased in full on peer disconnect.
-    std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint8_t>> m_peerPendingDespawn;
-
-    // Per-tick scratch for the data-parallel per-peer snapshot build. Each entry resolves a peer's
-    // stable per-peer state pointers once (serially, in the gather), so the parallel build performs
-    // no map operator[] / rehash; the worker writes only into its own buf and the peer-private maps
-    // it points at. The sim thread then flushes buf via m_net.send. buf retains capacity across ticks.
-    struct PeerSnapWork {
-        uint32_t peerId{};
-        EntityId peerEid;                      // invalid for an observer (no entity) (#857)
-        const EntityState* peerState{nullptr}; // null for an observer
-        double center[3]{};                    // interest center: the pilot's entity, or the observer's point
-        bool spectator{false};                 // #403: observer or dead pilot — eligible for the snapshot delay
-
-        // #576: which lever is actually spacing THIS peer's snapshots, frozen with the rest of the
-        // per-peer work in the serial gather. The governor's numbers are server-wide, but whether
-        // they BIND for a given peer depends on that peer's own congestion interval, so the
-        // comparison has to be made per peer and cannot be read off the governor alone.
-        uint32_t sendIntervalTicks{1}; // the composed interval this peer is actually being sent at
-        bool governorBinding{false};   // true when the SERVER's governor is what widened it
-        PeerInputState* pin{nullptr};
-        std::unordered_map<uint32_t, PeerEntityRec>* knownGens{nullptr};
-        std::unordered_map<uint32_t, uint8_t>* pending{nullptr};
-        std::vector<uint8_t> buf;
-        std::vector<uint8_t> compressScratch; // zstd output scratch (#775); reused across ticks
-
-        // Per-peer snapshot scratch, REUSED across ticks (#1092). These ten were locals inside the
-        // per-peer pass, so the pass allocated ten fresh vectors per peer per tick — roughly 77,000
-        // allocations/second at 128 peers and 60 Hz, inside the PARALLEL region, which makes it
-        // allocator contention across worker threads as well as raw allocation cost. `buf` and
-        // `compressScratch` above already demonstrated the fix; these simply never got it.
-        //
-        // Every one is cleared before use, never read across ticks. That matters: buffer reuse that
-        // leaks stale contents would change the wire, which the serial-equivalence byte-compare
-        // exists to catch.
-        std::vector<uint32_t> visible;                  // interest-query hits, exact-gated
-        std::vector<uint32_t> selected;                 // budget-scheduled subset of `visible`
-        std::vector<SnapshotCandidate> cands;           // priority ranking input
-        std::vector<std::array<double, 3>> originTable; // shared quantization origins, deduped
-        std::vector<uint8_t> recordStream;              // stitched entity records
-        std::vector<uint8_t> ownBlob;                   // the own-entity re-encode
-        std::vector<uint32_t> despawnIds;               // SnapshotDespawn TLV payload
-        std::vector<uint8_t> effectsBlob;               // SnapshotEffects TLV payload
-        std::vector<uint8_t> articulationBlob;          // SnapshotArticulation TLV payload
-        std::vector<uint8_t> crewBlob;                  // SnapshotCrew TLV body
-        std::vector<uint8_t> payload;                   // assembled (possibly compressed) payload
-    };
-    std::vector<PeerSnapWork> m_peerWork;
+    // The per-peer baselines (PeerEntityRec), the despawn queues and the PeerSnapWork scratch moved
+    // to SnapshotPipeline (#1086) — they exist only to serve the pass that writes them.
 
     // Shutdown countdown state (sim-thread only).
     bool m_shuttingDown{false};

@@ -457,6 +457,7 @@ add_library(engine-net STATIC
     net/AdminChannel.cpp
     net/NetworkUtils.cpp
     net/PeerAdmission.cpp
+    net/SnapshotPipeline.cpp
     net/WorldBroadcaster.cpp
     net/DiscoveryBeacon.cpp
     net/DiscoveryListener.cpp

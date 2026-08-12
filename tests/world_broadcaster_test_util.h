@@ -532,3 +532,233 @@ inline bool ackSkipsTypes(const std::vector<uint8_t>& ack) {
     return fl::findExt(ack.data() + off, ack.size() - off, static_cast<uint16_t>(fl::ExtTag::ConnectAckTypesUnchanged),
                        len) != nullptr;
 }
+
+// Disable the graceful tick-overrun governor (#514) on a broadcaster under test.
+//
+// The governor reads WALL-CLOCK tick time (TickProfiler::lastTotalMs) and sheds snapshots when the
+// tick exceeds its budget. That is exactly right in production and exactly wrong in a test that
+// asserts "a snapshot was sent on tick N": on a loaded machine — a CI runner, or a developer running
+// `ctest -j` with 24 sanitized processes in flight — an instrumented tick easily blows 16.6 ms, the
+// governor correctly concludes the server is overloaded, and the snapshot the test is waiting for is
+// legitimately never sent. The test then fails for a reason that has nothing to do with what it is
+// testing (#787).
+//
+// So any test that asserts on snapshot PRESENCE or byte-identity must call this. Tests that are
+// specifically exercising the governor obviously must not.
+void disableOverrunGovernor(fl::WorldBroadcaster& b) {
+    fl::TickGovernorParams gp;
+    gp.enabled = false;
+    b.setGovernorParams(gp);
+}
+
+// Read the SnapshotDespawn TLV (uint32[] of removed indices) from a snapshot packet.
+inline std::vector<uint32_t> decodeDespawns(const std::vector<uint8_t>& pkt) {
+    std::vector<uint32_t> ids;
+    fl::MsgWorldSnapshotHeader hdr = parseSnapshotHeader(pkt);
+    const std::size_t extOffset =
+        sizeof(hdr) + static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double) + hdr.bitstreamBytes;
+    if (pkt.size() <= extOffset)
+        return ids;
+    uint16_t valueLen{};
+    const uint8_t* p = fl::findExt(pkt.data() + extOffset, pkt.size() - extOffset,
+                                   static_cast<uint16_t>(fl::ExtTag::SnapshotDespawn), valueLen);
+    if (!p)
+        return ids;
+    for (uint16_t i = 0; i + 4u <= valueLen; i += 4u) {
+        uint32_t v{};
+        std::memcpy(&v, p + i, 4u);
+        ids.push_back(v);
+    }
+    return ids;
+}
+
+// Build CongestionParams with a fast (every-tick) eval cadence for deterministic tests.
+inline fl::CongestionParams testCongestion(bool enabled = true) {
+    fl::CongestionParams p = fl::makeCongestionParams(enabled, /*minSendHz=*/10.f, /*lossThreshold=*/0.02f,
+                                                      /*budgetFloorBytes=*/400u);
+    p.evalIntervalTicks = 1u; // step AIMD every tick so back-off/recovery is observable over few ticks
+    return p;
+}
+
+inline fl::PeerLinkStats lossLink(float loss) {
+    fl::PeerLinkStats s;
+    s.packetLoss = loss;
+    return s;
+}
+
+// Sends one MsgClientInput carrying the articulation commands.
+void sendArticulationInput(fl::WorldBroadcaster& wb, uint32_t peerId, uint32_t seq, uint8_t artButtons, uint8_t flaps) {
+    fl::MsgClientInput in{};
+    in.seqNum = seq;
+    in.throttle = 0.5f;
+    in.artButtons = artButtons;
+    in.flaps = flaps;
+    std::vector<uint8_t> buf;
+    fl::appendMsg(buf, in);
+    wb.onReceive(peerId, buf.data(), buf.size());
+}
+
+// Reads the TLV extension block of a peer's most recent snapshot.
+struct SnapshotExt {
+    const uint8_t* data{nullptr};
+    std::size_t size{0};
+    std::vector<uint8_t> pkt;
+};
+
+SnapshotExt lastSnapshotExt(const MockNetwork& net, uint32_t peerId) {
+    SnapshotExt out;
+    auto snaps = snapshotsFor(net, peerId);
+    if (snaps.empty())
+        return out;
+    out.pkt = snaps.back();
+    const auto hdr = parseSnapshotHeader(out.pkt);
+    const std::size_t off = sizeof(fl::MsgWorldSnapshotHeader) +
+                            static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double) + hdr.bitstreamBytes;
+    if (out.pkt.size() < off)
+        return out;
+    out.data = out.pkt.data() + off;
+    out.size = out.pkt.size() - off;
+    return out;
+}
+
+// Stub controller: drives the entity at a fixed throttle with no peer connection. Records how many
+// times it is sampled so the test can confirm onTick steps non-peer entities.
+struct ConstantController : fl::IEntityController {
+    float throttle{1.0f};
+    int sampleCount{0};
+    fl::ControlInput sample(const fl::EntityState&, uint64_t, double, const fl::AiTickContext&) override {
+        ++sampleCount;
+        fl::ControlInput ctrl{};
+        ctrl.throttle = throttle;
+        return ctrl;
+    }
+};
+
+std::map<uint32_t, std::vector<std::vector<uint8_t>>> runSnapshotScenario(fl::JobSystem* jobs, uint64_t killAtTick,
+                                                                          bool compress = false) {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    disableOverrunGovernor(broadcaster); // byte-identity must not depend on how busy the host is
+    if (jobs)
+        broadcaster.setJobSystem(*jobs);
+    broadcaster.setSnapshotCompression(compress);
+
+    // Distinct peer spawn positions so each peer gets a different frameOrigin, own-entity record, and
+    // interest set — making the per-peer byte comparison non-trivial. All within the 200 km default
+    // draw distance so peers see overlapping (but not identical) entity sets.
+    broadcaster.setSpawnPoints(
+        {{0.0, 1000.0, 0.0}, {40000.0, 1000.0, 0.0}, {0.0, 1000.0, 40000.0}, {40000.0, 1000.0, 40000.0}});
+    const std::vector<uint32_t> peerIds{0u, 1u, 2u, 3u};
+    for (uint32_t pid : peerIds)
+        connectPilotPeer(broadcaster, net, pid);
+
+    // 16 shared entities spread across the peers' interest region.
+    std::vector<fl::EntityId> ids;
+    for (int i = 0; i < 16; ++i) {
+        fl::EntityTransform t{};
+        t.pos[0] = i * 2000.0;
+        t.pos[1] = 1000.0;
+        t.pos[2] = (i % 4) * 5000.0;
+        fl::EntityId id = em.spawn("builtin:debug-entity", t);
+        REQUIRE(id.valid());
+        auto controller = std::make_unique<ConstantController>();
+        controller->throttle = 1.0f;
+        broadcaster.registerController(id, std::move(controller));
+        ids.push_back(id);
+    }
+
+    for (uint64_t tick = 1; tick <= 120; ++tick) {
+        if (killAtTick > 0 && tick == killAtTick)
+            em.kill(ids[7]); // remove a shared entity mid-run -> despawn detection on the next tick
+        broadcaster.onTick(1.0 / 60.0, tick);
+    }
+
+    std::map<uint32_t, std::vector<std::vector<uint8_t>>> out;
+    for (uint32_t pid : peerIds)
+        out[pid] = snapshotsFor(net, pid);
+    return out;
+}
+
+struct InterestShedResult {
+    std::map<uint32_t, std::vector<std::vector<uint8_t>>> snaps;
+    float finalInterestScale{1.f};
+};
+
+// A fake clock that advances a fixed delta on every now() call. Because onTick reads the clock a
+// fixed number of times per tick (per-pass phase timing, worker-count-independent), each tick measures
+// a constant, over-budget wall span — so the governor degrades deterministically and identically
+// across worker counts. Sim-thread only (no synchronization); mutable m_now so the const now() can step.
+class AutoAdvanceClock final : public fl::IClock {
+  public:
+    explicit AutoAdvanceClock(std::chrono::steady_clock::duration step) : m_step(step) {}
+    std::chrono::steady_clock::time_point now() const override {
+        m_now += m_step;
+        return m_now;
+    }
+
+  private:
+    mutable std::chrono::steady_clock::time_point m_now{};
+    std::chrono::steady_clock::duration m_step;
+};
+
+// Does a snapshot carry the #576 server-throttle tag?
+[[nodiscard]] inline bool hasServerThrottleTlv(const std::vector<uint8_t>& snap) {
+    fl::MsgWorldSnapshotHeader hdr{};
+    if (!fl::readMsg(snap.data(), snap.size(), hdr))
+        return false;
+    const std::size_t extOff =
+        sizeof(hdr) + static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double) + hdr.bitstreamBytes;
+    if (extOff >= snap.size())
+        return false;
+    std::uint16_t len = 0;
+    return fl::findExt(snap.data() + extOff, snap.size() - extOff,
+                       static_cast<uint16_t>(fl::ExtTag::SnapshotServerThrottle), len) != nullptr;
+}
+
+inline InterestShedResult runInterestShedScenario(fl::JobSystem* jobs) {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    AutoAdvanceClock clock(std::chrono::milliseconds(3));
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setClock(clock);
+    if (jobs)
+        broadcaster.setJobSystem(*jobs);
+    fl::TickGovernorParams gp = fl::makeTickGovernorParams(true, 0.90f, 0.60f, 15.0f, 4u, 400u, 0.5f);
+    gp.evalIntervalTicks = 1u;
+    gp.ewmaAlpha = 1.0f;
+    broadcaster.setGovernorParams(gp);
+
+    // Two peers at distinct spawn points so their (shrunk) interest sets differ.
+    broadcaster.setSpawnPoints({{0.0, 1000.0, 0.0}, {40'000.0, 1000.0, 0.0}});
+    const std::vector<uint32_t> peerIds{0u, 1u};
+    for (uint32_t pid : peerIds)
+        connectPilotPeer(broadcaster, net, pid);
+
+    // Static entities from 10 km out to 150 km: all inside the full 200 km radius, the far ones
+    // outside the floor-scaled 100 km radius of at least one peer.
+    for (int i = 0; i < 15; ++i) {
+        fl::EntityTransform t{};
+        t.pos[0] = 10'000.0 + i * 10'000.0;
+        t.pos[1] = 1000.0;
+        fl::EntityId id = em.spawn("builtin:debug-entity", t);
+        REQUIRE(id.valid());
+    }
+
+    for (uint64_t tick = 1; tick <= 120; ++tick)
+        broadcaster.onTick(1.0 / 60.0, tick);
+
+    InterestShedResult res;
+    res.finalInterestScale = broadcaster.getOverrunStatus().interestScale;
+    for (uint32_t pid : peerIds)
+        res.snaps[pid] = snapshotsFor(net, pid);
+    return res;
+}

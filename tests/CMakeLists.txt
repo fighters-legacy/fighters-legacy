@@ -1293,6 +1293,12 @@ target_link_libraries(test_peer_admission PRIVATE Catch2::Catch2WithMain engine-
     engine-bootstrap)
 catch_discover_tests(test_peer_admission)
 
+# The snapshot half (#1086), same arrangement.
+add_executable(test_snapshot_pipeline test_snapshot_pipeline.cpp)
+target_link_libraries(test_snapshot_pipeline PRIVATE Catch2::Catch2WithMain engine-net engine-weather
+    engine-bootstrap)
+catch_discover_tests(test_snapshot_pipeline)
+
 add_executable(test_weather test_weather.cpp)
 target_link_libraries(test_weather PRIVATE Catch2::Catch2WithMain engine-weather)
 

@@ -453,6 +453,26 @@ deterministic: with 8 test-spawn AI, terrain streaming exhausts its wall-clock p
 runs and one entity spawns at a coarse height, so two runs of the SAME binary disagree from tick 1 —
 a differ trusted without its control would have reported that as a regression.
 
+**2026-08-12 — D13 continued: `SnapshotPipeline` is the second extraction (#1086).** The whole
+per-tick snapshot path leaves `WorldBroadcaster::onTick` — the serial encode-once pass (#725), the
+replay tap (#643), the per-peer interest → scheduler → stitch build with its client-acked delta
+baselines and selective-ack window (#566), the despawn queues, compression, the congestion and
+governor decimation gates and the spectate delay — together with the per-peer baselines and the
+`PeerSnapWork` scratch. `onTick`'s serialize phase becomes one call; the file drops ~840 lines.
+
+Two things this move does NOT do, both deliberate. **Nothing is re-tuned**: no threshold, default or
+algorithm changes, because the discriminator for the whole stage is that the bytes do not move.
+**The jitter and congestion *stepping* stays in the broadcaster**, despite the issue text listing it
+here: `CongestionController::update` and the adaptive jitter resize run in the MAINTENANCE phase,
+before serialize, and they are driven by the peer's input arrivals rather than by the snapshot build.
+What moved is what the snapshot pass reads from them — the send interval and the effective byte
+budget. Moving the stepping too would have been a behavioural change dressed as a relocation.
+
+The three governor values (`snapshotIntervalTicks`, `interestScale`, `loadFactor`) are passed into
+`run()` rather than re-read from the governor inside it: the broadcaster samples them once per tick
+and also publishes them to its cross-thread mirrors, so passing them is what keeps the pass and the
+mirrors describing the same tick.
+
 **2026-08-12 — D14: one `AdminChannel` per admin frontend, and a registry that can enumerate them
 (#1079).** Six frontends — stdin, RCON, the ENet `MsgAdminCommand` path, the mission `do:` sink, HTTP
 REST and MCP — shared `CommandRegistry::dispatch` and forked everything around it: three `AuthTracker`
