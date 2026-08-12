@@ -81,14 +81,16 @@ struct SensingFixture {
         registry.registerType(makeDef("t:eye-unit", {"t:eye"}));
         registry.registerType(makeDef("t:target", {})); // a target that carries nothing
 
-        wb = std::make_unique<WorldBroadcaster>(em, registry, net, logger, withWeather ? &weather : nullptr);
-        wb->setSensorDefResolver([](const std::string& id) -> std::shared_ptr<const sensor::SensorDef> {
+        fl::WorldQueries q_wb;
+        q_wb.sensorDefs = [](const std::string& id) -> std::shared_ptr<const sensor::SensorDef> {
             if (id == "t:radar")
                 return makeRadar();
             if (id == "t:eye")
                 return makeEye();
             return nullptr;
-        });
+        };
+        wb = std::make_unique<WorldBroadcaster>(em, registry, net, logger, withWeather ? &weather : nullptr,
+                                                std::move(q_wb));
         wb->setSensorCheckHz(60.f); // a check every tick: these tests are about WHAT is seen, not when
     }
 

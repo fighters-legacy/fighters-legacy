@@ -370,6 +370,34 @@ artifacts move forward, and the scale gate is made honest (plan #1036 Stages 5�
 Architecture decisions D10–D23 arising from this review are recorded in #1036 and mirrored here
 individually by the stage PRs that implement them.
 
+**2026-08-12 — D12: `WorldBroadcaster`'s hooks and queries are taken at construction and frozen
+(#1082).** The class carried 29 independent single-slot `set*` hook setters: each new server feature
+cost a setter, a nullable member, a "null = feature off" comment and a wiring line in `main()`.
+`WorldBroadcasterConfig` had already proved the consolidation works for the ~33 SCALAR settings; this
+is the same move for the callbacks, and Stage 6 had already removed the ones that belonged elsewhere
+(observer sinks onto the event bus, the mission-tick composite into registered systems, the admin
+slots into an `AdminChannel`).
+
+Two structs, taken by value at construction and stored `const`: **`WorldQueries`** — the eleven
+pull-in resolvers the broadcaster ASKS the host for — and **`WorldBroadcasterHooks`**, the outbound
+callbacks, grouped into `admission` / `snapshot` / `comms` / `match` sub-structs **pre-shaped to the
+Stage 8 extraction boundaries** so each collaborator can be handed its own sub-struct wholesale. Null
+still means what it meant when these were setters: that feature is off. There is no setter, so
+assigning a field after construction is a compile error rather than a silent no-op once `start()` has
+run — the #1048 failure mode, reached here by removing the mutator rather than by wrapping the struct
+in a frozen `shared_ptr<const>`.
+
+⚑ **This is why #1084 landed first.** Eight of the nineteen seams cannot reach the constructor from a
+flat `main()`: four call back INTO the broadcaster (`flightSpawner`, `targetDesignator`,
+`flightOrderHandler`, `teamSwitchGuard`) and four capture objects built hundreds of lines later
+(`missionSlotBinder`, `teamAssigner`, `replaySink`, the admin channel). Inside `ServerRuntime` a hook
+is a lambda capturing `this` — valid before any member is constructed — and member declaration order
+puts every source before the broadcaster. Where the decision genuinely comes later, the installed
+hook forwards to a member and reproduces the UNSET behaviour when that member is empty; the four
+cases are written out in the code, because "install it always" is only equivalent when the hook can
+RETURN what unset meant. `replaySink` is the exception that stays conditional: a null sink means the
+tap stream is not built at all, so installing one on a server with replay off would cost every tick.
+
 **2026-08-12 — fl-server's lifetime is `ServerRuntime`, and declaration order is its teardown
 contract (#1084).** `main()` was a 2,680-line function holding ~65 objects in function scope whose
 only lifetime specification was a comment — *"Destruction order (LIFO): gameLoop first…, then

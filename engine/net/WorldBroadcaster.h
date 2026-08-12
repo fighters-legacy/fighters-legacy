@@ -380,11 +380,169 @@ struct WireTelemetry {
 // Threading: all ISimUpdate and INetworkEventHandler methods are called from
 // the GameLoop sim thread. INetwork::setEventHandler(&broadcaster) must be
 // called before GameLoop::start().
+// ── The host seams WorldBroadcaster pulls from and pushes to (#1082, D12) ────────────────────────
+//
+// These were 29 independent single-slot `set*` methods: each new server feature cost a setter, a
+// nullable member, a "null = feature off" comment and a wiring line in main.cpp. WorldBroadcasterConfig
+// already proved the consolidation works for the ~33 SCALAR settings; this is the same move for the
+// callbacks, and it is the last one -- Stage 6 took the observer sinks onto the event bus, the
+// mission-tick composite into registered systems, and the admin slots into an AdminChannel.
+//
+// Null still means exactly what it meant when these were setters: that feature is off. A caller that
+// wires none gets today's zero-configuration behaviour, which is why both structs are defaulted on
+// the constructor rather than required.
+//
+// They are taken at CONSTRUCTION and frozen. There is no setter, so "populate, construct, then set
+// one more field" is a compile error rather than a silent no-op after start() -- the #1048 failure
+// mode, reached here by removing the mutator instead of by wrapping the struct in a const shared_ptr.
+// applyConfig and the scalar setters stay: those are the hot-reload path, and a hook is not
+// hot-reloadable.
+
+// ── replay tap (#643) ────────────────────────────────────────────────────
+// One tick's worth of UNFILTERED entity state, in the exact encoding the wire uses.
+//
+// A recorder cannot reuse a per-peer snapshot: those are interest-filtered and budget-capped, so
+// they describe what one player could see, not what happened. Re-quantizing in the recorder would
+// be a SECOND quantization implementation free to disagree with the first about what 0.125 m
+// means -- the thing docs/developer/replay-format.md exists to prevent. So the tap reuses the blobs the
+// encode-once pass (#725) already built this tick and stitches them into one complete stream.
+struct ReplayTickRecords {
+    uint64_t tick{0};
+    bool keyframe{false}; // every record is full: the seek point a scrub lands on
+    uint16_t recordCount{0};
+    uint64_t stateHash{0};        // ReplayStateHash over the quantized records, ascending idx (#644)
+    std::vector<double> origins;  // originCount * 3 shared quantization origins
+    std::vector<uint8_t> records; // stitched record stream
+};
+
+// Resolve the territory a pilot's parachute comes down over, from the landing world position and the
+// pilot's faction (#672). A campaign wires this to its frontline (territoryAtWorld); unset =
+// TerritoryControl::Neutral, so a plain server resolves every survivor to MIA.
+using TerritoryQuery = std::function<TerritoryControl(glm::dvec3 pos, uint16_t factionIndex)>;
+
+// Notified when a pilot claims/leaves a mission player slot (#884): (missionObjectId, entity). A
+// VALID entity = the pilot's aircraft now occupies the slot; an INVALID one = the slot was freed.
+using MissionSlotBinder = std::function<void(const std::string& missionObjectId, EntityId entity)>;
+
+// Resolves an EntityDef::flightModelAsset to a parsed flight model for the spawn path. A std::function
+// so engine-net stays free of engine-content/engine-flight asset deps (the parse lives in fl-server,
+// which links both). Returns nullptr when the id is unknown; an empty flightModelAsset or an unset
+// resolver falls back to the builtin UFO model.
+using FlightModelResolver = std::function<std::shared_ptr<const FlightModelData>(const std::string& id)>;
+
+// Resolves an entity type's DEFAULT loadout to the mass and drag it costs the airframe (#812).
+// Resolved ONCE per controlled entity at spawn and cached -- a loadout does not change mid-flight
+// (rearm/jettison is #583). Unset => every entity flies clean, the pre-#812 behaviour.
+using PayloadResolver = std::function<PayloadEffect(const EntityDef& def)>;
+
+// Per-bot spawn context (#976): the skill range the seat's bot rolls within and the mission seed
+// feeding the deterministic per-instance skill roll.
+struct SeatBotContext {
+    float skillMin{0.5f};
+    float skillMax{0.5f};
+    uint64_t missionSeed{0};
+};
+
+// Builds a NON-fly crew seat's bot from its authored SeatDef (#969/#971) -- the concrete seat bots
+// live in engine-ai, which engine-net must not link. Unset ⇒ a crewed aircraft spawns with its
+// non-fly seats empty; the Fly seat always flies via its IEntityController regardless.
+using SeatControllerFactory =
+    std::function<std::unique_ptr<ISeatController>(const SeatDef& seat, uint8_t seatIdx, const SeatBotContext& ctx)>;
+
+// Assign a joining pilot to a team (#522). Consulted in handleConnectRequest before slot claim; the
+// returned faction is stamped onto the spawned aircraft. nullopt refuses the connection with
+// ConnectRefusalCode::MatchFull (every team full). Unset preserves the legacy behavior -- the mission
+// slot's faction, else the configured player faction.
+using TeamAssigner = std::function<std::optional<uint16_t>(uint32_t peerId)>;
+
+// Guard a mid-match team switch requested via MsgTeamRequest (#522). True = allowed. Unset ⇒ all
+// switches allowed. An admin `team` command bypasses this guard. A VETO, not an event (D10).
+using TeamSwitchGuard = std::function<bool(uint32_t peerId, uint16_t targetFaction)>;
+
+// Moderation veto (#646): return false to suppress a chat line. Unset ⇒ every line passes. A VETO,
+// so it stays off the match event bus -- an observer cannot refuse anything (D10).
+using ChatModerationHook = std::function<bool(uint32_t peerId, uint8_t channel, std::string_view text)>;
+
+// Called at the end of onConnect, after the peer's entity and controller exist: spawns the peer's
+// flight (N AI members), registers their controllers, and returns the formation it created.
+// kNoFormation (the default with no hook installed) = the peer flies alone.
+using FlightSpawner = std::function<fl::FormationId(uint32_t peerId, EntityId leadEntity)>;
+
+// Called once per addressed, live, AI member of a formation: builds the controller for `cmd` and
+// registers it. `designatedTarget` is resolved by the server before this is called. False = the
+// controller could not be built, which the caller reports as Rejected. RPC-shaped, so not an event.
+using FlightOrderHandler = std::function<bool(const fl::Formation& formation, const fl::FormationMember& member,
+                                              uint8_t command, EntityId designatedTarget)>;
+
+// Resolves the target for `attack_my_target` from the commander's own state (it lives in engine-ai).
+// Unset = attack orders always refuse with NoTarget, the correct degradation: never invent a target.
+using TargetDesignator = std::function<EntityId(const EntityState& commander, const float viewAxis[3])>;
+
+// What the broadcaster ASKS the host for. Pull-in resolvers: each is called, returns a value, and has
+// no side effect the caller depends on.
+struct WorldQueries {
+    TerritoryQuery territory;
+    std::function<float(glm::dvec3)> groundElevation;     // #477 radial floor; unset = the scalar elevation
+    std::function<SurfaceType(glm::dvec3)> groundSurface; // #487 per-surface rolling resistance
+    std::function<bool(glm::dvec3)> baseProximity;        // #55; unset = any ground counts (zero-pack sandbox)
+    FlightModelResolver flightModel;
+    PayloadResolver payload;
+    SeatControllerFactory seatControllerFactory;
+    // Resolves a sensor-def id to a parsed def (#685). Unset ⇒ every observer falls back to the
+    // builtin eyeball, which is what the zero-content sandbox runs on.
+    sensor::SensorSystem::SensorDefResolver sensorDefs;
+    TeamAssigner teamAssigner;
+    FlightSpawner flightSpawner;
+    TargetDesignator targetDesignator;
+};
+
+// What the broadcaster PUSHES to the host, grouped by the Stage 8 extraction boundaries (D13) so each
+// collaborator can be handed its own sub-struct wholesale instead of the set being re-sorted then.
+struct WorldBroadcasterHooks {
+    // PeerAdmission: whether and how a peer enters the world.
+    struct Admission {
+        MissionSlotBinder missionSlotBinder;
+    } admission;
+
+    // SnapshotPipeline: the per-tick encode and its taps.
+    struct Snapshot {
+        // The replay recorder's tap. A null sink costs nothing -- the tap stream is not built at all,
+        // and every byte the peers receive is unchanged.
+        std::function<void(const ReplayTickRecords&)> replaySink;
+        // Cadence at which every entity is emitted full; 0 = the 120-tick default. The first tick
+        // after construction is always a keyframe, so a recording never opens with deltas whose
+        // baseline is not in the file.
+        uint32_t replayKeyframeIntervalTicks{0};
+    } snapshot;
+
+    // SessionComms: everything the server says to players that is not world state.
+    struct Comms {
+        // Routes each ATC RadioTransmission somewhere (the #703 wire message; unset = log it).
+        std::function<void(const fl::atc::RadioTransmission&)> atcTransmissionSink;
+        ChatModerationHook chatModeration;
+        FlightOrderHandler flightOrders;
+        // This server's ENet admin frontend (#1079, D14): dispatcher, per-IP lockout and async-ack
+        // drain in one object shared with the other frontends. Null = MsgAdminCommand is discarded.
+        // A raw pointer because the channel outlives the broadcaster and is shared with RCON/HTTP.
+        AdminChannel* adminChannel{nullptr};
+    } comms;
+
+    // Match state and lifecycle.
+    struct Match {
+        TeamSwitchGuard teamSwitchGuard;
+        std::function<void()> shutdown; // the `shutdown --now` path asks the host to exit
+    } match;
+};
+
 class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public IEntityEventHandler {
   public:
     // weather may be nullptr; when non-null it is ticked and broadcast each sim tick.
+    // `queries` and `hooks` are the host seams (#1082, D12), taken here and FROZEN -- there is no
+    // setter for any of them, so a field assigned after construction is a compile error rather than a
+    // silent no-op once start() has run. Both default to all-null, which is exactly "every optional
+    // feature off": a test or a minimal embedder constructs a broadcaster the same way it always did.
     WorldBroadcaster(EntityManager& entityManager, EntityTypeRegistry& registry, INetwork& net, ILogger& logger,
-                     WeatherController* weather = nullptr);
+                     WeatherController* weather = nullptr, WorldQueries queries = {}, WorldBroadcasterHooks hooks = {});
     ~WorldBroadcaster(); // defined in .cpp — FlightIntegrator must be complete at destruction
 
     // ISimUpdate
@@ -455,11 +613,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Resolve the territory a pilot's parachute comes down over, from the landing world position and the
     // pilot's faction (#672). A campaign wires this to its frontline (territoryAtWorld); unset =
     // TerritoryControl::Neutral, so a plain server resolves every survivor to MIA. Sim-thread only.
-    using TerritoryQuery = std::function<TerritoryControl(glm::dvec3 pos, uint16_t factionIndex)>;
-    void setTerritoryQuery(TerritoryQuery fn) {
-        m_territoryQuery = std::move(fn);
-    }
-
     // Enable AI auto-eject (#672): an AI/scripted pilot punches out (spawns a chute + loses the airframe)
     // when its HP falls to the critical fraction, instead of riding a doomed aircraft down. Off by
     // default so unit damage tests see the plain damage progression; fl-server enables it. Sim-thread only.
@@ -486,12 +639,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     void setAtcService(fl::atc::AtcService* svc) noexcept {
         m_atcService = svc;
     }
-    // Routes each ATC RadioTransmission somewhere (the #703 wire message; nullptr = log it). Set
-    // before gameLoop.start().
-    void setAtcTransmissionSink(std::function<void(const fl::atc::RadioTransmission&)> sink) {
-        m_atcTransmissionSink = std::move(sink);
-    }
-
     // Peer management — all must be called from the sim thread (via GameLoop::enqueueSimCallback).
 
     // Broadcast a music-state transition to every connected peer (#413/#166). `state` is a GameState
@@ -587,30 +734,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         m_groundElevation.store(elev, std::memory_order_relaxed);
     }
 
-    // Inject a per-entity terrain height query called on the sim thread each tick.
-    // fn(worldPos) → terrain elevation (m) ABOVE THE DATUM along the radial through worldPos
-    // (i.e. TerrainStreamer::heightAt(dvec3)); FlightIntegrator compares it against the entity's
-    // geodetic altitude for radial ground contact (#477). When set, this overrides the global
-    // m_groundElevation scalar for each entity's FlightIntegrator::step() call.
-    // Requires TerrainStreamer::heightAt() to be thread-safe (shared_mutex). Call before
-    // gameLoop.start().
-    void setGroundElevationQuery(std::function<float(glm::dvec3)> fn);
-
-    // Per-entity ground SURFACE query (#487) — the terrain SurfaceType at a world position (the
-    // runway-surface override on top of the land-cover class; TerrainStreamer::surfaceTypeAt). When
-    // set, each FlightIntegrator::step() gets the surface's rolling resistance, so a rollout on grass
-    // is shorter than on concrete. The client mirrors this via the same groundFrictionFor table, so
-    // prediction stays in parity. Not set ⇒ paved default. Call before gameLoop.start().
-    void setGroundSurfaceQuery(std::function<SurfaceType(glm::dvec3)> fn);
-
-    // Base-proximity query for the #55 base-operations verbs: is `worldPos` at a serviced base
-    // (fl-server wires "within a few km of an airport")? Unset = any on-ground spot counts, which
-    // keeps the zero-pack sandbox serviceable. A carrier deck always counts, query or not. Call
-    // before gameLoop.start().
-    void setBaseProximityQuery(std::function<bool(glm::dvec3)> fn) {
-        m_baseProximityQuery = std::move(fn);
-    }
-
     // Set pre-cached peer spawn positions [x, y, z] in world space.
     // y must already include the terrain height + AGL offset, computed on the main thread
     // before gameLoop.start(). Positions are assigned round-robin to connecting peers.
@@ -636,11 +759,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // VALID entity = the pilot's aircraft now occupies the slot; an INVALID one = the slot was freed
     // (pilot disconnected). fl-server wires this to MissionRuntime::registerObjectEntity so the objective
     // evaluator's destroy(<slot-id>) tracks the live aircraft instead of firing from t=0. Sim-thread.
-    using MissionSlotBinder = std::function<void(const std::string& missionObjectId, EntityId entity)>;
-    void setMissionSlotBinder(MissionSlotBinder fn) {
-        m_missionSlotBinder = std::move(fn);
-    }
-
     // Install the mission's player slots. When non-empty, a connecting pilot is assigned the next open
     // slot (its type/faction/spawn) instead of the round-robin setSpawnPoints() + [world] player_faction
     // path; the slot frees on disconnect. All slots occupied ⇒ the pilot falls back to the default path,
@@ -735,35 +853,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         return m_worldStatePublisher;
     }
 
-    // ── replay tap (#643) ────────────────────────────────────────────────────
-    // One tick's worth of UNFILTERED entity state, in the exact encoding the wire uses.
-    //
-    // A recorder cannot reuse a per-peer snapshot: those are interest-filtered and budget-capped, so
-    // they describe what one player could see, not what happened. Re-quantizing in the recorder would
-    // be a SECOND quantization implementation free to disagree with the first about what 0.125 m
-    // means -- the thing docs/developer/replay-format.md exists to prevent. So the tap reuses the blobs the
-    // encode-once pass (#725) already built this tick and stitches them into one complete stream.
-    struct ReplayTickRecords {
-        uint64_t tick{0};
-        bool keyframe{false}; // every record is full: the seek point a scrub lands on
-        uint16_t recordCount{0};
-        uint64_t stateHash{0};        // ReplayStateHash over the quantized records, ascending idx (#644)
-        std::vector<double> origins;  // originCount * 3 shared quantization origins
-        std::vector<uint8_t> records; // stitched record stream
-    };
-
-    // Install the recorder's sink. `keyframeIntervalTicks` is the cadence at which every entity is
-    // emitted full (0 = use the default); the first tick after installation is always a keyframe, so
-    // a recording never opens with deltas whose baseline is not in the file. A null sink costs
-    // nothing -- the tap stream is not built at all, and every byte the peers receive is unchanged.
-    // Sim-thread; call before gameLoop.start().
-    void setReplaySink(std::function<void(const ReplayTickRecords&)> sink, uint32_t keyframeIntervalTicks) {
-        m_replaySink = std::move(sink);
-        m_replayKeyframeInterval = keyframeIntervalTicks == 0 ? 120u : keyframeIntervalTicks;
-        m_replayKnownGens.clear();
-        m_replayForceKeyframe = true;
-    }
-
     // The match event log (#600): one append-only record of kills, spawns, chat, admin commands,
     // joins and posture changes. Readable from any thread (the log takes its own lock).
     [[nodiscard]] MatchEventLog& matchEventLog() noexcept {
@@ -788,9 +877,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Seconds until the scheduled shutdown; 0 if none active (sim-thread-only read).
     uint32_t secondsUntilShutdown() const noexcept;
 
-    // Register a callback invoked on the sim thread at T=0. Call before gameLoop.start().
-    void setShutdownCallback(std::function<void()> fn);
-
     // Set the MOTD unicast to each connecting client after MsgConnectAck.
     // Empty string disables MOTD. May be called before gameLoop.start() or via
     // enqueueSimCallback for hot-reload (reload_config).
@@ -806,9 +892,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // lives in fl-server, which links both). Returns nullptr when the id is unknown; an empty
     // flightModelAsset or an unset resolver falls back to the builtin UFO model. Call before
     // gameLoop.start().
-    using FlightModelResolver = std::function<std::shared_ptr<const FlightModelData>(const std::string& id)>;
-    void setFlightModelResolver(FlightModelResolver fn);
-
     // Resolves an entity type's DEFAULT loadout to the mass and drag it costs the airframe (#812).
     // Same std::function injection as the flight-model resolver, and for the same reason: the
     // summation lives in engine-weapon (fl::defaultPayload), and engine-net must not link it.
@@ -816,9 +899,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Resolved ONCE per controlled entity at spawn and cached on the ControlledEntity -- a loadout
     // does not change mid-flight (rearm/jettison is #583). Unset => every entity flies clean, which
     // is exactly the pre-#812 behaviour.
-    using PayloadResolver = std::function<PayloadEffect(const EntityDef& def)>;
-    void setPayloadResolver(PayloadResolver fn);
-
     // Builds a NON-fly crew seat's bot from its authored SeatDef (#969/#971). The same std::function
     // injection as the resolvers above — the concrete seat bots (the turret gunner) live in engine-ai,
     // which engine-net must not link. Unset ⇒ a crewed aircraft spawns with its non-fly seats empty
@@ -827,15 +907,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Per-bot spawn context (#976): the skill range the seat's bot rolls within and the mission seed
     // feeding the deterministic per-instance skill roll. buildCrew passes the seat's authored defaults;
     // a mission `crew:` block overrides them via applyCrewSpawnConfig.
-    struct SeatBotContext {
-        float skillMin{0.5f};
-        float skillMax{0.5f};
-        uint64_t missionSeed{0};
-    };
-    using SeatControllerFactory = std::function<std::unique_ptr<ISeatController>(const SeatDef& seat, uint8_t seatIdx,
-                                                                                 const SeatBotContext& ctx)>;
-    void setSeatControllerFactory(SeatControllerFactory fn);
-
     // ── Mission crew configuration (#976) ────────────────────────────────────────────────────────
     // A per-seat override applied at spawn: bot spec, skill range, and occupancy. seatIndex names the
     // authored seat (already resolved from a role by the mission parser/validator).
@@ -890,14 +961,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // (the `set_seat` admin command, via enqueueSimCallback). Keyed by entity index (the live gen is
     // resolved internally).
     std::string adminSetSeat(uint32_t entityIdx, uint8_t seat, SeatOccupancy occ, uint32_t peerId);
-
-    // ---------------------------------------------------------------------------------------------
-    // Sensing (#685)
-    // ---------------------------------------------------------------------------------------------
-    // Resolves a sensor-def id to a parsed def, the setFlightModelResolver pattern (engine-net must
-    // not link engine-content). Unset ⇒ every observer falls back to the builtin eyeball, which is
-    // the honest default and is what the zero-content sandbox runs on. Call before gameLoop.start().
-    void setSensorDefResolver(sensor::SensorSystem::SensorDefResolver fn);
 
     // Geometry checks per second (default 10 = the reference cadence every authored `pod` is tuned
     // against). Converted to a tick stride; checks are staggered across it. Changing this changes
@@ -956,19 +1019,9 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // with ConnectRefusalCode::MatchFull (every team full). Unset (the default) preserves the legacy
     // behavior — the mission slot's faction, else m_playerFaction — so existing single-mode servers and
     // every existing test are byte-identical. fl-server wires this to the mode's TeamBalancer (#522).
-    using TeamAssigner = std::function<std::optional<uint16_t>(uint32_t peerId)>;
-    void setTeamAssigner(TeamAssigner fn) {
-        m_teamAssigner = std::move(fn);
-    }
-
     // Guard a mid-match team switch requested via MsgTeamRequest. Returns true if the switch is allowed
     // (fl-server wires it to TeamBalancer::switchAllowed). Unset ⇒ all switches allowed. An admin `team`
     // command bypasses this guard.
-    using TeamSwitchGuard = std::function<bool(uint32_t peerId, uint16_t targetFaction)>;
-    void setTeamSwitchGuard(TeamSwitchGuard fn) {
-        m_teamSwitchGuard = std::move(fn);
-    }
-
     // The faction (team) a peer's aircraft currently carries, or kNoFaction when the peer has no live
     // entity (observer / dead / unknown). Sim-thread; used by chat team routing (#646) and the balancer.
     [[nodiscard]] uint16_t factionForPeer(uint32_t peerId) const noexcept;
@@ -989,10 +1042,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     }
     // Moderation hook: return false to suppress a line (fl-server default logs an audit line + allows).
     // Unset ⇒ every line passes. Sim-thread; wired before gameLoop.start().
-    using ChatModerationHook = std::function<bool(uint32_t peerId, uint8_t channel, std::string_view text)>;
-    void setChatModerationHook(ChatModerationHook fn) {
-        m_chatModerationHook = std::move(fn);
-    }
     // ── world-mutating request limits (#1069) — sim-thread only ─────────────
     // Seat and team requests are cheap to SEND and expensive to GRANT: each one can despawn and
     // respawn an entity and re-send the whole ConnectAck type table. These bound how often a peer may
@@ -1176,25 +1225,15 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // The implementation spawns the peer's flight (N AI members), registers their controllers, and
     // returns the formation it created. kNoFormation (the default with no hook installed) = the peer
     // flies alone, which is exactly today's behavior.
-    using FlightSpawner = std::function<fl::FormationId(uint32_t peerId, EntityId leadEntity)>;
-    void setFlightSpawner(FlightSpawner fn);
-
     // Called on the sim thread once per addressed, live, AI member of a formation. Builds the new
     // controller for `cmd` and registers it (registerController REPLACES the existing one).
     // `designatedTarget` is resolved by the server (boresight, ai/Threat.h) before this is called;
     // an invalid target on an attack order means the order was already refused.
     // Returns false if the controller could not be built, which the caller reports as Rejected.
-    using FlightOrderHandler = std::function<bool(const fl::Formation& formation, const fl::FormationMember& member,
-                                                  uint8_t command, EntityId designatedTarget)>;
-    void setFlightOrderHandler(FlightOrderHandler fn);
-
     // Resolves the target for `attack_my_target` from the commander's own state. Injected because it
     // lives in engine-ai (ai::designateBoresightTarget). Unset = attack orders always refuse with
     // NoTarget, which is the correct degradation: never invent a target.
     // Args: the commanding entity, and its last-known look axis (PeerInputState::viewAxis).
-    using TargetDesignator = std::function<EntityId(const EntityState& commander, const float viewAxis[3])>;
-    void setTargetDesignator(TargetDesignator fn);
-
     // Send one MsgServerNotice to a single peer. The client surfaces it in the console and as a
     // banner. Text longer than the wire field is truncated safely. Sim-thread.
     //
@@ -1263,20 +1302,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     [[nodiscard]] bool hasJoinPassword() const noexcept {
         return !m_joinPassword.empty();
     }
-
-    // Attach this server's ENet admin frontend: the MsgAdminCommand channel (#1079, D14). The channel
-    // owns the dispatcher, the per-IP failed-auth lockout and the deferred shell drain that used to be
-    // three separate setters and four members here.
-    //
-    // Null (the default) = the channel is OFF and MsgAdminCommand is discarded, exactly as an unset
-    // dispatcher did. The channel must outlive this broadcaster; fl-server declares it above the
-    // broadcaster's consumers. Call before gameLoop.start(); dispatch, drain and the connect-gate
-    // lockout check all run on the sim thread.
-    //
-    // A setter and not a constructor argument on purpose: the dispatcher needs the CommandRegistry,
-    // which fl-server cannot build until the broadcaster exists. #1082 folds this into the
-    // construction-time hooks struct, which is where the ordering spine puts it.
-    void setAdminChannel(AdminChannel* channel) noexcept;
 
     // Apply all pre-start scalar configuration in one call (rate limiting, per-IP cap, MOTD, operator
     // password). Equivalent to the corresponding individual setters. Call before gameLoop.start().
@@ -1440,6 +1465,10 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     [[nodiscard]] PeerAuthority getPeerAuthority(uint32_t peerId) const;
 
   private:
+    // The frozen host seams. const, so nothing inside the class can reassign one either.
+    const WorldQueries m_queries;
+    const WorldBroadcasterHooks m_hooks;
+
     // Handle MsgConnectRequest (#853): grant a role, admit the peer (pilot = spawn its entity + form its
     // flight; observer = no entity), reply MsgConnectAck, and send the MOTD. Replaces the old "server
     // spawns on connect" flow. Sim-thread only (called from onReceive).
@@ -1560,7 +1589,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     WeatherController* m_weather{nullptr};
     const FactionRegistry* m_factionRegistry{nullptr}; // coalition-aware hostility for AI (#632)
     fl::atc::AtcService* m_atcService{nullptr};        // deterministic ATC FSM, ticked at 1 Hz (#702)
-    std::function<void(const fl::atc::RadioTransmission&)> m_atcTransmissionSink; // null = log (#702/#703)
 
     std::unordered_map<uint32_t, EntityId> m_peerEntities; // the aircraft a peer OWNS (Fly-seat pilots)
     std::unordered_map<uint32_t, PeerInputState> m_peerInputs;
@@ -1581,12 +1609,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
 
     // Formations and the wingman order path (#610). Sim-thread only, like every other roster here.
     fl::FormationRegistry m_formations;
-    FlightSpawner m_flightSpawner;           // null = peers fly alone (today's behavior)
-    FlightOrderHandler m_flightOrderHandler; // null = the order channel is off; orders are discarded
-    TargetDesignator m_targetDesignator;     // null = attack orders always refuse (never invent a target)
-    uint16_t m_playerFaction{1};             // 0 restores the legacy neutral-player behavior
-    TeamAssigner m_teamAssigner;             // #522: null = legacy (slot/player faction); else the mode balancer
-    TeamSwitchGuard m_teamSwitchGuard;       // #522: null = all MsgTeamRequest switches allowed
+    uint16_t m_playerFaction{1};                            // 0 restores the legacy neutral-player behavior
     std::string m_playerEntityType{"builtin:debug-entity"}; // pilot spawn default when client requests none (#834)
     bool m_allowObservers{true};                            // #857: false = refuse observer connect requests
     std::vector<RequiredPack> m_requiredPacks;              // #872: packs a client must have (id + optional version)
@@ -1594,7 +1617,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     int m_flightCmdRateLimit{4};                                       // orders per second per peer
     bool m_chatEnabled{true};                                          // #646: false = drop all chat
     int m_chatRateLimit{2};                                            // #646: chat lines per second per peer
-    ChatModerationHook m_chatModerationHook;                           // #646: null = every line passes
     // World-mutating request limits (#1069). Seat and team requests each cost a despawn/respawn plus
     // a full ConnectAck on grant; heartbeats each cost a MsgPeerDelay reply.
     // The rate this server actually steps at, and the value MsgConnectAck advertises (#1075). Fixed
@@ -1718,7 +1740,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     MatchEventLog m_matchEventLog;             // #600: the one append-only match record
 
     // ── replay tap state (#643) — sim-thread only ───────────────────────────
-    std::function<void(const ReplayTickRecords&)> m_replaySink;
     uint32_t m_replayKeyframeInterval{120};
     bool m_replayForceKeyframe{true};
     // entityIdx -> generation last recorded. A record is full on a keyframe tick, for an entity the
@@ -1844,7 +1865,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Base operations (#55): the "base refuel|rearm|repair" radio verbs — server-authoritative
     // ground-crew services for an aircraft shut down at a base (airfield ramp or carrier deck).
     void handleBaseOpsCommand(uint32_t peerId, EntityId flight, std::string_view op);
-    std::function<bool(glm::dvec3)> m_baseProximityQuery; // null = any ground counts (zero-pack sandbox)
     std::vector<ControlInput> m_stepInputs;
     // Entity indices already warned about a flight-envelope departure (#891 speed_guard_clamped), so
     // the diagnostic logs once per entity instead of every tick a diverged entity stays pinned.
@@ -1887,7 +1907,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     std::vector<MissionSpawnSlot> m_missionSlots;
     std::vector<uint32_t> m_slotOccupant;
     std::unordered_map<uint32_t, int> m_peerSlot;
-    MissionSlotBinder m_missionSlotBinder; // notified on slot claim/free for destroy(<id>) tracking (#884)
 
     // Mission roster (#914): mission-object-id -> entity, sent as MsgMissionRoster after ConnectAck so
     // the cinematic recorder can resolve entity-relative camera shots. Sim-thread only.
@@ -1924,9 +1943,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     uint16_t m_motdDisplaySeconds{0}; // 0 = client default
 
     // Resolves EntityDef::flightModelAsset -> FlightModelData at spawn (null = always builtin model).
-    FlightModelResolver m_flightModelResolver;
-    PayloadResolver m_payloadResolver;
-    SeatControllerFactory m_seatControllerFactory; // builds non-fly crew seat bots (#969); unset = empty seats
 
     // Sensing (#685). The system owns the observer side-storage; EntityState stays a flat POD that
     // knows nothing about being observed.
@@ -1948,18 +1964,14 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
 
     // Per-entity terrain height query (sim-thread only). When set, called each tick per entity instead
     // of the global m_groundElevation scalar.
-    std::function<float(glm::dvec3)> m_groundQuery;
-    std::function<SurfaceType(glm::dvec3)> m_groundSurfaceQuery; // #487 per-surface rolling resistance
-    std::string m_parachuteType;                                 // #672 entity type spawned on ejection ("" = none)
-    std::function<TerritoryControl(glm::dvec3, uint16_t)> m_territoryQuery; // #672 landing-zone control (unset = MIA)
-    bool m_aiAutoEject{false}; // #672 AI pilots auto-eject when critically hit; off by default
+    std::string m_parachuteType; // #672 entity type spawned on ejection ("" = none)
+    bool m_aiAutoEject{false};   // #672 AI pilots auto-eject when critically hit; off by default
 
     // Network admin channel state (set before gameLoop.start(); read on sim thread only).
     std::string m_operatorPassword; // empty = admin channel disabled
     std::string m_joinPassword;     // #998: empty = open server
     // The ENet frontend's channel: dispatcher, per-IP lockout and deferred shell drain in one object
     // shared with the other five frontends (#1079). Null = MsgAdminCommand discarded.
-    AdminChannel* m_adminChannel{nullptr};
 
     // Rate cap for the unauthenticated (grant-channel) admin path (#946): commands/second per peer
     // beyond which they are silently dropped, so a zero-cap peer cannot flood the permission-denied
@@ -2125,7 +2137,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     std::chrono::steady_clock::time_point m_nextNoticeAt{};
     uint32_t m_warningIntervalS{300};
     std::string m_shutdownReason;
-    std::function<void()> m_shutdownCallback;
 };
 
 } // namespace fl

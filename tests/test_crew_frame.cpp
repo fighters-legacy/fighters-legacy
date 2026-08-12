@@ -146,16 +146,16 @@ struct CrewFixture {
         registry.registerType(proj);
 
         em = std::make_unique<EntityManager>(logger, registry);
-        wb = std::make_unique<WorldBroadcaster>(*em, registry, net, logger);
+        fl::WorldQueries q_wb;
+        q_wb.seatControllerFactory = [gunnerFireAfter](const SeatDef&, uint8_t,
+                                                       const SeatBotContext&) -> std::unique_ptr<ISeatController> {
+            auto g = std::make_unique<StubGunner>();
+            g->fireAfter = gunnerFireAfter;
+            return g;
+        };
+        wb = std::make_unique<WorldBroadcaster>(*em, registry, net, logger, nullptr, std::move(q_wb));
         wb->setWeaponRegistry(&weapons);
         wb->setGroundElevation(0.f);
-        wb->setSeatControllerFactory(
-            [gunnerFireAfter](const SeatDef&, uint8_t,
-                              const WorldBroadcaster::SeatBotContext&) -> std::unique_ptr<ISeatController> {
-                auto g = std::make_unique<StubGunner>();
-                g->fireAfter = gunnerFireAfter;
-                return g;
-            });
     }
 
     // Admit a peer the way a real one arrives (#853): onConnect, then its MsgConnectRequest. Joining
@@ -240,7 +240,7 @@ TEST_CASE("Crewed frame: an empty seat with no factory contributes no fire (#969
     WorldBroadcaster wb(em, registry, net, logger);
     wb.setWeaponRegistry(&weapons);
     wb.setGroundElevation(0.f);
-    // deliberately NO setSeatControllerFactory
+    // deliberately NO seat-controller factory in the queries
 
     EntityTransform t{};
     t.pos[1] = 1.0;
@@ -396,14 +396,13 @@ TEST_CASE("Crewed frame: knocking out the Fly seat silences the pilot's guns (#9
     registry.registerType(proj);
 
     EntityManager em(logger, registry);
-    WorldBroadcaster wb(em, registry, net, logger);
+    fl::WorldQueries q_wb;
+    q_wb.seatControllerFactory = [](const SeatDef&, uint8_t,
+                                    const SeatBotContext&) -> std::unique_ptr<ISeatController> { return nullptr; };
+    WorldBroadcaster wb(em, registry, net, logger, nullptr, std::move(q_wb));
     wb.setWeaponRegistry(&weapons);
     wb.setGroundElevation(0.f);
     // No gunner bot — only the pilot's fire matters here.
-    wb.setSeatControllerFactory(
-        [](const SeatDef&, uint8_t, const WorldBroadcaster::SeatBotContext&) -> std::unique_ptr<ISeatController> {
-            return nullptr;
-        });
 
     struct FiringPilot : IEntityController {
         ControlInput sample(const EntityState&, uint64_t, double, const AiTickContext&) override {

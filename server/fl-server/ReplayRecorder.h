@@ -57,7 +57,7 @@ class ReplayRecorder {
     bool start(const Options& opts, const ReplaySections& sections, ILogger& log);
 
     // Sim thread. Queues one tick; cheap by construction.
-    void onTick(const WorldBroadcaster::ReplayTickRecords& rec, std::vector<MatchEvent> events);
+    void onTick(const ReplayTickRecords& rec, std::vector<MatchEvent> events);
 
     // Flush, close, join. Idempotent; called from the shutdown path.
     void stop();

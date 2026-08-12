@@ -254,6 +254,11 @@ struct ServerRuntime::Impl {
     fl::AirportRegistry m_airportRegistry;
     fl::WeatherControllerParams m_wparams;
     std::unique_ptr<fl::WeatherController> m_weatherController;
+    // ⚑ Declared BEFORE the broadcaster, so they are destroyed after it (#1082): the broadcaster
+    // takes the ENet admin channel as a raw pointer at construction and dispatches through it for as
+    // long as it lives, and the channel in turn dispatches into the registry.
+    CommandRegistry m_adminRegistry;
+    std::unique_ptr<fl::AdminChannel> m_enetChannel;
     std::unique_ptr<fl::WorldBroadcaster> m_broadcaster;
     std::shared_ptr<std::unordered_map<std::string, std::shared_ptr<const fl::FlightModelData>>> m_fmCache;
     std::unique_ptr<fl::DifficultyMultipliers> m_difficultyTable;
@@ -267,6 +272,13 @@ struct ServerRuntime::Impl {
     std::size_t m_rotationIndex{0};
     std::unique_ptr<fl::BotRoster> m_botRoster;
     std::function<void(std::string_view)> m_missionActionSink;
+    // Late-bound seams (#1082). The broadcaster takes its hooks at construction, but these four are
+    // only decided once the mission and the recorder exist, so the installed hook forwards to one of
+    // these and each reproduces exactly what an UNSET hook used to mean when it is empty.
+    std::function<void(const std::string&, fl::EntityId)> m_missionSlotBind;
+    std::function<std::optional<uint16_t>(uint32_t)> m_teamAssign;
+    std::function<bool(uint32_t, uint16_t)> m_teamSwitchAllowed;
+    std::function<void(const fl::ReplayTickRecords&)> m_replayTap;
     std::string m_loadedMissionName;
     uint64_t m_loadedMissionSpawned{0};
     fl::WorldApi m_worldApi;
@@ -275,12 +287,10 @@ struct ServerRuntime::Impl {
     std::string m_campaignSavePath;
     std::optional<std::string> m_campaignYaml;
     std::unique_ptr<fl::WorldStateBridge> m_worldStateBridge;
-    CommandRegistry m_adminRegistry;
     std::unique_ptr<CommandShell> m_adminShell;
     fl::AdminChannelRegistry m_adminChannels;
     std::unique_ptr<fl::AdminChannel> m_stdinChannel;
     std::unique_ptr<fl::AdminChannel> m_missionChannel;
-    std::unique_ptr<fl::AdminChannel> m_enetChannel;
     std::unique_ptr<fl::AdminChannel> m_rconChannel;
     std::unique_ptr<fl::AdminChannel> m_httpChannel;
     std::unique_ptr<fl::RconServer> m_rconServer;
@@ -917,8 +927,223 @@ bool ServerRuntime::Impl::initWorld() {
             log->log(fl::LogLevel::Warn, __FILE__, __LINE__, "wind profile_path not found; ignoring");
         }
     }
-    m_broadcaster =
-        std::make_unique<fl::WorldBroadcaster>(entityManager, entityRegistry, *net, *log, &weatherController);
+    // The host seams, built here and FROZEN at construction (#1082, D12). Every field is
+    // optional and null still means "that feature is off" -- what the 19 deleted setters meant.
+    // A hook that reaches back into the broadcaster captures `this`: valid before the member
+    // exists, which is why this lands after ServerRuntime (#1084) rather than before it.
+    fl::WorldQueries queries;
+    fl::WorldBroadcasterHooks hooks;
+
+    // The ENet admin frontend (#1079/#1082). Built here rather than in initAdmin because the
+    // broadcaster takes it at construction; an empty operator password leaves it null, which is what
+    // turns MsgAdminCommand handling OFF -- exactly as an unset dispatcher used to. Its shell tap and
+    // its registry entry are still wired in initAdmin, where the shell exists.
+    if (!cfg.security.operatorPassword.empty()) {
+        fl::AdminChannel::Config enetCfg;
+        enetCfg.name = "enet";
+        enetCfg.maxAuthFailures = cfg.security.adminAuthMaxFailures;
+        enetCfg.lockoutSeconds = cfg.security.adminAuthLockoutSeconds;
+        m_enetChannel = std::make_unique<fl::AdminChannel>(
+            [this](std::string_view cmd, const fl::CommandIssuer& issuer) {
+                // Permission-check against the issuer's granted capabilities (#946). The registry is
+                // still empty here and is filled in initAdmin; dispatch only happens once a peer
+                // sends a command, long after that.
+                return m_adminRegistry.dispatch(cmd, issuer);
+            },
+            std::move(enetCfg), fl::SystemClock::instance());
+        hooks.comms.adminChannel = m_enetChannel.get();
+    }
+
+    // The four seams the mission and the recorder decide later. Each forward reproduces the UNSET
+    // behaviour when its member is empty, which is what lets them be installed unconditionally:
+    hooks.admission.missionSlotBinder = [this](const std::string& id, fl::EntityId eid) {
+        if (m_missionSlotBind) // unset = notify nobody
+            m_missionSlotBind(id, eid);
+    };
+    queries.teamAssigner = [this](uint32_t peerId) -> std::optional<uint16_t> {
+        // kNoFaction is the legacy path -- the mission slot's faction, else the configured player
+        // faction -- which is precisely what the broadcaster did with no assigner installed. nullopt
+        // still means "every team is full, refuse the connection".
+        return m_teamAssign ? m_teamAssign(peerId) : std::optional<uint16_t>{fl::WorldBroadcaster::kNoFaction};
+    };
+    hooks.match.teamSwitchGuard = [this](uint32_t peerId, uint16_t target) {
+        return !m_teamSwitchAllowed || m_teamSwitchAllowed(peerId, target); // unset = all switches allowed
+    };
+    hooks.match.shutdown = []() { g_quit = 1; };
+    // The replay tap stays CONDITIONAL: a null sink means the tap stream is not built at all, so
+    // installing one on a server with replay disabled would cost every tick for nothing. Whether
+    // recording is on is known here; the recorder itself is not built until initSystems.
+    if (cfg.replay.enabled) {
+        hooks.snapshot.replaySink = [this](const fl::ReplayTickRecords& rec) {
+            if (m_replayTap)
+                m_replayTap(rec);
+        };
+        hooks.snapshot.replayKeyframeIntervalTicks = cfg.replay.keyframeIntervalTicks;
+    }
+
+    // Per-entity terrain height query: sim thread calls heightAt() (thread-safe via shared_mutex).
+    // The entity origin is the mesh's ground-contact point, so the floor clamps it directly to the
+    // terrain — the mesh then rests ON the ground.
+    queries.groundElevation = [&terrainStreamer](glm::dvec3 pos) {
+        return static_cast<float>(terrainStreamer.heightAt(pos));
+    };
+
+    // Per-entity ground surface (#487): the runway-surface override + land cover, so the rollout
+    // differs by surface. surfaceTypeAt is thread-safe (shared_mutex); the client mirrors it.
+    queries.groundSurface = [&terrainStreamer](glm::dvec3 pos) { return terrainStreamer.surfaceTypeAt(pos); };
+
+    // Base operations (#55): the crew chief services an aircraft shut down within a few km of an
+    // airport (or on a carrier deck, which WorldBroadcaster checks itself). AirportRegistry is
+    // load-once/lock-free, safe to query from the sim thread.
+    queries.baseProximity = [&airportRegistry](glm::dvec3 pos) {
+        constexpr double kBaseServiceRangeM = 5000.0;
+        return airportRegistry.nearestTo(pos.x, pos.z, kBaseServiceRangeM) != nullptr;
+    };
+
+    queries.flightModel = [&assets, fmCache](const std::string& id) -> std::shared_ptr<const fl::FlightModelData> {
+        // The compiled-in carrier's vessel model (#38): a "builtin:" name never touches the
+        // filesystem, same rule as every other builtin asset.
+        if (id == "builtin:carrier-vessel")
+            return fl::BuiltinCarrierVesselModel::get();
+        if (auto it = fmCache->find(id); it != fmCache->end())
+            return it->second;
+        std::shared_ptr<const fl::FlightModelData> model;
+        if (auto raw = assets.loadFlightModel(id.c_str()); raw && !raw->bytes.empty()) {
+            model = std::make_shared<const fl::FlightModelData>(fl::parseFlightModel(
+                std::string_view(reinterpret_cast<const char*>(raw->bytes.data()), raw->bytes.size())));
+        }
+        (*fmCache)[id] = model; // cache misses too, so a bad id isn't re-parsed every connect
+        return model;
+    };
+
+    // What an entity's DEFAULT loadout costs it in mass and drag (#812). Same injection shape as the
+    // resolvers above -- the summation lives in engine-weapon, and engine-net must not link it.
+    // Unset would mean every aircraft flies clean, which is exactly the bug this closes.
+    queries.payload = [&weaponRegistry, log](const fl::EntityDef& def) -> fl::PayloadEffect {
+        return fl::defaultPayload(def, weaponRegistry, *log);
+    };
+
+    // Build a crewed aircraft's non-fly seat bots (#971). engine-net does not link engine-ai
+    // (cmake/layering.cmake), so the concrete seat bots — the turret gunner — reach the broadcaster
+    // through this std::function seam, exactly like the flight-order / target-designator hooks below.
+    queries.seatControllerFactory =
+        [&entityManager](const fl::SeatDef& seat, uint8_t seatIdx,
+                         const fl::SeatBotContext& ctx) -> std::unique_ptr<fl::ISeatController> {
+        return fl::ai::makeSeatController(seat, seatIdx, entityManager, ctx.skillMin, ctx.skillMax, ctx.missionSeed);
+    };
+
+    // Resolve EntityDef::sensorIds -> parsed SensorDef on the spawn path (#685). A sensor reference
+    // is an ID, not an asset name, so it goes through ContentIndex (#810) -- see makeSensorDefResolver.
+    queries.sensorDefs = fl::makeSensorDefResolver(assets, contentIndex, *log);
+
+    hooks.comms.chatModeration = [log](uint32_t peerId, uint8_t channel, std::string_view text) {
+        char buf[320];
+        std::snprintf(buf, sizeof(buf), "[chat] peer %u ch%u: %.*s", peerId, static_cast<unsigned>(channel),
+                      static_cast<int>(text.size()), text.data());
+        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+        return true; // allow
+    };
+
+    // Only when a flight is configured: an unset spawner means "the peer flies alone", and a spawner
+    // that builds an empty formation is not the same thing.
+    if (cfg.flight.size > 0) {
+        const std::string flightEntityType = cfg.flight.entityType;
+        const uint32_t flightSize = cfg.flight.size;
+        queries.flightSpawner = [this, &entityManager, flightEntityType, flightSize,
+                                 wingmanParams](uint32_t peerId, fl::EntityId leadEntity) -> fl::FormationId {
+            const fl::EntityState* lead = entityManager.get(leadEntity);
+            if (!lead)
+                return fl::kNoFormation;
+
+            // The player is the anchor AND the commander of their own flight — the common case, but
+            // only a special case of the general model (an AWACS commands a flight it is not in).
+            const fl::FormationId fid =
+                m_broadcaster->formations().create("Viper", leadEntity, peerId, fl::kNoFormation);
+            if (fid == fl::kNoFormation)
+                return fid;
+
+            for (uint32_t slot = 0; slot < flightSize; ++slot) {
+                // Spawn each member on its station, so the flight starts formed rather than
+                // converging from a pile at the lead's position.
+                fl::ai::FormationParams fp = wingmanParams.formation;
+                const glm::vec3 off = fl::ai::formationSlotOffset(slot, fp);
+                fl::EntityTransform t{};
+                std::memcpy(t.quat, lead->transform.quat, sizeof(t.quat));
+                // Offsets are in the lead's frame; at spawn the lead is level, so applying them in
+                // world axes is close enough — FormationController closes the rest in a second.
+                t.pos[0] = lead->transform.pos[0] + static_cast<double>(off.x);
+                t.pos[1] = lead->transform.pos[1] + static_cast<double>(off.z);
+                t.pos[2] = lead->transform.pos[2] + static_cast<double>(off.y);
+
+                const fl::EntityId id = entityManager.spawn(flightEntityType.c_str(), t);
+                if (!id.valid())
+                    break;
+                // Same faction as the lead: a wingman that is neutral is invisible to hostiles and
+                // blind to them in turn.
+                if (fl::EntityState* ms = entityManager.get(id)) {
+                    ms->factionIndex = lead->factionIndex;
+                }
+
+                fl::ai::WingmanParams wp = wingmanParams;
+                wp.slotIndex = slot;
+                wp.homePoint = glm::dvec3(t.pos[0], t.pos[1], t.pos[2]); // RTB returns to where it started
+                m_broadcaster->registerController(id, fl::ai::makeWingmanController(entityManager, leadEntity,
+                                                                                    fl::ai::WingmanCommand::Rejoin,
+                                                                                    fl::EntityId{}, wp));
+
+                fl::FormationMember m{};
+                m.id = id;
+                m.peerId = fl::kNoPeer; // AI: the server owns this aircraft and may retask it
+                m.slotIndex = slot;
+                m_broadcaster->formations().addMember(fid, m);
+            }
+            return fid;
+        };
+    }
+
+    // Retask one AI member. The formation supplies the anchor (who to form on) and the member its
+    // slot, so an order never has to be told where the aircraft belongs.
+    hooks.comms.flightOrders = [this, &entityManager, wingmanParams](const fl::Formation& formation,
+                                                                     const fl::FormationMember& member, uint8_t command,
+                                                                     fl::EntityId designatedTarget) -> bool {
+        if (!fl::ai::isWingmanCommandOrdinal(command))
+            return false;
+        const auto cmd = static_cast<fl::ai::WingmanCommand>(command);
+
+        fl::ai::WingmanParams wp = wingmanParams;
+        wp.slotIndex = member.slotIndex;
+        if (const fl::EntityState* ms = entityManager.get(member.id)) {
+            // RTB heads for where this aircraft currently is if we never recorded a home; good enough
+            // and never NaN. (A real base comes with the mission system, #584.)
+            wp.homePoint = glm::dvec3(ms->transform.pos[0], ms->transform.pos[1], ms->transform.pos[2]);
+        }
+
+        auto ctrl = fl::ai::makeWingmanController(entityManager, formation.anchor, cmd, designatedTarget, wp);
+        if (!ctrl)
+            return false;
+        m_broadcaster->registerController(member.id, std::move(ctrl)); // REPLACES the existing controller
+        return true;
+    };
+
+    {
+        const auto designateRangeM = static_cast<float>(cfg.flight.designateRangeM);
+        const auto halfAngleRad =
+            static_cast<float>(cfg.flight.designateHalfAngleDeg * std::numbers::pi_v<double> / 180.0);
+        queries.targetDesignator = [this, &entityManager, designateRangeM, halfAngleRad](
+                                       const fl::EntityState& commander, const float viewAxis[3]) -> fl::EntityId {
+            if (const fl::sensor::ContactTable* contacts = m_broadcaster->contactsFor(commander.id.index)) {
+                // The honest path: a lead cannot order an attack on something it has not seen. If it
+                // is pointing at empty sky, this returns an invalid id and the order is REFUSED
+                // ("Two, no joy") rather than quietly retargeted — which is the whole principle.
+                return fl::ai::designateFromContacts(commander, viewAxis, contacts, designateRangeM, halfAngleRad);
+            }
+            return fl::ai::designateBoresightTarget(entityManager, commander, viewAxis, designateRangeM, halfAngleRad,
+                                                    &m_broadcaster->spatialIndex());
+        };
+    }
+
+    m_broadcaster = std::make_unique<fl::WorldBroadcaster>(entityManager, entityRegistry, *net, *log,
+                                                           &weatherController, std::move(queries), std::move(hooks));
     [[maybe_unused]] auto& broadcaster = *m_broadcaster;
     broadcaster.setParachuteType("builtin:parachute"); // spawn a chute on pilot ejection (#672)
     broadcaster.setAiAutoEject(true);                  // AI pilots punch out when critically hit (#672)
@@ -972,63 +1197,12 @@ bool ServerRuntime::Impl::initWorld() {
     }
     // Earth-fixed rotating world frame: Coriolis + centrifugal on every integrator (#482).
     broadcaster.setEarthRotationRate(cfg.world.earthRotation ? fl::kEarthRotationRate : 0.0);
-    // Per-entity terrain height query: sim thread calls heightAt() (thread-safe via shared_mutex).
-    // The entity origin is the mesh's ground-contact point, so the floor clamps it directly to the
-    // terrain — the mesh then rests ON the ground.
-    broadcaster.setGroundElevationQuery(
-        [&terrainStreamer](glm::dvec3 pos) { return static_cast<float>(terrainStreamer.heightAt(pos)); });
-    // Per-entity ground surface (#487): the runway-surface override + land cover, so the rollout
-    // differs by surface. surfaceTypeAt is thread-safe (shared_mutex); the client mirrors it.
-    broadcaster.setGroundSurfaceQuery(
-        [&terrainStreamer](glm::dvec3 pos) { return terrainStreamer.surfaceTypeAt(pos); });
-    // Base operations (#55): the crew chief services an aircraft shut down within a few km of an
-    // airport (or on a carrier deck, which WorldBroadcaster checks itself). AirportRegistry is
-    // load-once/lock-free, safe to query from the sim thread.
-    broadcaster.setBaseProximityQuery([&airportRegistry](glm::dvec3 pos) {
-        constexpr double kBaseServiceRangeM = 5000.0;
-        return airportRegistry.nearestTo(pos.x, pos.z, kBaseServiceRangeM) != nullptr;
-    });
     // Resolve EntityDef::flightModelAsset -> parsed FlightModelData on the spawn path. Loads the raw
     // TOML asset via AssetManager, parses it with engine-flight's parseFlightModel, and caches the
     // result by id (sim-thread-only access). Empty/unknown ids fall back to the builtin model in
     // WorldBroadcaster.
     fmCache = std::make_shared<std::unordered_map<std::string, std::shared_ptr<const fl::FlightModelData>>>();
-    broadcaster.setFlightModelResolver(
-        [&assets, fmCache](const std::string& id) -> std::shared_ptr<const fl::FlightModelData> {
-            // The compiled-in carrier's vessel model (#38): a "builtin:" name never touches the
-            // filesystem, same rule as every other builtin asset.
-            if (id == "builtin:carrier-vessel")
-                return fl::BuiltinCarrierVesselModel::get();
-            if (auto it = fmCache->find(id); it != fmCache->end())
-                return it->second;
-            std::shared_ptr<const fl::FlightModelData> model;
-            if (auto raw = assets.loadFlightModel(id.c_str()); raw && !raw->bytes.empty()) {
-                model = std::make_shared<const fl::FlightModelData>(fl::parseFlightModel(
-                    std::string_view(reinterpret_cast<const char*>(raw->bytes.data()), raw->bytes.size())));
-            }
-            (*fmCache)[id] = model; // cache misses too, so a bad id isn't re-parsed every connect
-            return model;
-        });
-    // What an entity's DEFAULT loadout costs it in mass and drag (#812). Same injection shape as the
-    // resolvers above -- the summation lives in engine-weapon, and engine-net must not link it.
-    // Unset would mean every aircraft flies clean, which is exactly the bug this closes.
-    broadcaster.setPayloadResolver([&weaponRegistry, log](const fl::EntityDef& def) -> fl::PayloadEffect {
-        return fl::defaultPayload(def, weaponRegistry, *log);
-    });
 
-    // Build a crewed aircraft's non-fly seat bots (#971). engine-net does not link engine-ai
-    // (cmake/layering.cmake), so the concrete seat bots — the turret gunner — reach the broadcaster
-    // through this std::function seam, exactly like the flight-order / target-designator hooks below.
-    broadcaster.setSeatControllerFactory(
-        [&entityManager](const fl::SeatDef& seat, uint8_t seatIdx,
-                         const fl::WorldBroadcaster::SeatBotContext& ctx) -> std::unique_ptr<fl::ISeatController> {
-            return fl::ai::makeSeatController(seat, seatIdx, entityManager, ctx.skillMin, ctx.skillMax,
-                                              ctx.missionSeed);
-        });
-
-    // Resolve EntityDef::sensorIds -> parsed SensorDef on the spawn path (#685). A sensor reference
-    // is an ID, not an asset name, so it goes through ContentIndex (#810) -- see makeSensorDefResolver.
-    broadcaster.setSensorDefResolver(fl::makeSensorDefResolver(assets, contentIndex, *log));
     broadcaster.setSensorCheckHz(static_cast<float>(cfg.world.sensorCheckHz));
 
     // ---- Server-side difficulty (#682) -----------------------------------------------------------
@@ -1082,13 +1256,6 @@ bool ServerRuntime::Impl::initWorld() {
     // an operator replaces it with a filter. Rate limit + enable come from [chat].
     broadcaster.setChatEnabled(cfg.chat.enabled);
     broadcaster.setChatRateLimit(cfg.chat.rateLimitPerS);
-    broadcaster.setChatModerationHook([log](uint32_t peerId, uint8_t channel, std::string_view text) {
-        char buf[320];
-        std::snprintf(buf, sizeof(buf), "[chat] peer %u ch%u: %.*s", peerId, static_cast<unsigned>(channel),
-                      static_cast<int>(text.size()), text.data());
-        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
-        return true; // allow
-    });
 
     // In-game voice comms (Epic J, #532). The server relays opaque Opus frames by net membership and
     // never decodes one; everything here is routing + bandwidth policy. An empty [[voice.nets]] leaves
@@ -1150,84 +1317,6 @@ bool ServerRuntime::Impl::initWorld() {
     wingmanParams.engageRangeM = static_cast<float>(cfg.flight.engageRangeM);
     wingmanParams.coverRangeM = static_cast<float>(cfg.flight.coverRangeM);
 
-    if (cfg.flight.size > 0) {
-        const std::string flightEntityType = cfg.flight.entityType;
-        const uint32_t flightSize = cfg.flight.size;
-        broadcaster.setFlightSpawner([&broadcaster, &entityManager, flightEntityType, flightSize,
-                                      wingmanParams](uint32_t peerId, fl::EntityId leadEntity) -> fl::FormationId {
-            const fl::EntityState* lead = entityManager.get(leadEntity);
-            if (!lead)
-                return fl::kNoFormation;
-
-            // The player is the anchor AND the commander of their own flight — the common case, but
-            // only a special case of the general model (an AWACS commands a flight it is not in).
-            const fl::FormationId fid = broadcaster.formations().create("Viper", leadEntity, peerId, fl::kNoFormation);
-            if (fid == fl::kNoFormation)
-                return fid;
-
-            for (uint32_t slot = 0; slot < flightSize; ++slot) {
-                // Spawn each member on its station, so the flight starts formed rather than
-                // converging from a pile at the lead's position.
-                fl::ai::FormationParams fp = wingmanParams.formation;
-                const glm::vec3 off = fl::ai::formationSlotOffset(slot, fp);
-                fl::EntityTransform t{};
-                std::memcpy(t.quat, lead->transform.quat, sizeof(t.quat));
-                // Offsets are in the lead's frame; at spawn the lead is level, so applying them in
-                // world axes is close enough — FormationController closes the rest in a second.
-                t.pos[0] = lead->transform.pos[0] + static_cast<double>(off.x);
-                t.pos[1] = lead->transform.pos[1] + static_cast<double>(off.z);
-                t.pos[2] = lead->transform.pos[2] + static_cast<double>(off.y);
-
-                const fl::EntityId id = entityManager.spawn(flightEntityType.c_str(), t);
-                if (!id.valid())
-                    break;
-                // Same faction as the lead: a wingman that is neutral is invisible to hostiles and
-                // blind to them in turn.
-                if (fl::EntityState* ms = entityManager.get(id)) {
-                    ms->factionIndex = lead->factionIndex;
-                }
-
-                fl::ai::WingmanParams wp = wingmanParams;
-                wp.slotIndex = slot;
-                wp.homePoint = glm::dvec3(t.pos[0], t.pos[1], t.pos[2]); // RTB returns to where it started
-                broadcaster.registerController(id, fl::ai::makeWingmanController(entityManager, leadEntity,
-                                                                                 fl::ai::WingmanCommand::Rejoin,
-                                                                                 fl::EntityId{}, wp));
-
-                fl::FormationMember m{};
-                m.id = id;
-                m.peerId = fl::kNoPeer; // AI: the server owns this aircraft and may retask it
-                m.slotIndex = slot;
-                broadcaster.formations().addMember(fid, m);
-            }
-            return fid;
-        });
-    }
-
-    // Retask one AI member. The formation supplies the anchor (who to form on) and the member its
-    // slot, so an order never has to be told where the aircraft belongs.
-    broadcaster.setFlightOrderHandler(
-        [&broadcaster, &entityManager, wingmanParams](const fl::Formation& formation, const fl::FormationMember& member,
-                                                      uint8_t command, fl::EntityId designatedTarget) -> bool {
-            if (!fl::ai::isWingmanCommandOrdinal(command))
-                return false;
-            const auto cmd = static_cast<fl::ai::WingmanCommand>(command);
-
-            fl::ai::WingmanParams wp = wingmanParams;
-            wp.slotIndex = member.slotIndex;
-            if (const fl::EntityState* ms = entityManager.get(member.id)) {
-                // RTB heads for where this aircraft currently is if we never recorded a home; good enough
-                // and never NaN. (A real base comes with the mission system, #584.)
-                wp.homePoint = glm::dvec3(ms->transform.pos[0], ms->transform.pos[1], ms->transform.pos[2]);
-            }
-
-            auto ctrl = fl::ai::makeWingmanController(entityManager, formation.anchor, cmd, designatedTarget, wp);
-            if (!ctrl)
-                return false;
-            broadcaster.registerController(member.id, std::move(ctrl)); // REPLACES the existing controller
-            return true;
-        });
-
     // Target designation for attack_my_target. THIS LAMBDA WAS THE SEAM (#610), and the sensor core
     // (#677/#684/#685) has now closed it: the lead designates from ITS OWN CONTACT TABLE — the things
     // it has actually detected, preferring what it has LOCKED — instead of from ground truth.
@@ -1238,23 +1327,6 @@ bool ServerRuntime::Impl::initWorld() {
     // The boresight-over-ground-truth path remains as the fallback for a server with no sensing
     // evaluated (contactsFor returns null), so a headless/degenerate setup still designates something
     // rather than silently refusing every order.
-    {
-        const auto designateRangeM = static_cast<float>(cfg.flight.designateRangeM);
-        const auto halfAngleRad =
-            static_cast<float>(cfg.flight.designateHalfAngleDeg * std::numbers::pi_v<double> / 180.0);
-        broadcaster.setTargetDesignator([&broadcaster, &entityManager, designateRangeM, halfAngleRad](
-                                            const fl::EntityState& commander, const float viewAxis[3]) -> fl::EntityId {
-            if (const fl::sensor::ContactTable* contacts = broadcaster.contactsFor(commander.id.index)) {
-                // The honest path: a lead cannot order an attack on something it has not seen. If it
-                // is pointing at empty sky, this returns an invalid id and the order is REFUSED
-                // ("Two, no joy") rather than quietly retargeted — which is the whole principle.
-                return fl::ai::designateFromContacts(commander, viewAxis, contacts, designateRangeM, halfAngleRad);
-            }
-            return fl::ai::designateBoresightTarget(entityManager, commander, viewAxis, designateRangeM, halfAngleRad,
-                                                    &broadcaster.spatialIndex());
-        });
-    }
-
     // Wire pre-cached spawn positions. Must be called before gameLoop.start() (never mutated after).
     broadcaster.setSpawnPoints(std::move(cachedSpawns));
     // Seed the physics floor from the already-primed TerrainStreamer at origin.
@@ -1756,7 +1828,7 @@ bool ServerRuntime::Impl::initMission() {
                     }
 
                     // The zone pass reads a flat POD list rather than EntityManager directly, so
-                    // engine-world needs no engine-entity dependency (the setGroundElevationQuery seam).
+                    // engine-world needs no engine-entity dependency (the ground-elevation query seam).
                     alertSystem.setEntitySampler([&entityManager](std::vector<fl::ZoneEntitySample>& out) {
                         entityManager.forEach([&out](const fl::EntityState& e) {
                             if (e.dead)
@@ -1880,12 +1952,11 @@ bool ServerRuntime::Impl::initMission() {
                 // Bind a pilot's aircraft to its player-slot id on connect (and unbind on disconnect), so
                 // destroy(<slot-id>) tracks the live aircraft instead of firing at t=0 (#884). Fired from
                 // the handshake on the sim thread — the same thread that steps the runtime.
-                broadcaster.setMissionSlotBinder(
-                    [rt = missionRuntime.get(), &broadcaster](const std::string& id, fl::EntityId eid) {
-                        rt->registerObjectEntity(id, eid);
-                        // Advertise the late slot<->aircraft bind so a recorder's mission roster stays current (#914).
-                        broadcaster.updateMissionRoster(id, eid);
-                    });
+                m_missionSlotBind = [rt = missionRuntime.get(), &broadcaster](const std::string& id, fl::EntityId eid) {
+                    rt->registerObjectEntity(id, eid);
+                    // Advertise the late slot<->aircraft bind so a recorder's mission roster stays current (#914).
+                    broadcaster.updateMissionRoster(id, eid);
+                };
                 loadedMissionName = parsed.mission.name;
                 loadedMissionSpawned = setup.spawned.size();
 
@@ -1924,9 +1995,8 @@ bool ServerRuntime::Impl::initMission() {
                 return teams;
             };
             broadcaster.setPlayerFaction(teamTemplate.front().factionIndex); // round-robin fallback team
-            broadcaster.setTeamAssigner(
-                [countTeams](uint32_t) -> std::optional<uint16_t> { return fl::pickTeam(countTeams()); });
-            broadcaster.setTeamSwitchGuard([countTeams, &broadcaster](uint32_t peerId, uint16_t target) -> bool {
+            m_teamAssign = [countTeams](uint32_t) -> std::optional<uint16_t> { return fl::pickTeam(countTeams()); };
+            m_teamSwitchAllowed = [countTeams, &broadcaster](uint32_t peerId, uint16_t target) -> bool {
                 const std::vector<fl::TeamState> teams = countTeams();
                 const uint16_t cur = broadcaster.factionForPeer(peerId);
                 const fl::TeamState* from = nullptr;
@@ -1942,7 +2012,7 @@ bool ServerRuntime::Impl::initMission() {
                 if (!from)
                     return (to->capacity == 0) || (to->count < to->capacity); // joining from no team
                 return fl::switchAllowed(*from, *to);
-            });
+            };
             char buf[96];
             std::snprintf(buf, sizeof(buf), "match: %zu team(s) balanced by the game mode", teamTemplate.size());
             log->log(LogLevel::Info, __FILE__, __LINE__, buf);
@@ -2178,11 +2248,8 @@ bool ServerRuntime::Impl::initAdmin() {
     m_missionChannel = std::make_unique<fl::AdminChannel>(adminDispatch, channelConfig("mission", 0, 0, false),
                                                           fl::SystemClock::instance());
     [[maybe_unused]] auto& missionChannel = *m_missionChannel;
-    m_enetChannel = std::make_unique<fl::AdminChannel>(
-        adminDispatch,
-        channelConfig("enet", cfg.security.adminAuthMaxFailures, cfg.security.adminAuthLockoutSeconds, true),
-        fl::SystemClock::instance());
-    [[maybe_unused]] auto& enetChannel = *m_enetChannel;
+    // The enet channel is built in initWorld -- the broadcaster takes it at construction (#1082) --
+    // and is null when no operator password is configured, which is what turns that frontend off.
     m_rconChannel = std::make_unique<fl::AdminChannel>(
         adminDispatch, channelConfig("rcon", cfg.rcon.maxAuthFailures, cfg.rcon.lockoutSeconds, true),
         fl::SystemClock::instance());
@@ -2299,7 +2366,6 @@ bool ServerRuntime::Impl::initSystems() {
     [[maybe_unused]] auto& churnState = m_churnState;
     [[maybe_unused]] auto& churnTick = m_churnTick;
     [[maybe_unused]] auto& configPath = m_configPath;
-    [[maybe_unused]] auto& enetChannel = *m_enetChannel;
     [[maybe_unused]] auto& entityManager = *m_entityManager;
     [[maybe_unused]] auto& entityRegistry = m_entityRegistry;
     [[maybe_unused]] auto& fmCache = m_fmCache;
@@ -2593,7 +2659,6 @@ bool ServerRuntime::Impl::initSystems() {
         return c;
     }());
 
-    broadcaster.setShutdownCallback([&]() { g_quit = 1; });
     fl::registerServerCommands(adminRegistry, adminCtx);
 
     // Route mission `do:` actions through the validated admin command path (#212), e.g. a trigger
@@ -2614,10 +2679,9 @@ bool ServerRuntime::Impl::initSystems() {
     // what turns the frontend ON -- with no operator password the broadcaster holds no channel and
     // discards MsgAdminCommand, exactly as an unset dispatcher did before.
     if (!cfg.security.operatorPassword.empty()) {
-        enetChannel.setShellTap([&adminShell]() { return adminShell.mark(); },
-                                [&adminShell](int m) { return adminShell.drainSince(m); });
-        broadcaster.setAdminChannel(&enetChannel);
-        adminChannels.add(enetChannel);
+        m_enetChannel->setShellTap([&adminShell]() { return adminShell.mark(); },
+                                   [&adminShell](int m) { return adminShell.drainSince(m); });
+        adminChannels.add(*m_enetChannel);
         log->log(LogLevel::Info, __FILE__, __LINE__, "network admin commands: enabled");
     } else {
         log->log(LogLevel::Info, __FILE__, __LINE__,
@@ -2737,17 +2801,15 @@ bool ServerRuntime::Impl::initSystems() {
         ropts.sessionFlags = loadedMissionName.empty() ? 0u : fl::kReplaySessionMission;
 
         if (replayRecorder.start(ropts, sections, *log)) {
-            broadcaster.setReplaySink(
-                [&replayRecorder, &broadcaster,
-                 lastEventSeq = uint64_t{0}](const fl::WorldBroadcaster::ReplayTickRecords& rec) mutable {
-                    // Interleave the events that landed since the previous tick. since() returns
-                    // copies, so no lock is held while the recorder serializes them.
-                    std::vector<fl::MatchEvent> events = broadcaster.matchEventLog().since(lastEventSeq);
-                    if (!events.empty())
-                        lastEventSeq = events.back().seq;
-                    replayRecorder.onTick(rec, std::move(events));
-                },
-                cfg.replay.keyframeIntervalTicks);
+            m_replayTap = [&replayRecorder, &broadcaster,
+                           lastEventSeq = uint64_t{0}](const fl::ReplayTickRecords& rec) mutable {
+                // Interleave the events that landed since the previous tick. since() returns
+                // copies, so no lock is held while the recorder serializes them.
+                std::vector<fl::MatchEvent> events = broadcaster.matchEventLog().since(lastEventSeq);
+                if (!events.empty())
+                    lastEventSeq = events.back().seq;
+                replayRecorder.onTick(rec, std::move(events));
+            };
         }
     }
     return true;

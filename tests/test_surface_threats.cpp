@@ -57,17 +57,19 @@ struct ThreatFixture {
         registerProjectileEntityDefs(weapons, registry, logger);
 
         em = std::make_unique<EntityManager>(logger, registry);
-        wb = std::make_unique<WorldBroadcaster>(*em, registry, net, logger);
+        fl::WorldQueries q_wb;
+        q_wb.sensorDefs = builtinSensorResolver;
+        // `this` rather than a pointer taken after construction: the query is frozen at construction
+        // now, and the fixture outlives every call into it.
+        q_wb.targetDesignator = [this](const EntityState& shooter, const float axis[3]) -> EntityId {
+            return ai::designateFromContacts(shooter, axis, wb->contactsFor(shooter.id.index), 60000.f,
+                                             std::numbers::pi_v<float>, nullptr);
+        };
+        wb = std::make_unique<WorldBroadcaster>(*em, registry, net, logger, nullptr, std::move(q_wb));
         wb->setWeaponRegistry(&weapons);
-        wb->setSensorDefResolver(builtinSensorResolver);
         wb->setSensorCheckHz(60.f); // sense every tick — these tests are about the engagement, not cadence
         // Launch designation the way fl-server wires it: a shooter designates the nearest hostile it
         // has an honest track on (so a SAM's SARH guides at the aircraft instead of flying dumb).
-        WorldBroadcaster* wbp = wb.get();
-        wb->setTargetDesignator([wbp](const EntityState& shooter, const float axis[3]) -> EntityId {
-            return ai::designateFromContacts(shooter, axis, wbp->contactsFor(shooter.id.index), 60000.f,
-                                             std::numbers::pi_v<float>, nullptr);
-        });
     }
 
     // Spawn facing +X (identity) unless noseUp, which points the nose at +Y (a 90 deg rotation about
