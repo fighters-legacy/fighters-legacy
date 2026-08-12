@@ -3,6 +3,7 @@
 
 #include "ILogger.h"
 #include "loop/ISimUpdate.h"
+#include "util/SimThreadOwnership.h"
 
 #include <algorithm>
 #include <chrono>
@@ -108,6 +109,16 @@ void GameLoop::drainSimCallbacks() {
 }
 
 void GameLoop::simThreadFunc() {
+    // Publish this thread's identity so classes with a sim-thread-only tier can assert on it in debug
+    // builds without knowing about GameLoop (#1094). Released on the way out, so teardown reads as
+    // single-threaded again -- which it is, since stop() joins before anything is destroyed.
+    SimThreadOwnership::claim();
+    struct OwnershipScope {
+        ~OwnershipScope() {
+            SimThreadOwnership::release();
+        }
+    } ownershipScope;
+
     TimeController tc{1.0 / m_tickRate};
 
     auto fixedStepDur = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(tc.fixedStep()));
