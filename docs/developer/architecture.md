@@ -421,6 +421,38 @@ there; the phase then binds `auto& name = *p_name;` so the moved code reads unch
 keeps a 2,400-line relocation reviewable. The client's `Game` pimpl with its named init phases is the
 in-repo template this follows.
 
+**2026-08-12 — D13: the `WorldBroadcaster` decomposition is concrete collaborators owned by value,
+and the first one is `PeerAdmission` (#1085).** Stage 8 breaks the 205-public-method broadcaster into
+`PeerAdmission` / `SnapshotPipeline` / `SessionComms` along the boundaries D12's hooks struct was
+already shaped to. Each is a **concrete class in `engine-net`, owned by value — no virtual
+interface**: there is no second implementation, no test double substitutes for one, and an interface
+invented before a second implementation exists is a guess about which axis will vary. One can be cut
+later where a real one appears.
+
+`PeerAdmission` takes whether and how a peer enters the world: the five-gate connect gauntlet
+(ban → allowlist → per-IP connect rate → per-IP concurrent cap → admin-auth lockout), the
+`MsgConnectRequest` handshake end to end, the `ConnectAck` reply burst, the mission player slots, the
+spawn-point round robin, the reconnection grace table and the refusal table — with the state only
+they touch (~810 lines out of `WorldBroadcaster.cpp`).
+
+⚑ **The stage's safety net is that the move changes nothing observable, so the seam is a
+back-reference, not a new abstraction.** Admission is inherently world-mutating — it spawns
+airframes, binds crew seats, writes the roster and the scoreboard — and that machinery stays in the
+broadcaster. Re-exposing twenty internals as public methods would grow the surface this epic exists
+to shrink; re-hooking them as twenty `std::function`s would rebuild the single-slot-hook pattern this
+epic exists to delete. So the collaborator holds a `WorldBroadcaster&` and is a `friend` of its
+owner, and every moved call site reads exactly as it did. Narrowing that seam is behavioural work and
+belongs after the structure settles — not in a stage whose discriminator is byte-identical output.
+
+The gate is evidence, not review: the #644 per-tick state hash is compared A/B against a binary built
+from the parent commit (**498 common ticks, 0 differing**), with the comparison validated in both
+other directions first — the same build twice differs in 0 of 495 ticks, and a deliberately different
+world (one extra AI) differs in all 491. The handshake-completing `fuzz_connect_path` harness runs
+**unchanged** against the extracted class. ⚑ The A/B harness is only valid once the *setup* is
+deterministic: with 8 test-spawn AI, terrain streaming exhausts its wall-clock prime budget on some
+runs and one entity spawns at a coarse height, so two runs of the SAME binary disagree from tick 1 —
+a differ trusted without its control would have reported that as a regression.
+
 **2026-08-12 — D14: one `AdminChannel` per admin frontend, and a registry that can enumerate them
 (#1079).** Six frontends — stdin, RCON, the ENet `MsgAdminCommand` path, the mission `do:` sink, HTTP
 REST and MCP — shared `CommandRegistry::dispatch` and forked everything around it: three `AuthTracker`

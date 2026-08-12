@@ -1286,6 +1286,13 @@ target_link_libraries(test_world_broadcaster PRIVATE Catch2::Catch2WithMain engi
     engine-bootstrap) # builtinDebugEntityDef/registerBuiltinWeapons — the sandbox arming smoke (#440)
 catch_discover_tests(test_world_broadcaster)
 
+# The admission half of the old broadcaster suite (#1085), sharing its fixtures via
+# world_broadcaster_test_util.h. Same link set: it drives PeerAdmission through its owner.
+add_executable(test_peer_admission test_peer_admission.cpp)
+target_link_libraries(test_peer_admission PRIVATE Catch2::Catch2WithMain engine-net engine-weather
+    engine-bootstrap)
+catch_discover_tests(test_peer_admission)
+
 add_executable(test_weather test_weather.cpp)
 target_link_libraries(test_weather PRIVATE Catch2::Catch2WithMain engine-weather)
 

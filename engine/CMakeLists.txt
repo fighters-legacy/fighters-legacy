@@ -456,6 +456,7 @@ target_link_libraries(engine-replay PUBLIC engine-protocol engine-compress)
 add_library(engine-net STATIC
     net/AdminChannel.cpp
     net/NetworkUtils.cpp
+    net/PeerAdmission.cpp
     net/WorldBroadcaster.cpp
     net/DiscoveryBeacon.cpp
     net/DiscoveryListener.cpp
