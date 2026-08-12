@@ -46,7 +46,6 @@ std::size_t TerrainStreamer::TileKeyHash::operator()(const TileKey& k) const noe
 TerrainStreamer::TerrainStreamer(fl::TerrainManifest manifest, AssetManager& assets, IAsyncFilesystem& asyncFs,
                                  IRenderer* renderer)
     : m_manifest(std::move(manifest)), m_assets(assets), m_asyncFs(asyncFs), m_renderer(renderer) {
-    m_asyncFs.setEventHandler(this);
     uploadBiomeTextures();
 }
 
@@ -89,11 +88,10 @@ void TerrainStreamer::uploadBiomeTextures() {
 }
 
 TerrainStreamer::~TerrainStreamer() {
-    // Deregister first so any late service() calls hit a null handler, not dead this.
-    m_asyncFs.setEventHandler(nullptr);
-    // Cancel all in-flight reads (callbacks now go nowhere).
-    for (auto& [id, pending] : m_pendingByReadId)
-        m_asyncFs.cancelRead(id);
+    // Cancel every read this streamer owns AND suppress their completions in one call (#1083). Reads are
+    // routed per request now, so there is no slot to deregister -- and cancelRead() alone would still
+    // deliver a Cancelled completion into an object that is being destroyed.
+    m_asyncFs.cancelReadsFor(this);
     // Destroy GPU resources.
     if (m_renderer) {
         for (auto& [key, tile] : m_tiles) {
@@ -316,7 +314,7 @@ void TerrainStreamer::loadTile(const TileKey& key, int& proceduralCount) {
         tile.state = TileState::Loading;
         tile.lastDesiredFrame = m_frame;
     }
-    const AsyncReadId id = m_asyncFs.readFileAsync(PathDomain::Assets, path->c_str());
+    const AsyncReadId id = m_asyncFs.readFileAsync(PathDomain::Assets, path->c_str(), this);
     if (id == 0) {
         // readFileAsync failed — remove the entry and retry next frame.
         std::unique_lock lock(m_tileMutex);
@@ -333,7 +331,7 @@ void TerrainStreamer::loadTile(const TileKey& key, int& proceduralCount) {
     auto coverPath = m_assets.resolveTilePath(m_manifest.terrainId.c_str(), key.face, key.level, key.i, key.j,
                                               fl::TileLayer::LandCover);
     if (coverPath) {
-        const AsyncReadId cid = m_asyncFs.readFileAsync(PathDomain::Assets, coverPath->c_str());
+        const AsyncReadId cid = m_asyncFs.readFileAsync(PathDomain::Assets, coverPath->c_str(), this);
         if (cid != 0) {
             {
                 std::unique_lock lock(m_tileMutex);
@@ -356,7 +354,7 @@ void TerrainStreamer::queueSatelliteRead(const TileKey& key) {
                                             fl::TileLayer::Satellite);
     if (!satPath)
         return;
-    const AsyncReadId sid = m_asyncFs.readFileAsync(PathDomain::Assets, satPath->c_str());
+    const AsyncReadId sid = m_asyncFs.readFileAsync(PathDomain::Assets, satPath->c_str(), this);
     if (sid == 0)
         return;
     {

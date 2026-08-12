@@ -47,12 +47,10 @@ void StdAsyncFilesystem::shutdown() {
     m_initialized = false;
 }
 
-void StdAsyncFilesystem::setEventHandler(IAsyncFilesystemHandler* handler) {
-    m_handler = handler;
-}
-
-AsyncReadId StdAsyncFilesystem::readFileAsync(PathDomain domain, const char* path) {
-    if (!m_initialized || !path)
+AsyncReadId StdAsyncFilesystem::readFileAsync(PathDomain domain, const char* path, IAsyncFilesystemHandler* handler) {
+    // A null handler is refused rather than accepted-and-dropped: a read whose completion goes nowhere is
+    // the silent failure this change exists to remove (#1083).
+    if (!m_initialized || !path || handler == nullptr)
         return 0;
 
     uint32_t id = m_nextId++;
@@ -63,6 +61,7 @@ AsyncReadId StdAsyncFilesystem::readFileAsync(PathDomain domain, const char* pat
     req->id = id;
     req->domain = domain;
     req->path = path;
+    req->handler = handler;
 
     m_liveRequests[id] = req;
 
@@ -80,6 +79,26 @@ void StdAsyncFilesystem::cancelRead(AsyncReadId id) {
         it->second->cancelled.store(true, std::memory_order_relaxed);
 }
 
+void StdAsyncFilesystem::cancelReadsFor(IAsyncFilesystemHandler* handler) {
+    if (!handler)
+        return;
+    // In flight: cancel, and clear the handler so the worker's completion is delivered nowhere.
+    for (auto& [id, req] : m_liveRequests) {
+        if (req->handler == handler) {
+            req->cancelled.store(true, std::memory_order_relaxed);
+            req->handler = nullptr;
+        }
+    }
+    // Already completed but not yet serviced: scrub the queued copies too, or a completion from before
+    // this call would still reach the departing object.
+    {
+        std::lock_guard lock(m_completedMtx);
+        for (auto& c : m_completedQueue)
+            if (c.handler == handler)
+                c.handler = nullptr;
+    }
+}
+
 void StdAsyncFilesystem::service() {
     std::vector<CompletedRequest> batch;
     {
@@ -88,8 +107,10 @@ void StdAsyncFilesystem::service() {
     }
     for (auto& c : batch) {
         m_liveRequests.erase(c.id);
-        if (m_handler)
-            m_handler->onReadComplete(c.id, c.status, c.data.empty() ? nullptr : c.data.data(), c.data.size(),
+        // Routed by request id (#1083): each read's completion goes to the handler that issued it, so a
+        // second consumer cannot take over the first one's callbacks.
+        if (c.handler)
+            c.handler->onReadComplete(c.id, c.status, c.data.empty() ? nullptr : c.data.data(), c.data.size(),
                                       c.errorMsg.empty() ? nullptr : c.errorMsg.c_str());
     }
 }
@@ -116,9 +137,12 @@ void StdAsyncFilesystem::workerLoop() {
         }
 
         AsyncReadId id = req->id;
+        // The handler travels with the completion (#1083): service() delivers to it directly rather than
+        // to one process-wide slot. Read-only here; the main thread set it before this request was queued.
+        IAsyncFilesystemHandler* const handler = req->handler;
 
         if (req->cancelled.load(std::memory_order_relaxed)) {
-            push({id, AsyncReadStatus::Cancelled, {}, {}});
+            push({id, AsyncReadStatus::Cancelled, {}, {}, handler});
             continue;
         }
 
@@ -129,14 +153,14 @@ void StdAsyncFilesystem::workerLoop() {
         // (UTF-8-safe). std::ifstream needs no per-thread TLS cleanup.
         std::ifstream ifs(fullPath, std::ios::binary);
         if (!ifs) {
-            push({id, AsyncReadStatus::Error, {}, "failed to open file: " + fullPath.string()});
+            push({id, AsyncReadStatus::Error, {}, "failed to open file: " + fullPath.string(), handler});
             continue;
         }
 
         std::error_code ec;
         std::uintmax_t rawSize = std::filesystem::file_size(fullPath, ec);
         if (ec) {
-            push({id, AsyncReadStatus::Error, {}, ec.message()});
+            push({id, AsyncReadStatus::Error, {}, ec.message(), handler});
             continue;
         }
 
@@ -146,15 +170,15 @@ void StdAsyncFilesystem::workerLoop() {
         if (fileSize > 0) {
             ifs.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(fileSize));
             if (static_cast<std::size_t>(ifs.gcount()) != fileSize) {
-                push({id, AsyncReadStatus::Error, {}, "short read: " + fullPath.string()});
+                push({id, AsyncReadStatus::Error, {}, "short read: " + fullPath.string(), handler});
                 continue;
             }
         }
 
         if (req->cancelled.load(std::memory_order_relaxed)) {
-            push({id, AsyncReadStatus::Cancelled, {}, {}});
+            push({id, AsyncReadStatus::Cancelled, {}, {}, handler});
         } else {
-            push({id, AsyncReadStatus::Success, std::move(data), {}});
+            push({id, AsyncReadStatus::Success, std::move(data), {}, handler});
         }
     }
 }

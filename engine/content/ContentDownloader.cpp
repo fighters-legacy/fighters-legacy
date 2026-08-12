@@ -9,7 +9,6 @@ void ContentDownloader::start(std::vector<ContentManifestEntry> manifest, DoneFn
     m_results.clear();
     m_current = 0;
     m_active = true;
-    m_http.setEventHandler(this);
     if (m_manifest.empty()) {
         finish(true);
         return;
@@ -36,7 +35,7 @@ void ContentDownloader::beginEntry(std::size_t i) {
     HttpRequestOptions opts;
     opts.url = e.url;
     opts.userAgent = "fighters-legacy-content/1";
-    m_activeId = m_http.get(opts);
+    m_activeId = m_http.get(opts, this);
     if (m_activeId == 0) {
         m_fs.closeFile(m_writeHandle);
         m_writeHandle = -1;
@@ -126,7 +125,10 @@ void ContentDownloader::finishEntry(bool ok, const std::string& error) {
 
 void ContentDownloader::finish(bool allOk) {
     m_active = false;
-    m_http.setEventHandler(nullptr);
+    // No slot to restore, and nothing to stomp (#1083). This used to be
+    // `m_http.setEventHandler(nullptr)`, which did not restore whatever was there -- and the client
+    // already owned that slot for the server browser's lobby list, so the first completed download
+    // silently ended lobby callbacks for the rest of the process.
     if (m_onDone)
         m_onDone(allOk);
 }

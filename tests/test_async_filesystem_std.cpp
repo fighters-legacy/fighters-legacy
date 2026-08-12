@@ -52,9 +52,8 @@ TEST_CASE("StdAsyncFilesystem reads existing file", "[async_fs_std]") {
     StdAsyncFilesystem fs(dir.path, dir.path);
     Collector col;
     REQUIRE(fs.init());
-    fs.setEventHandler(&col);
 
-    AsyncReadId id = fs.readFileAsync(PathDomain::Assets, "tile0.bin");
+    AsyncReadId id = fs.readFileAsync(PathDomain::Assets, "tile0.bin", &col);
     REQUIRE(id > 0);
 
     drainUntil(fs, col, 1);
@@ -73,9 +72,8 @@ TEST_CASE("StdAsyncFilesystem fires Error for missing file", "[async_fs_std]") {
     StdAsyncFilesystem fs(dir.path, dir.path);
     Collector col;
     REQUIRE(fs.init());
-    fs.setEventHandler(&col);
 
-    AsyncReadId id = fs.readFileAsync(PathDomain::Assets, "no_such_file.bin");
+    AsyncReadId id = fs.readFileAsync(PathDomain::Assets, "no_such_file.bin", &col);
     REQUIRE(id > 0);
 
     drainUntil(fs, col, 1);
@@ -97,11 +95,10 @@ TEST_CASE("StdAsyncFilesystem multiple concurrent reads all complete", "[async_f
     StdAsyncFilesystem fs(dir.path, dir.path);
     Collector col;
     REQUIRE(fs.init());
-    fs.setEventHandler(&col);
 
     AsyncReadId ids[N];
     for (int i = 0; i < N; ++i)
-        ids[i] = fs.readFileAsync(PathDomain::Assets, ("tile" + std::to_string(i) + ".bin").c_str());
+        ids[i] = fs.readFileAsync(PathDomain::Assets, ("tile" + std::to_string(i) + ".bin").c_str(), &col);
 
     drainUntil(fs, col, N);
 
@@ -125,10 +122,9 @@ TEST_CASE("StdAsyncFilesystem shutdown drains pending before returning", "[async
     StdAsyncFilesystem fs(dir.path, dir.path);
     Collector col;
     REQUIRE(fs.init());
-    fs.setEventHandler(&col);
 
-    AsyncReadId id1 = fs.readFileAsync(PathDomain::Assets, "a.bin");
-    AsyncReadId id2 = fs.readFileAsync(PathDomain::Assets, "b.bin");
+    AsyncReadId id1 = fs.readFileAsync(PathDomain::Assets, "a.bin", &col);
+    AsyncReadId id2 = fs.readFileAsync(PathDomain::Assets, "b.bin", &col);
 
     // shutdown() must drain: all callbacks fire before it returns.
     fs.shutdown();
@@ -152,9 +148,8 @@ TEST_CASE("StdAsyncFilesystem reads empty file as Success with zero bytes", "[as
     StdAsyncFilesystem fs(dir.path, dir.path);
     Collector col;
     REQUIRE(fs.init());
-    fs.setEventHandler(&col);
 
-    AsyncReadId id = fs.readFileAsync(PathDomain::Assets, "empty.bin");
+    AsyncReadId id = fs.readFileAsync(PathDomain::Assets, "empty.bin", &col);
     drainUntil(fs, col, 1);
 
     REQUIRE(col.results.size() == 1);

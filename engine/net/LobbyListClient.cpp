@@ -77,7 +77,7 @@ bool LobbyListClient::refresh(const std::string& lobbyUrl) {
     opts.method = HttpMethod::Get;
     m_buf.clear();
     m_lastFailed = false;
-    m_reqId = m_http.get(opts);
+    m_reqId = m_http.get(opts, this);
     return m_reqId != 0;
 }
 

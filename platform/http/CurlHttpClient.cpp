@@ -10,6 +10,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -23,8 +24,12 @@ struct CurlHttpClient::Impl {
     explicit Impl(ILogger* log) : logger(log) {}
 
     ILogger* logger{nullptr};
-    IHttpClientHandler* handler{nullptr};
     std::string lastError;
+
+    // Per-request handler (#1083). Populated by request(), erased when that request's Complete event is
+    // delivered -- so a handler outlives exactly the requests it owns and no longer. Guarded by mtx
+    // because request() runs on the caller's thread while service() drains on the main one.
+    std::unordered_map<HttpRequestId, IHttpClientHandler*> handlers;
 
     // A queued request.
     struct Request {
@@ -239,32 +244,39 @@ void CurlHttpClient::shutdown() {
     m_impl->cvDrain.notify_all();
     if (m_impl->worker.joinable())
         m_impl->worker.join();
-    // Deliver Cancelled for anything still queued as a request but not yet completed.
-    if (m_impl->handler) {
+    // Deliver Cancelled for anything still queued as a request but not yet completed. Routed per
+    // request (#1083): shutdown() must tell EACH owner about ITS requests, not tell one handler about
+    // everybody's. A request whose owner already called cancelRequestsFor() has no mapping left, so it
+    // is correctly silent.
+    {
         std::deque<Impl::Request> leftover;
+        std::unordered_map<HttpRequestId, IHttpClientHandler*> owners;
         {
             std::lock_guard<std::mutex> lk(m_impl->mtx);
             leftover.swap(m_impl->requests);
+            owners.swap(m_impl->handlers);
         }
-        for (const auto& r : leftover)
-            m_impl->handler->onHttpComplete(r.id, HttpStatus::Cancelled, 0, nullptr);
+        for (const auto& r : leftover) {
+            const auto it = owners.find(r.id);
+            if (it != owners.end() && it->second)
+                it->second->onHttpComplete(r.id, HttpStatus::Cancelled, 0, nullptr);
+        }
     }
     if (g_curlRefCount.fetch_sub(1) == 1)
         curl_global_cleanup();
 }
 
-void CurlHttpClient::setEventHandler(IHttpClientHandler* handler) {
-    m_impl->handler = handler;
-}
-
-HttpRequestId CurlHttpClient::request(const HttpRequestOptions& options) {
-    if (!m_impl->running || options.url.empty())
+HttpRequestId CurlHttpClient::request(const HttpRequestOptions& options, IHttpClientHandler* handler) {
+    // A null handler is refused rather than accepted-and-dropped: a request whose completion goes nowhere
+    // is the silent failure this change exists to remove.
+    if (!m_impl->running || options.url.empty() || handler == nullptr)
         return 0;
     HttpRequestId id;
     {
         std::lock_guard<std::mutex> lk(m_impl->mtx);
         id = m_impl->nextId++;
         m_impl->requests.push_back({id, options});
+        m_impl->handlers.emplace(id, handler);
     }
     m_impl->cv.notify_one();
     return id;
@@ -277,6 +289,21 @@ void CurlHttpClient::cancel(HttpRequestId id) {
     m_impl->cancelled.insert(id);
 }
 
+void CurlHttpClient::cancelRequestsFor(IHttpClientHandler* handler) {
+    if (!handler)
+        return;
+    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    for (auto it = m_impl->handlers.begin(); it != m_impl->handlers.end();) {
+        if (it->second == handler) {
+            m_impl->cancelled.insert(it->first);
+            it = m_impl->handlers.erase(it); // no mapping left, so service() delivers nothing
+        } else {
+            ++it;
+        }
+    }
+    // Events already queued for those ids are dropped by service()'s "no handler" branch.
+}
+
 void CurlHttpClient::service() {
     std::deque<Impl::Event> batch;
     {
@@ -284,19 +311,37 @@ void CurlHttpClient::service() {
         batch.swap(m_impl->events);
     }
     m_impl->cvDrain.notify_all(); // let a blocked worker enqueue more
-    if (!m_impl->handler)
-        return;
+
     for (auto& e : batch) {
+        // Route by request id (#1083). A handler is looked up per event rather than held across the
+        // batch, because a Complete for one request may run before a Data for another.
+        IHttpClientHandler* handler = nullptr;
+        {
+            std::lock_guard<std::mutex> lk(m_impl->mtx);
+            const auto it = m_impl->handlers.find(e.id);
+            if (it != m_impl->handlers.end())
+                handler = it->second;
+            // The completion is the last event for a request, so its handler mapping retires with it.
+            if (e.kind == Impl::Event::Kind::Complete && it != m_impl->handlers.end())
+                m_impl->handlers.erase(it);
+        }
+        if (!handler)
+            continue; // a cancelled-and-forgotten request; nothing to deliver it to
+
         switch (e.kind) {
         case Impl::Event::Kind::Data:
-            m_impl->handler->onHttpData(e.id, e.data.data(), e.data.size());
+            // onHttpData's documented contract is "return false to ABORT the transfer", and the return
+            // value used to be discarded here -- an advertised control that did nothing. Honour it by
+            // cancelling, which is exactly what the doc says happens (the transfer then completes as
+            // Cancelled, so the handler still gets its terminal callback).
+            if (!handler->onHttpData(e.id, e.data.data(), e.data.size()))
+                cancel(e.id);
             break;
         case Impl::Event::Kind::Progress:
-            m_impl->handler->onHttpProgress(e.id, e.received, e.total);
+            handler->onHttpProgress(e.id, e.received, e.total);
             break;
         case Impl::Event::Kind::Complete:
-            m_impl->handler->onHttpComplete(e.id, e.status, e.httpCode,
-                                            e.errorMsg.empty() ? nullptr : e.errorMsg.c_str());
+            handler->onHttpComplete(e.id, e.status, e.httpCode, e.errorMsg.empty() ? nullptr : e.errorMsg.c_str());
             break;
         }
     }

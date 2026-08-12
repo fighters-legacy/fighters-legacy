@@ -45,8 +45,20 @@ struct HttpRequestOptions {
     uint32_t maxRedirects{5};         // https->http downgrades are always refused regardless
 };
 
-// Implement and register via IHttpClient::setEventHandler. Callbacks fire on the thread that calls
-// service() (the main thread in normal use). All pointers are valid only during the call.
+// Implement and pass PER REQUEST to IHttpClient::request/get (#1083). Callbacks fire on the thread that
+// calls service() (the main thread in normal use). All pointers are valid only during the call.
+//
+// It used to be registered once via a single-slot setEventHandler, and three components implement this
+// interface: ContentDownloader, LobbyListClient and LobbyRegistration. ContentDownloader::start took the
+// slot and finish() set it back to NULLPTR rather than restoring whatever was there -- while the client
+// already owned that slot for the server browser's lobby list. So the moment the join-time content
+// download (#924) or first-run pack download (#108) was wired in, the server browser would have silently
+// stopped receiving lobby callbacks after the first download completed: no error, no log, just a browser
+// that never populates again. Nothing was broken only because the second consumer had not shipped.
+//
+// A handler LIST was considered and rejected: every subscriber would then filter every completion, turning
+// a silent-steal bug into a silent-crosstalk one. Routing by request id is what the async model already
+// implies -- the request carries an id, so the completion knows where it belongs.
 class IHttpClientHandler {
   public:
     virtual ~IHttpClientHandler() = default;
@@ -72,24 +84,30 @@ class IHttpClient {
     // Cancels all in-flight requests (each fires onHttpComplete with Cancelled), joins the worker.
     virtual void shutdown() = 0;
 
-    // Register the completion handler; nullptr deregisters.
-    virtual void setEventHandler(IHttpClientHandler* handler) = 0;
-
-    // Enqueue a request using options.method. Returns an id >= 1, or 0 if it could not be enqueued
-    // (before init(), empty url). This is the primitive; get() is a convenience forwarder.
-    virtual HttpRequestId request(const HttpRequestOptions& options) = 0;
+    // Enqueue a request using options.method, routing every callback for it to `handler`. Returns an id
+    // >= 1, or 0 if it could not be enqueued (before init(), empty url, null handler). This is the
+    // primitive; get() is a convenience forwarder.
+    //
+    // The handler must outlive the request. A consumer that is going away cancels its requests first --
+    // cancel() still delivers a completion, so the handler is needed until then.
+    virtual HttpRequestId request(const HttpRequestOptions& options, IHttpClientHandler* handler) = 0;
 
     // Enqueue a GET (forwards to request() with method = Get). Non-virtual so a backend only implements
     // request(). Kept for the existing download call sites.
-    HttpRequestId get(const HttpRequestOptions& options) {
+    HttpRequestId get(const HttpRequestOptions& options, IHttpClientHandler* handler) {
         HttpRequestOptions o = options;
         o.method = HttpMethod::Get;
-        return request(o);
+        return request(o, handler);
     }
 
     // Best-effort cancellation; the completion callback still fires (Success if already done, else
     // Cancelled). No-op for id 0 or an already-dispatched request.
     virtual void cancel(HttpRequestId id) = 0;
+
+    // Cancel every in-flight request belonging to `handler` and deliver NOTHING for them. The tool for a
+    // consumer that is going away: cancel() alone still fires a completion, straight into the object
+    // being destroyed. See the same method on IAsyncFilesystem for the full reasoning (#1083).
+    virtual void cancelRequestsFor(IHttpClientHandler* handler) = 0;
 
     // Drain completed callbacks. Call once per frame from the main loop.
     virtual void service() = 0;

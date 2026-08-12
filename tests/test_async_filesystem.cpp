@@ -29,18 +29,20 @@ struct Collector : IAsyncFilesystemHandler {
 
 TEST_CASE("MockAsyncFilesystem readFileAsync returns nonzero id", "[async_fs]") {
     MockAsyncFilesystem fs;
+    Collector col;
     fs.init();
     fs.addFile("terrain/tile0.bin", "data");
-    AsyncReadId id = fs.readFileAsync(PathDomain::Assets, "terrain/tile0.bin");
+    AsyncReadId id = fs.readFileAsync(PathDomain::Assets, "terrain/tile0.bin", &col);
     REQUIRE(id > 0);
 }
 
 TEST_CASE("MockAsyncFilesystem id 0 is never returned", "[async_fs]") {
     MockAsyncFilesystem fs;
+    Collector col;
     fs.init();
     fs.addFile("a.bin", "x");
-    AsyncReadId id1 = fs.readFileAsync(PathDomain::Assets, "a.bin");
-    AsyncReadId id2 = fs.readFileAsync(PathDomain::Assets, "a.bin");
+    AsyncReadId id1 = fs.readFileAsync(PathDomain::Assets, "a.bin", &col);
+    AsyncReadId id2 = fs.readFileAsync(PathDomain::Assets, "a.bin", &col);
     REQUIRE(id1 != 0);
     REQUIRE(id2 != 0);
     REQUIRE(id1 != id2);
@@ -50,10 +52,9 @@ TEST_CASE("MockAsyncFilesystem service fires Success with correct data", "[async
     MockAsyncFilesystem fs;
     Collector col;
     fs.init();
-    fs.setEventHandler(&col);
     fs.addFile("terrain/tile0.bin", "hello");
 
-    AsyncReadId id = fs.readFileAsync(PathDomain::Assets, "terrain/tile0.bin");
+    AsyncReadId id = fs.readFileAsync(PathDomain::Assets, "terrain/tile0.bin", &col);
     fs.service();
 
     REQUIRE(col.results.size() == 1);
@@ -68,9 +69,8 @@ TEST_CASE("MockAsyncFilesystem service fires Error for missing file", "[async_fs
     MockAsyncFilesystem fs;
     Collector col;
     fs.init();
-    fs.setEventHandler(&col);
 
-    AsyncReadId id = fs.readFileAsync(PathDomain::Assets, "missing.bin");
+    AsyncReadId id = fs.readFileAsync(PathDomain::Assets, "missing.bin", &col);
     fs.service();
 
     REQUIRE(col.results.size() == 1);
@@ -83,10 +83,9 @@ TEST_CASE("MockAsyncFilesystem cancelRead before service fires Cancelled", "[asy
     MockAsyncFilesystem fs;
     Collector col;
     fs.init();
-    fs.setEventHandler(&col);
     fs.addFile("terrain/tile0.bin", "data");
 
-    AsyncReadId id = fs.readFileAsync(PathDomain::Assets, "terrain/tile0.bin");
+    AsyncReadId id = fs.readFileAsync(PathDomain::Assets, "terrain/tile0.bin", &col);
     fs.cancelRead(id);
     fs.service();
 
@@ -99,12 +98,11 @@ TEST_CASE("MockAsyncFilesystem shutdown cancels all pending requests", "[async_f
     MockAsyncFilesystem fs;
     Collector col;
     fs.init();
-    fs.setEventHandler(&col);
     fs.addFile("a.bin", "a");
     fs.addFile("b.bin", "b");
 
-    AsyncReadId id1 = fs.readFileAsync(PathDomain::Assets, "a.bin");
-    AsyncReadId id2 = fs.readFileAsync(PathDomain::Assets, "b.bin");
+    AsyncReadId id1 = fs.readFileAsync(PathDomain::Assets, "a.bin", &col);
+    AsyncReadId id2 = fs.readFileAsync(PathDomain::Assets, "b.bin", &col);
     fs.shutdown();
 
     REQUIRE(col.results.size() == 2);
@@ -124,13 +122,12 @@ TEST_CASE("MockAsyncFilesystem multiple requests all dispatched", "[async_fs]") 
     MockAsyncFilesystem fs;
     Collector col;
     fs.init();
-    fs.setEventHandler(&col);
     for (int i = 0; i < 3; ++i)
         fs.addFile("tile" + std::to_string(i) + ".bin", std::string(4, static_cast<char>('a' + i)));
 
     AsyncReadId ids[3];
     for (int i = 0; i < 3; ++i)
-        ids[i] = fs.readFileAsync(PathDomain::Assets, ("tile" + std::to_string(i) + ".bin").c_str());
+        ids[i] = fs.readFileAsync(PathDomain::Assets, ("tile" + std::to_string(i) + ".bin").c_str(), &col);
 
     fs.service();
 
@@ -144,23 +141,27 @@ TEST_CASE("MockAsyncFilesystem multiple requests all dispatched", "[async_fs]") 
     REQUIRE(expected.empty());
 }
 
-TEST_CASE("MockAsyncFilesystem null handler does not crash", "[async_fs]") {
+// #1083: a read is routed to the handler that issued it, so a null handler is REFUSED rather than
+// accepted-and-dropped. A read whose completion goes nowhere is the silent failure per-request routing
+// exists to remove; returning 0 tells the caller immediately instead of at never.
+TEST_CASE("MockAsyncFilesystem refuses a read with no handler", "[async_fs]") {
     MockAsyncFilesystem fs;
     fs.init();
-    fs.setEventHandler(nullptr);
     fs.addFile("a.bin", "x");
-    fs.readFileAsync(PathDomain::Assets, "a.bin");
+    REQUIRE(fs.readFileAsync(PathDomain::Assets, "a.bin", nullptr) == 0);
     REQUIRE_NOTHROW(fs.service());
 }
 
 TEST_CASE("MockAsyncFilesystem readFileAsync returns 0 before init", "[async_fs]") {
     MockAsyncFilesystem fs;
+    Collector col;
     fs.addFile("a.bin", "x");
-    REQUIRE(fs.readFileAsync(PathDomain::Assets, "a.bin") == 0);
+    REQUIRE(fs.readFileAsync(PathDomain::Assets, "a.bin", &col) == 0);
 }
 
 TEST_CASE("MockAsyncFilesystem readFileAsync returns 0 for null path", "[async_fs]") {
     MockAsyncFilesystem fs;
+    Collector col;
     fs.init();
-    REQUIRE(fs.readFileAsync(PathDomain::Assets, nullptr) == 0);
+    REQUIRE(fs.readFileAsync(PathDomain::Assets, nullptr, &col) == 0);
 }

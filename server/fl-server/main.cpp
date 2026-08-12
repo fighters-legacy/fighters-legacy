@@ -504,7 +504,6 @@ int main(int argc, char** argv) {
         httpClient = fl::createHttpClient(log);
         if (httpClient && httpClient->init()) {
             lobbyReg = std::make_unique<LobbyRegistration>(*httpClient, *log);
-            httpClient->setEventHandler(lobbyReg.get());
             LobbyRegistrationConfig lc;
             lc.lobbyUrl = cfg.lobbyUrl;
             lc.name = cfg.name;
