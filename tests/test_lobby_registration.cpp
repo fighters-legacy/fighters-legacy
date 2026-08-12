@@ -42,7 +42,6 @@ TEST_CASE("LobbyRegistration: first tick POSTs a JSON heartbeat to /v1/servers (
     ManualClock clock;
     LobbyRegistration reg(http, log);
     reg.setClock(clock);
-    http.setEventHandler(&reg);
     reg.configure(makeCfg());
     reg.setDynamic(3, "fjord");
 
@@ -66,7 +65,6 @@ TEST_CASE("LobbyRegistration: heartbeats on the configured interval, not every t
     ManualClock clock;
     LobbyRegistration reg(http, log);
     reg.setClock(clock);
-    http.setEventHandler(&reg);
     reg.configure(makeCfg());
 
     reg.tick(); // POST #1
@@ -84,7 +82,6 @@ TEST_CASE("LobbyRegistration: disabled when private or lobby url empty (#143)", 
     ManualClock clock;
     LobbyRegistration reg(http, log);
     reg.setClock(clock);
-    http.setEventHandler(&reg);
 
     LobbyRegistrationConfig priv = makeCfg();
     priv.visibilityPublic = false;
@@ -108,7 +105,6 @@ TEST_CASE("LobbyRegistration: a failed POST backs off before retrying (#143)", "
     ManualClock clock;
     LobbyRegistration reg(http, log);
     reg.setClock(clock);
-    http.setEventHandler(&reg);
     reg.configure(makeCfg());
 
     reg.tick();     // POST #1 (in flight)
@@ -128,7 +124,6 @@ TEST_CASE("LobbyRegistration: deregister sends a DELETE (#143)", "[lobby_reg]") 
     ManualClock clock;
     LobbyRegistration reg(http, log);
     reg.setClock(clock);
-    http.setEventHandler(&reg);
     reg.configure(makeCfg());
     reg.deregister();
     REQUIRE(http.requests.size() == 1u);

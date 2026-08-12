@@ -1587,7 +1587,10 @@ target_link_libraries(test_sha256 PRIVATE Catch2::Catch2WithMain engine-crypto)
 catch_discover_tests(test_sha256)
 
 add_executable(test_content_downloader test_content_downloader.cpp)
-target_link_libraries(test_content_downloader PRIVATE Catch2::Catch2WithMain engine-content engine-crypto)
+# engine-net for LobbyListClient: the #1083 regression drives TWO IHttpClient consumers at once,
+# which is the case the old single-slot handler could not serve.
+target_link_libraries(test_content_downloader PRIVATE Catch2::Catch2WithMain engine-content engine-crypto
+    engine-net)
 target_include_directories(test_content_downloader PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Lobby / server browser (#143): pure parser, registration client, and merge model.

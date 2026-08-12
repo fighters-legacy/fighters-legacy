@@ -92,7 +92,7 @@ void LobbyRegistration::postHeartbeat() {
     opts.contentType = "application/json";
     m_lastBody = buildBody();
     opts.body = m_lastBody;
-    m_reqId = m_http.request(opts);
+    m_reqId = m_http.request(opts, this);
     m_lastPost = m_clock->now();
     m_havePosted = true;
 }
@@ -114,7 +114,7 @@ void LobbyRegistration::deregister() {
     opts.method = HttpMethod::Delete_;
     opts.contentType = "application/json";
     opts.body = "{\"port\":" + std::to_string(m_cfg.gamePort) + "}";
-    (void)m_http.request(opts); // best-effort; the reply is ignored
+    (void)m_http.request(opts, this); // best-effort; the reply is ignored
 }
 
 void LobbyRegistration::onHttpComplete(HttpRequestId id, HttpStatus status, long httpCode, const char* errorMsg) {

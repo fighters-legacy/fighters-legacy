@@ -1580,7 +1580,6 @@ void Game::initScreenManager() {
         if (d.services.p.httpClient) {
             d.services.lobbyList =
                 std::make_unique<fl::LobbyListClient>(*d.services.p.httpClient, *d.services.rawLogger);
-            d.services.p.httpClient->setEventHandler(d.services.lobbyList.get());
         }
         // [client] lobby_urls: comma-separated internet lobby endpoints (empty by default — federation
         // posture, the operator opts in).

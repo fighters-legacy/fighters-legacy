@@ -45,7 +45,6 @@ TEST_CASE("LobbyListClient: a successful fetch populates the server list (#1145)
     RecordingLog log;
     TrackingHttpClient http;
     LobbyListClient client(http, log);
-    http.setEventHandler(&client);
     http.setResponse(kEndpoint, kTwoServers, 200);
 
     REQUIRE(client.refresh("https://lobby.example.com"));
@@ -68,7 +67,6 @@ TEST_CASE("LobbyListClient: the endpoint path is appended exactly once (#1145)",
     RecordingLog log;
     TrackingHttpClient http;
     LobbyListClient client(http, log);
-    http.setEventHandler(&client);
     http.setResponse(kEndpoint, "[]", 200);
 
     REQUIRE(client.refresh("https://lobby.example.com/"));
@@ -80,7 +78,6 @@ TEST_CASE("LobbyListClient: an empty URL is not a request (#1145)", "[lobby][net
     RecordingLog log;
     TrackingHttpClient http;
     LobbyListClient client(http, log);
-    http.setEventHandler(&client);
 
     CHECK_FALSE(client.refresh(""));
     CHECK_FALSE(client.inFlight());
@@ -93,7 +90,6 @@ TEST_CASE("LobbyListClient: a second refresh while one is in flight is refused (
     RecordingLog log;
     TrackingHttpClient http;
     LobbyListClient client(http, log);
-    http.setEventHandler(&client);
     http.setResponse(kEndpoint, kTwoServers, 200);
 
     REQUIRE(client.refresh("https://lobby.example.com"));
@@ -108,7 +104,6 @@ TEST_CASE("LobbyListClient: a transport error is reported and leaves the list al
     RecordingLog log;
     TrackingHttpClient http;
     LobbyListClient client(http, log);
-    http.setEventHandler(&client);
 
     // First a good fetch, so there is a previous list to protect.
     http.setResponse(kEndpoint, kTwoServers, 200);
@@ -132,7 +127,6 @@ TEST_CASE("LobbyListClient: a non-2xx response is a failure even with a body (#1
     RecordingLog log;
     TrackingHttpClient http;
     LobbyListClient client(http, log);
-    http.setEventHandler(&client);
     http.setResponse(kEndpoint, "<html>Internal Server Error</html>", 500);
 
     REQUIRE(client.refresh("https://lobby.example.com"));
@@ -146,7 +140,6 @@ TEST_CASE("LobbyListClient: a 3xx redirect body is not treated as a list (#1145)
     RecordingLog log;
     TrackingHttpClient http;
     LobbyListClient client(http, log);
-    http.setEventHandler(&client);
     http.setResponse(kEndpoint, "[]", 302);
 
     REQUIRE(client.refresh("https://lobby.example.com"));
@@ -160,7 +153,6 @@ TEST_CASE("LobbyListClient: data for a stale request id is ignored (#1145)", "[l
     RecordingLog log;
     TrackingHttpClient http;
     LobbyListClient client(http, log);
-    http.setEventHandler(&client);
     http.setResponse(kEndpoint, kTwoServers, 200);
     REQUIRE(client.refresh("https://lobby.example.com"));
 
@@ -175,7 +167,6 @@ TEST_CASE("LobbyListClient: completion for a stale request id is ignored (#1145)
     RecordingLog log;
     TrackingHttpClient http;
     LobbyListClient client(http, log);
-    http.setEventHandler(&client);
     http.setResponse(kEndpoint, kTwoServers, 200);
     REQUIRE(client.refresh("https://lobby.example.com"));
 
@@ -193,7 +184,6 @@ TEST_CASE("LobbyListClient: a body split across chunks is accumulated before par
     RecordingLog log;
     TrackingHttpClient http;
     LobbyListClient client(http, log);
-    http.setEventHandler(&client);
     http.setResponse(kEndpoint, kTwoServers, 200, /*chunkSize=*/16);
 
     REQUIRE(client.refresh("https://lobby.example.com"));
@@ -207,7 +197,6 @@ TEST_CASE("LobbyListClient: an empty successful body yields an empty list, not a
     RecordingLog log;
     TrackingHttpClient http;
     LobbyListClient client(http, log);
-    http.setEventHandler(&client);
     http.setResponse(kEndpoint, "[]", 200);
 
     REQUIRE(client.refresh("https://lobby.example.com"));
@@ -220,7 +209,6 @@ TEST_CASE("LobbyListClient: a refresh after a failure clears the failure flag (#
     RecordingLog log;
     TrackingHttpClient http;
     LobbyListClient client(http, log);
-    http.setEventHandler(&client);
 
     // no canned response for the endpoint: the mock answers with a transport error
     REQUIRE(client.refresh("https://lobby.example.com"));

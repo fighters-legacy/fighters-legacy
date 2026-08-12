@@ -263,11 +263,13 @@ struct MockAsyncFilesystem : public IAsyncFilesystem {
         PathDomain domain;
         std::string path;
         bool cancelled{false};
+        // Per-read handler (#1083): routed by id, exactly as the real backend does, so a test can drive
+        // two consumers at once and see that neither takes the other's completions.
+        IAsyncFilesystemHandler* handler{nullptr};
     };
     std::vector<PendingRead> pending;
 
     AsyncReadId nextId{1};
-    IAsyncFilesystemHandler* handler{nullptr};
     bool initialized{false};
     std::string lastErrorBuf;
 
@@ -284,20 +286,17 @@ struct MockAsyncFilesystem : public IAsyncFilesystem {
     }
     void shutdown() override {
         for (auto& p : pending)
-            if (handler)
-                handler->onReadComplete(p.id, AsyncReadStatus::Cancelled, nullptr, 0, nullptr);
+            if (p.handler)
+                p.handler->onReadComplete(p.id, AsyncReadStatus::Cancelled, nullptr, 0, nullptr);
         pending.clear();
         initialized = false;
     }
-    void setEventHandler(IAsyncFilesystemHandler* h) override {
-        handler = h;
-    }
 
-    AsyncReadId readFileAsync(PathDomain domain, const char* path) override {
-        if (!initialized || !path)
+    AsyncReadId readFileAsync(PathDomain domain, const char* path, IAsyncFilesystemHandler* h) override {
+        if (!initialized || !path || h == nullptr)
             return 0;
         AsyncReadId id = nextId++;
-        pending.push_back({id, domain, std::string(path), false});
+        pending.push_back({id, domain, std::string(path), false, h});
         return id;
     }
     void cancelRead(AsyncReadId id) override {
@@ -307,24 +306,30 @@ struct MockAsyncFilesystem : public IAsyncFilesystem {
                 return;
             }
     }
+    void cancelReadsFor(IAsyncFilesystemHandler* h) override {
+        for (auto& p : pending)
+            if (p.handler == h) {
+                p.cancelled = true;
+                p.handler = nullptr; // and deliver nothing: the owner is going away
+            }
+    }
     void service() override {
         std::vector<PendingRead> batch;
         std::swap(batch, pending);
         for (auto& p : batch) {
+            if (!p.handler)
+                continue; // forgotten by cancelReadsFor
             if (p.cancelled) {
-                if (handler)
-                    handler->onReadComplete(p.id, AsyncReadStatus::Cancelled, nullptr, 0, nullptr);
+                p.handler->onReadComplete(p.id, AsyncReadStatus::Cancelled, nullptr, 0, nullptr);
                 continue;
             }
             auto it = files.find(p.path);
             if (it == files.end()) {
                 lastErrorBuf = "file not found: " + p.path;
-                if (handler)
-                    handler->onReadComplete(p.id, AsyncReadStatus::Error, nullptr, 0, lastErrorBuf.c_str());
+                p.handler->onReadComplete(p.id, AsyncReadStatus::Error, nullptr, 0, lastErrorBuf.c_str());
             } else {
-                if (handler)
-                    handler->onReadComplete(p.id, AsyncReadStatus::Success, it->second.data(), it->second.size(),
-                                            nullptr);
+                p.handler->onReadComplete(p.id, AsyncReadStatus::Success, it->second.data(), it->second.size(),
+                                          nullptr);
             }
         }
     }

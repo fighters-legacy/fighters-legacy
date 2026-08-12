@@ -29,9 +29,9 @@ class StdAsyncFilesystem : public IAsyncFilesystem {
 
     bool init() override;
     void shutdown() override;
-    void setEventHandler(IAsyncFilesystemHandler* handler) override;
-    AsyncReadId readFileAsync(PathDomain domain, const char* path) override;
+    AsyncReadId readFileAsync(PathDomain domain, const char* path, IAsyncFilesystemHandler* handler) override;
     void cancelRead(AsyncReadId id) override;
+    void cancelReadsFor(IAsyncFilesystemHandler* handler) override;
     void service() override;
     const char* getLastError() const override;
 
@@ -41,6 +41,9 @@ class StdAsyncFilesystem : public IAsyncFilesystem {
         PathDomain domain;
         std::string path;
         std::atomic<bool> cancelled{false};
+        // Who this read's completion belongs to (#1083). Written on the main thread before the worker
+        // sees the request and read on the main thread in service(); the worker never touches it.
+        IAsyncFilesystemHandler* handler{nullptr};
     };
 
     struct CompletedRequest {
@@ -48,6 +51,9 @@ class StdAsyncFilesystem : public IAsyncFilesystem {
         AsyncReadStatus status;
         std::vector<uint8_t> data;
         std::string errorMsg;
+        // Carried through with the completion so service() can deliver it without a second lookup, and
+        // so a completion queued by shutdown() still knows where it belongs.
+        IAsyncFilesystemHandler* handler{nullptr};
     };
 
     void workerLoop();
@@ -58,7 +64,6 @@ class StdAsyncFilesystem : public IAsyncFilesystem {
     uint32_t m_nextId{1};      // main-thread only; skip 0 on rollover
     bool m_initialized{false}; // set by init(), cleared by shutdown()
 
-    IAsyncFilesystemHandler* m_handler{nullptr}; // main-thread only
     mutable std::string m_lastError;
 
     std::thread m_worker;

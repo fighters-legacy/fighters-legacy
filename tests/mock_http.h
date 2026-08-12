@@ -21,11 +21,11 @@ struct NullHttpClient : public IHttpClient {
         return true;
     }
     void shutdown() override {}
-    void setEventHandler(IHttpClientHandler*) override {}
-    HttpRequestId request(const HttpRequestOptions&) override {
+    HttpRequestId request(const HttpRequestOptions&, IHttpClientHandler*) override {
         return 0;
     }
     void cancel(HttpRequestId) override {}
+    void cancelRequestsFor(IHttpClientHandler*) override {}
     void service() override {}
     const char* getLastError() const override {
         return nullptr;
@@ -61,53 +61,66 @@ struct TrackingHttpClient : public IHttpClient {
         return true;
     }
     void shutdown() override {}
-    void setEventHandler(IHttpClientHandler* h) override {
-        m_handler = h;
-    }
-    HttpRequestId request(const HttpRequestOptions& o) override {
-        if (o.url.empty())
+    // Per-request handler (#1083): the mock routes by id exactly as the real backend does, which is what
+    // lets a test drive two consumers at once and see that neither steals the other's completions.
+    HttpRequestId request(const HttpRequestOptions& o, IHttpClientHandler* handler) override {
+        if (o.url.empty() || handler == nullptr)
             return 0;
         requestedUrls.push_back(o.url);
         requests.push_back(o);
         m_pending.push_back({m_nextId, o.url});
+        m_handlers[m_nextId] = handler;
         return m_nextId++;
     }
     void cancel(HttpRequestId id) override {
         m_cancelled.push_back(id);
     }
+    void cancelRequestsFor(IHttpClientHandler* handler) override {
+        for (auto it = m_handlers.begin(); it != m_handlers.end();) {
+            if (it->second == handler) {
+                m_cancelled.push_back(it->first);
+                it = m_handlers.erase(it); // and deliver nothing: the owner is going away
+            } else {
+                ++it;
+            }
+        }
+    }
     void service() override {
         auto pending = m_pending;
         m_pending.clear();
         for (const auto& [id, url] : pending) {
+            const auto hit = m_handlers.find(id);
+            IHttpClientHandler* const handler = (hit != m_handlers.end()) ? hit->second : nullptr;
+            if (hit != m_handlers.end())
+                m_handlers.erase(hit); // the completion below is this request's last event
+            if (!handler)
+                continue; // forgotten by cancelRequestsFor: its owner is gone
+
             const bool wasCancelled = std::find(m_cancelled.begin(), m_cancelled.end(), id) != m_cancelled.end();
             if (wasCancelled) {
-                if (m_handler)
-                    m_handler->onHttpComplete(id, HttpStatus::Cancelled, 0, nullptr);
+                handler->onHttpComplete(id, HttpStatus::Cancelled, 0, nullptr);
                 continue;
             }
             auto it = responses.find(url);
             if (it == responses.end()) {
-                if (m_handler)
-                    m_handler->onHttpComplete(id, HttpStatus::Error, 0, "no canned response");
+                handler->onHttpComplete(id, HttpStatus::Error, 0, "no canned response");
                 continue;
             }
             const Canned& c = it->second;
             bool aborted = false;
-            if (m_handler && c.status == HttpStatus::Success) {
+            if (c.status == HttpStatus::Success) {
                 for (const auto& chunk : c.chunks) {
-                    if (!m_handler->onHttpData(id, chunk.data(), chunk.size())) {
+                    if (!handler->onHttpData(id, chunk.data(), chunk.size())) {
                         aborted = true;
                         break;
                     }
                 }
             }
-            if (m_handler) {
-                if (aborted)
-                    m_handler->onHttpComplete(id, HttpStatus::Cancelled, 0, nullptr);
-                else
-                    m_handler->onHttpComplete(id, c.status, c.httpCode,
-                                              c.status == HttpStatus::Error ? "canned error" : nullptr);
-            }
+            if (aborted)
+                handler->onHttpComplete(id, HttpStatus::Cancelled, 0, nullptr);
+            else
+                handler->onHttpComplete(id, c.status, c.httpCode,
+                                        c.status == HttpStatus::Error ? "canned error" : nullptr);
         }
     }
     const char* getLastError() const override {
@@ -115,7 +128,7 @@ struct TrackingHttpClient : public IHttpClient {
     }
 
   private:
-    IHttpClientHandler* m_handler{nullptr};
+    std::unordered_map<HttpRequestId, IHttpClientHandler*> m_handlers;
     HttpRequestId m_nextId{1};
     std::deque<std::pair<HttpRequestId, std::string>> m_pending;
     std::vector<HttpRequestId> m_cancelled;
