@@ -205,7 +205,7 @@ namespace fl {
 // after it, #1038), and voice capture is torn down before SDL_Quit() (#1054).
 //
 // An object whose constructor arguments are only known during a phase is held by unique_ptr and
-// built there; the phase binds `auto& name = *p_name;` so the moved code reads unchanged. The rest
+// built there; the phase binds `auto& name = *m_name;` so the moved code reads unchanged. The rest
 // default-construct and are assigned into.
 // ---------------------------------------------------------------------------
 struct ServerRuntime::Impl {
@@ -218,82 +218,82 @@ struct ServerRuntime::Impl {
         uint64_t tick{0};                                      // churn-local tick counter
     };
 
-    explicit Impl(ServerRuntime::Options& o) : opts(o) {}
+    explicit Impl(ServerRuntime::Options& o) : m_opts(o) {}
 
-    ServerRuntime::Options& opts;
-    int exitCode{0};
+    ServerRuntime::Options& m_opts;
+    int m_exitCode{0};
 
-    const fl::ServerUptime serverUptime;
-    Platform p;
-    ILogger* log{nullptr};
-    std::string configPath;
-    fl::ServerConfig cfg;
-    INetwork* net{nullptr};
-    std::string missionToLoad;
-    std::string modeRefToLoad;
-    char listeningMsg[192]{};
-    std::unique_ptr<fl::ServerQueryResponder> queryResponder;
-    std::unique_ptr<DiscoveryBeacon> beacon;
-    std::unique_ptr<IHttpClient> httpClient;
-    std::unique_ptr<LobbyRegistration> lobbyReg;
-    std::filesystem::path assetsRoot;
-    std::filesystem::path userDataRoot;
-    std::unique_ptr<ModLoader> p_modLoader;
-    std::unique_ptr<AssetManager> p_assets;
-    fl::GameModeDef gameMode;
-    std::unique_ptr<fl::TerrainStreamer> p_terrainStreamer;
-    fl::ContentIndex contentIndex;
-    fl::WeaponRegistry weaponRegistry;
-    fl::EntityTypeRegistry entityRegistry;
-    std::unique_ptr<fl::EntityManager> p_entityManager;
-    double planetR{0.0};
-    std::function<glm::dvec3(double, double, double)> nearSideSurface;
-    std::function<bool(double, double, std::chrono::steady_clock::time_point)> primeSpawnHeightUntil;
-    std::function<void(double, double)> primeSpawnHeight;
-    std::vector<std::array<double, 3>> cachedSpawns;
-    fl::AirportRegistry airportRegistry;
-    fl::WeatherControllerParams wparams;
-    std::unique_ptr<fl::WeatherController> p_weatherController;
-    std::unique_ptr<fl::WorldBroadcaster> p_broadcaster;
-    std::shared_ptr<std::unordered_map<std::string, std::shared_ptr<const fl::FlightModelData>>> fmCache;
-    std::unique_ptr<fl::DifficultyMultipliers> p_difficultyTable;
-    std::function<fl::AiScaling(const std::string&)> resolveAiScaling;
-    fl::ai::WingmanParams wingmanParams{};
-    std::unordered_map<std::string, std::pair<std::string, std::string>> aiScriptCache;
-    fl::FactionRegistry missionFactions;
-    std::unique_ptr<fl::AlertSystem> p_alertSystem;
-    std::unique_ptr<fl::MissionRuntime> missionRuntime;
-    fl::MatchController matchController;
-    std::size_t rotationIndex{0};
-    std::unique_ptr<fl::BotRoster> botRoster;
-    std::function<void(std::string_view)> missionActionSink;
-    std::string loadedMissionName;
-    uint64_t loadedMissionSpawned{0};
-    fl::WorldApi worldApi;
-    std::unique_ptr<fl::CampaignRunner> campaignRunner;
-    std::string campaignMissionId;
-    std::string campaignSavePath;
-    std::optional<std::string> campaignYaml;
-    std::unique_ptr<fl::WorldStateBridge> p_worldStateBridge;
-    CommandRegistry adminRegistry;
-    std::unique_ptr<CommandShell> p_adminShell;
-    fl::AdminChannelRegistry adminChannels;
-    std::unique_ptr<fl::AdminChannel> p_stdinChannel;
-    std::unique_ptr<fl::AdminChannel> p_missionChannel;
-    std::unique_ptr<fl::AdminChannel> p_enetChannel;
-    std::unique_ptr<fl::AdminChannel> p_rconChannel;
-    std::unique_ptr<fl::AdminChannel> p_httpChannel;
-    std::unique_ptr<fl::RconServer> rconServer;
-    std::unique_ptr<fl::HttpAdminServer> httpAdminServer;
-    std::function<void()> churnTick;
-    std::unique_ptr<fl::atc::AtcService> atcService;
-    std::unique_ptr<GameLoop> p_gameLoop;
-    std::unique_ptr<fl::JobSystem> p_jobSystem;
-    std::shared_ptr<const fl::ServerCommandContext> adminCtx;
-    fl::ReplayRecorder replayRecorder;
-    fl::WorldEvolutionSinks aiSinks;
-    fl::StdinCommandReader stdinReader;
-    ChurnState churnState;
+    const fl::ServerUptime m_serverUptime;
+    Platform m_p;
+    ILogger* m_log{nullptr};
+    std::string m_configPath;
+    fl::ServerConfig m_cfg;
+    INetwork* m_net{nullptr};
+    std::string m_missionToLoad;
+    std::string m_modeRefToLoad;
+    char m_listeningMsg[192]{};
+    std::unique_ptr<fl::ServerQueryResponder> m_queryResponder;
+    std::unique_ptr<DiscoveryBeacon> m_beacon;
+    std::unique_ptr<IHttpClient> m_httpClient;
+    std::unique_ptr<LobbyRegistration> m_lobbyReg;
+    std::filesystem::path m_assetsRoot;
+    std::filesystem::path m_userDataRoot;
+    std::unique_ptr<ModLoader> m_modLoader;
+    std::unique_ptr<AssetManager> m_assets;
+    fl::GameModeDef m_gameMode;
+    std::unique_ptr<fl::TerrainStreamer> m_terrainStreamer;
+    fl::ContentIndex m_contentIndex;
+    fl::WeaponRegistry m_weaponRegistry;
+    fl::EntityTypeRegistry m_entityRegistry;
+    std::unique_ptr<fl::EntityManager> m_entityManager;
+    double m_planetR{0.0};
+    std::function<glm::dvec3(double, double, double)> m_nearSideSurface;
+    std::function<bool(double, double, std::chrono::steady_clock::time_point)> m_primeSpawnHeightUntil;
+    std::function<void(double, double)> m_primeSpawnHeight;
+    std::vector<std::array<double, 3>> m_cachedSpawns;
+    fl::AirportRegistry m_airportRegistry;
+    fl::WeatherControllerParams m_wparams;
+    std::unique_ptr<fl::WeatherController> m_weatherController;
+    std::unique_ptr<fl::WorldBroadcaster> m_broadcaster;
+    std::shared_ptr<std::unordered_map<std::string, std::shared_ptr<const fl::FlightModelData>>> m_fmCache;
+    std::unique_ptr<fl::DifficultyMultipliers> m_difficultyTable;
+    std::function<fl::AiScaling(const std::string&)> m_resolveAiScaling;
+    fl::ai::WingmanParams m_wingmanParams{};
+    std::unordered_map<std::string, std::pair<std::string, std::string>> m_aiScriptCache;
+    fl::FactionRegistry m_missionFactions;
+    std::unique_ptr<fl::AlertSystem> m_alertSystem;
+    std::unique_ptr<fl::MissionRuntime> m_missionRuntime;
+    fl::MatchController m_matchController;
+    std::size_t m_rotationIndex{0};
+    std::unique_ptr<fl::BotRoster> m_botRoster;
+    std::function<void(std::string_view)> m_missionActionSink;
+    std::string m_loadedMissionName;
+    uint64_t m_loadedMissionSpawned{0};
+    fl::WorldApi m_worldApi;
+    std::unique_ptr<fl::CampaignRunner> m_campaignRunner;
+    std::string m_campaignMissionId;
+    std::string m_campaignSavePath;
+    std::optional<std::string> m_campaignYaml;
+    std::unique_ptr<fl::WorldStateBridge> m_worldStateBridge;
+    CommandRegistry m_adminRegistry;
+    std::unique_ptr<CommandShell> m_adminShell;
+    fl::AdminChannelRegistry m_adminChannels;
+    std::unique_ptr<fl::AdminChannel> m_stdinChannel;
+    std::unique_ptr<fl::AdminChannel> m_missionChannel;
+    std::unique_ptr<fl::AdminChannel> m_enetChannel;
+    std::unique_ptr<fl::AdminChannel> m_rconChannel;
+    std::unique_ptr<fl::AdminChannel> m_httpChannel;
+    std::unique_ptr<fl::RconServer> m_rconServer;
+    std::unique_ptr<fl::HttpAdminServer> m_httpAdminServer;
+    std::function<void()> m_churnTick;
+    std::unique_ptr<fl::atc::AtcService> m_atcService;
+    std::unique_ptr<GameLoop> m_gameLoop;
+    std::unique_ptr<fl::JobSystem> m_jobSystem;
+    std::shared_ptr<const fl::ServerCommandContext> m_adminCtx;
+    fl::ReplayRecorder m_replayRecorder;
+    fl::WorldEvolutionSinks m_aiSinks;
+    fl::StdinCommandReader m_stdinReader;
+    ChurnState m_churnState;
 
     // The phases, in call order.
     [[nodiscard]] bool initConfig();
@@ -309,13 +309,13 @@ struct ServerRuntime::Impl {
 bool ServerRuntime::Impl::initConfig() {
     // The members this phase touches, bound by name so the moved code reads unchanged --
     // and so its `[&name]` lambda captures still compile: you cannot capture a member.
-    [[maybe_unused]] auto& cfg = this->cfg;
-    [[maybe_unused]] auto& configPath = this->configPath;
-    [[maybe_unused]] auto& log = this->log;
-    [[maybe_unused]] auto& missionToLoad = this->missionToLoad;
-    [[maybe_unused]] auto& modeRefToLoad = this->modeRefToLoad;
-    [[maybe_unused]] auto& net = this->net;
-    [[maybe_unused]] auto& p = this->p;
+    [[maybe_unused]] auto& cfg = m_cfg;
+    [[maybe_unused]] auto& configPath = m_configPath;
+    [[maybe_unused]] auto& log = m_log;
+    [[maybe_unused]] auto& missionToLoad = m_missionToLoad;
+    [[maybe_unused]] auto& modeRefToLoad = m_modeRefToLoad;
+    [[maybe_unused]] auto& net = m_net;
+    [[maybe_unused]] auto& p = m_p;
     // ---- Set up platform ----
     // The network backend is created later (createNetwork), once [network].transport is known.
     // p is a member (see Impl)
@@ -338,42 +338,42 @@ bool ServerRuntime::Impl::initConfig() {
     cfg = fl::parseServerConfig(fl::ensureAndReadConfig(configPath, fl::defaultServerConfigToml(), *log), log);
 
     // ---- Tier 2 + 3: CLI positional args and environment variables ----
-    applyCliAndEnvOverrides(cfg, opts.argc, opts.argv, log);
+    applyCliAndEnvOverrides(cfg, m_opts.argc, m_opts.argv, log);
 
     // --bind / --admin-token flags from the pre-pass override any lower tier.
-    if (!opts.bind.empty())
-        cfg.server.bindAddress = opts.bind;
+    if (!m_opts.bind.empty())
+        cfg.server.bindAddress = m_opts.bind;
     // --admin-token takes highest precedence and overrides server.toml + FL_OPERATOR_PASSWORD.
     // Used internally by LocalServer (single-player) to inject a per-session token.
-    if (!opts.adminToken.empty())
-        cfg.security.operatorPassword = opts.adminToken;
+    if (!m_opts.adminToken.empty())
+        cfg.security.operatorPassword = m_opts.adminToken;
     // --metrics-json overrides the [metrics] tick_json_path from server.toml.
-    if (!opts.metricsJson.empty())
-        cfg.metrics.tickJsonPath = opts.metricsJson;
+    if (!m_opts.metricsJson.empty())
+        cfg.metrics.tickJsonPath = m_opts.metricsJson;
     // The embedded single-player server is told where to record (#41): its working directory is
     // wherever the CLIENT was launched from, which is not where the replay browser looks.
-    if (!opts.replayDir.empty())
-        cfg.replay.dir = opts.replayDir;
+    if (!m_opts.replayDir.empty())
+        cfg.replay.dir = m_opts.replayDir;
     // Both of these exist for the determinism gate (#644), which needs a populated world and the
     // recorder's own per-tick hashes without hand-editing a server.toml in a ctest.
-    if (!opts.replayHashLog.empty())
-        cfg.replay.hashLog = opts.replayHashLog;
-    if (opts.testSpawnAi >= 0)
-        cfg.world.testSpawnAiCount = static_cast<uint32_t>(opts.testSpawnAi);
+    if (!m_opts.replayHashLog.empty())
+        cfg.replay.hashLog = m_opts.replayHashLog;
+    if (m_opts.testSpawnAi >= 0)
+        cfg.world.testSpawnAiCount = static_cast<uint32_t>(m_opts.testSpawnAi);
     // --sim-worker-threads overrides the [world] sim_worker_threads from server.toml.
-    if (opts.simWorkers >= 0)
-        cfg.world.simWorkerThreads = static_cast<uint32_t>(opts.simWorkers);
+    if (m_opts.simWorkers >= 0)
+        cfg.world.simWorkerThreads = static_cast<uint32_t>(m_opts.simWorkers);
     // --flight-size overrides [flight] size. The game client's embedded single-player server passes
     // --flight-size 1, so single-player always flies with a wingman without changing the shipped
     // dedicated-server default (0), which would otherwise move every load-test number.
-    if (opts.flightSize >= 0)
-        cfg.flight.size = static_cast<uint32_t>(opts.flightSize);
+    if (m_opts.flightSize >= 0)
+        cfg.flight.size = static_cast<uint32_t>(m_opts.flightSize);
 
     // ---- Select + create the transport backend (now that [network].transport is known) ----
     // --transport <gns|enet> from the pre-pass overrides the config. Single-player LocalServer passes
     // --transport enet so the enet6 game client and this server match.
-    if (!opts.transport.empty())
-        cfg.network.transport = opts.transport;
+    if (!m_opts.transport.empty())
+        cfg.network.transport = m_opts.transport;
     const TransportKind transportKind = parseTransportKind(cfg.network.transport, TransportKind::Gns);
     p.network = createNetwork(transportKind, log);
     net = p.network.get();
@@ -389,7 +389,7 @@ bool ServerRuntime::Impl::initConfig() {
     // Multi-item rotation *timing* (advancing to the next item over the running server) lands
     // incrementally; the parse -> load -> sim-setup wiring is the deliverable here. The actual load
     // happens below once the entity registry + weather controller exist (see "load startup mission").
-    missionToLoad = opts.mission;
+    missionToLoad = m_opts.mission;
     if (missionToLoad.empty() && !cfg.rotation.items.empty())
         missionToLoad = cfg.rotation.items.front();
     // A rotation item may pair a mission with a game mode: "mission@builtin:tdm" (#521). Split the mode
@@ -401,7 +401,7 @@ bool ServerRuntime::Impl::initConfig() {
         if (!modeRef.empty())
             modeRefToLoad = modeRef;
     }
-    if (!cfg.rotation.items.empty() && opts.mission.empty()) {
+    if (!cfg.rotation.items.empty() && m_opts.mission.empty()) {
         char buf[128];
         std::snprintf(buf, sizeof(buf), "rotation: %zu item(s), order=%s (loading first: %s)",
                       cfg.rotation.items.size(), cfg.rotation.order.c_str(), cfg.rotation.items.front().c_str());
@@ -419,19 +419,19 @@ bool ServerRuntime::Impl::initConfig() {
 bool ServerRuntime::Impl::initNet() {
     // The members this phase touches, bound by name so the moved code reads unchanged --
     // and so its `[&name]` lambda captures still compile: you cannot capture a member.
-    [[maybe_unused]] auto& beacon = this->beacon;
-    [[maybe_unused]] auto& cfg = this->cfg;
-    [[maybe_unused]] auto& httpClient = this->httpClient;
-    [[maybe_unused]] auto& listeningMsg = this->listeningMsg;
-    [[maybe_unused]] auto& lobbyReg = this->lobbyReg;
-    [[maybe_unused]] auto& log = this->log;
-    [[maybe_unused]] auto& net = this->net;
-    [[maybe_unused]] auto& primeSpawnHeight = this->primeSpawnHeight;
-    [[maybe_unused]] auto& queryResponder = this->queryResponder;
+    [[maybe_unused]] auto& beacon = m_beacon;
+    [[maybe_unused]] auto& cfg = m_cfg;
+    [[maybe_unused]] auto& httpClient = m_httpClient;
+    [[maybe_unused]] auto& listeningMsg = m_listeningMsg;
+    [[maybe_unused]] auto& lobbyReg = m_lobbyReg;
+    [[maybe_unused]] auto& log = m_log;
+    [[maybe_unused]] auto& net = m_net;
+    [[maybe_unused]] auto& primeSpawnHeight = m_primeSpawnHeight;
+    [[maybe_unused]] auto& queryResponder = m_queryResponder;
     // ---- Init network ----
     if (!net->init()) {
         log->log(LogLevel::Error, __FILE__, __LINE__, "network init failed");
-        exitCode = 1;
+        m_exitCode = 1;
         return false;
     }
 
@@ -440,7 +440,7 @@ bool ServerRuntime::Impl::initNet() {
         std::snprintf(buf, sizeof(buf), "bind failed: %s", net->getLastError() ? net->getLastError() : "unknown");
         log->log(LogLevel::Error, __FILE__, __LINE__, buf);
         net->shutdown();
-        exitCode = 1;
+        m_exitCode = 1;
         return false;
     }
 
@@ -479,7 +479,7 @@ bool ServerRuntime::Impl::initNet() {
     const uint16_t queryPort = cfg.discovery.queryPort != 0 ? static_cast<uint16_t>(cfg.discovery.queryPort)
                                                             : static_cast<uint16_t>(cfg.server.port + 1);
     // queryResponder is a member (see Impl)
-    if (cfg.discovery.queryEnabled && !opts.noDiscovery) {
+    if (cfg.discovery.queryEnabled && !m_opts.noDiscovery) {
         queryResponder = std::make_unique<fl::ServerQueryResponder>(queryPort, *log);
         if (!queryResponder->start()) {
             log->log(LogLevel::Warn, __FILE__, __LINE__, "server query responder: bind failed; queries disabled");
@@ -497,7 +497,7 @@ bool ServerRuntime::Impl::initNet() {
     }
 
     // beacon is a member (see Impl)
-    if (cfg.discovery.enabled && !opts.noDiscovery) {
+    if (cfg.discovery.enabled && !m_opts.noDiscovery) {
         DiscoveryBeacon::Config dcfg;
         dcfg.name = cfg.server.name;
         dcfg.gamePort = cfg.server.port;       // advertised as MsgLanBeacon::gamePort — where clients connect
@@ -561,29 +561,29 @@ bool ServerRuntime::Impl::initNet() {
 bool ServerRuntime::Impl::initContent() {
     // The members this phase touches, bound by name so the moved code reads unchanged --
     // and so its `[&name]` lambda captures still compile: you cannot capture a member.
-    [[maybe_unused]] auto& airportRegistry = this->airportRegistry;
-    [[maybe_unused]] auto& assetsRoot = this->assetsRoot;
-    [[maybe_unused]] auto& cachedSpawns = this->cachedSpawns;
-    [[maybe_unused]] auto& cfg = this->cfg;
-    [[maybe_unused]] auto& contentIndex = this->contentIndex;
-    [[maybe_unused]] auto& entityRegistry = this->entityRegistry;
-    [[maybe_unused]] auto& gameMode = this->gameMode;
-    [[maybe_unused]] auto& log = this->log;
-    [[maybe_unused]] auto& modeRefToLoad = this->modeRefToLoad;
-    [[maybe_unused]] auto& nearSideSurface = this->nearSideSurface;
-    [[maybe_unused]] auto& p = this->p;
-    [[maybe_unused]] auto& planetR = this->planetR;
-    [[maybe_unused]] auto& primeSpawnHeight = this->primeSpawnHeight;
-    [[maybe_unused]] auto& primeSpawnHeightUntil = this->primeSpawnHeightUntil;
-    [[maybe_unused]] auto& userDataRoot = this->userDataRoot;
-    [[maybe_unused]] auto& weaponRegistry = this->weaponRegistry;
+    [[maybe_unused]] auto& airportRegistry = m_airportRegistry;
+    [[maybe_unused]] auto& assetsRoot = m_assetsRoot;
+    [[maybe_unused]] auto& cachedSpawns = m_cachedSpawns;
+    [[maybe_unused]] auto& cfg = m_cfg;
+    [[maybe_unused]] auto& contentIndex = m_contentIndex;
+    [[maybe_unused]] auto& entityRegistry = m_entityRegistry;
+    [[maybe_unused]] auto& gameMode = m_gameMode;
+    [[maybe_unused]] auto& log = m_log;
+    [[maybe_unused]] auto& modeRefToLoad = m_modeRefToLoad;
+    [[maybe_unused]] auto& nearSideSurface = m_nearSideSurface;
+    [[maybe_unused]] auto& p = m_p;
+    [[maybe_unused]] auto& planetR = m_planetR;
+    [[maybe_unused]] auto& primeSpawnHeight = m_primeSpawnHeight;
+    [[maybe_unused]] auto& primeSpawnHeightUntil = m_primeSpawnHeightUntil;
+    [[maybe_unused]] auto& userDataRoot = m_userDataRoot;
+    [[maybe_unused]] auto& weaponRegistry = m_weaponRegistry;
     // ---- Content system and headless terrain ----
     // Content root resolution mirrors the client (#831) so a single-player pair agrees on where
     // mods/ lives: --assets <dir> > FL_ASSETS_ROOT > the current working directory. LocalServer
     // forwards the client's resolved root via --assets, so the two never disagree.
     assetsRoot = fs::current_path();
-    if (!opts.assets.empty())
-        assetsRoot = fs::path(opts.assets);
+    if (!m_opts.assets.empty())
+        assetsRoot = fs::path(m_opts.assets);
     else if (const char* ev = std::getenv("FL_ASSETS_ROOT"); ev && *ev)
         assetsRoot = fs::path(ev);
     userDataRoot = fs::current_path();
@@ -600,14 +600,14 @@ bool ServerRuntime::Impl::initContent() {
         auto asyncFs = std::make_unique<StdAsyncFilesystem>(assetsRoot, userDataRoot);
         if (!asyncFs->init()) {
             log->log(LogLevel::Error, __FILE__, __LINE__, "async filesystem init failed");
-            exitCode = 1;
+            m_exitCode = 1;
             return false;
         }
         p.asyncFilesystem = std::move(asyncFs);
     }
 
-    p_modLoader = std::make_unique<ModLoader>(*p.filesystem, *log, assetsRoot.string());
-    [[maybe_unused]] auto& modLoader = *p_modLoader;
+    m_modLoader = std::make_unique<ModLoader>(*p.filesystem, *log, assetsRoot.string());
+    [[maybe_unused]] auto& modLoader = *m_modLoader;
     auto packs = modLoader.load();
     {
         char buf[128];
@@ -622,8 +622,8 @@ bool ServerRuntime::Impl::initContent() {
                                                fl::builtinWorldTerrainManifest().terrainId))
         packs.push_back(std::move(base));
 
-    p_assets = std::make_unique<AssetManager>(std::move(packs), *log);
-    [[maybe_unused]] auto& assets = *p_assets;
+    m_assets = std::make_unique<AssetManager>(std::move(packs), *log);
+    [[maybe_unused]] auto& assets = *m_assets;
     assets.initialize(nullptr); // headless — window is null; NeedsConfiguration packs dropped
 
     // Resolve the active game mode (#521): a builtin id, a pack modes/ asset, or the free-flight
@@ -639,9 +639,9 @@ bool ServerRuntime::Impl::initContent() {
     }
     (void)gameMode; // consumed by the MatchController in #523
 
-    p_terrainStreamer =
+    m_terrainStreamer =
         std::make_unique<fl::TerrainStreamer>(fl::builtinWorldTerrainManifest(), assets, *p.asyncFilesystem, nullptr);
-    [[maybe_unused]] auto& terrainStreamer = *p_terrainStreamer;
+    [[maybe_unused]] auto& terrainStreamer = *m_terrainStreamer;
     log->log(LogLevel::Info, __FILE__, __LINE__, "terrain: headless streamer initialized");
 
     // Apply the configured planet radius BEFORE the first update(): tiles bake curvature and
@@ -684,8 +684,8 @@ bool ServerRuntime::Impl::initContent() {
 
     // ---- Entity system ----
     // entityRegistry is a member (see Impl)
-    p_entityManager = std::make_unique<fl::EntityManager>(*log, entityRegistry);
-    [[maybe_unused]] auto& entityManager = *p_entityManager;
+    m_entityManager = std::make_unique<fl::EntityManager>(*log, entityRegistry);
+    [[maybe_unused]] auto& entityManager = *m_entityManager;
 
     // World object ceiling (#1049). Applied HERE, before anything spawns, so the mission load, the
     // load-test pre-spawn and every runtime spawn are bounded by it. The key was parsed and
@@ -874,30 +874,30 @@ bool ServerRuntime::Impl::initContent() {
 bool ServerRuntime::Impl::initWorld() {
     // The members this phase touches, bound by name so the moved code reads unchanged --
     // and so its `[&name]` lambda captures still compile: you cannot capture a member.
-    [[maybe_unused]] auto& aiScriptCache = this->aiScriptCache;
-    [[maybe_unused]] auto& airportRegistry = this->airportRegistry;
-    [[maybe_unused]] auto& assets = *p_assets;
-    [[maybe_unused]] auto& cachedSpawns = this->cachedSpawns;
-    [[maybe_unused]] auto& cfg = this->cfg;
-    [[maybe_unused]] auto& configPath = this->configPath;
-    [[maybe_unused]] auto& contentIndex = this->contentIndex;
-    [[maybe_unused]] auto& entityManager = *p_entityManager;
-    [[maybe_unused]] auto& entityRegistry = this->entityRegistry;
-    [[maybe_unused]] auto& fmCache = this->fmCache;
-    [[maybe_unused]] auto& log = this->log;
-    [[maybe_unused]] auto& net = this->net;
-    [[maybe_unused]] auto& p = this->p;
-    [[maybe_unused]] auto& primeSpawnHeight = this->primeSpawnHeight;
-    [[maybe_unused]] auto& resolveAiScaling = this->resolveAiScaling;
-    [[maybe_unused]] auto& terrainStreamer = *p_terrainStreamer;
-    [[maybe_unused]] auto& weaponRegistry = this->weaponRegistry;
-    [[maybe_unused]] auto& wingmanParams = this->wingmanParams;
-    [[maybe_unused]] auto& wparams = this->wparams;
+    [[maybe_unused]] auto& aiScriptCache = m_aiScriptCache;
+    [[maybe_unused]] auto& airportRegistry = m_airportRegistry;
+    [[maybe_unused]] auto& assets = *m_assets;
+    [[maybe_unused]] auto& cachedSpawns = m_cachedSpawns;
+    [[maybe_unused]] auto& cfg = m_cfg;
+    [[maybe_unused]] auto& configPath = m_configPath;
+    [[maybe_unused]] auto& contentIndex = m_contentIndex;
+    [[maybe_unused]] auto& entityManager = *m_entityManager;
+    [[maybe_unused]] auto& entityRegistry = m_entityRegistry;
+    [[maybe_unused]] auto& fmCache = m_fmCache;
+    [[maybe_unused]] auto& log = m_log;
+    [[maybe_unused]] auto& net = m_net;
+    [[maybe_unused]] auto& p = m_p;
+    [[maybe_unused]] auto& primeSpawnHeight = m_primeSpawnHeight;
+    [[maybe_unused]] auto& resolveAiScaling = m_resolveAiScaling;
+    [[maybe_unused]] auto& terrainStreamer = *m_terrainStreamer;
+    [[maybe_unused]] auto& weaponRegistry = m_weaponRegistry;
+    [[maybe_unused]] auto& wingmanParams = m_wingmanParams;
+    [[maybe_unused]] auto& wparams = m_wparams;
     // ---- WorldBroadcaster wires the sim loop to ENet ----
     // wparams is a member (see Impl)
     wparams.timeScaleRatio = static_cast<float>(cfg.world.timeScale);
-    p_weatherController = std::make_unique<fl::WeatherController>(wparams);
-    [[maybe_unused]] auto& weatherController = *p_weatherController;
+    m_weatherController = std::make_unique<fl::WeatherController>(wparams);
+    [[maybe_unused]] auto& weatherController = *m_weatherController;
     // Altitude wind profile (#489): load the [wind] profile_path (relative to the config dir) and
     // apply it, so aircraft feel altitude-dependent wind the client predicts in parity.
     if (!cfg.wind.profilePath.empty()) {
@@ -917,9 +917,9 @@ bool ServerRuntime::Impl::initWorld() {
             log->log(fl::LogLevel::Warn, __FILE__, __LINE__, "wind profile_path not found; ignoring");
         }
     }
-    p_broadcaster =
+    m_broadcaster =
         std::make_unique<fl::WorldBroadcaster>(entityManager, entityRegistry, *net, *log, &weatherController);
-    [[maybe_unused]] auto& broadcaster = *p_broadcaster;
+    [[maybe_unused]] auto& broadcaster = *m_broadcaster;
     broadcaster.setParachuteType("builtin:parachute"); // spawn a chute on pilot ejection (#672)
     broadcaster.setAiAutoEject(true);                  // AI pilots punch out when critically hit (#672)
     fl::WorldBroadcasterConfig wbConfig;
@@ -1041,9 +1041,9 @@ bool ServerRuntime::Impl::initWorld() {
     // The table is mod-overridable (data/difficulty.toml through the AssetManager, highest-priority
     // pack wins) exactly like the client path, so a content pack tunes its own AI without patching
     // the server.
-    p_difficultyTable =
+    m_difficultyTable =
         std::make_unique<fl::DifficultyMultipliers>(fl::DifficultyMultipliers::load(assets, *p.filesystem, *log));
-    [[maybe_unused]] auto& difficultyTable = *p_difficultyTable;
+    [[maybe_unused]] auto& difficultyTable = *m_difficultyTable;
     resolveAiScaling = [&difficultyTable](const std::string& name) -> fl::AiScaling {
         fl::DifficultyPreset preset = fl::DifficultyPreset::Pilot;
         if (name == "cadet")
@@ -1289,34 +1289,34 @@ bool ServerRuntime::Impl::initWorld() {
 bool ServerRuntime::Impl::initMission() {
     // The members this phase touches, bound by name so the moved code reads unchanged --
     // and so its `[&name]` lambda captures still compile: you cannot capture a member.
-    [[maybe_unused]] auto& adminRegistry = this->adminRegistry;
-    [[maybe_unused]] auto& aiScriptCache = this->aiScriptCache;
-    [[maybe_unused]] auto& assets = *p_assets;
-    [[maybe_unused]] auto& botRoster = this->botRoster;
-    [[maybe_unused]] auto& broadcaster = *p_broadcaster;
-    [[maybe_unused]] auto& campaignMissionId = this->campaignMissionId;
-    [[maybe_unused]] auto& campaignRunner = this->campaignRunner;
-    [[maybe_unused]] auto& campaignSavePath = this->campaignSavePath;
-    [[maybe_unused]] auto& campaignYaml = this->campaignYaml;
-    [[maybe_unused]] auto& cfg = this->cfg;
-    [[maybe_unused]] auto& entityManager = *p_entityManager;
-    [[maybe_unused]] auto& entityRegistry = this->entityRegistry;
-    [[maybe_unused]] auto& gameMode = this->gameMode;
-    [[maybe_unused]] auto& loadedMissionName = this->loadedMissionName;
-    [[maybe_unused]] auto& loadedMissionSpawned = this->loadedMissionSpawned;
-    [[maybe_unused]] auto& log = this->log;
-    [[maybe_unused]] auto& matchController = this->matchController;
-    [[maybe_unused]] auto& missionActionSink = this->missionActionSink;
-    [[maybe_unused]] auto& missionFactions = this->missionFactions;
-    [[maybe_unused]] auto& missionRuntime = this->missionRuntime;
-    [[maybe_unused]] auto& missionToLoad = this->missionToLoad;
-    [[maybe_unused]] auto& nearSideSurface = this->nearSideSurface;
-    [[maybe_unused]] auto& net = this->net;
-    [[maybe_unused]] auto& p = this->p;
-    [[maybe_unused]] auto& rotationIndex = this->rotationIndex;
-    [[maybe_unused]] auto& terrainStreamer = *p_terrainStreamer;
-    [[maybe_unused]] auto& weatherController = *p_weatherController;
-    [[maybe_unused]] auto& worldApi = this->worldApi;
+    [[maybe_unused]] auto& adminRegistry = m_adminRegistry;
+    [[maybe_unused]] auto& aiScriptCache = m_aiScriptCache;
+    [[maybe_unused]] auto& assets = *m_assets;
+    [[maybe_unused]] auto& botRoster = m_botRoster;
+    [[maybe_unused]] auto& broadcaster = *m_broadcaster;
+    [[maybe_unused]] auto& campaignMissionId = m_campaignMissionId;
+    [[maybe_unused]] auto& campaignRunner = m_campaignRunner;
+    [[maybe_unused]] auto& campaignSavePath = m_campaignSavePath;
+    [[maybe_unused]] auto& campaignYaml = m_campaignYaml;
+    [[maybe_unused]] auto& cfg = m_cfg;
+    [[maybe_unused]] auto& entityManager = *m_entityManager;
+    [[maybe_unused]] auto& entityRegistry = m_entityRegistry;
+    [[maybe_unused]] auto& gameMode = m_gameMode;
+    [[maybe_unused]] auto& loadedMissionName = m_loadedMissionName;
+    [[maybe_unused]] auto& loadedMissionSpawned = m_loadedMissionSpawned;
+    [[maybe_unused]] auto& log = m_log;
+    [[maybe_unused]] auto& matchController = m_matchController;
+    [[maybe_unused]] auto& missionActionSink = m_missionActionSink;
+    [[maybe_unused]] auto& missionFactions = m_missionFactions;
+    [[maybe_unused]] auto& missionRuntime = m_missionRuntime;
+    [[maybe_unused]] auto& missionToLoad = m_missionToLoad;
+    [[maybe_unused]] auto& nearSideSurface = m_nearSideSurface;
+    [[maybe_unused]] auto& net = m_net;
+    [[maybe_unused]] auto& p = m_p;
+    [[maybe_unused]] auto& rotationIndex = m_rotationIndex;
+    [[maybe_unused]] auto& terrainStreamer = *m_terrainStreamer;
+    [[maybe_unused]] auto& weatherController = *m_weatherController;
+    [[maybe_unused]] auto& worldApi = m_worldApi;
     // ---- Load the startup mission (#854/#855) ----
     // Resolve the mission asset, hand its bytes to the engine-mission runtime parser (the same schema
     // validate-mission checks), and set up the sim from it BEFORE gameLoop.start(): spawns + factions
@@ -1327,8 +1327,8 @@ bool ServerRuntime::Impl::initMission() {
     // Airspace enforcement (#162). Declared beside missionFactions because it holds a reference to it
     // and, like it, must outlive gameLoop (the composite tick hook and the world.* Lua hooks capture
     // it). Inert until a mission supplies zones -- a zoneless server pays one empty-vector check a tick.
-    p_alertSystem = std::make_unique<fl::AlertSystem>(missionFactions);
-    [[maybe_unused]] auto& alertSystem = *p_alertSystem;
+    m_alertSystem = std::make_unique<fl::AlertSystem>(missionFactions);
+    [[maybe_unused]] auto& alertSystem = *m_alertSystem;
     // The objective/trigger evaluator (#633). Constructed below when a mission loads; declared here so
     // it outlives gameLoop (the broadcaster's tick hook captures a pointer into it).
     // missionRuntime is a member (see Impl)
@@ -1466,13 +1466,13 @@ bool ServerRuntime::Impl::initMission() {
     // campaignMissionId is a member (see Impl)
     // campaignSavePath is a member (see Impl)
     // campaignYaml is a member (see Impl)
-    if (!opts.campaign.empty()) {
-        if (auto campBytes = fl::loadMissionYaml(opts.campaign, &assets, *log)) {
+    if (!m_opts.campaign.empty()) {
+        if (auto campBytes = fl::loadMissionYaml(m_opts.campaign, &assets, *log)) {
             fl::CampaignParseResult cp = fl::parseCampaign(*campBytes);
             if (!cp.ok) {
                 char buf[160];
                 std::snprintf(buf, sizeof(buf), "campaign '%.80s' failed to parse (%zu error(s))",
-                              opts.campaign.c_str(), cp.errors.size());
+                              m_opts.campaign.c_str(), cp.errors.size());
                 log->log(LogLevel::Error, __FILE__, __LINE__, buf);
                 for (const std::string& e : cp.errors)
                     log->log(LogLevel::Error, __FILE__, __LINE__, e.c_str());
@@ -1553,7 +1553,7 @@ bool ServerRuntime::Impl::initMission() {
             }
         } else {
             char buf[160];
-            std::snprintf(buf, sizeof(buf), "campaign file '%.96s' not found", opts.campaign.c_str());
+            std::snprintf(buf, sizeof(buf), "campaign file '%.96s' not found", m_opts.campaign.c_str());
             log->log(LogLevel::Warn, __FILE__, __LINE__, buf);
         }
     }
@@ -1601,8 +1601,8 @@ bool ServerRuntime::Impl::initMission() {
                     if (!obj.route.empty()) {
                         std::vector<glm::dvec3> wps;
                         wps.reserve(obj.route.size());
-                        for (const auto& p : obj.route)
-                            wps.emplace_back(p[0], p[1], p[2]);
+                        for (const auto& wp : obj.route)
+                            wps.emplace_back(wp[0], wp[1], wp[2]);
                         ctrl = std::make_unique<fl::ai::WaypointController>(std::move(wps));
                     } else if (!obj.ai.empty()) {
                         std::vector<std::string> toks;
@@ -2088,9 +2088,9 @@ bool ServerRuntime::Impl::initMission() {
     // Each system owns its own sub-rate cadence now: BotRoster steps itself at ~1 Hz, WorldStateBridge
     // pushes the mission block every 30 ticks and MsgMatchState on a version change. The caller no longer
     // knows or cares.
-    p_worldStateBridge =
+    m_worldStateBridge =
         std::make_unique<fl::WorldStateBridge>(broadcaster, matchController, missionRuntime.get(), loadedMissionName);
-    [[maybe_unused]] auto& worldStateBridge = *p_worldStateBridge;
+    [[maybe_unused]] auto& worldStateBridge = *m_worldStateBridge;
 
     if (!cfg.trace.inputTraceDir.empty()) {
         broadcaster.setInputTraceDir(cfg.trace.inputTraceDir);
@@ -2121,31 +2121,31 @@ bool ServerRuntime::Impl::initMission() {
 bool ServerRuntime::Impl::initAdmin() {
     // The members this phase touches, bound by name so the moved code reads unchanged --
     // and so its `[&name]` lambda captures still compile: you cannot capture a member.
-    [[maybe_unused]] auto& adminChannels = this->adminChannels;
-    [[maybe_unused]] auto& adminRegistry = this->adminRegistry;
-    [[maybe_unused]] auto& aiScriptCache = this->aiScriptCache;
-    [[maybe_unused]] auto& alertSystem = *p_alertSystem;
-    [[maybe_unused]] auto& assets = *p_assets;
-    [[maybe_unused]] auto& atcService = this->atcService;
-    [[maybe_unused]] auto& botRoster = this->botRoster;
-    [[maybe_unused]] auto& broadcaster = *p_broadcaster;
-    [[maybe_unused]] auto& cfg = this->cfg;
-    [[maybe_unused]] auto& churnState = this->churnState;
-    [[maybe_unused]] auto& churnTick = this->churnTick;
-    [[maybe_unused]] auto& httpAdminServer = this->httpAdminServer;
-    [[maybe_unused]] auto& log = this->log;
-    [[maybe_unused]] auto& matchController = this->matchController;
-    [[maybe_unused]] auto& missionFactions = this->missionFactions;
-    [[maybe_unused]] auto& missionRuntime = this->missionRuntime;
-    [[maybe_unused]] auto& rconServer = this->rconServer;
-    [[maybe_unused]] auto& rotationIndex = this->rotationIndex;
-    [[maybe_unused]] auto& worldStateBridge = *p_worldStateBridge;
+    [[maybe_unused]] auto& adminChannels = m_adminChannels;
+    [[maybe_unused]] auto& adminRegistry = m_adminRegistry;
+    [[maybe_unused]] auto& aiScriptCache = m_aiScriptCache;
+    [[maybe_unused]] auto& alertSystem = *m_alertSystem;
+    [[maybe_unused]] auto& assets = *m_assets;
+    [[maybe_unused]] auto& atcService = m_atcService;
+    [[maybe_unused]] auto& botRoster = m_botRoster;
+    [[maybe_unused]] auto& broadcaster = *m_broadcaster;
+    [[maybe_unused]] auto& cfg = m_cfg;
+    [[maybe_unused]] auto& churnState = m_churnState;
+    [[maybe_unused]] auto& churnTick = m_churnTick;
+    [[maybe_unused]] auto& httpAdminServer = m_httpAdminServer;
+    [[maybe_unused]] auto& log = m_log;
+    [[maybe_unused]] auto& matchController = m_matchController;
+    [[maybe_unused]] auto& missionFactions = m_missionFactions;
+    [[maybe_unused]] auto& missionRuntime = m_missionRuntime;
+    [[maybe_unused]] auto& rconServer = m_rconServer;
+    [[maybe_unused]] auto& rotationIndex = m_rotationIndex;
+    [[maybe_unused]] auto& worldStateBridge = *m_worldStateBridge;
     // ---- Admin command registry (built before gameLoop to satisfy RAII destruction order) ----
     // Destruction order (LIFO): gameLoop first (sim thread stops), then rconServer
     // (RCON I/O thread stops while adminRegistry still alive), then adminShell, then adminRegistry.
     // adminRegistry is a member (see Impl)
-    p_adminShell = std::make_unique<CommandShell>(*log, adminRegistry);
-    [[maybe_unused]] auto& adminShell = *p_adminShell;
+    m_adminShell = std::make_unique<CommandShell>(*log, adminRegistry);
+    [[maybe_unused]] auto& adminShell = *m_adminShell;
 
     // ---- Admin frontends: one AdminChannel each (#1079, D14) ----
     // {auth, issuer resolution, dispatch-with-issuer, drain} behind a constructor, and an enumerable
@@ -2172,26 +2172,26 @@ bool ServerRuntime::Impl::initAdmin() {
     // because the operator started this process and chose to load that mission. They are registered
     // anyway: the failure this issue fixes is a surface an operator cannot SEE, and "no per-IP auth"
     // is a thing worth being able to read during an incident.
-    p_stdinChannel = std::make_unique<fl::AdminChannel>(adminDispatch, channelConfig("stdin", 0, 0, false),
+    m_stdinChannel = std::make_unique<fl::AdminChannel>(adminDispatch, channelConfig("stdin", 0, 0, false),
                                                         fl::SystemClock::instance());
-    [[maybe_unused]] auto& stdinChannel = *p_stdinChannel;
-    p_missionChannel = std::make_unique<fl::AdminChannel>(adminDispatch, channelConfig("mission", 0, 0, false),
+    [[maybe_unused]] auto& stdinChannel = *m_stdinChannel;
+    m_missionChannel = std::make_unique<fl::AdminChannel>(adminDispatch, channelConfig("mission", 0, 0, false),
                                                           fl::SystemClock::instance());
-    [[maybe_unused]] auto& missionChannel = *p_missionChannel;
-    p_enetChannel = std::make_unique<fl::AdminChannel>(
+    [[maybe_unused]] auto& missionChannel = *m_missionChannel;
+    m_enetChannel = std::make_unique<fl::AdminChannel>(
         adminDispatch,
         channelConfig("enet", cfg.security.adminAuthMaxFailures, cfg.security.adminAuthLockoutSeconds, true),
         fl::SystemClock::instance());
-    [[maybe_unused]] auto& enetChannel = *p_enetChannel;
-    p_rconChannel = std::make_unique<fl::AdminChannel>(
+    [[maybe_unused]] auto& enetChannel = *m_enetChannel;
+    m_rconChannel = std::make_unique<fl::AdminChannel>(
         adminDispatch, channelConfig("rcon", cfg.rcon.maxAuthFailures, cfg.rcon.lockoutSeconds, true),
         fl::SystemClock::instance());
-    [[maybe_unused]] auto& rconChannel = *p_rconChannel;
+    [[maybe_unused]] auto& rconChannel = *m_rconChannel;
     // MCP shares this one: same listener, same token table, same lockout (see HttpAdminServer.h).
-    p_httpChannel = std::make_unique<fl::AdminChannel>(
+    m_httpChannel = std::make_unique<fl::AdminChannel>(
         adminDispatch, channelConfig("http", cfg.httpAdmin.maxAuthFailures, cfg.httpAdmin.lockoutSeconds, true),
         fl::SystemClock::instance());
-    [[maybe_unused]] auto& httpChannel = *p_httpChannel;
+    [[maybe_unused]] auto& httpChannel = *m_httpChannel;
     adminChannels.add(stdinChannel);
     adminChannels.add(missionChannel);
 
@@ -2213,8 +2213,8 @@ bool ServerRuntime::Impl::initAdmin() {
     // broadcaster holds a raw pointer to it). Constructed + wired below, after gameLoop exists.
     // atcService is a member (see Impl)
 
-    p_gameLoop = std::make_unique<GameLoop>(broadcaster, *log, kSimTickRateHz, cfg.world.maxCatchupTicks);
-    [[maybe_unused]] auto& gameLoop = *p_gameLoop;
+    m_gameLoop = std::make_unique<GameLoop>(broadcaster, *log, kSimTickRateHz, cfg.world.maxCatchupTicks);
+    [[maybe_unused]] auto& gameLoop = *m_gameLoop;
 
     // The ordered sim-system list (#1078). Registration order is execution order; see the note above
     // the WorldStateBridge construction. Each of these implements ISimUpdate, so a new sim system is a
@@ -2270,8 +2270,8 @@ bool ServerRuntime::Impl::initAdmin() {
     // Data-parallel sim tick: the worker pool that parallelises the per-entity AI + integrate
     // passes. Constructed before gameLoop.start() and outlives it (declared here in main's scope).
     // 0 = auto (hardware_concurrency), 1 = serial. Injected into the broadcaster below.
-    p_jobSystem = std::make_unique<fl::JobSystem>(cfg.world.simWorkerThreads);
-    [[maybe_unused]] auto& jobSystem = *p_jobSystem;
+    m_jobSystem = std::make_unique<fl::JobSystem>(cfg.world.simWorkerThreads);
+    [[maybe_unused]] auto& jobSystem = *m_jobSystem;
     broadcaster.setJobSystem(jobSystem);
     {
         char wbuf[96];
@@ -2285,40 +2285,40 @@ bool ServerRuntime::Impl::initAdmin() {
 bool ServerRuntime::Impl::initSystems() {
     // The members this phase touches, bound by name so the moved code reads unchanged --
     // and so its `[&name]` lambda captures still compile: you cannot capture a member.
-    [[maybe_unused]] auto& adminChannels = this->adminChannels;
-    [[maybe_unused]] auto& adminCtx = this->adminCtx;
-    [[maybe_unused]] auto& adminRegistry = this->adminRegistry;
-    [[maybe_unused]] auto& adminShell = *p_adminShell;
-    [[maybe_unused]] auto& aiScriptCache = this->aiScriptCache;
-    [[maybe_unused]] auto& airportRegistry = this->airportRegistry;
-    [[maybe_unused]] auto& assets = *p_assets;
-    [[maybe_unused]] auto& atcService = this->atcService;
-    [[maybe_unused]] auto& beacon = this->beacon;
-    [[maybe_unused]] auto& broadcaster = *p_broadcaster;
-    [[maybe_unused]] auto& cfg = this->cfg;
-    [[maybe_unused]] auto& churnState = this->churnState;
-    [[maybe_unused]] auto& churnTick = this->churnTick;
-    [[maybe_unused]] auto& configPath = this->configPath;
-    [[maybe_unused]] auto& enetChannel = *p_enetChannel;
-    [[maybe_unused]] auto& entityManager = *p_entityManager;
-    [[maybe_unused]] auto& entityRegistry = this->entityRegistry;
-    [[maybe_unused]] auto& fmCache = this->fmCache;
-    [[maybe_unused]] auto& gameLoop = *p_gameLoop;
-    [[maybe_unused]] auto& loadedMissionName = this->loadedMissionName;
-    [[maybe_unused]] auto& loadedMissionSpawned = this->loadedMissionSpawned;
-    [[maybe_unused]] auto& log = this->log;
-    [[maybe_unused]] auto& missionActionSink = this->missionActionSink;
-    [[maybe_unused]] auto& missionChannel = *p_missionChannel;
-    [[maybe_unused]] auto& missionFactions = this->missionFactions;
-    [[maybe_unused]] auto& missionRuntime = this->missionRuntime;
-    [[maybe_unused]] auto& nearSideSurface = this->nearSideSurface;
-    [[maybe_unused]] auto& planetR = this->planetR;
-    [[maybe_unused]] auto& primeSpawnHeightUntil = this->primeSpawnHeightUntil;
-    [[maybe_unused]] auto& replayRecorder = this->replayRecorder;
-    [[maybe_unused]] auto& resolveAiScaling = this->resolveAiScaling;
-    [[maybe_unused]] auto& serverUptime = this->serverUptime;
-    [[maybe_unused]] auto& weatherController = *p_weatherController;
-    [[maybe_unused]] auto& worldApi = this->worldApi;
+    [[maybe_unused]] auto& adminChannels = m_adminChannels;
+    [[maybe_unused]] auto& adminCtx = m_adminCtx;
+    [[maybe_unused]] auto& adminRegistry = m_adminRegistry;
+    [[maybe_unused]] auto& adminShell = *m_adminShell;
+    [[maybe_unused]] auto& aiScriptCache = m_aiScriptCache;
+    [[maybe_unused]] auto& airportRegistry = m_airportRegistry;
+    [[maybe_unused]] auto& assets = *m_assets;
+    [[maybe_unused]] auto& atcService = m_atcService;
+    [[maybe_unused]] auto& beacon = m_beacon;
+    [[maybe_unused]] auto& broadcaster = *m_broadcaster;
+    [[maybe_unused]] auto& cfg = m_cfg;
+    [[maybe_unused]] auto& churnState = m_churnState;
+    [[maybe_unused]] auto& churnTick = m_churnTick;
+    [[maybe_unused]] auto& configPath = m_configPath;
+    [[maybe_unused]] auto& enetChannel = *m_enetChannel;
+    [[maybe_unused]] auto& entityManager = *m_entityManager;
+    [[maybe_unused]] auto& entityRegistry = m_entityRegistry;
+    [[maybe_unused]] auto& fmCache = m_fmCache;
+    [[maybe_unused]] auto& gameLoop = *m_gameLoop;
+    [[maybe_unused]] auto& loadedMissionName = m_loadedMissionName;
+    [[maybe_unused]] auto& loadedMissionSpawned = m_loadedMissionSpawned;
+    [[maybe_unused]] auto& log = m_log;
+    [[maybe_unused]] auto& missionActionSink = m_missionActionSink;
+    [[maybe_unused]] auto& missionChannel = *m_missionChannel;
+    [[maybe_unused]] auto& missionFactions = m_missionFactions;
+    [[maybe_unused]] auto& missionRuntime = m_missionRuntime;
+    [[maybe_unused]] auto& nearSideSurface = m_nearSideSurface;
+    [[maybe_unused]] auto& planetR = m_planetR;
+    [[maybe_unused]] auto& primeSpawnHeightUntil = m_primeSpawnHeightUntil;
+    [[maybe_unused]] auto& replayRecorder = m_replayRecorder;
+    [[maybe_unused]] auto& resolveAiScaling = m_resolveAiScaling;
+    [[maybe_unused]] auto& serverUptime = m_serverUptime;
+    [[maybe_unused]] auto& weatherController = *m_weatherController;
+    [[maybe_unused]] auto& worldApi = m_worldApi;
     // ---- Air-traffic control (#706) ----
     // Build the ATC service from the airport registry and wire the scramble spawn path. The spawn
     // handler ENQUEUES onto the sim thread (a scramble may originate from a Lua worker thread), spawns
@@ -2634,10 +2634,10 @@ bool ServerRuntime::Impl::initSystems() {
     // The overrun governor is pinned OFF so AI decimation (aiStride > 1) cannot make the outcome
     // load-dependent — determinism is the entire point of a mission-as-test. Combined with pure Lua
     // scripts (no wall-clock / unseeded RNG), a run is byte-reproducible.
-    if (!opts.missionReport.empty()) {
+    if (!m_opts.missionReport.empty()) {
         if (!missionRuntime) {
             log->log(LogLevel::Error, __FILE__, __LINE__, "--mission-report requires a mission (use --mission <name>)");
-            exitCode = 2;
+            m_exitCode = 2;
             return false;
         }
         broadcaster.setGovernorParams(fl::makeTickGovernorParams(false, 0.9f, 0.6f, 15.f, 4, 400));
@@ -2669,13 +2669,13 @@ bool ServerRuntime::Impl::initSystems() {
         rep.liveEntities = entityManager.liveCount();
         rep.spawnedObjects = loadedMissionSpawned;
         rep.entityCapRefusals = entityManager.softCapRefusals();
-        fl::writeConfigFile(opts.missionReport, fl::toJson(rep) + "\n", *log);
+        fl::writeConfigFile(m_opts.missionReport, fl::toJson(rep) + "\n", *log);
         char rbuf[256];
         std::snprintf(rbuf, sizeof(rbuf), "mission report: %s after %.1f s / %llu tick(s) -> %s", rep.outcome.c_str(),
-                      rep.elapsedSeconds, static_cast<unsigned long long>(rep.ticks), opts.missionReport.c_str());
+                      rep.elapsedSeconds, static_cast<unsigned long long>(rep.ticks), m_opts.missionReport.c_str());
         log->log(LogLevel::Info, __FILE__, __LINE__, rbuf);
         // --mission-report is done: a successful early exit, not a failure.
-        exitCode = 0;
+        m_exitCode = 0;
         return false;
     }
 
@@ -2756,37 +2756,37 @@ bool ServerRuntime::Impl::initSystems() {
 int ServerRuntime::Impl::mainLoop() {
     // The members this phase touches, bound by name so the moved code reads unchanged --
     // and so its `[&name]` lambda captures still compile: you cannot capture a member.
-    [[maybe_unused]] auto& adminChannels = this->adminChannels;
-    [[maybe_unused]] auto& adminCtx = this->adminCtx;
-    [[maybe_unused]] auto& adminShell = *p_adminShell;
-    [[maybe_unused]] auto& aiSinks = this->aiSinks;
-    [[maybe_unused]] auto& alertSystem = *p_alertSystem;
-    [[maybe_unused]] auto& assets = *p_assets;
-    [[maybe_unused]] auto& assetsRoot = this->assetsRoot;
-    [[maybe_unused]] auto& beacon = this->beacon;
-    [[maybe_unused]] auto& broadcaster = *p_broadcaster;
-    [[maybe_unused]] auto& cfg = this->cfg;
-    [[maybe_unused]] auto& entityManager = *p_entityManager;
-    [[maybe_unused]] auto& gameLoop = *p_gameLoop;
-    [[maybe_unused]] auto& httpAdminServer = this->httpAdminServer;
-    [[maybe_unused]] auto& httpChannel = *p_httpChannel;
-    [[maybe_unused]] auto& httpClient = this->httpClient;
-    [[maybe_unused]] auto& listeningMsg = this->listeningMsg;
-    [[maybe_unused]] auto& lobbyReg = this->lobbyReg;
-    [[maybe_unused]] auto& log = this->log;
-    [[maybe_unused]] auto& missionFactions = this->missionFactions;
-    [[maybe_unused]] auto& net = this->net;
-    [[maybe_unused]] auto& p = this->p;
-    [[maybe_unused]] auto& primeSpawnHeight = this->primeSpawnHeight;
-    [[maybe_unused]] auto& queryResponder = this->queryResponder;
-    [[maybe_unused]] auto& rconChannel = *p_rconChannel;
-    [[maybe_unused]] auto& rconServer = this->rconServer;
-    [[maybe_unused]] auto& replayRecorder = this->replayRecorder;
-    [[maybe_unused]] auto& serverUptime = this->serverUptime;
-    [[maybe_unused]] auto& stdinChannel = *p_stdinChannel;
-    [[maybe_unused]] auto& stdinReader = this->stdinReader;
-    [[maybe_unused]] auto& terrainStreamer = *p_terrainStreamer;
-    [[maybe_unused]] auto& userDataRoot = this->userDataRoot;
+    [[maybe_unused]] auto& adminChannels = m_adminChannels;
+    [[maybe_unused]] auto& adminCtx = m_adminCtx;
+    [[maybe_unused]] auto& adminShell = *m_adminShell;
+    [[maybe_unused]] auto& aiSinks = m_aiSinks;
+    [[maybe_unused]] auto& alertSystem = *m_alertSystem;
+    [[maybe_unused]] auto& assets = *m_assets;
+    [[maybe_unused]] auto& assetsRoot = m_assetsRoot;
+    [[maybe_unused]] auto& beacon = m_beacon;
+    [[maybe_unused]] auto& broadcaster = *m_broadcaster;
+    [[maybe_unused]] auto& cfg = m_cfg;
+    [[maybe_unused]] auto& entityManager = *m_entityManager;
+    [[maybe_unused]] auto& gameLoop = *m_gameLoop;
+    [[maybe_unused]] auto& httpAdminServer = m_httpAdminServer;
+    [[maybe_unused]] auto& httpChannel = *m_httpChannel;
+    [[maybe_unused]] auto& httpClient = m_httpClient;
+    [[maybe_unused]] auto& listeningMsg = m_listeningMsg;
+    [[maybe_unused]] auto& lobbyReg = m_lobbyReg;
+    [[maybe_unused]] auto& log = m_log;
+    [[maybe_unused]] auto& missionFactions = m_missionFactions;
+    [[maybe_unused]] auto& net = m_net;
+    [[maybe_unused]] auto& p = m_p;
+    [[maybe_unused]] auto& primeSpawnHeight = m_primeSpawnHeight;
+    [[maybe_unused]] auto& queryResponder = m_queryResponder;
+    [[maybe_unused]] auto& rconChannel = *m_rconChannel;
+    [[maybe_unused]] auto& rconServer = m_rconServer;
+    [[maybe_unused]] auto& replayRecorder = m_replayRecorder;
+    [[maybe_unused]] auto& serverUptime = m_serverUptime;
+    [[maybe_unused]] auto& stdinChannel = *m_stdinChannel;
+    [[maybe_unused]] auto& stdinReader = m_stdinReader;
+    [[maybe_unused]] auto& terrainStreamer = *m_terrainStreamer;
+    [[maybe_unused]] auto& userDataRoot = m_userDataRoot;
     // ---- Start sim loop ----
     // Emit the "listening on" line now that pre-loop setup (including primeSpawnHeight) is done.
     // LocalServer::start() waits for this line; emitting it here ensures ENet is serviced before
@@ -2798,7 +2798,7 @@ int ServerRuntime::Impl::mainLoop() {
     // sim dt stays 1/60 — content is byte-identical; ticks just arrive slower, so a slow (software-
     // rendered, lavapipe) recording client never misses a capture boundary. Applied after start()
     // because setRate is a main-thread control (see GameLoop).
-    if (!opts.timeRate.empty()) {
+    if (!m_opts.timeRate.empty()) {
         auto parseTimeRate = [](const std::string& s, TimeRate& out) -> bool {
             if (s == "paused")
                 out = TimeRate::Paused;
@@ -2821,12 +2821,12 @@ int ServerRuntime::Impl::mainLoop() {
             return true;
         };
         TimeRate tr = TimeRate::Normal;
-        if (parseTimeRate(opts.timeRate, tr)) {
+        if (parseTimeRate(m_opts.timeRate, tr)) {
             gameLoop.setRate(tr);
-            log->log(LogLevel::Info, __FILE__, __LINE__, ("time-rate set to " + opts.timeRate).c_str());
+            log->log(LogLevel::Info, __FILE__, __LINE__, ("time-rate set to " + m_opts.timeRate).c_str());
         } else {
             log->log(LogLevel::Warn, __FILE__, __LINE__,
-                     ("--time-rate: unknown rate \"" + opts.timeRate +
+                     ("--time-rate: unknown rate \"" + m_opts.timeRate +
                       "\" (paused|eighth|quarter|half|normal|double|quad|octa); using normal")
                          .c_str());
         }
@@ -3211,7 +3211,7 @@ int ServerRuntime::Impl::mainLoop() {
     return 0;
 }
 
-ServerRuntime::ServerRuntime(Options opts) : m_opts(std::move(opts)), m_impl(std::make_unique<Impl>(m_opts)) {}
+ServerRuntime::ServerRuntime(Options options) : m_opts(std::move(options)), m_impl(std::make_unique<Impl>(m_opts)) {}
 
 // Out of line because Impl is only complete here -- which is the point: the teardown order lives
 // beside the phases that build the objects, not in a header half the server includes.
@@ -3222,7 +3222,7 @@ int ServerRuntime::run() {
     // error and a successful early finish (--mission-report), which are the same control flow.
     if (!m_impl->initConfig() || !m_impl->initNet() || !m_impl->initContent() || !m_impl->initWorld() ||
         !m_impl->initMission() || !m_impl->initAdmin() || !m_impl->initSystems())
-        return m_impl->exitCode;
+        return m_impl->m_exitCode;
     return m_impl->mainLoop();
 }
 

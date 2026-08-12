@@ -76,12 +76,12 @@ def impl_member_order(text: str) -> list[str]:
             continue
         if "(" in stripped.split(";")[0]:
             continue  # a member function declaration
-        # `std::unique_ptr<fl::WorldBroadcaster> p_broadcaster;` -> broadcaster
-        # `char listeningMsg[192]{};`                            -> listeningMsg
-        m = re.match(r"^[\w:<>,\s\*&]+?\b(p_)?([a-zA-Z_]\w*)\s*(?:\[[^\]]*\])?\s*(?:\{[^}]*\})?\s*;", stripped)
+        # `std::unique_ptr<fl::WorldBroadcaster> m_broadcaster;` -> broadcaster
+        # `char m_listeningMsg[192]{};`                          -> listeningMsg
+        m = re.match(r"^[\w:<>,\s\*&]+?\bm_([a-zA-Z_]\w*)\s*(?:\[[^\]]*\])?\s*(?:\{[^}]*\})?\s*;", stripped)
         if not m:
             continue
-        name = m.group(2)
+        name = m.group(1)
         if name in ("opts", "exitCode"):
             continue  # bookkeeping, not an owned object
         names.append(name)

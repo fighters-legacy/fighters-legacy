@@ -26,16 +26,16 @@ struct ServerRuntime::Impl {
 
     explicit Impl(ServerRuntime::Options& o) : opts(o) {}
 
-    ServerRuntime::Options& opts;
-    int exitCode{0};
+    ServerRuntime::Options& m_opts;
+    int m_exitCode{0};
 
-    Platform p;
-    ILogger* log{nullptr};
-    INetwork* net{nullptr};
-    std::unique_ptr<fl::WorldBroadcaster> p_broadcaster;
-    char listeningMsg[192]{};
-    std::unique_ptr<GameLoop> p_gameLoop;
-    fl::StdinCommandReader stdinReader;
+    Platform m_p;
+    ILogger* m_log{nullptr};
+    INetwork* m_net{nullptr};
+    std::unique_ptr<fl::WorldBroadcaster> m_broadcaster;
+    char m_listeningMsg[192]{};
+    std::unique_ptr<GameLoop> m_gameLoop;
+    fl::StdinCommandReader m_stdinReader;
 };
 """
 
@@ -45,10 +45,10 @@ def test_member_order_reads_declaration_order():
     assert order == ["p", "log", "net", "broadcaster", "listeningMsg", "gameLoop", "stdinReader"]
 
 
-def test_member_order_unwraps_the_unique_ptr_prefix():
-    """`p_broadcaster` is the handle; `broadcaster` is what the rules name."""
+def test_member_order_strips_the_member_prefix():
+    """`m_broadcaster` is the member; `broadcaster` is what the rules name."""
     assert "broadcaster" in lto.impl_member_order(IMPL)
-    assert "p_broadcaster" not in lto.impl_member_order(IMPL)
+    assert "m_broadcaster" not in lto.impl_member_order(IMPL)
 
 
 def test_member_order_skips_the_nested_struct_and_the_options_reference():
@@ -64,9 +64,9 @@ def test_the_real_source_satisfies_every_rule():
 def test_a_reordered_source_fails(monkeypatch, tmp_path, capsys):
     """The inversion #1038 was: the stdin reader outliving the sim thread."""
     text = lto.SOURCE.read_text()
-    moved = text.replace("    fl::StdinCommandReader stdinReader;\n", "", 1)
-    anchor = "    std::unique_ptr<GameLoop> p_gameLoop;"
-    moved = moved.replace(anchor, "    fl::StdinCommandReader stdinReader;\n" + anchor, 1)
+    moved = text.replace("    fl::StdinCommandReader m_stdinReader;\n", "", 1)
+    anchor = "    std::unique_ptr<GameLoop> m_gameLoop;"
+    moved = moved.replace(anchor, "    fl::StdinCommandReader m_stdinReader;\n" + anchor, 1)
     broken = tmp_path / "ServerRuntime.cpp"
     broken.write_text(moved)
     monkeypatch.setattr(lto, "SOURCE", broken)
@@ -77,6 +77,6 @@ def test_a_reordered_source_fails(monkeypatch, tmp_path, capsys):
 def test_a_parser_that_stops_matching_fails_rather_than_passing(monkeypatch, tmp_path):
     """A gate that silently matches nothing reports success for the wrong reason."""
     stub = tmp_path / "ServerRuntime.cpp"
-    stub.write_text("struct ServerRuntime::Impl {\n    int exitCode{0};\n};\n")
+    stub.write_text("struct ServerRuntime::Impl {\n    int m_exitCode{0};\n};\n")
     monkeypatch.setattr(lto, "SOURCE", stub)
     assert lto.main() == 1
