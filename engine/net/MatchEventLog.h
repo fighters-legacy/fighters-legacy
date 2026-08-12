@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -17,9 +18,23 @@
 // serve them is how a codebase ends up with five hooks that disagree.
 //
 // So: one bounded ring of typed, tick-stamped records, written on the sim thread and readable from
-// any thread. It does NOT replace the existing hooks. Two of them are not observers at all -- the
-// chat hook returns a veto and the admin dispatch returns a response body -- so the log records what
-// flowed through them rather than standing in for them.
+// any thread -- AND, since #1077, the match event BUS. It used to stop one step short of that ("it does
+// NOT replace the existing hooks"), and the disagreement its own comment predicted duly arrived:
+// recordParticipant fired m_matchParticipantSink AND appended a Join/Leave, so every participant event
+// was wired twice and every future event type would have been too. The tick-stamping bug (#1076) was
+// the first divergence; nothing structural prevented the next.
+//
+// Now: subscribe() before the first append, notified synchronously with each record. The kills-only
+// match sink, the participant sink and the observer half of the chat-intent hook are subscribers, and
+// their WorldBroadcaster setters are gone. What deliberately stays OUT of the bus (D10):
+//
+//   * ChatModerationHook and TeamSwitchGuard return a decision -- they are VETOES, not observations.
+//     An observer cannot refuse anything, so making them subscribers would silently drop the refusal.
+//   * setAdminDispatch / setAdminShell return a response body -- that is RPC, and a bus has nowhere to
+//     put a reply.
+//   * setReplaySink stays a dedicated high-bandwidth tap: a whole-world quantized stream is not an
+//     event, and putting 60 Hz of world state through a per-record notification would be a category
+//     error as well as a cost.
 //
 // Bounded on purpose: a long match must not grow this without limit, and an agent that stops reading
 // must not be able to exhaust server memory. Old records are dropped, and `droppedCount()` says how
@@ -127,15 +142,44 @@ class MatchEventLog {
 
     explicit MatchEventLog(std::size_t capacity = kDefaultCapacity);
 
+    // A bus subscriber. Called once per appended record, ON THE SIM THREAD, with the record as the log
+    // stored it -- seq and tick already stamped, so a subscriber sees exactly what /events and the
+    // .flrep will show.
+    using Subscriber = std::function<void(const MatchEvent&)>;
+
+    // Register before the sim starts. The list FREEZES at the first setTick() -- the same
+    // freeze-at-start shape as EntityManager's handler list -- because a subscriber added mid-match
+    // would silently miss everything before it with no way to know. Debug builds assert; release ignores
+    // the late call rather than accepting a subscriber that begins with a hole in its history.
+    //
+    // The line is the sim START, not the first append, and the difference is load-bearing: server init
+    // appends before the loop runs (a mission spawn is a Spawn record), and it does so BETWEEN the
+    // subscriber registrations in fl-server's main -- the scoreboard is wired before the mission loads,
+    // the chat-intent tier after. Freezing at the first append rejected the second one, for missing
+    // spawn records no chat tier could want. Every event a subscriber exists for -- join, leave, kill,
+    // chat, admin command, alert level -- happens after the loop starts, so this is where the honest
+    // line falls.
+    void subscribe(Subscriber fn);
+
+    [[nodiscard]] std::size_t subscriberCount() const noexcept {
+        return m_subscribers.size();
+    }
+
     // Advance the log's tick. Called once per tick by the sim's owner (WorldBroadcaster::onTick),
     // before anything that could append. Sim thread.
-    void setTick(uint64_t tick) noexcept {
+    void setTick(uint64_t tick) {
         // Relaxed: this publishes no other data, and every append takes the mutex for the ring
         // itself. An append from another thread (the MCP audit path runs on an HTTP thread) may
         // therefore read a tick up to one tick stale, which is a far better number than the up-to-1 s
         // stale published-snapshot tick that path used to copy in by hand. Exact ORDERING is carried
         // by `seq`, which is stamped under the lock.
         m_tick.store(tick, std::memory_order_relaxed);
+        // The sim is running, so the subscriber list is closed (#1077).
+        m_subscribersFrozen = true;
+        // ...and deliver anything an off-thread append parked. Here because this is the one sim-thread
+        // call the log already receives every tick, so a subscriber needs no service() of its own and
+        // cannot be starved by a quiet tick.
+        drainDeferred();
     }
 
     [[nodiscard]] uint64_t tick() const noexcept {
@@ -145,6 +189,13 @@ class MatchEventLog {
     // Stamps `seq` AND `tick`, then appends; the payload is the caller's. Any `tick` already set on
     // `ev` is overwritten -- that is the point, and it is what makes the stamp impossible to forget.
     // Callable from any thread.
+    //
+    // Subscribers are notified with the stored record, always on the SIM THREAD and never with the
+    // ring's lock held (a subscriber may read the log). An append from another thread -- the MCP audit
+    // path runs on an HTTP thread -- parks its record and the next setTick() delivers it, in seq order,
+    // before that tick's own events. So a subscriber never has to be thread-aware, which is the whole
+    // point of having one bus instead of five hooks: MatchController::recordKill is sim-thread-only,
+    // and an off-thread notification would have been a race the old sinks did not have.
     void append(MatchEvent ev);
 
     // Every retained record with seq > afterSeq, oldest first. Pass 0 for "everything retained".
@@ -169,12 +220,25 @@ class MatchEventLog {
     // return a complete answer.
     [[nodiscard]] bool hasGapBefore(uint64_t afterSeq) const;
 
+    // Off-thread records whose notification was dropped because the deferred queue was full. Non-zero
+    // means a subscriber missed events; the RECORDS are still in the ring, so /events and the recorder
+    // are unaffected. Reported rather than silent, for the same reason droppedCount() is.
+    [[nodiscard]] uint64_t deferredNotifyDropped() const;
+
     void clear();
 
   private:
+    // Deliver `rec` to every subscriber. Sim thread, lock NOT held.
+    void notify(const MatchEvent& rec) const;
+    // Deliver anything an off-thread append parked. Sim thread, lock NOT held.
+    void drainDeferred();
+
     // Outside the mutex on purpose: the sim thread advances this every tick, and taking the ring's
     // lock at 60 Hz would contend with a reader copying up to 4096 records for a /events response.
     std::atomic<uint64_t> m_tick{0};
+    // Frozen at the first append, so it is read without a lock on the notify path.
+    std::vector<Subscriber> m_subscribers;
+    bool m_subscribersFrozen{false};
     mutable std::mutex m_mutex;
     std::vector<MatchEvent> m_ring; // sized to m_capacity once; m_head is the next write slot
     std::size_t m_capacity;
@@ -182,6 +246,11 @@ class MatchEventLog {
     std::size_t m_count{0};
     uint64_t m_nextSeq{1}; // seq 0 is reserved to mean "before everything"
     uint64_t m_dropped{0};
+    // Records appended off the sim thread, awaiting notification at the next setTick(). Guarded by
+    // m_mutex. Bounded by the same capacity as the ring: an agent hammering the audit path while the
+    // sim is wedged must not grow this without limit, and a dropped notification is counted.
+    std::vector<MatchEvent> m_deferred;
+    uint64_t m_deferredDropped{0};
 };
 
 } // namespace fl

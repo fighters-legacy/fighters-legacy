@@ -1116,21 +1116,12 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     };
     void setMatchState(const MatchStatePod& state);
 
-    // Sink for scoreboard-relevant combat events (#523): (killerParticipant, victimParticipant,
-    // sameFaction). Called from the damage path (onEntityEvent) on the sim thread; fl-server forwards
-    // it to MatchController::recordKill. Unset ⇒ no match scoring (the pre-#523 behavior).
-    using MatchEventSink = std::function<void(uint32_t killer, uint32_t victim, bool sameFaction)>;
-    void setMatchEventSink(MatchEventSink fn) {
-        m_matchEventSink = std::move(fn);
-    }
-
-    // Sink for match participant join/leave (#523): (participantId, faction, isBot, joined). Called for
-    // pilots + bots (never observers — they have no scoreboard row) from admission / disconnect / team
-    // switch / bot spawn+retire. fl-server forwards it to MatchController::participantJoined/Left.
-    using MatchParticipantSink = std::function<void(uint32_t id, uint16_t faction, bool isBot, bool joined)>;
-    void setMatchParticipantSink(MatchParticipantSink fn) {
-        m_matchParticipantSink = std::move(fn);
-    }
+    // The scoreboard's kill and participant feeds are NOT setters any more (#1077). They were
+    // setMatchEventSink (kills) and setMatchParticipantSink (join/leave), and every event they carried
+    // was ALSO appended to the match event log -- so each was wired twice and every new event type
+    // would have been too. Both are MatchEventLog subscribers now: see matchEventLog().subscribe().
+    // Kill records carry actor/target/instigator, and a subscriber is notified synchronously from the
+    // damage path, so the still-live entity factions a team-kill test needs are still there to read.
 
     // Freeze combat (Ending / PostMatch phases): suppresses new fire input and kill scoring. Cleared on
     // the next Active phase. Sim-thread only.
@@ -1234,16 +1225,11 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     WingmanResult issueWingmanOrder(uint32_t peerId, uint8_t command, uint16_t flightId = kOwnFlight,
                                     uint32_t memberIdx = kFlightAll, bool cascade = false);
 
-    // A team-chat line that passed moderation and the rate limit (#611). Fires on the SIM THREAD,
-    // after the veto and after the line is recorded, so a suppressed line never reaches a model.
-    // Unset ⇒ the intent tier is off and chat is chat.
-    //
-    // The hook is deliberately given the text and nothing else: everything it may do with the result
-    // goes back through issueWingmanOrder above.
-    using ChatIntentHook = std::function<void(uint32_t peerId, uint8_t channel, std::string_view text)>;
-    void setChatIntentHook(ChatIntentHook fn) {
-        m_chatIntentHook = std::move(fn);
-    }
+    // The chat-intent tier is a MatchEventLog subscriber (#1077), not a hook: it OBSERVES a line that
+    // already passed moderation and the rate limit, and the Chat record it reads is appended after the
+    // veto -- so a suppressed line still never reaches a model. A subscriber filters on
+    // ChatChannel::Team itself, which is where that policy belongs. Everything the tier may DO with the
+    // result still goes back through issueWingmanOrder above.
 
     // Max wingman orders a peer may issue per second before the excess is refused with RateLimited.
     // Acked once per window, never per packet — an ack per rejected packet would be an amplifier.
@@ -1629,7 +1615,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     bool m_chatEnabled{true};                                          // #646: false = drop all chat
     int m_chatRateLimit{2};                                            // #646: chat lines per second per peer
     ChatModerationHook m_chatModerationHook;                           // #646: null = every line passes
-    ChatIntentHook m_chatIntentHook;                                   // #611: null = the intent tier is off
     // World-mutating request limits (#1069). Seat and team requests each cost a despawn/respawn plus
     // a full ConnectAck on grant; heartbeats each cost a MsgPeerDelay reply.
     // The rate this server actually steps at, and the value MsgConnectAck advertises (#1075). Fixed
@@ -1737,13 +1722,11 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     DamageRules m_damageRules{};
 
     // ── match lifecycle + scoring (#523) — sim-thread only ───────────────────
-    MatchStatePod m_matchState;                  // last state set by fl-server; unicast to a late joiner
-    bool m_haveMatchState{false};                // false until fl-server pushes the first state
-    MatchEventSink m_matchEventSink;             // null = no match scoring (pre-#523 behavior)
-    MatchParticipantSink m_matchParticipantSink; // null = no participant tracking
-    bool m_combatFrozen{false};                  // true in Ending/PostMatch — gates fire input + kill scoring
-    uint64_t m_lastScoreboardTick{0};            // last tick a periodic MsgScoreboard went out
-    bool m_scoreboardDirty{false};               // a score changed since the last broadcast
+    MatchStatePod m_matchState;       // last state set by fl-server; unicast to a late joiner
+    bool m_haveMatchState{false};     // false until fl-server pushes the first state
+    bool m_combatFrozen{false};       // true in Ending/PostMatch — gates fire input + kill scoring
+    uint64_t m_lastScoreboardTick{0}; // last tick a periodic MsgScoreboard went out
+    bool m_scoreboardDirty{false};    // a score changed since the last broadcast
 
     // ~1 Hz aggregated world-state surface (#600 / #861). Rebuilt in the Serialize phase from a cheap
     // sim-thread copy of entity/formation/peer state; the GM-map feed (and later the Epic M read API)

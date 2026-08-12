@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "net/MatchEventLog.h"
 
+#include "util/SimThreadOwnership.h"
+
 #include <algorithm>
+#include <cassert>
 
 namespace fl {
 
@@ -11,18 +14,68 @@ MatchEventLog::MatchEventLog(std::size_t capacity) : m_capacity(capacity == 0 ? 
     m_ring.resize(m_capacity);
 }
 
+void MatchEventLog::subscribe(Subscriber fn) {
+    assert(!m_subscribersFrozen && "MatchEventLog::subscribe() must run before the sim loop starts");
+    if (m_subscribersFrozen || !fn)
+        return;
+    m_subscribers.push_back(std::move(fn));
+}
+
 void MatchEventLog::append(MatchEvent ev) {
     // Read before the lock: m_tick is independent of the ring, and the load is relaxed.
     const uint64_t tick = m_tick.load(std::memory_order_relaxed);
+    const bool onSim = SimThreadOwnership::onSimThreadOrSingleThreaded();
+    MatchEvent stored;
+    {
+        std::lock_guard<std::mutex> lk(m_mutex);
+        ev.seq = m_nextSeq++;
+        ev.tick = tick;
+        if (m_count == m_capacity)
+            ++m_dropped; // overwriting the oldest retained record
+        m_ring[m_head] = std::move(ev);
+        stored = m_ring[m_head];
+        m_head = (m_head + 1) % m_capacity;
+        if (m_count < m_capacity)
+            ++m_count;
+
+        if (!onSim && !m_subscribers.empty()) {
+            // Park it for the next setTick(). The RECORD is already in the ring, so /events, the .flrep
+            // and the audit mirror see it immediately either way; only the notification waits.
+            if (m_deferred.size() < m_capacity)
+                m_deferred.push_back(stored);
+            else
+                ++m_deferredDropped;
+        }
+    }
+    if (onSim)
+        notify(stored);
+}
+
+void MatchEventLog::notify(const MatchEvent& rec) const {
+    // Lock NOT held: a subscriber may read the log (nextSeq, tail) and would deadlock on it. The
+    // subscriber list is frozen by now, so reading it here needs no lock either.
+    for (const Subscriber& fn : m_subscribers)
+        fn(rec);
+}
+
+void MatchEventLog::drainDeferred() {
+    if (m_subscribers.empty())
+        return;
+    std::vector<MatchEvent> pending;
+    {
+        std::lock_guard<std::mutex> lk(m_mutex);
+        if (m_deferred.empty())
+            return;
+        pending.swap(m_deferred);
+    }
+    // In seq order, which is append order: a subscriber sees the same sequence a /events reader does.
+    for (const MatchEvent& rec : pending)
+        notify(rec);
+}
+
+uint64_t MatchEventLog::deferredNotifyDropped() const {
     std::lock_guard<std::mutex> lk(m_mutex);
-    ev.seq = m_nextSeq++;
-    ev.tick = tick;
-    if (m_count == m_capacity)
-        ++m_dropped; // overwriting the oldest retained record
-    m_ring[m_head] = std::move(ev);
-    m_head = (m_head + 1) % m_capacity;
-    if (m_count < m_capacity)
-        ++m_count;
+    return m_deferredDropped;
 }
 
 std::vector<MatchEvent> MatchEventLog::since(uint64_t afterSeq) const {

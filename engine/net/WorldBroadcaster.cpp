@@ -344,8 +344,6 @@ void WorldBroadcaster::broadcastMusicState(uint8_t state) {
 }
 
 void WorldBroadcaster::recordParticipant(uint32_t participantId, uint16_t faction, bool isBot, bool joined) {
-    if (m_matchParticipantSink)
-        m_matchParticipantSink(participantId, faction, isBot, joined);
 
     MatchEvent me;
     me.type = joined ? MatchEventType::Join : MatchEventType::Leave;
@@ -4082,16 +4080,6 @@ void WorldBroadcaster::onEntityEvent(const EntityEvent& event) {
             }
         }
 
-        // Feed the match controller (#523): killer + victim participants, and whether it was a team
-        // kill. sameFaction reads the still-live entity factions.
-        if (m_matchEventSink) {
-            bool sameFaction = false;
-            if (const EntityState* v = m_entityManager.get(event.subject))
-                if (const EntityState* k = m_entityManager.get(event.instigator))
-                    sameFaction = v->factionIndex != 0 && v->factionIndex == k->factionIndex;
-            m_matchEventSink(killerPeer, victimPeer, sameFaction);
-        }
-
         CombatEventRecord rec{};
         rec.type = static_cast<uint8_t>(CombatEventType::Kill);
         rec.weaponClass = m_currentWeaponClass; // set while a weapon damage call is on the stack (#625)
@@ -5375,8 +5363,6 @@ void WorldBroadcaster::handleChat(uint32_t peerId, const void* data, std::size_t
     // Offer the line to the intent tier (#611) — after the veto and after the record, so a line that
     // was suppressed never reaches a model, and what a model saw is what the match log says was
     // said. Team channel only: the wingman answers to their flight, not to everyone in the server.
-    if (m_chatIntentHook && static_cast<ChatChannel>(hdr.channel) == ChatChannel::Team)
-        m_chatIntentHook(peerId, hdr.channel, text);
 
     const auto channel = static_cast<ChatChannel>(hdr.channel);
     const uint16_t senderFaction = (channel == ChatChannel::Team) ? factionForPeer(peerId) : kNoFaction;
