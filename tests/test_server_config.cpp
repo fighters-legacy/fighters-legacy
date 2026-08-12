@@ -16,113 +16,113 @@ TEST_CASE("parseServerConfig: empty TOML returns all defaults", "[server_config]
     MockLogger log;
     auto cfg = parseServerConfig("", &log);
 
-    CHECK(cfg.name == "Unnamed Server");
-    CHECK(cfg.port == 4778);
-    CHECK(cfg.bindAddress == "0.0.0.0");
-    CHECK(cfg.maxPeers == 32);
-    CHECK(cfg.gameModes == (std::vector<std::string>{"campaign", "mission", "sandbox"}));
-    CHECK(cfg.motd.empty());
-    CHECK(cfg.motdDisplayS == 0u);
-    CHECK(cfg.password.empty());
-    CHECK(cfg.rotationOrder == "sequential");
-    CHECK(cfg.rotationItems.empty());
-    CHECK(cfg.rotationTimeLimitMin == 0);
-    CHECK_FALSE(cfg.lobbyRegister);
+    CHECK(cfg.server.name == "Unnamed Server");
+    CHECK(cfg.server.port == 4778);
+    CHECK(cfg.server.bindAddress == "0.0.0.0");
+    CHECK(cfg.server.maxPeers == 32);
+    CHECK(cfg.server.gameModes == (std::vector<std::string>{"campaign", "mission", "sandbox"}));
+    CHECK(cfg.server.motd.empty());
+    CHECK(cfg.server.motdDisplayS == 0u);
+    CHECK(cfg.server.password.empty());
+    CHECK(cfg.rotation.order == "sequential");
+    CHECK(cfg.rotation.items.empty());
+    CHECK(cfg.rotation.timeLimitMin == 0);
+    CHECK_FALSE(cfg.lobby.registerServer);
     // Empty by default (#1072): a URL with no service behind it is a default that only generates
     // confusing outbound failures. A lobby is opted into by naming one.
-    CHECK(cfg.lobbyUrl.empty());
-    CHECK(cfg.lobbyVisibility == "public");
-    CHECK(cfg.modStack.empty());
-    CHECK(cfg.playerEntityType == "builtin:debug-entity");
-    CHECK(cfg.aiDifficultyFloor == "recruit");
-    CHECK(cfg.discoveryEnabled == true);
-    CHECK(cfg.discoveryIntervalMs == 2000);
-    CHECK(cfg.connectRateLimitCount == 5);
-    CHECK(cfg.connectRateLimitWindowS == 10);
-    CHECK(cfg.packetFloodMultiplier == 3);
-    CHECK(cfg.banlistPath.empty());
-    CHECK(cfg.allowlistPath.empty());
-    CHECK(cfg.incomingBandwidthBps == 0u);
-    CHECK(cfg.outgoingBandwidthBps == 0u);
-    CHECK(cfg.operatorPassword.empty());
-    CHECK(cfg.preHandshakeRateLimitCount == 20);
-    CHECK(cfg.preHandshakeWindowMs == 1000);
-    CHECK(cfg.maxConnectionsPerIp == 0);
-    CHECK(cfg.idleTimeoutS == 0);
-    CHECK(cfg.drawDistanceKm == 100.0);  // #1093: presentation relevance, not sensor truth
-    CHECK(cfg.spatialCellSizeKm == 0.0); // #1093: 0 = auto (clamp(draw/32, 500 m, 10 km))
-    CHECK(cfg.testSpawnAiCount == 0u);
-    CHECK(cfg.testSpawnSpreadKm == 50.0);
-    CHECK(cfg.testSpawnAglM == 500.0);
-    CHECK(cfg.snapshotBudgetBytes == 1200u);
-    CHECK(cfg.jitterBufferDepth == 4u);
-    CHECK(cfg.jitterAdaptWindow == 60u);
-    CHECK(cfg.jitterHysteresis == 2u);
-    CHECK(cfg.jitterMultiplier == Catch::Approx(2.0f));
-    CHECK(cfg.simWorkerThreads == 0u);
-    CHECK(cfg.overrunGovernorEnabled == true);
-    CHECK(cfg.overrunHighWatermark == Catch::Approx(0.90f));
-    CHECK(cfg.overrunLowWatermark == Catch::Approx(0.60f));
-    CHECK(cfg.overrunMinSnapshotHz == Catch::Approx(15.0f));
-    CHECK(cfg.overrunMaxAiStride == 4u);
-    CHECK(cfg.overrunBudgetFloorBytes == 400u);
-    CHECK(cfg.overrunMinInterestFraction == Catch::Approx(0.5f));
-    CHECK(cfg.maxCatchupTicks == 8);
+    CHECK(cfg.lobby.url.empty());
+    CHECK(cfg.lobby.visibility == "public");
+    CHECK(cfg.mods.stack.empty());
+    CHECK(cfg.world.playerEntityType == "builtin:debug-entity");
+    CHECK(cfg.ai.difficultyFloor == "recruit");
+    CHECK(cfg.discovery.enabled == true);
+    CHECK(cfg.discovery.intervalMs == 2000);
+    CHECK(cfg.security.connectRateLimitCount == 5);
+    CHECK(cfg.security.connectRateLimitWindowS == 10);
+    CHECK(cfg.security.packetFloodMultiplier == 3);
+    CHECK(cfg.security.banlistPath.empty());
+    CHECK(cfg.security.allowlistPath.empty());
+    CHECK(cfg.security.incomingBandwidthBps == 0u);
+    CHECK(cfg.security.outgoingBandwidthBps == 0u);
+    CHECK(cfg.security.operatorPassword.empty());
+    CHECK(cfg.security.preHandshakeRateLimitCount == 20);
+    CHECK(cfg.security.preHandshakeWindowMs == 1000);
+    CHECK(cfg.security.maxConnectionsPerIp == 0);
+    CHECK(cfg.security.idleTimeoutS == 0);
+    CHECK(cfg.world.drawDistanceKm == 100.0);  // #1093: presentation relevance, not sensor truth
+    CHECK(cfg.world.spatialCellSizeKm == 0.0); // #1093: 0 = auto (clamp(draw/32, 500 m, 10 km))
+    CHECK(cfg.world.testSpawnAiCount == 0u);
+    CHECK(cfg.world.testSpawnSpreadKm == 50.0);
+    CHECK(cfg.world.testSpawnAglM == 500.0);
+    CHECK(cfg.world.snapshotBudgetBytes == 1200u);
+    CHECK(cfg.world.jitterBufferDepth == 4u);
+    CHECK(cfg.world.jitterAdaptWindow == 60u);
+    CHECK(cfg.world.jitterHysteresis == 2u);
+    CHECK(cfg.world.jitterMultiplier == Catch::Approx(2.0f));
+    CHECK(cfg.world.simWorkerThreads == 0u);
+    CHECK(cfg.world.overrunGovernorEnabled == true);
+    CHECK(cfg.world.overrunHighWatermark == Catch::Approx(0.90f));
+    CHECK(cfg.world.overrunLowWatermark == Catch::Approx(0.60f));
+    CHECK(cfg.world.overrunMinSnapshotHz == Catch::Approx(15.0f));
+    CHECK(cfg.world.overrunMaxAiStride == 4u);
+    CHECK(cfg.world.overrunBudgetFloorBytes == 400u);
+    CHECK(cfg.world.overrunMinInterestFraction == Catch::Approx(0.5f));
+    CHECK(cfg.world.maxCatchupTicks == 8);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: reads world.player_entity_type (#834)", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\nplayer_entity_type = \"fl-base:f5e\"\n", &log);
-    CHECK(cfg.playerEntityType == "fl-base:f5e");
+    CHECK(cfg.world.playerEntityType == "fl-base:f5e");
 }
 
 TEST_CASE("parseServerConfig: reads world.allow_observers (#857)", "[server_config]") {
     MockLogger log;
-    CHECK(parseServerConfig("", &log).allowObservers == true); // default
-    CHECK(parseServerConfig("[world]\nallow_observers = false\n", &log).allowObservers == false);
+    CHECK(parseServerConfig("", &log).world.allowObservers == true); // default
+    CHECK(parseServerConfig("[world]\nallow_observers = false\n", &log).world.allowObservers == false);
 }
 
 TEST_CASE("parseServerConfig: reads world.earth_rotation (#482)", "[server_config]") {
     MockLogger log;
-    CHECK(parseServerConfig("", &log).earthRotation == true); // default: Earth-fixed rotating frame
-    CHECK(parseServerConfig("[world]\nearth_rotation = false\n", &log).earthRotation == false);
+    CHECK(parseServerConfig("", &log).world.earthRotation == true); // default: Earth-fixed rotating frame
+    CHECK(parseServerConfig("[world]\nearth_rotation = false\n", &log).world.earthRotation == false);
 }
 
 TEST_CASE("parseServerConfig: reads mods.required (#872)", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[mods]\nrequired = [\"fl-base\", \"theater\"]\n", &log);
-    REQUIRE(cfg.requiredPacks.size() == 2u);
-    CHECK(cfg.requiredPacks[0] == "fl-base");
-    CHECK(cfg.requiredPacks[1] == "theater");
-    CHECK(cfg.requiredPackPolicy == "warn"); // default
+    REQUIRE(cfg.mods.requiredPacks.size() == 2u);
+    CHECK(cfg.mods.requiredPacks[0] == "fl-base");
+    CHECK(cfg.mods.requiredPacks[1] == "theater");
+    CHECK(cfg.mods.requiredPackPolicy == "warn"); // default
 }
 
 TEST_CASE("parseServerConfig: reads mods.required_policy (#872)", "[server_config]") {
     MockLogger log;
-    CHECK(parseServerConfig("[mods]\nrequired_policy = \"refuse\"\n", &log).requiredPackPolicy == "refuse");
-    CHECK(parseServerConfig("[mods]\nrequired_policy = \"allow_placeholder\"\n", &log).requiredPackPolicy ==
+    CHECK(parseServerConfig("[mods]\nrequired_policy = \"refuse\"\n", &log).mods.requiredPackPolicy == "refuse");
+    CHECK(parseServerConfig("[mods]\nrequired_policy = \"allow_placeholder\"\n", &log).mods.requiredPackPolicy ==
           "allow_placeholder");
     // Invalid value warns and keeps the default.
-    CHECK(parseServerConfig("[mods]\nrequired_policy = \"bogus\"\n", &log).requiredPackPolicy == "warn");
+    CHECK(parseServerConfig("[mods]\nrequired_policy = \"bogus\"\n", &log).mods.requiredPackPolicy == "warn");
 }
 
 TEST_CASE("parseServerConfig: reads world.sim_worker_threads", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\nsim_worker_threads = 8\n", &log);
-    CHECK(cfg.simWorkerThreads == 8u);
+    CHECK(cfg.world.simWorkerThreads == 8u);
 }
 
 TEST_CASE("parseServerConfig: world.sim_worker_threads boundary values accepted", "[server_config]") {
     MockLogger log;
-    CHECK(parseServerConfig("[world]\nsim_worker_threads = 1\n", &log).simWorkerThreads == 1u);
-    CHECK(parseServerConfig("[world]\nsim_worker_threads = 256\n", &log).simWorkerThreads == 256u);
+    CHECK(parseServerConfig("[world]\nsim_worker_threads = 1\n", &log).world.simWorkerThreads == 1u);
+    CHECK(parseServerConfig("[world]\nsim_worker_threads = 256\n", &log).world.simWorkerThreads == 256u);
 }
 
 TEST_CASE("parseServerConfig: world.sim_worker_threads out of range warns and keeps default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\nsim_worker_threads = 257\n", &log);
-    CHECK(cfg.simWorkerThreads == 0u);
+    CHECK(cfg.world.simWorkerThreads == 0u);
     CHECK_FALSE(log.entries.empty());
 }
 
@@ -132,17 +132,17 @@ TEST_CASE("parseServerConfig: world.sim_worker_threads out of range warns and ke
 
 TEST_CASE("parseServerConfig: reads world.spatial_cell_size_km", "[server_config]") {
     MockLogger log;
-    CHECK(parseServerConfig("[world]\nspatial_cell_size_km = 2.5\n", &log).spatialCellSizeKm == 2.5);
+    CHECK(parseServerConfig("[world]\nspatial_cell_size_km = 2.5\n", &log).world.spatialCellSizeKm == 2.5);
     // 0 = auto is a valid, accepted value (no warning).
     MockLogger log2;
-    CHECK(parseServerConfig("[world]\nspatial_cell_size_km = 0\n", &log2).spatialCellSizeKm == 0.0);
+    CHECK(parseServerConfig("[world]\nspatial_cell_size_km = 0\n", &log2).world.spatialCellSizeKm == 0.0);
     CHECK(log2.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: world.spatial_cell_size_km out of range warns and keeps default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\nspatial_cell_size_km = 2000\n", &log);
-    CHECK(cfg.spatialCellSizeKm == 0.0); // the default is auto (#1093)
+    CHECK(cfg.world.spatialCellSizeKm == 0.0); // the default is auto (#1093)
     CHECK_FALSE(log.entries.empty());
 }
 
@@ -155,10 +155,10 @@ test_spawn_spread_km = 80.0
 test_spawn_agl_m = 1200.0
 )",
                                  &log);
-    CHECK(cfg.testSpawnAiCount == 5000u);
-    CHECK(cfg.testSpawnSpreadKm == 80.0);
-    CHECK(cfg.testSpawnAglM == 1200.0);
-    CHECK(cfg.testSpawnEntityType.empty()); // default = builtin:debug-entity
+    CHECK(cfg.world.testSpawnAiCount == 5000u);
+    CHECK(cfg.world.testSpawnSpreadKm == 80.0);
+    CHECK(cfg.world.testSpawnAglM == 1200.0);
+    CHECK(cfg.world.testSpawnEntityType.empty()); // default = builtin:debug-entity
     CHECK(log.entries.empty());
 }
 
@@ -170,8 +170,8 @@ test_spawn_ai_count = 128
 test_spawn_entity_type = "builtin:bomber"
 )",
                                  &log);
-    CHECK(cfg.testSpawnAiCount == 128u);
-    CHECK(cfg.testSpawnEntityType == "builtin:bomber"); // crewed-AI load
+    CHECK(cfg.world.testSpawnAiCount == 128u);
+    CHECK(cfg.world.testSpawnEntityType == "builtin:bomber"); // crewed-AI load
 }
 
 TEST_CASE("parseServerConfig: world.test_spawn_* out of range warns and keeps defaults", "[server_config]") {
@@ -183,9 +183,9 @@ test_spawn_spread_km = -1
 test_spawn_agl_m = 999999
 )",
                                  &log);
-    CHECK(cfg.testSpawnAiCount == 0u);
-    CHECK(cfg.testSpawnSpreadKm == 50.0);
-    CHECK(cfg.testSpawnAglM == 500.0);
+    CHECK(cfg.world.testSpawnAiCount == 0u);
+    CHECK(cfg.world.testSpawnSpreadKm == 50.0);
+    CHECK(cfg.world.testSpawnAglM == 500.0);
     CHECK_FALSE(log.entries.empty());
 }
 
@@ -198,18 +198,18 @@ test_projectile_rate = 120.0
 test_projectile_ttl_s = 2.5
 )",
                                  &log);
-    CHECK(cfg.testSpawnAiMix == "loiter:60,pursuit:25,patrol:15");
-    CHECK(cfg.testProjectileRate == 120.0);
-    CHECK(cfg.testProjectileTtlS == 2.5);
+    CHECK(cfg.world.testSpawnAiMix == "loiter:60,pursuit:25,patrol:15");
+    CHECK(cfg.world.testProjectileRate == 120.0);
+    CHECK(cfg.world.testProjectileTtlS == 2.5);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: AI-mix/churn defaults are off", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\n", &log);
-    CHECK(cfg.testSpawnAiMix.empty()); // all loiter (the #573 baseline)
-    CHECK(cfg.testProjectileRate == 0.0);
-    CHECK(cfg.testProjectileTtlS == 3.0);
+    CHECK(cfg.world.testSpawnAiMix.empty()); // all loiter (the #573 baseline)
+    CHECK(cfg.world.testProjectileRate == 0.0);
+    CHECK(cfg.world.testProjectileTtlS == 3.0);
 }
 
 TEST_CASE("parseServerConfig: invalid AI-mix warns and falls back to all loiter (#580)", "[server_config]") {
@@ -222,9 +222,9 @@ test_projectile_rate = 500000
 test_projectile_ttl_s = 0.001
 )",
                                  &log);
-    CHECK(cfg.testSpawnAiMix.empty());
-    CHECK(cfg.testProjectileRate == 0.0); // out of range [0, 100000] -> default
-    CHECK(cfg.testProjectileTtlS == 3.0); // out of range [0.05, 600] -> default
+    CHECK(cfg.world.testSpawnAiMix.empty());
+    CHECK(cfg.world.testProjectileRate == 0.0); // out of range [0, 100000] -> default
+    CHECK(cfg.world.testProjectileTtlS == 3.0); // out of range [0.05, 600] -> default
     CHECK_FALSE(log.entries.empty());
 }
 
@@ -246,14 +246,14 @@ overrun_min_interest_fraction = 0.75
 max_catchup_ticks = 16
 )",
                                  &log);
-    CHECK_FALSE(cfg.overrunGovernorEnabled);
-    CHECK(cfg.overrunHighWatermark == Catch::Approx(0.8f));
-    CHECK(cfg.overrunLowWatermark == Catch::Approx(0.5f));
-    CHECK(cfg.overrunMinSnapshotHz == Catch::Approx(20.0f));
-    CHECK(cfg.overrunMaxAiStride == 8u);
-    CHECK(cfg.overrunBudgetFloorBytes == 600u);
-    CHECK(cfg.overrunMinInterestFraction == Catch::Approx(0.75f));
-    CHECK(cfg.maxCatchupTicks == 16);
+    CHECK_FALSE(cfg.world.overrunGovernorEnabled);
+    CHECK(cfg.world.overrunHighWatermark == Catch::Approx(0.8f));
+    CHECK(cfg.world.overrunLowWatermark == Catch::Approx(0.5f));
+    CHECK(cfg.world.overrunMinSnapshotHz == Catch::Approx(20.0f));
+    CHECK(cfg.world.overrunMaxAiStride == 8u);
+    CHECK(cfg.world.overrunBudgetFloorBytes == 600u);
+    CHECK(cfg.world.overrunMinInterestFraction == Catch::Approx(0.75f));
+    CHECK(cfg.world.maxCatchupTicks == 16);
     CHECK(log.entries.empty());
 }
 
@@ -261,41 +261,41 @@ TEST_CASE("parseServerConfig: overrun_low_watermark must be below high warns and
     MockLogger log;
     // low >= high (default high 0.90) is rejected.
     auto cfg = parseServerConfig("[world]\noverrun_low_watermark = 0.95\n", &log);
-    CHECK(cfg.overrunLowWatermark == Catch::Approx(0.60f));
+    CHECK(cfg.world.overrunLowWatermark == Catch::Approx(0.60f));
     CHECK(log.hasMessage(LogLevel::Warn, "world.overrun_low_watermark out of range"));
 }
 
 TEST_CASE("parseServerConfig: overrun_max_ai_stride out of range warns and keeps default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\noverrun_max_ai_stride = 99\n", &log);
-    CHECK(cfg.overrunMaxAiStride == 4u);
+    CHECK(cfg.world.overrunMaxAiStride == 4u);
     CHECK(log.hasMessage(LogLevel::Warn, "world.overrun_max_ai_stride out of range"));
 }
 
 TEST_CASE("parseServerConfig: overrun_min_interest_fraction boundary + out-of-range", "[server_config]") {
     MockLogger log;
-    CHECK(parseServerConfig("[world]\noverrun_min_interest_fraction = 0.1\n", &log).overrunMinInterestFraction ==
+    CHECK(parseServerConfig("[world]\noverrun_min_interest_fraction = 0.1\n", &log).world.overrunMinInterestFraction ==
           Catch::Approx(0.1f));
-    CHECK(parseServerConfig("[world]\noverrun_min_interest_fraction = 1.0\n", &log).overrunMinInterestFraction ==
+    CHECK(parseServerConfig("[world]\noverrun_min_interest_fraction = 1.0\n", &log).world.overrunMinInterestFraction ==
           Catch::Approx(1.0f)); // 1.0 = lever disabled
     CHECK(log.entries.empty());
     MockLogger log2;
     auto cfg = parseServerConfig("[world]\noverrun_min_interest_fraction = 0.05\n", &log2);
-    CHECK(cfg.overrunMinInterestFraction == Catch::Approx(0.5f));
+    CHECK(cfg.world.overrunMinInterestFraction == Catch::Approx(0.5f));
     CHECK(log2.hasMessage(LogLevel::Warn, "world.overrun_min_interest_fraction out of range"));
     MockLogger log3;
     auto cfg2 = parseServerConfig("[world]\noverrun_min_interest_fraction = 1.5\n", &log3);
-    CHECK(cfg2.overrunMinInterestFraction == Catch::Approx(0.5f));
+    CHECK(cfg2.world.overrunMinInterestFraction == Catch::Approx(0.5f));
     CHECK(log3.hasMessage(LogLevel::Warn, "world.overrun_min_interest_fraction out of range"));
 }
 
 TEST_CASE("parseServerConfig: max_catchup_ticks boundary + out-of-range", "[server_config]") {
     MockLogger log;
-    CHECK(parseServerConfig("[world]\nmax_catchup_ticks = 1\n", &log).maxCatchupTicks == 1);
-    CHECK(parseServerConfig("[world]\nmax_catchup_ticks = 64\n", &log).maxCatchupTicks == 64);
+    CHECK(parseServerConfig("[world]\nmax_catchup_ticks = 1\n", &log).world.maxCatchupTicks == 1);
+    CHECK(parseServerConfig("[world]\nmax_catchup_ticks = 64\n", &log).world.maxCatchupTicks == 64);
     MockLogger log2;
     auto cfg = parseServerConfig("[world]\nmax_catchup_ticks = 65\n", &log2);
-    CHECK(cfg.maxCatchupTicks == 8);
+    CHECK(cfg.world.maxCatchupTicks == 8);
     CHECK(log2.hasMessage(LogLevel::Warn, "world.max_catchup_ticks out of range"));
 }
 
@@ -308,8 +308,8 @@ TEST_CASE("parseServerConfig: malformed TOML logs Warn and returns defaults", "[
     auto cfg = parseServerConfig("not valid toml [[[ ~~~", &log);
 
     CHECK(log.hasMessage(LogLevel::Warn, "failed to parse config"));
-    CHECK(cfg.port == 4778);
-    CHECK(cfg.name == "Unnamed Server");
+    CHECK(cfg.server.port == 4778);
+    CHECK(cfg.server.name == "Unnamed Server");
 }
 
 // ---------------------------------------------------------------------------
@@ -329,26 +329,26 @@ password     = "s3cr3t"
 )",
                                  &log);
 
-    CHECK(cfg.name == "My Server");
-    CHECK(cfg.port == 9000);
-    CHECK(cfg.bindAddress == "127.0.0.1");
-    CHECK(cfg.maxPeers == 32);
-    CHECK(cfg.motd == "Welcome!");
-    CHECK(cfg.password == "s3cr3t");
+    CHECK(cfg.server.name == "My Server");
+    CHECK(cfg.server.port == 9000);
+    CHECK(cfg.server.bindAddress == "127.0.0.1");
+    CHECK(cfg.server.maxPeers == 32);
+    CHECK(cfg.server.motd == "Welcome!");
+    CHECK(cfg.server.password == "s3cr3t");
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: reads motd_display_s from [server] section", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[server]\nmotd_display_s = 30\n", &log);
-    CHECK(cfg.motdDisplayS == 30u);
+    CHECK(cfg.server.motdDisplayS == 30u);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: motd_display_s 0 is accepted", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[server]\nmotd_display_s = 0\n", &log);
-    CHECK(cfg.motdDisplayS == 0u);
+    CHECK(cfg.server.motdDisplayS == 0u);
     CHECK(log.entries.empty());
 }
 
@@ -394,109 +394,109 @@ TEST_CASE("parseServerConfig: reads network.allow_insecure false", "[server_conf
 TEST_CASE("parseServerConfig: motd_display_s boundary 65535 is accepted", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[server]\nmotd_display_s = 65535\n", &log);
-    CHECK(cfg.motdDisplayS == 65535u);
+    CHECK(cfg.server.motdDisplayS == 65535u);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: motd_display_s 65536 warns and clamps to 65535", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[server]\nmotd_display_s = 65536\n", &log);
-    CHECK(cfg.motdDisplayS == 65535u);
+    CHECK(cfg.server.motdDisplayS == 65535u);
     CHECK(log.hasMessage(LogLevel::Warn, "server.motd_display_s out of range"));
 }
 
 TEST_CASE("parseServerConfig: motd_display_s negative warns and clamps to 0", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[server]\nmotd_display_s = -1\n", &log);
-    CHECK(cfg.motdDisplayS == 0u);
+    CHECK(cfg.server.motdDisplayS == 0u);
     CHECK(log.hasMessage(LogLevel::Warn, "server.motd_display_s out of range"));
 }
 
 TEST_CASE("parseServerConfig: port 0 warns and keeps default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[server]\nport = 0\n", &log);
-    CHECK(cfg.port == 4778);
+    CHECK(cfg.server.port == 4778);
     CHECK(log.hasMessage(LogLevel::Warn, "server.port out of range"));
 }
 
 TEST_CASE("parseServerConfig: port 65536 warns and keeps default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[server]\nport = 65536\n", &log);
-    CHECK(cfg.port == 4778);
+    CHECK(cfg.server.port == 4778);
     CHECK(log.hasMessage(LogLevel::Warn, "server.port out of range"));
 }
 
 TEST_CASE("parseServerConfig: port boundary 1 is accepted", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[server]\nport = 1\n", &log);
-    CHECK(cfg.port == 1);
+    CHECK(cfg.server.port == 1);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: port boundary 65535 is accepted", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[server]\nport = 65535\n", &log);
-    CHECK(cfg.port == 65535);
+    CHECK(cfg.server.port == 65535);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: max_peers 0 warns and keeps default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[server]\nmax_peers = 0\n", &log);
-    CHECK(cfg.maxPeers == 32);
+    CHECK(cfg.server.maxPeers == 32);
     CHECK(log.hasMessage(LogLevel::Warn, "server.max_peers out of range"));
 }
 
 TEST_CASE("parseServerConfig: max_peers 1025 warns and keeps default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[server]\nmax_peers = 1025\n", &log);
-    CHECK(cfg.maxPeers == 32);
+    CHECK(cfg.server.maxPeers == 32);
     CHECK(log.hasMessage(LogLevel::Warn, "server.max_peers out of range"));
 }
 
 TEST_CASE("parseServerConfig: max_peers boundary 1 is accepted", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[server]\nmax_peers = 1\n", &log);
-    CHECK(cfg.maxPeers == 1);
+    CHECK(cfg.server.maxPeers == 1);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: max_peers above the old 128 cap is accepted (128+ re-target)", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[server]\nmax_peers = 256\n", &log);
-    CHECK(cfg.maxPeers == 256);
+    CHECK(cfg.server.maxPeers == 256);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: max_peers boundary 1024 is accepted", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[server]\nmax_peers = 1024\n", &log);
-    CHECK(cfg.maxPeers == 1024);
+    CHECK(cfg.server.maxPeers == 1024);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: valid game_modes subset replaces default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[server]\ngame_modes = [\"campaign\", \"sandbox\"]\n", &log);
-    REQUIRE(cfg.gameModes.size() == 2);
-    CHECK(cfg.gameModes[0] == "campaign");
-    CHECK(cfg.gameModes[1] == "sandbox");
+    REQUIRE(cfg.server.gameModes.size() == 2);
+    CHECK(cfg.server.gameModes[0] == "campaign");
+    CHECK(cfg.server.gameModes[1] == "sandbox");
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: invalid game_mode entry warns and is skipped", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[server]\ngame_modes = [\"campaign\", \"bogus\", \"sandbox\"]\n", &log);
-    REQUIRE(cfg.gameModes.size() == 2);
-    CHECK(cfg.gameModes[0] == "campaign");
-    CHECK(cfg.gameModes[1] == "sandbox");
+    REQUIRE(cfg.server.gameModes.size() == 2);
+    CHECK(cfg.server.gameModes[0] == "campaign");
+    CHECK(cfg.server.gameModes[1] == "sandbox");
     CHECK(log.hasMessage(LogLevel::Warn, "bogus"));
 }
 
 TEST_CASE("parseServerConfig: all-invalid game_modes keeps default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[server]\ngame_modes = [\"bogus1\", \"bogus2\"]\n", &log);
-    CHECK(cfg.gameModes == (std::vector<std::string>{"campaign", "mission", "sandbox"}));
+    CHECK(cfg.server.gameModes == (std::vector<std::string>{"campaign", "mission", "sandbox"}));
 }
 
 // ---------------------------------------------------------------------------
@@ -513,25 +513,25 @@ time_limit_min = 30
 )",
                                  &log);
 
-    CHECK(cfg.rotationOrder == "random");
-    REQUIRE(cfg.rotationItems.size() == 2);
-    CHECK(cfg.rotationItems[0] == "mission-alpha");
-    CHECK(cfg.rotationItems[1] == "mission-beta");
-    CHECK(cfg.rotationTimeLimitMin == 30);
+    CHECK(cfg.rotation.order == "random");
+    REQUIRE(cfg.rotation.items.size() == 2);
+    CHECK(cfg.rotation.items[0] == "mission-alpha");
+    CHECK(cfg.rotation.items[1] == "mission-beta");
+    CHECK(cfg.rotation.timeLimitMin == 30);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: invalid rotation.order warns and keeps default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[rotation]\norder = \"alphabetical\"\n", &log);
-    CHECK(cfg.rotationOrder == "sequential");
+    CHECK(cfg.rotation.order == "sequential");
     CHECK(log.hasMessage(LogLevel::Warn, "rotation.order"));
 }
 
 TEST_CASE("parseServerConfig: empty rotation.items stays empty", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[rotation]\nitems = []\n", &log);
-    CHECK(cfg.rotationItems.empty());
+    CHECK(cfg.rotation.items.empty());
     CHECK(log.entries.empty());
 }
 
@@ -549,16 +549,16 @@ visibility = "private"
 )",
                                  &log);
 
-    CHECK(cfg.lobbyRegister == true);
-    CHECK(cfg.lobbyUrl == "https://my.lobby.example");
-    CHECK(cfg.lobbyVisibility == "private");
+    CHECK(cfg.lobby.registerServer == true);
+    CHECK(cfg.lobby.url == "https://my.lobby.example");
+    CHECK(cfg.lobby.visibility == "private");
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: invalid lobby.visibility warns and keeps default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[lobby]\nvisibility = \"unlisted\"\n", &log);
-    CHECK(cfg.lobbyVisibility == "public");
+    CHECK(cfg.lobby.visibility == "public");
     CHECK(log.hasMessage(LogLevel::Warn, "lobby.visibility"));
 }
 
@@ -569,16 +569,16 @@ TEST_CASE("parseServerConfig: invalid lobby.visibility warns and keeps default",
 TEST_CASE("parseServerConfig: reads mods.stack", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[mods]\nstack = [\"fl-base-pack\", \"my-theater\"]\n", &log);
-    REQUIRE(cfg.modStack.size() == 2);
-    CHECK(cfg.modStack[0] == "fl-base-pack");
-    CHECK(cfg.modStack[1] == "my-theater");
+    REQUIRE(cfg.mods.stack.size() == 2);
+    CHECK(cfg.mods.stack[0] == "fl-base-pack");
+    CHECK(cfg.mods.stack[1] == "my-theater");
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: empty mods.stack stays empty", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[mods]\nstack = []\n", &log);
-    CHECK(cfg.modStack.empty());
+    CHECK(cfg.mods.stack.empty());
     CHECK(log.entries.empty());
 }
 
@@ -597,93 +597,93 @@ jitter_buffer_jitter_multiplier = 1.5
 )",
                                  &log);
 
-    CHECK(cfg.jitterBufferDepth == 8u);
-    CHECK(cfg.jitterAdaptWindow == 90u);
-    CHECK(cfg.jitterHysteresis == 3u);
-    CHECK(cfg.jitterMultiplier == Catch::Approx(1.5f));
+    CHECK(cfg.world.jitterBufferDepth == 8u);
+    CHECK(cfg.world.jitterAdaptWindow == 90u);
+    CHECK(cfg.world.jitterHysteresis == 3u);
+    CHECK(cfg.world.jitterMultiplier == Catch::Approx(1.5f));
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: entity_soft_cap is parsed from [world]", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\nentity_soft_cap = 800\n", &log);
-    CHECK(cfg.entitySoftCap == 800);
+    CHECK(cfg.world.entitySoftCap == 800);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: absent entity_soft_cap defaults to 0", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("", &log);
-    CHECK(cfg.entitySoftCap == 0);
+    CHECK(cfg.world.entitySoftCap == 0);
 }
 
 TEST_CASE("parseServerConfig: negative entity_soft_cap warns and uses 0", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\nentity_soft_cap = -1\n", &log);
-    CHECK(cfg.entitySoftCap == 0);
+    CHECK(cfg.world.entitySoftCap == 0);
     CHECK(log.hasMessage(LogLevel::Warn, "entity_soft_cap"));
 }
 
 TEST_CASE("parseServerConfig: planet_radius_m valid value accepted", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\nplanet_radius_m = 3000000.0\n", &log);
-    CHECK(cfg.planetRadiusM == 3'000'000.0);
+    CHECK(cfg.world.planetRadiusM == 3'000'000.0);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: planet_radius_m too small warns and uses default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\nplanet_radius_m = 500.0\n", &log);
-    CHECK(cfg.planetRadiusM == 6'371'000.0);
+    CHECK(cfg.world.planetRadiusM == 6'371'000.0);
     CHECK(log.hasMessage(LogLevel::Warn, "planet_radius_m"));
 }
 
 TEST_CASE("parseServerConfig: planet_radius_m too large warns and uses default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\nplanet_radius_m = 2000000000.0\n", &log);
-    CHECK(cfg.planetRadiusM == 6'371'000.0);
+    CHECK(cfg.world.planetRadiusM == 6'371'000.0);
     CHECK(log.hasMessage(LogLevel::Warn, "planet_radius_m"));
 }
 
 TEST_CASE("parseServerConfig: reads world.draw_distance_km", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\ndraw_distance_km = 150.5\n", &log);
-    CHECK(cfg.drawDistanceKm == 150.5);
+    CHECK(cfg.world.drawDistanceKm == 150.5);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: draw_distance_km below minimum warns and uses default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\ndraw_distance_km = 0.5\n", &log);
-    CHECK(cfg.drawDistanceKm == 100.0);
+    CHECK(cfg.world.drawDistanceKm == 100.0);
     CHECK(log.hasMessage(LogLevel::Warn, "draw_distance_km"));
 }
 
 TEST_CASE("parseServerConfig: draw_distance_km above maximum warns and uses default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\ndraw_distance_km = 100001.0\n", &log);
-    CHECK(cfg.drawDistanceKm == 100.0);
+    CHECK(cfg.world.drawDistanceKm == 100.0);
     CHECK(log.hasMessage(LogLevel::Warn, "draw_distance_km"));
 }
 
 TEST_CASE("parseServerConfig: reads world.snapshot_budget_bytes", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\nsnapshot_budget_bytes = 800\n", &log);
-    CHECK(cfg.snapshotBudgetBytes == 800u);
+    CHECK(cfg.world.snapshotBudgetBytes == 800u);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: snapshot_budget_bytes 0 is accepted (unlimited)", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\nsnapshot_budget_bytes = 0\n", &log);
-    CHECK(cfg.snapshotBudgetBytes == 0u);
+    CHECK(cfg.world.snapshotBudgetBytes == 0u);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: snapshot_budget_bytes 70000 warns and uses default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\nsnapshot_budget_bytes = 70000\n", &log);
-    CHECK(cfg.snapshotBudgetBytes == 1200u);
+    CHECK(cfg.world.snapshotBudgetBytes == 1200u);
     CHECK(log.hasMessage(LogLevel::Warn, "snapshot_budget_bytes"));
 }
 
@@ -692,66 +692,66 @@ TEST_CASE("parseServerConfig: reads world.congestion_* fields", "[server_config]
     auto cfg = parseServerConfig("[world]\ncongestion_enabled = false\ncongestion_min_send_hz = 20.0\n"
                                  "congestion_loss_threshold = 0.05\ncongestion_budget_floor_bytes = 600\n",
                                  &log);
-    CHECK(cfg.congestionEnabled == false);
-    CHECK(cfg.congestionMinSendHz == 20.0f);
-    CHECK(cfg.congestionLossThreshold == 0.05f);
-    CHECK(cfg.congestionBudgetFloorBytes == 600u);
+    CHECK(cfg.world.congestionEnabled == false);
+    CHECK(cfg.world.congestionMinSendHz == 20.0f);
+    CHECK(cfg.world.congestionLossThreshold == 0.05f);
+    CHECK(cfg.world.congestionBudgetFloorBytes == 600u);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: congestion_min_send_hz out of range warns and keeps default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\ncongestion_min_send_hz = 120.0\n", &log);
-    CHECK(cfg.congestionMinSendHz == 10.0f);
+    CHECK(cfg.world.congestionMinSendHz == 10.0f);
     CHECK(log.hasMessage(LogLevel::Warn, "congestion_min_send_hz"));
 }
 
 TEST_CASE("parseServerConfig: congestion_loss_threshold out of range warns and keeps default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\ncongestion_loss_threshold = 2.0\n", &log);
-    CHECK(cfg.congestionLossThreshold == 0.02f);
+    CHECK(cfg.world.congestionLossThreshold == 0.02f);
     CHECK(log.hasMessage(LogLevel::Warn, "congestion_loss_threshold"));
 }
 
 TEST_CASE("parseServerConfig: congestion_budget_floor_bytes out of range warns and keeps default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\ncongestion_budget_floor_bytes = 70000\n", &log);
-    CHECK(cfg.congestionBudgetFloorBytes == 400u);
+    CHECK(cfg.world.congestionBudgetFloorBytes == 400u);
     CHECK(log.hasMessage(LogLevel::Warn, "congestion_budget_floor_bytes"));
 }
 
 TEST_CASE("parseServerConfig: reads world.jitter_buffer_depth", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\njitter_buffer_depth = 16\n", &log);
-    CHECK(cfg.jitterBufferDepth == 16u);
+    CHECK(cfg.world.jitterBufferDepth == 16u);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: jitter_buffer_depth 0 warns and uses default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\njitter_buffer_depth = 0\n", &log);
-    CHECK(cfg.jitterBufferDepth == 4u);
+    CHECK(cfg.world.jitterBufferDepth == 4u);
     CHECK(log.hasMessage(LogLevel::Warn, "jitter_buffer_depth"));
 }
 
 TEST_CASE("parseServerConfig: jitter_buffer_depth 33 warns and uses default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\njitter_buffer_depth = 33\n", &log);
-    CHECK(cfg.jitterBufferDepth == 4u);
+    CHECK(cfg.world.jitterBufferDepth == 4u);
     CHECK(log.hasMessage(LogLevel::Warn, "jitter_buffer_depth"));
 }
 
 TEST_CASE("parseServerConfig: jitter_buffer_depth boundary 1 is accepted", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\njitter_buffer_depth = 1\n", &log);
-    CHECK(cfg.jitterBufferDepth == 1u);
+    CHECK(cfg.world.jitterBufferDepth == 1u);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: jitter_buffer_depth boundary 32 is accepted", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\njitter_buffer_depth = 32\n", &log);
-    CHECK(cfg.jitterBufferDepth == 32u);
+    CHECK(cfg.world.jitterBufferDepth == 32u);
     CHECK(log.entries.empty());
 }
 
@@ -764,7 +764,7 @@ TEST_CASE("parseServerConfig: each valid difficulty_floor is accepted", "[server
     for (const char* val : {"recruit", "cadet", "veteran", "ace"}) {
         std::string toml = std::string("[ai]\ndifficulty_floor = \"") + val + "\"\n";
         auto cfg = parseServerConfig(toml, &log);
-        CHECK(cfg.aiDifficultyFloor == val);
+        CHECK(cfg.ai.difficultyFloor == val);
     }
     CHECK(log.entries.empty());
 }
@@ -772,7 +772,7 @@ TEST_CASE("parseServerConfig: each valid difficulty_floor is accepted", "[server
 TEST_CASE("parseServerConfig: invalid ai.difficulty_floor warns and keeps default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[ai]\ndifficulty_floor = \"expert\"\n", &log);
-    CHECK(cfg.aiDifficultyFloor == "recruit");
+    CHECK(cfg.ai.difficultyFloor == "recruit");
     CHECK(log.hasMessage(LogLevel::Warn, "difficulty_floor"));
 }
 
@@ -783,18 +783,18 @@ TEST_CASE("parseServerConfig: invalid ai.difficulty_floor warns and keeps defaul
 TEST_CASE("parseServerConfig: partial config keeps unspecified keys at defaults", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[server]\nport = 9000\n", &log);
-    CHECK(cfg.port == 9000);
-    CHECK(cfg.name == "Unnamed Server");
-    CHECK(cfg.maxPeers == 32);
-    CHECK(cfg.rotationOrder == "sequential");
-    CHECK(cfg.aiDifficultyFloor == "recruit");
+    CHECK(cfg.server.port == 9000);
+    CHECK(cfg.server.name == "Unnamed Server");
+    CHECK(cfg.server.maxPeers == 32);
+    CHECK(cfg.rotation.order == "sequential");
+    CHECK(cfg.ai.difficultyFloor == "recruit");
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: unknown TOML keys are silently ignored", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[server]\nport = 5000\nunknown_key = \"whatever\"\n", &log);
-    CHECK(cfg.port == 5000);
+    CHECK(cfg.server.port == 5000);
     CHECK(log.entries.empty());
 }
 
@@ -805,22 +805,22 @@ TEST_CASE("parseServerConfig: unknown TOML keys are silently ignored", "[server_
 TEST_CASE("parseServerConfig: reads [discovery] fields", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[discovery]\nenabled = false\ninterval_ms = 5000\n", &log);
-    CHECK_FALSE(cfg.discoveryEnabled);
-    CHECK(cfg.discoveryIntervalMs == 5000);
+    CHECK_FALSE(cfg.discovery.enabled);
+    CHECK(cfg.discovery.intervalMs == 5000);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: discovery interval_ms below 100 warns and keeps default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[discovery]\ninterval_ms = 50\n", &log);
-    CHECK(cfg.discoveryIntervalMs == 2000);
+    CHECK(cfg.discovery.intervalMs == 2000);
     CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
 }
 
 TEST_CASE("parseServerConfig: discovery interval_ms above 60000 warns and keeps default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[discovery]\ninterval_ms = 70000\n", &log);
-    CHECK(cfg.discoveryIntervalMs == 2000);
+    CHECK(cfg.discovery.intervalMs == 2000);
     CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
 }
 
@@ -828,13 +828,13 @@ TEST_CASE("parseServerConfig: discovery interval_ms boundaries are accepted", "[
     {
         MockLogger log;
         auto cfg = parseServerConfig("[discovery]\ninterval_ms = 100\n", &log);
-        CHECK(cfg.discoveryIntervalMs == 100);
+        CHECK(cfg.discovery.intervalMs == 100);
         CHECK(log.entries.empty());
     }
     {
         MockLogger log;
         auto cfg = parseServerConfig("[discovery]\ninterval_ms = 60000\n", &log);
-        CHECK(cfg.discoveryIntervalMs == 60000);
+        CHECK(cfg.discovery.intervalMs == 60000);
         CHECK(log.entries.empty());
     }
 }
@@ -856,28 +856,28 @@ incoming_bandwidth_bps      = 1000000
 outgoing_bandwidth_bps      = 2000000
 )",
                                  &log);
-    CHECK(cfg.connectRateLimitCount == 10);
-    CHECK(cfg.connectRateLimitWindowS == 30);
-    CHECK(cfg.packetFloodMultiplier == 5);
-    CHECK(cfg.banlistPath == "/etc/fl/ban.txt");
-    CHECK(cfg.allowlistPath == "/etc/fl/allow.txt");
-    CHECK(cfg.incomingBandwidthBps == 1000000u);
-    CHECK(cfg.outgoingBandwidthBps == 2000000u);
+    CHECK(cfg.security.connectRateLimitCount == 10);
+    CHECK(cfg.security.connectRateLimitWindowS == 30);
+    CHECK(cfg.security.packetFloodMultiplier == 5);
+    CHECK(cfg.security.banlistPath == "/etc/fl/ban.txt");
+    CHECK(cfg.security.allowlistPath == "/etc/fl/allow.txt");
+    CHECK(cfg.security.incomingBandwidthBps == 1000000u);
+    CHECK(cfg.security.outgoingBandwidthBps == 2000000u);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: security defaults when [security] absent", "[server_config][security]") {
     MockLogger log;
     auto cfg = parseServerConfig("", &log);
-    CHECK(cfg.connectRateLimitCount == 5);
-    CHECK(cfg.connectRateLimitWindowS == 10);
-    CHECK(cfg.packetFloodMultiplier == 3);
-    CHECK(cfg.banlistPath.empty());
-    CHECK(cfg.allowlistPath.empty());
-    CHECK(cfg.incomingBandwidthBps == 0u);
-    CHECK(cfg.outgoingBandwidthBps == 0u);
-    CHECK(cfg.preHandshakeRateLimitCount == 20);
-    CHECK(cfg.preHandshakeWindowMs == 1000);
+    CHECK(cfg.security.connectRateLimitCount == 5);
+    CHECK(cfg.security.connectRateLimitWindowS == 10);
+    CHECK(cfg.security.packetFloodMultiplier == 3);
+    CHECK(cfg.security.banlistPath.empty());
+    CHECK(cfg.security.allowlistPath.empty());
+    CHECK(cfg.security.incomingBandwidthBps == 0u);
+    CHECK(cfg.security.outgoingBandwidthBps == 0u);
+    CHECK(cfg.security.preHandshakeRateLimitCount == 20);
+    CHECK(cfg.security.preHandshakeWindowMs == 1000);
 }
 
 TEST_CASE("parseServerConfig: connect_rate_limit_count out of range warns and uses default",
@@ -885,20 +885,20 @@ TEST_CASE("parseServerConfig: connect_rate_limit_count out of range warns and us
     {
         MockLogger log;
         auto cfg = parseServerConfig("[security]\nconnect_rate_limit_count = 0\n", &log);
-        CHECK(cfg.connectRateLimitCount == 5);
+        CHECK(cfg.security.connectRateLimitCount == 5);
         CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
     }
     {
         MockLogger log;
         auto cfg = parseServerConfig("[security]\nconnect_rate_limit_count = 100001\n", &log);
-        CHECK(cfg.connectRateLimitCount == 5);
+        CHECK(cfg.security.connectRateLimitCount == 5);
         CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
     }
     {
         // 101 was rejected before the 128+ re-target raised the ceiling to 100000.
         MockLogger log;
         auto cfg = parseServerConfig("[security]\nconnect_rate_limit_count = 1000\n", &log);
-        CHECK(cfg.connectRateLimitCount == 1000);
+        CHECK(cfg.security.connectRateLimitCount == 1000);
         CHECK(log.entries.empty());
     }
 }
@@ -908,13 +908,13 @@ TEST_CASE("parseServerConfig: connect_rate_limit_window_s out of range warns and
     {
         MockLogger log;
         auto cfg = parseServerConfig("[security]\nconnect_rate_limit_window_s = 0\n", &log);
-        CHECK(cfg.connectRateLimitWindowS == 10);
+        CHECK(cfg.security.connectRateLimitWindowS == 10);
         CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
     }
     {
         MockLogger log;
         auto cfg = parseServerConfig("[security]\nconnect_rate_limit_window_s = 3601\n", &log);
-        CHECK(cfg.connectRateLimitWindowS == 10);
+        CHECK(cfg.security.connectRateLimitWindowS == 10);
         CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
     }
 }
@@ -924,13 +924,13 @@ TEST_CASE("parseServerConfig: packet_flood_multiplier out of range warns and use
     {
         MockLogger log;
         auto cfg = parseServerConfig("[security]\npacket_flood_multiplier = 0\n", &log);
-        CHECK(cfg.packetFloodMultiplier == 3);
+        CHECK(cfg.security.packetFloodMultiplier == 3);
         CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
     }
     {
         MockLogger log;
         auto cfg = parseServerConfig("[security]\npacket_flood_multiplier = 101\n", &log);
-        CHECK(cfg.packetFloodMultiplier == 3);
+        CHECK(cfg.security.packetFloodMultiplier == 3);
         CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
     }
 }
@@ -939,13 +939,13 @@ TEST_CASE("parseServerConfig: negative bandwidth warns and uses 0", "[server_con
     {
         MockLogger log;
         auto cfg = parseServerConfig("[security]\nincoming_bandwidth_bps = -1\n", &log);
-        CHECK(cfg.incomingBandwidthBps == 0u);
+        CHECK(cfg.security.incomingBandwidthBps == 0u);
         CHECK(log.hasMessage(LogLevel::Warn, "must be >= 0"));
     }
     {
         MockLogger log;
         auto cfg = parseServerConfig("[security]\noutgoing_bandwidth_bps = -1\n", &log);
-        CHECK(cfg.outgoingBandwidthBps == 0u);
+        CHECK(cfg.security.outgoingBandwidthBps == 0u);
         CHECK(log.hasMessage(LogLevel::Warn, "must be >= 0"));
     }
 }
@@ -953,14 +953,14 @@ TEST_CASE("parseServerConfig: negative bandwidth warns and uses 0", "[server_con
 TEST_CASE("parseServerConfig: reads security.operator_password", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[security]\noperator_password = \"hunter2\"\n", &log);
-    CHECK(cfg.operatorPassword == "hunter2");
+    CHECK(cfg.security.operatorPassword == "hunter2");
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: operator_password empty string is accepted", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[security]\noperator_password = \"\"\n", &log);
-    CHECK(cfg.operatorPassword.empty());
+    CHECK(cfg.security.operatorPassword.empty());
     CHECK(log.entries.empty());
 }
 
@@ -968,8 +968,8 @@ TEST_CASE("parseServerConfig: reads pre_handshake_rate_limit fields", "[server_c
     MockLogger log;
     auto cfg =
         parseServerConfig("[security]\npre_handshake_rate_limit_count = 50\npre_handshake_window_ms = 500\n", &log);
-    CHECK(cfg.preHandshakeRateLimitCount == 50);
-    CHECK(cfg.preHandshakeWindowMs == 500);
+    CHECK(cfg.security.preHandshakeRateLimitCount == 50);
+    CHECK(cfg.security.preHandshakeWindowMs == 500);
     CHECK(log.entries.empty());
 }
 
@@ -977,7 +977,7 @@ TEST_CASE("parseServerConfig: pre_handshake_rate_limit_count 0 is accepted witho
           "[server_config][security]") {
     MockLogger log;
     auto cfg = parseServerConfig("[security]\npre_handshake_rate_limit_count = 0\n", &log);
-    CHECK(cfg.preHandshakeRateLimitCount == 0);
+    CHECK(cfg.security.preHandshakeRateLimitCount == 0);
     CHECK(log.entries.empty());
 }
 
@@ -986,13 +986,13 @@ TEST_CASE("parseServerConfig: pre_handshake_rate_limit_count out of range warns 
     {
         MockLogger log;
         auto cfg = parseServerConfig("[security]\npre_handshake_rate_limit_count = -1\n", &log);
-        CHECK(cfg.preHandshakeRateLimitCount == 20);
+        CHECK(cfg.security.preHandshakeRateLimitCount == 20);
         CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
     }
     {
         MockLogger log;
         auto cfg = parseServerConfig("[security]\npre_handshake_rate_limit_count = 10001\n", &log);
-        CHECK(cfg.preHandshakeRateLimitCount == 20);
+        CHECK(cfg.security.preHandshakeRateLimitCount == 20);
         CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
     }
 }
@@ -1002,13 +1002,13 @@ TEST_CASE("parseServerConfig: pre_handshake_window_ms out of range warns and use
     {
         MockLogger log;
         auto cfg = parseServerConfig("[security]\npre_handshake_window_ms = 50\n", &log);
-        CHECK(cfg.preHandshakeWindowMs == 1000);
+        CHECK(cfg.security.preHandshakeWindowMs == 1000);
         CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
     }
     {
         MockLogger log;
         auto cfg = parseServerConfig("[security]\npre_handshake_window_ms = 90000\n", &log);
-        CHECK(cfg.preHandshakeWindowMs == 1000);
+        CHECK(cfg.security.preHandshakeWindowMs == 1000);
         CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
     }
 }
@@ -1016,7 +1016,7 @@ TEST_CASE("parseServerConfig: pre_handshake_window_ms out of range warns and use
 TEST_CASE("parseServerConfig: reads security.max_connections_per_ip", "[server_config][security]") {
     MockLogger log;
     auto cfg = parseServerConfig("[security]\nmax_connections_per_ip = 4\n", &log);
-    CHECK(cfg.maxConnectionsPerIp == 4);
+    CHECK(cfg.security.maxConnectionsPerIp == 4);
     CHECK(log.entries.empty());
 }
 
@@ -1024,7 +1024,7 @@ TEST_CASE("parseServerConfig: max_connections_per_ip of zero is accepted without
           "[server_config][security]") {
     MockLogger log;
     auto cfg = parseServerConfig("[security]\nmax_connections_per_ip = 0\n", &log);
-    CHECK(cfg.maxConnectionsPerIp == 0);
+    CHECK(cfg.security.maxConnectionsPerIp == 0);
     CHECK(log.entries.empty());
 }
 
@@ -1033,20 +1033,20 @@ TEST_CASE("parseServerConfig: max_connections_per_ip out of range warns and uses
     {
         MockLogger log;
         auto cfg = parseServerConfig("[security]\nmax_connections_per_ip = -1\n", &log);
-        CHECK(cfg.maxConnectionsPerIp == 0);
+        CHECK(cfg.security.maxConnectionsPerIp == 0);
         CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
     }
     {
         MockLogger log;
         auto cfg = parseServerConfig("[security]\nmax_connections_per_ip = 1025\n", &log);
-        CHECK(cfg.maxConnectionsPerIp == 0);
+        CHECK(cfg.security.maxConnectionsPerIp == 0);
         CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
     }
     {
         // 129 was rejected before the 128+ re-target raised the ceiling to 1024.
         MockLogger log;
         auto cfg = parseServerConfig("[security]\nmax_connections_per_ip = 256\n", &log);
-        CHECK(cfg.maxConnectionsPerIp == 256);
+        CHECK(cfg.security.maxConnectionsPerIp == 256);
         CHECK(log.entries.empty());
     }
 }
@@ -1112,28 +1112,28 @@ TEST_CASE("parseServerConfig: spawn.points entry missing z is skipped with warni
 TEST_CASE("parseServerConfig: reads security.idle_timeout_s", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[security]\nidle_timeout_s = 60\n", &log);
-    CHECK(cfg.idleTimeoutS == 60);
+    CHECK(cfg.security.idleTimeoutS == 60);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: idle_timeout_s 0 is accepted (disabled)", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[security]\nidle_timeout_s = 0\n", &log);
-    CHECK(cfg.idleTimeoutS == 0);
+    CHECK(cfg.security.idleTimeoutS == 0);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: idle_timeout_s negative warns and keeps 0", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[security]\nidle_timeout_s = -1\n", &log);
-    CHECK(cfg.idleTimeoutS == 0);
+    CHECK(cfg.security.idleTimeoutS == 0);
     CHECK(log.hasMessage(LogLevel::Warn, "idle_timeout_s out of range"));
 }
 
 TEST_CASE("parseServerConfig: idle_timeout_s 86401 warns and keeps 0", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[security]\nidle_timeout_s = 86401\n", &log);
-    CHECK(cfg.idleTimeoutS == 0);
+    CHECK(cfg.security.idleTimeoutS == 0);
     CHECK(log.hasMessage(LogLevel::Warn, "idle_timeout_s out of range"));
 }
 
@@ -1144,107 +1144,107 @@ TEST_CASE("parseServerConfig: idle_timeout_s 86401 warns and keeps 0", "[server_
 TEST_CASE("parseServerConfig: reads world.jitter_buffer_adapt_window", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\njitter_buffer_adapt_window = 90\n", &log);
-    CHECK(cfg.jitterAdaptWindow == 90u);
+    CHECK(cfg.world.jitterAdaptWindow == 90u);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: jitter_buffer_adapt_window below 10 warns and uses default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\njitter_buffer_adapt_window = 9\n", &log);
-    CHECK(cfg.jitterAdaptWindow == 60u);
+    CHECK(cfg.world.jitterAdaptWindow == 60u);
     CHECK(log.hasMessage(LogLevel::Warn, "jitter_buffer_adapt_window"));
 }
 
 TEST_CASE("parseServerConfig: jitter_buffer_adapt_window above 3600 warns and uses default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\njitter_buffer_adapt_window = 3601\n", &log);
-    CHECK(cfg.jitterAdaptWindow == 60u);
+    CHECK(cfg.world.jitterAdaptWindow == 60u);
     CHECK(log.hasMessage(LogLevel::Warn, "jitter_buffer_adapt_window"));
 }
 
 TEST_CASE("parseServerConfig: jitter_buffer_adapt_window boundary 10 accepted", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\njitter_buffer_adapt_window = 10\n", &log);
-    CHECK(cfg.jitterAdaptWindow == 10u);
+    CHECK(cfg.world.jitterAdaptWindow == 10u);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: jitter_buffer_adapt_window boundary 3600 accepted", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\njitter_buffer_adapt_window = 3600\n", &log);
-    CHECK(cfg.jitterAdaptWindow == 3600u);
+    CHECK(cfg.world.jitterAdaptWindow == 3600u);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: reads world.jitter_buffer_hysteresis", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\njitter_buffer_hysteresis = 3\n", &log);
-    CHECK(cfg.jitterHysteresis == 3u);
+    CHECK(cfg.world.jitterHysteresis == 3u);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: jitter_buffer_hysteresis above 8 warns and uses default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\njitter_buffer_hysteresis = 9\n", &log);
-    CHECK(cfg.jitterHysteresis == 2u);
+    CHECK(cfg.world.jitterHysteresis == 2u);
     CHECK(log.hasMessage(LogLevel::Warn, "jitter_buffer_hysteresis"));
 }
 
 TEST_CASE("parseServerConfig: jitter_buffer_hysteresis boundary 0 accepted", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\njitter_buffer_hysteresis = 0\n", &log);
-    CHECK(cfg.jitterHysteresis == 0u);
+    CHECK(cfg.world.jitterHysteresis == 0u);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: jitter_buffer_hysteresis boundary 8 accepted", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\njitter_buffer_hysteresis = 8\n", &log);
-    CHECK(cfg.jitterHysteresis == 8u);
+    CHECK(cfg.world.jitterHysteresis == 8u);
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: reads world.jitter_buffer_jitter_multiplier", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\njitter_buffer_jitter_multiplier = 1.5\n", &log);
-    CHECK(cfg.jitterMultiplier == Catch::Approx(1.5f));
+    CHECK(cfg.world.jitterMultiplier == Catch::Approx(1.5f));
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: jitter_buffer_jitter_multiplier negative warns and uses default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\njitter_buffer_jitter_multiplier = -0.1\n", &log);
-    CHECK(cfg.jitterMultiplier == Catch::Approx(2.0f));
+    CHECK(cfg.world.jitterMultiplier == Catch::Approx(2.0f));
     CHECK(log.hasMessage(LogLevel::Warn, "jitter_buffer_jitter_multiplier"));
 }
 
 TEST_CASE("parseServerConfig: jitter_buffer_jitter_multiplier above 8.0 warns and uses default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\njitter_buffer_jitter_multiplier = 8.1\n", &log);
-    CHECK(cfg.jitterMultiplier == Catch::Approx(2.0f));
+    CHECK(cfg.world.jitterMultiplier == Catch::Approx(2.0f));
     CHECK(log.hasMessage(LogLevel::Warn, "jitter_buffer_jitter_multiplier"));
 }
 
 TEST_CASE("parseServerConfig: jitter_buffer_jitter_multiplier boundary 0.0 accepted", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\njitter_buffer_jitter_multiplier = 0.0\n", &log);
-    CHECK(cfg.jitterMultiplier == Catch::Approx(0.0f));
+    CHECK(cfg.world.jitterMultiplier == Catch::Approx(0.0f));
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: jitter_buffer_jitter_multiplier boundary 8.0 accepted", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\njitter_buffer_jitter_multiplier = 8.0\n", &log);
-    CHECK(cfg.jitterMultiplier == Catch::Approx(8.0f));
+    CHECK(cfg.world.jitterMultiplier == Catch::Approx(8.0f));
     CHECK(log.entries.empty());
 }
 
 TEST_CASE("parseServerConfig: adaptive jitter defaults are correct", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("", &log);
-    CHECK(cfg.jitterAdaptWindow == 60u);
-    CHECK(cfg.jitterHysteresis == 2u);
-    CHECK(cfg.jitterMultiplier == Catch::Approx(2.0f));
+    CHECK(cfg.world.jitterAdaptWindow == 60u);
+    CHECK(cfg.world.jitterHysteresis == 2u);
+    CHECK(cfg.world.jitterMultiplier == Catch::Approx(2.0f));
 }
 
 // ---------------------------------------------------------------------------
@@ -1313,7 +1313,7 @@ TEST_CASE("defaultServerConfigToml: ships no persistence keys, which have no imp
 // default is EMPTY, and LobbyRegistration treats empty as disabled.
 TEST_CASE("defaultServerConfigToml: the lobby url default is empty, not a host with no service", "[server_config]") {
     MockLogger log;
-    CHECK(parseServerConfig(defaultServerConfigToml(), &log).lobbyUrl.empty());
+    CHECK(parseServerConfig(defaultServerConfigToml(), &log).lobby.url.empty());
     CHECK(std::string_view(defaultServerConfigToml()).find("lobby.fighters-legacy.org") == std::string_view::npos);
 }
 
@@ -1321,10 +1321,10 @@ TEST_CASE("defaultServerConfigToml: the lobby url default is empty, not a host w
 // Malformed input that fires a parse-error or a validation-warning log path must tolerate a null log.
 TEST_CASE("parseServerConfig: null logger is tolerated on malformed input", "[server_config]") {
     auto cfg = parseServerConfig("this = = not valid toml [[[", nullptr);
-    CHECK(cfg.name == "Unnamed Server"); // parse error -> defaults
+    CHECK(cfg.server.name == "Unnamed Server"); // parse error -> defaults
 
     auto cfg2 = parseServerConfig("[server]\nport = 999999\n", nullptr);
-    CHECK(cfg2.port == 4778); // out-of-range -> warning logged (to the null sink) + default
+    CHECK(cfg2.server.port == 4778); // out-of-range -> warning logged (to the null sink) + default
 }
 
 // --- [ai] difficulty (#682) ---------------------------------------------------------------------
@@ -1334,18 +1334,18 @@ TEST_CASE("parseServerConfig: each valid ai.difficulty is accepted", "[server_co
         const std::string toml = std::string("[ai]\ndifficulty = \"") + val + "\"\n";
         MockLogger logger;
         const ServerConfig cfg = parseServerConfig(toml, &logger);
-        CHECK(cfg.aiDifficulty == val);
+        CHECK(cfg.ai.difficulty == val);
     }
 }
 
 TEST_CASE("parseServerConfig: ai.difficulty defaults to pilot and rejects unknown values", "[server_config]") {
     MockLogger logger;
-    CHECK(parseServerConfig("", &logger).aiDifficulty == "pilot");
+    CHECK(parseServerConfig("", &logger).ai.difficulty == "pilot");
 
     // An unknown preset keeps the default rather than inventing one — the established
     // range-validated-default idiom, and a warn so the operator sees the typo.
     const ServerConfig cfg = parseServerConfig("[ai]\ndifficulty = \"godlike\"\n", &logger);
-    CHECK(cfg.aiDifficulty == "pilot");
+    CHECK(cfg.ai.difficulty == "pilot");
 }
 
 TEST_CASE("parseServerConfig: ai.difficulty and ai.difficulty_floor are distinct keys", "[server_config]") {
@@ -1353,8 +1353,8 @@ TEST_CASE("parseServerConfig: ai.difficulty and ai.difficulty_floor are distinct
     // tick). `difficulty_floor` is the future per-client clamp. Setting one must not move the other.
     MockLogger logger;
     const ServerConfig cfg = parseServerConfig("[ai]\ndifficulty = \"ace\"\ndifficulty_floor = \"veteran\"\n", &logger);
-    CHECK(cfg.aiDifficulty == "ace");
-    CHECK(cfg.aiDifficultyFloor == "veteran");
+    CHECK(cfg.ai.difficulty == "ace");
+    CHECK(cfg.ai.difficultyFloor == "veteran");
 }
 
 // ---------------------------------------------------------------------------
@@ -1376,7 +1376,7 @@ TEST_CASE("parseServerConfig: an out-of-range float port does not invoke UB", "[
 
     // It must not crash, and it must not silently adopt garbage: an unusable value is no value, so
     // the field keeps its default, exactly as it would for a missing key.
-    CHECK(cfg.port == 4778);
+    CHECK(cfg.server.port == 4778);
 }
 
 TEST_CASE("parseServerConfig: assorted hostile numeric literals are all survivable", "[server_config][fuzz]") {
@@ -1403,14 +1403,14 @@ TEST_CASE("parseServerConfig: a whole-number float IS accepted for an integer fi
     // values that cannot be represented, not values that merely look like floats.
     MockLogger log;
     auto cfg = parseServerConfig("[server]\nport = 4778.0\n", &log);
-    CHECK(cfg.port == 4778);
+    CHECK(cfg.server.port == 4778);
 }
 
 TEST_CASE("parseServerConfig: a fractional value for an integer field is refused", "[server_config]") {
     // Silently truncating 4778.7 to 4778 would be a lie about what the operator asked for.
     MockLogger log;
     auto cfg = parseServerConfig("[server]\nport = 4778.7\n", &log);
-    CHECK(cfg.port == 4778); // the default, not a truncation — the field was never applied
+    CHECK(cfg.server.port == 4778); // the default, not a truncation — the field was never applied
 }
 
 TEST_CASE("parseServerConfig: [wind] profile_path is parsed", "[server_config]") {

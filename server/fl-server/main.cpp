@@ -152,26 +152,26 @@ static void onSignal(int) {
 static void applyCliAndEnvOverrides(fl::ServerConfig& cfg, int argc, char** argv, ILogger* log) {
     // Tier 2: CLI positional args — [port] [maxPeers]
     if (argc >= 2 && argv[1][0] != '-')
-        cfg.port = static_cast<uint16_t>(std::atoi(argv[1]));
+        cfg.server.port = static_cast<uint16_t>(std::atoi(argv[1]));
     if (argc >= 3 && argv[2][0] != '-')
-        cfg.maxPeers = std::atoi(argv[2]);
+        cfg.server.maxPeers = std::atoi(argv[2]);
 
     // Tier 3: environment variables (highest precedence)
     if (const char* e = std::getenv("FL_PORT"))
-        cfg.port = static_cast<uint16_t>(std::atoi(e));
+        cfg.server.port = static_cast<uint16_t>(std::atoi(e));
     if (const char* e = std::getenv("FL_BIND_ADDRESS"))
-        cfg.bindAddress = e;
+        cfg.server.bindAddress = e;
     if (const char* e = std::getenv("FL_MAX_PEERS"))
-        cfg.maxPeers = std::atoi(e);
+        cfg.server.maxPeers = std::atoi(e);
     if (const char* e = std::getenv("FL_NAME"))
-        cfg.name = e;
+        cfg.server.name = e;
     if (const char* e = std::getenv("FL_LOBBY_REGISTER"))
-        cfg.lobbyRegister = (std::strcmp(e, "true") == 0 || std::strcmp(e, "1") == 0);
+        cfg.lobby.registerServer = (std::strcmp(e, "true") == 0 || std::strcmp(e, "1") == 0);
     if (const char* e = std::getenv("FL_LOBBY_URL"))
-        cfg.lobbyUrl = e;
+        cfg.lobby.url = e;
     if (const char* e = std::getenv("FL_LOBBY_VISIBILITY")) {
         if (std::strcmp(e, "public") == 0 || std::strcmp(e, "private") == 0)
-            cfg.lobbyVisibility = e;
+            cfg.lobby.visibility = e;
         else
             log->log(LogLevel::Warn, __FILE__, __LINE__,
                      "FL_LOBBY_VISIBILITY must be \"public\" or \"private\"; ignoring");
@@ -179,13 +179,13 @@ static void applyCliAndEnvOverrides(fl::ServerConfig& cfg, int argc, char** argv
     if (const char* e = std::getenv("FL_AI_DIFFICULTY_FLOOR")) {
         if (std::strcmp(e, "recruit") == 0 || std::strcmp(e, "cadet") == 0 || std::strcmp(e, "veteran") == 0 ||
             std::strcmp(e, "ace") == 0)
-            cfg.aiDifficultyFloor = e;
+            cfg.ai.difficultyFloor = e;
         else
             log->log(LogLevel::Warn, __FILE__, __LINE__,
                      "FL_AI_DIFFICULTY_FLOOR must be recruit/cadet/veteran/ace; ignoring");
     }
     if (const char* e = std::getenv("FL_OPERATOR_PASSWORD"))
-        cfg.operatorPassword = e;
+        cfg.security.operatorPassword = e;
 }
 
 // ---------------------------------------------------------------------------
@@ -333,11 +333,11 @@ int main(int argc, char** argv) {
 
     // --bind / --admin-token flags from the pre-pass override any lower tier.
     if (!flagBind.empty())
-        cfg.bindAddress = flagBind;
+        cfg.server.bindAddress = flagBind;
     // --admin-token takes highest precedence and overrides server.toml + FL_OPERATOR_PASSWORD.
     // Used internally by LocalServer (single-player) to inject a per-session token.
     if (!flagAdminToken.empty())
-        cfg.operatorPassword = flagAdminToken;
+        cfg.security.operatorPassword = flagAdminToken;
     // --metrics-json overrides the [metrics] tick_json_path from server.toml.
     if (!flagMetricsJson.empty())
         cfg.metrics.tickJsonPath = flagMetricsJson;
@@ -350,10 +350,10 @@ int main(int argc, char** argv) {
     if (!flagReplayHashLog.empty())
         cfg.replay.hashLog = flagReplayHashLog;
     if (flagTestSpawnAi >= 0)
-        cfg.testSpawnAiCount = static_cast<uint32_t>(flagTestSpawnAi);
+        cfg.world.testSpawnAiCount = static_cast<uint32_t>(flagTestSpawnAi);
     // --sim-worker-threads overrides the [world] sim_worker_threads from server.toml.
     if (flagSimWorkers >= 0)
-        cfg.simWorkerThreads = static_cast<uint32_t>(flagSimWorkers);
+        cfg.world.simWorkerThreads = static_cast<uint32_t>(flagSimWorkers);
     // --flight-size overrides [flight] size. The game client's embedded single-player server passes
     // --flight-size 1, so single-player always flies with a wingman without changing the shipped
     // dedicated-server default (0), which would otherwise move every load-test number.
@@ -381,27 +381,27 @@ int main(int argc, char** argv) {
     // incrementally; the parse -> load -> sim-setup wiring is the deliverable here. The actual load
     // happens below once the entity registry + weather controller exist (see "load startup mission").
     std::string missionToLoad = flagMission;
-    if (missionToLoad.empty() && !cfg.rotationItems.empty())
-        missionToLoad = cfg.rotationItems.front();
+    if (missionToLoad.empty() && !cfg.rotation.items.empty())
+        missionToLoad = cfg.rotation.items.front();
     // A rotation item may pair a mission with a game mode: "mission@builtin:tdm" (#521). Split the mode
     // ref off so it never reaches the mission loader; an item without '@' uses the [match] mode default.
-    std::string modeRefToLoad = cfg.matchMode;
+    std::string modeRefToLoad = cfg.match.mode;
     {
         auto [missionRef, modeRef] = fl::splitRotationItem(missionToLoad);
         missionToLoad = missionRef;
         if (!modeRef.empty())
             modeRefToLoad = modeRef;
     }
-    if (!cfg.rotationItems.empty() && flagMission.empty()) {
+    if (!cfg.rotation.items.empty() && flagMission.empty()) {
         char buf[128];
-        std::snprintf(buf, sizeof(buf), "rotation: %zu item(s), order=%s (loading first: %s)", cfg.rotationItems.size(),
-                      cfg.rotationOrder.c_str(), cfg.rotationItems.front().c_str());
+        std::snprintf(buf, sizeof(buf), "rotation: %zu item(s), order=%s (loading first: %s)",
+                      cfg.rotation.items.size(), cfg.rotation.order.c_str(), cfg.rotation.items.front().c_str());
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
     }
-    if (!cfg.modStack.empty()) {
+    if (!cfg.mods.stack.empty()) {
         char buf[128];
         std::snprintf(buf, sizeof(buf), "mod stack: %zu mod ID(s) configured (explicit ordering not yet active)",
-                      cfg.modStack.size());
+                      cfg.mods.stack.size());
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
     }
 
@@ -411,7 +411,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    if (!net->bind(cfg.bindAddress.c_str(), cfg.port, cfg.maxPeers)) {
+    if (!net->bind(cfg.server.bindAddress.c_str(), cfg.server.port, cfg.server.maxPeers)) {
         char buf[128];
         std::snprintf(buf, sizeof(buf), "bind failed: %s", net->getLastError() ? net->getLastError() : "unknown");
         log->log(LogLevel::Error, __FILE__, __LINE__, buf);
@@ -425,21 +425,21 @@ int main(int argc, char** argv) {
     // Stored here for use after pre-loop setup completes (see below).
     char listeningMsg[192];
     std::snprintf(listeningMsg, sizeof(listeningMsg), "listening on %s:%u (max %d peers) name=\"%s\"",
-                  cfg.bindAddress.c_str(), cfg.port, cfg.maxPeers, cfg.name.c_str());
+                  cfg.server.bindAddress.c_str(), cfg.server.port, cfg.server.maxPeers, cfg.server.name.c_str());
 
-    if (cfg.incomingBandwidthBps || cfg.outgoingBandwidthBps) {
-        net->setBandwidthLimit(cfg.incomingBandwidthBps, cfg.outgoingBandwidthBps);
+    if (cfg.security.incomingBandwidthBps || cfg.security.outgoingBandwidthBps) {
+        net->setBandwidthLimit(cfg.security.incomingBandwidthBps, cfg.security.outgoingBandwidthBps);
         char buf[96];
-        std::snprintf(buf, sizeof(buf), "bandwidth cap: in=%u B/s out=%u B/s", cfg.incomingBandwidthBps,
-                      cfg.outgoingBandwidthBps);
+        std::snprintf(buf, sizeof(buf), "bandwidth cap: in=%u B/s out=%u B/s", cfg.security.incomingBandwidthBps,
+                      cfg.security.outgoingBandwidthBps);
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
     }
 
-    net->setPreHandshakeRateLimit(cfg.preHandshakeRateLimitCount, cfg.preHandshakeWindowMs);
+    net->setPreHandshakeRateLimit(cfg.security.preHandshakeRateLimitCount, cfg.security.preHandshakeWindowMs);
 
     // ---- LAN discovery beacon ----
     uint8_t discoveryGameModeFlags = 0;
-    for (const auto& m : cfg.gameModes) {
+    for (const auto& m : cfg.server.gameModes) {
         if (m == "campaign")
             discoveryGameModeFlags |= fl::kGameModeCampaign;
         else if (m == "mission")
@@ -447,24 +447,24 @@ int main(int argc, char** argv) {
         else if (m == "sandbox")
             discoveryGameModeFlags |= fl::kGameModeSandbox;
     }
-    if (!cfg.password.empty())
+    if (!cfg.server.password.empty())
         discoveryGameModeFlags |= fl::kGameModePassworded; // #998 — browsers show a lock icon
     // Server info query responder (#997): a dedicated UDP port that answers A2S-style queries for the
     // server browser's ping/details column. Auto port = game port + 1.
-    const uint16_t queryPort = cfg.discoveryQueryPort != 0 ? static_cast<uint16_t>(cfg.discoveryQueryPort)
-                                                           : static_cast<uint16_t>(cfg.port + 1);
+    const uint16_t queryPort = cfg.discovery.queryPort != 0 ? static_cast<uint16_t>(cfg.discovery.queryPort)
+                                                            : static_cast<uint16_t>(cfg.server.port + 1);
     std::unique_ptr<fl::ServerQueryResponder> queryResponder;
-    if (cfg.discoveryQueryEnabled && !flagNoDiscovery) {
+    if (cfg.discovery.queryEnabled && !flagNoDiscovery) {
         queryResponder = std::make_unique<fl::ServerQueryResponder>(queryPort, *log);
         if (!queryResponder->start()) {
             log->log(LogLevel::Warn, __FILE__, __LINE__, "server query responder: bind failed; queries disabled");
             queryResponder.reset();
         } else {
             fl::ServerQueryResponder::StaticInfo si;
-            si.name = cfg.name;
-            si.gamePort = cfg.port;
+            si.name = cfg.server.name;
+            si.gamePort = cfg.server.port;
             si.buildVersion = FL_VERSION_STRING; // #1074
-            si.maxPlayers = static_cast<uint8_t>(cfg.maxPeers > 255 ? 255 : cfg.maxPeers);
+            si.maxPlayers = static_cast<uint8_t>(cfg.server.maxPeers > 255 ? 255 : cfg.server.maxPeers);
             si.gameModeFlags = discoveryGameModeFlags;
             queryResponder->setStaticInfo(std::move(si));
             log->log(LogLevel::Info, __FILE__, __LINE__, "server query responder started");
@@ -472,18 +472,18 @@ int main(int argc, char** argv) {
     }
 
     std::unique_ptr<DiscoveryBeacon> beacon;
-    if (cfg.discoveryEnabled && !flagNoDiscovery) {
+    if (cfg.discovery.enabled && !flagNoDiscovery) {
         DiscoveryBeacon::Config dcfg;
-        dcfg.name = cfg.name;
-        dcfg.gamePort = cfg.port;              // advertised as MsgLanBeacon::gamePort — where clients connect
+        dcfg.name = cfg.server.name;
+        dcfg.gamePort = cfg.server.port;       // advertised as MsgLanBeacon::gamePort — where clients connect
         dcfg.buildVersion = FL_VERSION_STRING; // #1074: the browser shows it without connecting
         // Broadcast to the dedicated discovery port (#1071), never to the game port. The old alias is
         // why a client could not run its browser while a dedicated server held the game port.
         dcfg.discoveryPort = fl::kDiscoveryPort;
-        dcfg.maxPlayers = static_cast<uint8_t>(cfg.maxPeers > 255 ? 255 : cfg.maxPeers);
+        dcfg.maxPlayers = static_cast<uint8_t>(cfg.server.maxPeers > 255 ? 255 : cfg.server.maxPeers);
         dcfg.gameModeFlags = discoveryGameModeFlags;
         dcfg.queryPort = queryResponder ? queryPort : 0; // #997: advertise the query port to browsers
-        dcfg.intervalMs = cfg.discoveryIntervalMs;
+        dcfg.intervalMs = cfg.discovery.intervalMs;
         dcfg.broadcastAddr = "255.255.255.255";
         beacon = std::make_unique<DiscoveryBeacon>(dcfg, *log);
         if (!beacon->isOpen()) {
@@ -500,17 +500,17 @@ int main(int argc, char** argv) {
     // module-boundary rules ban engine-* from a backend and fl-server from CLIENT backends only).
     std::unique_ptr<IHttpClient> httpClient;
     std::unique_ptr<LobbyRegistration> lobbyReg;
-    if (cfg.lobbyRegister) {
+    if (cfg.lobby.registerServer) {
         httpClient = fl::createHttpClient(log);
         if (httpClient && httpClient->init()) {
             lobbyReg = std::make_unique<LobbyRegistration>(*httpClient, *log);
             LobbyRegistrationConfig lc;
-            lc.lobbyUrl = cfg.lobbyUrl;
-            lc.name = cfg.name;
-            lc.gamePort = cfg.port;
-            lc.maxPlayers = cfg.maxPeers;
-            lc.mode = cfg.matchMode;
-            lc.visibilityPublic = (cfg.lobbyVisibility == "public");
+            lc.lobbyUrl = cfg.lobby.url;
+            lc.name = cfg.server.name;
+            lc.gamePort = cfg.server.port;
+            lc.maxPlayers = cfg.server.maxPeers;
+            lc.mode = cfg.match.mode;
+            lc.visibilityPublic = (cfg.lobby.visibility == "public");
             lobbyReg->configure(lc);
             if (lobbyReg->enabled()) {
                 log->log(LogLevel::Info, __FILE__, __LINE__, "lobby registration active");
@@ -520,9 +520,9 @@ int main(int argc, char** argv) {
                 // an operator told "visibility=private" when they set public would look in the wrong
                 // place. Same defect class as the flag this issue removed.
                 log->log(LogLevel::Info, __FILE__, __LINE__,
-                         cfg.lobbyUrl.empty() ? "lobby registration requested but [lobby] url is empty; disabled "
-                                                "(set it to a lobby's base URL -- the reference service is issue #999)"
-                                              : "lobby registration disabled (visibility=private)");
+                         cfg.lobby.url.empty() ? "lobby registration requested but [lobby] url is empty; disabled "
+                                                 "(set it to a lobby's base URL -- the reference service is issue #999)"
+                                               : "lobby registration disabled (visibility=private)");
             }
         } else {
             log->log(LogLevel::Warn, __FILE__, __LINE__,
@@ -597,7 +597,7 @@ int main(int argc, char** argv) {
     // Apply the configured planet radius BEFORE the first update(): tiles bake curvature and
     // procedural elevations at generation time, so streaming first would generate Earth-radius
     // terrain (and prime wrong spawn elevations) on a non-Earth planet.
-    terrainStreamer.setPlanetRadius(cfg.planetRadiusM);
+    terrainStreamer.setPlanetRadius(cfg.world.planetRadiusM);
 
     // Kick off terrain streaming at the origin. A single update() is not enough to guarantee the
     // spawn point's covering tile chain is Ready (procedural loads are rate-limited per update;
@@ -646,9 +646,9 @@ int main(int argc, char** argv) {
     // out by a world full of projectiles and AI — the failure mode a flat cap has by construction.
     // It is derived rather than configured because there is only one correct value for it; EntityPool
     // clamps it to half the cap so a big max_peers against a small cap cannot starve the world.
-    if (cfg.entitySoftCap > 0) {
-        const auto cap = static_cast<uint32_t>(cfg.entitySoftCap);
-        const auto wanted = static_cast<uint32_t>(cfg.maxPeers < 0 ? 0 : cfg.maxPeers);
+    if (cfg.world.entitySoftCap > 0) {
+        const auto cap = static_cast<uint32_t>(cfg.world.entitySoftCap);
+        const auto wanted = static_cast<uint32_t>(cfg.server.maxPeers < 0 ? 0 : cfg.server.maxPeers);
         entityManager.setSoftCap(cap, wanted);
         const uint32_t reserve = entityManager.playerReserve();
         char buf[224];
@@ -659,7 +659,7 @@ int main(int argc, char** argv) {
             std::snprintf(buf, sizeof(buf),
                           "world.entity_soft_cap (%u) is small relative to max_peers (%d): the player reserve was "
                           "clamped from %u to %u, so a full lobby may not find airframes",
-                          cap, cfg.maxPeers, wanted, reserve);
+                          cap, cfg.server.maxPeers, wanted, reserve);
             log->log(LogLevel::Warn, __FILE__, __LINE__, buf);
         }
     }
@@ -718,7 +718,7 @@ int main(int argc, char** argv) {
     // sphere's NEAR side at radial altitude `agl` above the terrain: solve geodeticAltitude(x,y,z)
     // = terrainRadialElev + agl for the near-side y. General ground queries use the radial
     // heightAt(dvec3) API (#477); this near-side convention stays confined to spawn placement.
-    const double planetR = cfg.planetRadiusM;
+    const double planetR = cfg.world.planetRadiusM;
     auto nearSideSurface = [&](double x, double z, double agl) -> glm::dvec3 {
         const double h = terrainStreamer.heightAt(glm::dvec3{x, 0.0, z}); // radial terrain elevation
         const double target = planetR + h + agl;
@@ -820,7 +820,7 @@ int main(int argc, char** argv) {
 
     // ---- WorldBroadcaster wires the sim loop to ENet ----
     fl::WeatherControllerParams wparams;
-    wparams.timeScaleRatio = static_cast<float>(cfg.timeScale);
+    wparams.timeScaleRatio = static_cast<float>(cfg.world.timeScale);
     fl::WeatherController weatherController(wparams);
     // Altitude wind profile (#489): load the [wind] profile_path (relative to the config dir) and
     // apply it, so aircraft feel altitude-dependent wind the client predicts in parity.
@@ -845,36 +845,38 @@ int main(int argc, char** argv) {
     broadcaster.setParachuteType("builtin:parachute"); // spawn a chute on pilot ejection (#672)
     broadcaster.setAiAutoEject(true);                  // AI pilots punch out when critically hit (#672)
     fl::WorldBroadcasterConfig wbConfig;
-    wbConfig.connectRateLimit = cfg.connectRateLimitCount;
-    wbConfig.connectRateWindowS = cfg.connectRateLimitWindowS;
-    wbConfig.floodMultiplier = cfg.packetFloodMultiplier;
-    wbConfig.maxConnectionsPerIp = cfg.maxConnectionsPerIp;
-    wbConfig.motd = cfg.motd;
-    wbConfig.motdDisplaySeconds = cfg.motdDisplayS;
-    wbConfig.operatorPassword = cfg.operatorPassword;
-    wbConfig.playerEntityType = cfg.playerEntityType; // pilot spawn default when client requests none (#834)
-    wbConfig.allowObservers = cfg.allowObservers;     // #857
-    wbConfig.requiredPacks.clear();                   // #872: parse "id" / "id@version" specs into RequiredPack
-    for (const auto& spec : cfg.requiredPacks)
+    wbConfig.connectRateLimit = cfg.security.connectRateLimitCount;
+    wbConfig.connectRateWindowS = cfg.security.connectRateLimitWindowS;
+    wbConfig.floodMultiplier = cfg.security.packetFloodMultiplier;
+    wbConfig.maxConnectionsPerIp = cfg.security.maxConnectionsPerIp;
+    wbConfig.motd = cfg.server.motd;
+    wbConfig.motdDisplaySeconds = cfg.server.motdDisplayS;
+    wbConfig.operatorPassword = cfg.security.operatorPassword;
+    wbConfig.playerEntityType = cfg.world.playerEntityType; // pilot spawn default when client requests none (#834)
+    wbConfig.allowObservers = cfg.world.allowObservers;     // #857
+    wbConfig.requiredPacks.clear();                         // #872: parse "id" / "id@version" specs into RequiredPack
+    for (const auto& spec : cfg.mods.requiredPacks)
         wbConfig.requiredPacks.push_back(fl::parseRequiredPackSpec(spec));
     wbConfig.requiredPackPolicy =
-        fl::parseRequiredPackPolicy(cfg.requiredPackPolicy).value_or(fl::RequiredPackPolicy::Warn);
-    wbConfig.idleTimeoutS = cfg.idleTimeoutS;
-    wbConfig.drawDistanceKm = static_cast<float>(cfg.drawDistanceKm);
-    wbConfig.snapshotBudgetBytes = cfg.snapshotBudgetBytes;
+        fl::parseRequiredPackPolicy(cfg.mods.requiredPackPolicy).value_or(fl::RequiredPackPolicy::Warn);
+    wbConfig.idleTimeoutS = cfg.security.idleTimeoutS;
+    wbConfig.drawDistanceKm = static_cast<float>(cfg.world.drawDistanceKm);
+    wbConfig.snapshotBudgetBytes = cfg.world.snapshotBudgetBytes;
     wbConfig.compressSnapshots = cfg.network.compressSnapshots;
-    wbConfig.jitterBufferMaxDepth = cfg.jitterBufferDepth;
-    wbConfig.jitterAdaptWindow = cfg.jitterAdaptWindow;
-    wbConfig.jitterHysteresis = cfg.jitterHysteresis;
-    wbConfig.jitterMultiplier = cfg.jitterMultiplier;
-    wbConfig.congestion = fl::makeCongestionParams(cfg.congestionEnabled, cfg.congestionMinSendHz,
-                                                   cfg.congestionLossThreshold, cfg.congestionBudgetFloorBytes);
-    wbConfig.governor = fl::makeTickGovernorParams(
-        cfg.overrunGovernorEnabled, cfg.overrunHighWatermark, cfg.overrunLowWatermark, cfg.overrunMinSnapshotHz,
-        cfg.overrunMaxAiStride, cfg.overrunBudgetFloorBytes, cfg.overrunMinInterestFraction);
-    wbConfig.gameplay = fl::DamageRules{cfg.friendlyFire, cfg.crashDamage};
+    wbConfig.jitterBufferMaxDepth = cfg.world.jitterBufferDepth;
+    wbConfig.jitterAdaptWindow = cfg.world.jitterAdaptWindow;
+    wbConfig.jitterHysteresis = cfg.world.jitterHysteresis;
+    wbConfig.jitterMultiplier = cfg.world.jitterMultiplier;
+    wbConfig.congestion =
+        fl::makeCongestionParams(cfg.world.congestionEnabled, cfg.world.congestionMinSendHz,
+                                 cfg.world.congestionLossThreshold, cfg.world.congestionBudgetFloorBytes);
+    wbConfig.governor = fl::makeTickGovernorParams(cfg.world.overrunGovernorEnabled, cfg.world.overrunHighWatermark,
+                                                   cfg.world.overrunLowWatermark, cfg.world.overrunMinSnapshotHz,
+                                                   cfg.world.overrunMaxAiStride, cfg.world.overrunBudgetFloorBytes,
+                                                   cfg.world.overrunMinInterestFraction);
+    wbConfig.gameplay = fl::DamageRules{cfg.gameplay.friendlyFire, cfg.gameplay.crashDamage};
     broadcaster.applyConfig(wbConfig);
-    broadcaster.setJoinPassword(cfg.password); // #998: [server] password gates joins (empty = open)
+    broadcaster.setJoinPassword(cfg.server.password); // #998: [server] password gates joins (empty = open)
     // The fire path's vocabulary (#625). After applyConfig, before gameLoop.start(); the registry
     // lives in main's scope and outlives the broadcaster.
     broadcaster.setWeaponRegistry(&weaponRegistry);
@@ -886,12 +888,12 @@ int main(int argc, char** argv) {
     // Function-scope static so lifetime outlasts the broadcaster.
     static fl::CentralGravityField s_gravity{6'371'000.f};
     {
-        const auto R_m = static_cast<float>(cfg.planetRadiusM);
+        const auto R_m = static_cast<float>(cfg.world.planetRadiusM);
         s_gravity = fl::CentralGravityField(R_m);
         broadcaster.setGravityField(s_gravity, R_m / 1000.f);
     }
     // Earth-fixed rotating world frame: Coriolis + centrifugal on every integrator (#482).
-    broadcaster.setEarthRotationRate(cfg.earthRotation ? fl::kEarthRotationRate : 0.0);
+    broadcaster.setEarthRotationRate(cfg.world.earthRotation ? fl::kEarthRotationRate : 0.0);
     // Per-entity terrain height query: sim thread calls heightAt() (thread-safe via shared_mutex).
     // The entity origin is the mesh's ground-contact point, so the floor clamps it directly to the
     // terrain — the mesh then rests ON the ground.
@@ -949,7 +951,7 @@ int main(int argc, char** argv) {
     // Resolve EntityDef::sensorIds -> parsed SensorDef on the spawn path (#685). A sensor reference
     // is an ID, not an asset name, so it goes through ContentIndex (#810) -- see makeSensorDefResolver.
     broadcaster.setSensorDefResolver(fl::makeSensorDefResolver(assets, contentIndex, *log));
-    broadcaster.setSensorCheckHz(static_cast<float>(cfg.sensorCheckHz));
+    broadcaster.setSensorCheckHz(static_cast<float>(cfg.world.sensorCheckHz));
 
     // ---- Server-side difficulty (#682) -----------------------------------------------------------
     // The FIRST server-side consumer of the difficulty system: until now AiScaling was parsed and
@@ -972,12 +974,12 @@ int main(int argc, char** argv) {
         difficultyTable.applyPreset(preset, ds);
         return ds.ai;
     };
-    broadcaster.setAiScaling(resolveAiScaling(cfg.aiDifficulty));
+    broadcaster.setAiScaling(resolveAiScaling(cfg.ai.difficulty));
     {
-        const fl::AiScaling scaling = resolveAiScaling(cfg.aiDifficulty);
+        const fl::AiScaling scaling = resolveAiScaling(cfg.ai.difficulty);
         char buf[192];
         std::snprintf(buf, sizeof(buf), "ai difficulty \"%s\": radar range x%.2f, reaction %.2f s",
-                      cfg.aiDifficulty.c_str(), static_cast<double>(scaling.radarSensorRange),
+                      cfg.ai.difficulty.c_str(), static_cast<double>(scaling.radarSensorRange),
                       static_cast<double>(scaling.reactionTimeS));
         log->log(fl::LogLevel::Info, __FILE__, __LINE__, buf);
     }
@@ -986,15 +988,15 @@ int main(int argc, char** argv) {
     // engine-net does not link engine-ai (cmake/layering.cmake), so the three places an order needs
     // engine-ai — spawning a flight, building a controller, designating a target — are injected here
     // as std::functions. fl-server links both, so this is the seam where they meet.
-    broadcaster.setPlayerFaction(cfg.playerFaction);
+    broadcaster.setPlayerFaction(cfg.world.playerFaction);
     broadcaster.setBuildVersion(FL_VERSION_STRING); // #1074: rides MsgHello so a peer knows the build
     broadcaster.setFlightCommandRateLimit(cfg.flight.commandRateLimitPerS);
 
     // World-mutating request limits (#1069): seat/team grants cost a despawn+respawn and a full
     // ConnectAck; heartbeats cost a reply. These bound how often a peer may ask for each.
-    broadcaster.setSeatRequestRateLimit(cfg.seatRequestRateLimitPerS);
-    broadcaster.setTeamSwitchCooldownSeconds(cfg.teamSwitchCooldownS);
-    broadcaster.setHeartbeatRateLimit(cfg.heartbeatRateLimitPerS);
+    broadcaster.setSeatRequestRateLimit(cfg.security.seatRequestRateLimitPerS);
+    broadcaster.setTeamSwitchCooldownSeconds(cfg.security.teamSwitchCooldownS);
+    broadcaster.setHeartbeatRateLimit(cfg.security.heartbeatRateLimitPerS);
 
     // In-match text chat (#646). The moderation hook default logs an audit line and allows every message;
     // an operator replaces it with a filter. Rate limit + enable come from [chat].
@@ -1048,9 +1050,9 @@ int main(int argc, char** argv) {
     }
 
     // Spectator snapshot delay (#403): anti-ghosting for dead/observer peers (0 = off).
-    broadcaster.setSpectateDelay(cfg.spectateDelayS);
+    broadcaster.setSpectateDelay(cfg.world.spectateDelayS);
 
-    if (cfg.flight.size > 0 && cfg.playerFaction == 0) {
+    if (cfg.flight.size > 0 && cfg.world.playerFaction == 0) {
         // A flight whose threat logic can never fire is a silently broken feature, not a
         // configuration: areFactionsHostile gives a faction-0 entity no enemies at all.
         log->log(LogLevel::Warn, __FILE__, __LINE__,
@@ -1612,7 +1614,7 @@ int main(int argc, char** argv) {
                 auto groundHeight = [&](double x, double z) -> double { return nearSideSurface(x, z, 0.0).y; };
                 fl::MissionSetupResult setup =
                     fl::applyMission(parsed.mission, entityManager, missionFactions, &weatherController,
-                                     cfg.planetRadiusM, onSpawned, groundHeight);
+                                     cfg.world.planetRadiusM, onSpawned, groundHeight);
                 broadcaster.setFactionRegistry(&missionFactions);
 
                 // ---- Airspace alert system (#162) ----
@@ -1626,7 +1628,7 @@ int main(int argc, char** argv) {
                         alertSystem.addPolicy(std::move(policy));
                     for (const fl::AirspaceZone& z : parsed.mission.airspaceZones)
                         alertSystem.addZone(z);
-                    alertSystem.setPlanetRadius(cfg.planetRadiusM);
+                    alertSystem.setPlanetRadius(cfg.world.planetRadiusM);
 
                     // A zone whose owner does not resolve enforces nothing, and that is invisible in
                     // play -- so say so rather than letting the mission look like it is working.
@@ -1833,7 +1835,7 @@ int main(int argc, char** argv) {
         }
     }
     // Friendly fire: a mode's On/Off override wins over [gameplay] friendly_fire (#522).
-    broadcaster.setDamageRules(fl::effectiveDamageRules(gameMode, cfg.friendlyFire, cfg.crashDamage));
+    broadcaster.setDamageRules(fl::effectiveDamageRules(gameMode, cfg.gameplay.friendlyFire, cfg.gameplay.crashDamage));
 
     // ── Match lifecycle (#523) ────────────────────────────────────────────────────────────────
     // Configure the controller for the active mode + teams. Publish state on every phase change (which
@@ -1842,8 +1844,8 @@ int main(int argc, char** argv) {
     {
         fl::MatchTeamSetup mts = fl::buildMatchTeams(gameMode, missionFactions, *log);
         matchController.configure(gameMode, mts.teams);
-        matchController.setEndingSeconds(static_cast<double>(cfg.matchEndScreenS));
-        broadcaster.setReconnectGraceTicks(static_cast<uint64_t>(std::max(0, cfg.matchReconnectGraceS)) * 60u); // #524
+        matchController.setEndingSeconds(static_cast<double>(cfg.match.endScreenS));
+        broadcaster.setReconnectGraceTicks(static_cast<uint64_t>(std::max(0, cfg.match.reconnectGraceS)) * 60u); // #524
 
         // Respawn policy from the mode (#648): a dead pilot respawns on request after the delay. Enabled
         // ONLY for a competitive team match — the no-match free-flight default (haveTeams == false) leaves
@@ -1909,16 +1911,16 @@ int main(int argc, char** argv) {
 
         // AI bot backfill (#87): spawn server-side AI participants up to the fill target. Bots are not
         // network peers. Requires teams (a free-for-all cannot balance bots) and fill > 0.
-        if (cfg.botsFill > 0 && mts.haveTeams) {
+        if (cfg.bots.fill > 0 && mts.haveTeams) {
             std::vector<uint16_t> botTeams;
             for (const fl::TeamState& ts : mts.teams)
                 botTeams.push_back(ts.factionIndex);
             const double botGroundY = terrainStreamer.heightAt(glm::dvec3{0.0, 0.0, 0.0});
             std::string fighterSrc(
-                fl::builtinAiScript(cfg.botsAiScript.empty() ? std::string("builtin:fighter") : cfg.botsAiScript));
+                fl::builtinAiScript(cfg.bots.aiScript.empty() ? std::string("builtin:fighter") : cfg.bots.aiScript));
             if (fighterSrc.empty())
                 fighterSrc = std::string(fl::builtinAiScript("builtin:fighter"));
-            const std::string botType = cfg.botsEntityType.empty() ? cfg.playerEntityType : cfg.botsEntityType;
+            const std::string botType = cfg.bots.entityType.empty() ? cfg.world.playerEntityType : cfg.bots.entityType;
 
             auto botSpawn = [&entityManager, &broadcaster, &worldApi, botGroundY, botType, fighterSrc,
                              spawnN = uint32_t{0}](uint16_t faction) mutable -> fl::EntityId {
@@ -1950,9 +1952,9 @@ int main(int argc, char** argv) {
                 return s != nullptr && !s->dead;
             };
             fl::BotRoster::Config bcfg;
-            bcfg.fill = cfg.botsFill;
-            bcfg.maxBots = cfg.botsMax;
-            bcfg.balanceTeams = cfg.botsBalanceTeams;
+            bcfg.fill = cfg.bots.fill;
+            bcfg.maxBots = cfg.bots.max;
+            bcfg.balanceTeams = cfg.bots.balanceTeams;
             botRoster = std::make_unique<fl::BotRoster>(broadcaster, bcfg, std::move(botTeams), std::move(botSpawn),
                                                         std::move(botKill), std::move(botAlive));
             log->log(LogLevel::Info, __FILE__, __LINE__, "bots: AI backfill enabled");
@@ -1980,17 +1982,19 @@ int main(int argc, char** argv) {
         std::snprintf(buf, sizeof(buf), "input tracing enabled -> %s", cfg.trace.inputTraceDir.c_str());
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
     }
-    if (!cfg.banlistPath.empty()) {
-        auto banned = fl::loadIpListFile(cfg.banlistPath, log);
+    if (!cfg.security.banlistPath.empty()) {
+        auto banned = fl::loadIpListFile(cfg.security.banlistPath, log);
         char buf[128];
-        std::snprintf(buf, sizeof(buf), "banlist: loaded %zu IPs from %s", banned.size(), cfg.banlistPath.c_str());
+        std::snprintf(buf, sizeof(buf), "banlist: loaded %zu IPs from %s", banned.size(),
+                      cfg.security.banlistPath.c_str());
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
         broadcaster.setBannedAddresses(std::move(banned));
     }
-    if (!cfg.allowlistPath.empty()) {
-        auto allowed = fl::loadIpListFile(cfg.allowlistPath, log);
+    if (!cfg.security.allowlistPath.empty()) {
+        auto allowed = fl::loadIpListFile(cfg.security.allowlistPath, log);
         char buf[128];
-        std::snprintf(buf, sizeof(buf), "allowlist: loaded %zu IPs from %s", allowed.size(), cfg.allowlistPath.c_str());
+        std::snprintf(buf, sizeof(buf), "allowlist: loaded %zu IPs from %s", allowed.size(),
+                      cfg.security.allowlistPath.c_str());
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
         broadcaster.setAllowedAddresses(std::move(allowed));
     }
@@ -2031,9 +2035,10 @@ int main(int argc, char** argv) {
                                   fl::SystemClock::instance());
     fl::AdminChannel missionChannel(adminDispatch, channelConfig("mission", 0, 0, /*perIpAuth=*/false),
                                     fl::SystemClock::instance());
-    fl::AdminChannel enetChannel(adminDispatch,
-                                 channelConfig("enet", cfg.adminAuthMaxFailures, cfg.adminAuthLockoutSeconds, true),
-                                 fl::SystemClock::instance());
+    fl::AdminChannel enetChannel(
+        adminDispatch,
+        channelConfig("enet", cfg.security.adminAuthMaxFailures, cfg.security.adminAuthLockoutSeconds, true),
+        fl::SystemClock::instance());
     fl::AdminChannel rconChannel(adminDispatch,
                                  channelConfig("rcon", cfg.rcon.maxAuthFailures, cfg.rcon.lockoutSeconds, true),
                                  fl::SystemClock::instance());
@@ -2067,7 +2072,7 @@ int main(int argc, char** argv) {
     // broadcaster holds a raw pointer to it). Constructed + wired below, after gameLoop exists.
     std::unique_ptr<fl::atc::AtcService> atcService;
 
-    GameLoop gameLoop(broadcaster, *log, kSimTickRateHz, cfg.maxCatchupTicks);
+    GameLoop gameLoop(broadcaster, *log, kSimTickRateHz, cfg.world.maxCatchupTicks);
 
     // The ordered sim-system list (#1078). Registration order is execution order; see the note above
     // the WorldStateBridge construction. Each of these implements ISimUpdate, so a new sim system is a
@@ -2092,17 +2097,18 @@ int main(int argc, char** argv) {
                 if (botRoster)
                     botRoster->clear(); // #87: retire bots before the world reset; refills next step
                 broadcaster.resetWorld();
-                std::string modeRef = cfg.matchMode;
-                if (!cfg.rotationItems.empty()) {
-                    rotationIndex = (rotationIndex + 1) % cfg.rotationItems.size();
-                    auto [mref, moderef] = fl::splitRotationItem(cfg.rotationItems[rotationIndex]);
+                std::string modeRef = cfg.match.mode;
+                if (!cfg.rotation.items.empty()) {
+                    rotationIndex = (rotationIndex + 1) % cfg.rotation.items.size();
+                    auto [mref, moderef] = fl::splitRotationItem(cfg.rotation.items[rotationIndex]);
                     (void)mref;
                     if (!moderef.empty())
                         modeRef = moderef;
                 }
                 const fl::GameModeDef nextMode = fl::resolveGameMode(modeRef, &assets, *log);
                 fl::MatchTeamSetup nmts = fl::buildMatchTeams(nextMode, missionFactions, *log);
-                broadcaster.setDamageRules(fl::effectiveDamageRules(nextMode, cfg.friendlyFire, cfg.crashDamage));
+                broadcaster.setDamageRules(
+                    fl::effectiveDamageRules(nextMode, cfg.gameplay.friendlyFire, cfg.gameplay.crashDamage));
                 matchController.configure(nextMode, nmts.teams);
                 if (nmts.haveTeams) { // respawn only for a competitive team match — see the setup path above
                     fl::WorldBroadcaster::RespawnPolicy rp;
@@ -2122,12 +2128,12 @@ int main(int argc, char** argv) {
     // Data-parallel sim tick: the worker pool that parallelises the per-entity AI + integrate
     // passes. Constructed before gameLoop.start() and outlives it (declared here in main's scope).
     // 0 = auto (hardware_concurrency), 1 = serial. Injected into the broadcaster below.
-    fl::JobSystem jobSystem(cfg.simWorkerThreads);
+    fl::JobSystem jobSystem(cfg.world.simWorkerThreads);
     broadcaster.setJobSystem(jobSystem);
     {
         char wbuf[96];
         std::snprintf(wbuf, sizeof(wbuf), "sim worker pool: %u background worker(s) (sim_worker_threads=%u)",
-                      jobSystem.workerCount(), cfg.simWorkerThreads);
+                      jobSystem.workerCount(), cfg.world.simWorkerThreads);
         log->log(LogLevel::Info, __FILE__, __LINE__, wbuf);
     }
 
@@ -2185,8 +2191,8 @@ int main(int argc, char** argv) {
     // ---- Load-test affordance (#573): pre-spawn N server-side AI entities to stress the entity pool
     // + SpatialIndex at scale. A TESTING AFFORDANCE, NOT A CAPACITY GUARANTEE. Disabled (0) by default;
     // must be wired before gameLoop.start() (registerController is sim-thread-only afterward).
-    if (cfg.testSpawnAiCount > 0) {
-        const double spreadM = cfg.testSpawnSpreadKm * 1000.0;
+    if (cfg.world.testSpawnAiCount > 0) {
+        const double spreadM = cfg.world.testSpawnSpreadKm * 1000.0;
 
         // Terrain-relative placement (#1137). test_spawn_agl_m used to be measured above the
         // ORIGIN's ground for every entity, so over a wide spread anything above higher ground
@@ -2218,13 +2224,13 @@ int main(int argc, char** argv) {
             return {s.x, s.y, s.z};
         };
         const auto positions =
-            fl::testSpawnPositions(cfg.testSpawnAiCount, spreadM, cfg.testSpawnAglM, loadSpawnSurface);
+            fl::testSpawnPositions(cfg.world.testSpawnAiCount, spreadM, cfg.world.testSpawnAglM, loadSpawnSurface);
         if (coarseSpawnPoints > 0) {
             char cbuf[192];
             std::snprintf(cbuf, sizeof(cbuf),
                           "test spawn: %u of %u spawn points used a COARSE terrain height (streaming budget "
                           "exhausted) — those entities may sit lower above ground than %.0f m",
-                          coarseSpawnPoints, cfg.testSpawnAiCount, cfg.testSpawnAglM);
+                          coarseSpawnPoints, cfg.world.testSpawnAiCount, cfg.world.testSpawnAglM);
             log->log(LogLevel::Warn, __FILE__, __LINE__, cbuf);
         }
 
@@ -2233,16 +2239,16 @@ int main(int argc, char** argv) {
         // Already validated by parseServerConfig — a parse failure here can't happen, but fall back
         // to all-loiter defensively anyway.
         std::vector<fl::TestSpawnMixEntry> mix;
-        if (!cfg.testSpawnAiMix.empty()) {
+        if (!cfg.world.testSpawnAiMix.empty()) {
             std::string mixErr;
-            if (!fl::parseTestSpawnMix(cfg.testSpawnAiMix, mix, mixErr))
+            if (!fl::parseTestSpawnMix(cfg.world.testSpawnAiMix, mix, mixErr))
                 mix.clear();
         }
 
         // #980: the load AI's entity type (default the single-seat debug entity; builtin:bomber runs
         // CREWED AI, exercising the per-seat passes + turret replication under scale-gate load).
         const std::string loadType =
-            cfg.testSpawnEntityType.empty() ? std::string("builtin:debug-entity") : cfg.testSpawnEntityType;
+            cfg.world.testSpawnEntityType.empty() ? std::string("builtin:debug-entity") : cfg.world.testSpawnEntityType;
         uint32_t spawned = 0;
         fl::EntityId prevId; // pursuit/patrol target: the previously spawned load entity
         for (const auto& pos : positions) {
@@ -2264,7 +2270,7 @@ int main(int argc, char** argv) {
             // after).
             std::string_view behavior = "loiter";
             if (!mix.empty())
-                behavior = fl::assignTestSpawnBehavior(mix, spawned, cfg.testSpawnAiCount);
+                behavior = fl::assignTestSpawnBehavior(mix, spawned, cfg.world.testSpawnAiCount);
             std::unique_ptr<fl::IEntityController> ctrl;
             if (behavior == "pursuit" && prevId.valid()) {
                 ctrl = std::make_unique<fl::ai::PursuitController>(entityManager, prevId);
@@ -2296,8 +2302,8 @@ int main(int argc, char** argv) {
         std::snprintf(sbuf, sizeof(sbuf),
                       "test spawn: %u AI entities over %.1f km at %.0f m AGL, mix=%s "
                       "(testing affordance, NOT a capacity guarantee)",
-                      spawned, cfg.testSpawnSpreadKm, cfg.testSpawnAglM,
-                      cfg.testSpawnAiMix.empty() ? "loiter" : cfg.testSpawnAiMix.c_str());
+                      spawned, cfg.world.testSpawnSpreadKm, cfg.world.testSpawnAglM,
+                      cfg.world.testSpawnAiMix.empty() ? "loiter" : cfg.world.testSpawnAiMix.c_str());
         log->log(LogLevel::Warn, __FILE__, __LINE__, sbuf);
     }
 
@@ -2306,11 +2312,11 @@ int main(int argc, char** argv) {
     // spawn+reap traffic through the EntityPool free-list, the O(liveCount) forEach, and the
     // SnapshotDespawn TLV path. Runs on the sim thread (callbacks drain at the top of each tick,
     // before onTick), so spawn/kill need no extra synchronisation. A TESTING AFFORDANCE.
-    if (cfg.testProjectileRate > 0.0) {
-        const double spreadM = cfg.testSpawnSpreadKm * 1000.0;
-        const double aglM = cfg.testSpawnAglM;
-        const uint64_t ttlTicks = static_cast<uint64_t>(cfg.testProjectileTtlS * 60.0) + 1u;
-        const double rate = cfg.testProjectileRate;
+    if (cfg.world.testProjectileRate > 0.0) {
+        const double spreadM = cfg.world.testSpawnSpreadKm * 1000.0;
+        const double aglM = cfg.world.testSpawnAglM;
+        const uint64_t ttlTicks = static_cast<uint64_t>(cfg.world.testProjectileTtlS * 60.0) + 1u;
+        const double rate = cfg.world.testProjectileRate;
         // Terrain-relative, same as the load spawn (#1137) — the churn walks the same spread off the
         // same knob, so it had the same trap. Sampled per spawn on the SIM thread: heightAt() is
         // thread-safe (m_tileMutex) and is already the per-tick physics floor, and only update() is
@@ -2349,7 +2355,8 @@ int main(int argc, char** argv) {
         std::snprintf(cbuf, sizeof(cbuf),
                       "test churn: %.1f projectile spawns/s, ttl %.2f s (~%.0f live at steady state; "
                       "testing affordance)",
-                      cfg.testProjectileRate, cfg.testProjectileTtlS, cfg.testProjectileRate * cfg.testProjectileTtlS);
+                      cfg.world.testProjectileRate, cfg.world.testProjectileTtlS,
+                      cfg.world.testProjectileRate * cfg.world.testProjectileTtlS);
         log->log(LogLevel::Warn, __FILE__, __LINE__, cbuf);
     }
 
@@ -2369,6 +2376,7 @@ int main(int argc, char** argv) {
         c.sim.gameLoop = &gameLoop;
         c.env.logger = log;
         c.env.configPath = &configPath;
+        c.env.runningConfig = &cfg; // the startup values reload_config diffs against (#1081)
         c.env.quitFlag = &g_quit;
         c.env.uptime = serverUptime; // the process-wide instant, not a fresh one
         c.env.traceDir = cfg.trace.inputTraceDir;
@@ -2386,16 +2394,16 @@ int main(int argc, char** argv) {
             fmCache->clear();
             broadcaster.reloadFlightModels();
         };
-        c.bans.banlistPath = cfg.banlistPath.empty() ? nullptr : &cfg.banlistPath;
-        c.bans.allowlistPath = cfg.allowlistPath.empty() ? nullptr : &cfg.allowlistPath;
+        c.bans.banlistPath = cfg.security.banlistPath.empty() ? nullptr : &cfg.security.banlistPath;
+        c.bans.allowlistPath = cfg.security.allowlistPath.empty() ? nullptr : &cfg.security.allowlistPath;
         c.bans.saveBanlist = [&](const std::unordered_set<std::string>& b) {
-            fl::saveIpListFile(cfg.banlistPath, b, log);
+            fl::saveIpListFile(cfg.security.banlistPath, b, log);
         };
-        c.bans.loadBanlist = [&]() { return fl::loadIpListFile(cfg.banlistPath, log); };
-        c.bans.loadAllowlist = [&]() { return fl::loadIpListFile(cfg.allowlistPath, log); };
-        c.shutdown.warningIntervalS = static_cast<uint32_t>(cfg.shutdownWarningIntervalS);
-        c.shutdown.minDelayS = static_cast<uint32_t>(cfg.minShutdownDelayS);
-        c.shutdown.requireConfirm = cfg.shutdownRequireConfirm;
+        c.bans.loadBanlist = [&]() { return fl::loadIpListFile(cfg.security.banlistPath, log); };
+        c.bans.loadAllowlist = [&]() { return fl::loadIpListFile(cfg.security.allowlistPath, log); };
+        c.shutdown.warningIntervalS = static_cast<uint32_t>(cfg.shutdown.warningIntervalS);
+        c.shutdown.minDelayS = static_cast<uint32_t>(cfg.shutdown.minDelayS);
+        c.shutdown.requireConfirm = cfg.shutdown.requireConfirm;
         c.rcon.shell = &adminShell;
         // Every frontend at once (#1079). The three per-channel lockout hooks this replaced had to be
         // added by hand for each new frontend, which is how a surface gets forgotten.
@@ -2423,7 +2431,7 @@ int main(int argc, char** argv) {
     // attached here because its dispatcher needs adminRegistry (built just above). Attaching it is
     // what turns the frontend ON -- with no operator password the broadcaster holds no channel and
     // discards MsgAdminCommand, exactly as an unset dispatcher did before.
-    if (!cfg.operatorPassword.empty()) {
+    if (!cfg.security.operatorPassword.empty()) {
         enetChannel.setShellTap([&adminShell]() { return adminShell.mark(); },
                                 [&adminShell](int m) { return adminShell.drainSince(m); });
         broadcaster.setAdminChannel(&enetChannel);
@@ -2538,7 +2546,7 @@ int main(int argc, char** argv) {
         ropts.tickRateHz = static_cast<uint32_t>(kSimTickRateHz);
         // Stored, never assumed: every geodetic readout on playback -- and the ACMI export built on
         // this file later (#923) -- is a function of the radius this session actually ran.
-        ropts.planetRadiusM = cfg.planetRadiusM;
+        ropts.planetRadiusM = cfg.world.planetRadiusM;
         ropts.missionId = loadedMissionName;
         ropts.startUnixSeconds = static_cast<uint64_t>(now);
         ropts.sessionFlags = loadedMissionName.empty() ? 0u : fl::kReplaySessionMission;
@@ -2612,13 +2620,13 @@ int main(int argc, char** argv) {
     fl::WorldEvolutionSinks aiSinks;
     {
         bool pluginLoadFailed = false;
-        const std::string pluginPath = cfg.aiProvider.enabled ? cfg.aiProvider.plugin : std::string{};
+        const std::string pluginPath = cfg.ai.provider.enabled ? cfg.ai.provider.plugin : std::string{};
         aiProvider = fl::loadWorldAiProvider(pluginPath, *log, pluginLoadFailed);
         if (pluginLoadFailed) {
             // Loud, because the alternative is a server quietly running scripted content for a week
             // because a path was mistyped, with nothing in the log that says so.
             log->log(LogLevel::Error, __FILE__, __LINE__,
-                     ("ai_provider: plugin '" + cfg.aiProvider.plugin +
+                     ("ai_provider: plugin '" + cfg.ai.provider.plugin +
                       "' could not be loaded; continuing with no provider (every AI feature falls back "
                       "to its scripted path)")
                          .c_str());
@@ -2632,7 +2640,7 @@ int main(int argc, char** argv) {
             aiProvider = std::make_unique<fl::NullAiProvider>();
             (void)aiProvider->init(*log);
         }
-        if (cfg.aiProvider.enabled) {
+        if (cfg.ai.provider.enabled) {
             // Report what it can actually do at startup rather than at first use: an operator who
             // configured a provider for narrative and got one that only maps intent should find out
             // now, not from missing briefings three missions in.
@@ -2676,7 +2684,7 @@ int main(int argc, char** argv) {
     // Team chat -> a templated prompt -> the provider -> a grammar name -> the SAME order path the
     // radio menu drives. The model chooses among validated commands; it never invents an action and
     // never supplies a target.
-    if (cfg.chatIntent.enabled && aiProvider->supports(fl::WorldAiCapability::Intent)) {
+    if (cfg.ai.chatIntent.enabled && aiProvider->supports(fl::WorldAiCapability::Intent)) {
         // Per-peer, per-minute budget. Deliberately separate from (and far below) the chat rate
         // limit: a chat line costs nothing and a model call costs money and latency, so the team
         // channel must not be a lever against the server's own inference budget.
@@ -2709,8 +2717,8 @@ int main(int argc, char** argv) {
                 b.count = 0;
                 b.warned = false;
             }
-            if (cfg.chatIntent.rateLimitPerMin > 0 && ++b.count > cfg.chatIntent.rateLimitPerMin) {
-                if (!b.warned && cfg.chatIntent.notifyOnDecline) {
+            if (cfg.ai.chatIntent.rateLimitPerMin > 0 && ++b.count > cfg.ai.chatIntent.rateLimitPerMin) {
+                if (!b.warned && cfg.ai.chatIntent.notifyOnDecline) {
                     b.warned = true; // once per window; a flood must not be amplified back at the sender
                     broadcaster.sendNoticeTo(peerId, "Voice/chat orders are rate limited; use the radio menu.");
                 }
@@ -2730,7 +2738,7 @@ int main(int argc, char** argv) {
                         return;
                     const fl::ai::IntentResult r = fl::ai::validateIntentResponse(name);
                     if (!r.command) {
-                        if (cfg.chatIntent.notifyOnDecline && r.rejection != fl::ai::IntentRejection::Declined) {
+                        if (cfg.ai.chatIntent.notifyOnDecline && r.rejection != fl::ai::IntentRejection::Declined) {
                             // A DECLINE is the model behaving correctly and needs no apology; a malformed
                             // or out-of-grammar answer is a backend problem the operator should see.
                             char nbuf[128];
@@ -2748,12 +2756,12 @@ int main(int argc, char** argv) {
                         (void)broadcaster.issueWingmanOrder(peerId, ordinal);
                     });
                 });
-            if (id == 0 && cfg.chatIntent.notifyOnDecline)
+            if (id == 0 && cfg.ai.chatIntent.notifyOnDecline)
                 broadcaster.sendNoticeTo(peerId, "Voice/chat orders are unavailable; use the radio menu.");
         });
         log->log(LogLevel::Info, __FILE__, __LINE__,
                  "ai.chat_intent: free-text wingman commands enabled over team chat");
-    } else if (cfg.chatIntent.enabled) {
+    } else if (cfg.ai.chatIntent.enabled) {
         log->log(LogLevel::Warn, __FILE__, __LINE__,
                  "ai.chat_intent is enabled but the provider does not support intent mapping; "
                  "the radio menu remains the path");
@@ -2768,7 +2776,7 @@ int main(int argc, char** argv) {
         // ---- MCP surface (#601) ----
         // A second frontend on the listener above, so it is enabled before start() rather than
         // started separately. The three hooks are all it needs from the sim.
-        if (cfg.mcp.enabled) {
+        if (cfg.ai.mcp.enabled) {
             fl::McpHooks hooks;
             hooks.auditAgentAction = [&broadcaster](std::string_view tool, const fl::CommandIssuer& issuer,
                                                     std::string_view detail) {
@@ -2791,7 +2799,7 @@ int main(int argc, char** argv) {
                 return snap ? snap->tick : 0;
             };
             hooks.matchEventSeq = [&broadcaster]() -> uint64_t { return broadcaster.matchEventLog().nextSeq(); };
-            httpAdminServer->enableMcp(cfg.mcp, std::move(hooks));
+            httpAdminServer->enableMcp(cfg.ai.mcp, std::move(hooks));
         }
 
         if (!httpAdminServer->start()) {

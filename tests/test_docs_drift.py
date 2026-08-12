@@ -123,6 +123,67 @@ def test_config_doc_keys_ignores_non_key_tables():
     assert not any(k.startswith("server.string") for k in keys)  # Type/Default table
 
 
+RELOAD_TABLE_SRC = """
+const std::array kTable = std::to_array<ConfigKeyInfo>({
+    {"server.name", ReloadClass::Hot,
+     [](const ServerConfig& c) { return valueText(c.server.name); }, applyBeaconName},
+    {"server.port", ReloadClass::Restart,
+     [](const ServerConfig& c) { return valueText(c.server.port); }, nullptr},
+});
+"""
+
+RELOAD_DOC = """## Runtime administration
+
+#### Hot-reload behaviour (`reload_config`)
+
+Prose, and a code block that must not be mistaken for the matrix.
+
+| Key | Reload |
+|---|---|
+| `server.name` | **Hot** |
+| `server.port` | Restart |
+
+#### Access control
+
+| Key | Reload |
+|---|---|
+| `server.motd` | **Hot** |
+"""
+
+
+def test_reload_table_reads_the_class_of_each_row():
+    table = dd.extract_reload_table(RELOAD_TABLE_SRC)
+    assert table == {"server.name": "hot", "server.port": "restart"}
+
+
+def test_reload_table_is_empty_for_a_file_without_one():
+    assert dd.extract_reload_table("int main() { return 0; }") == {}
+
+
+def test_reload_matrix_reads_the_documented_class():
+    matrix = dd.extract_reload_matrix(RELOAD_DOC)
+    assert matrix["server.name"] == "hot"
+    assert matrix["server.port"] == "restart"
+
+
+def test_reload_matrix_stops_at_the_next_heading():
+    """A `Key | Reload` table under a LATER heading is not part of the matrix.
+
+    Without the stop the checker would silently absorb any similarly shaped table further down
+    the page, and a key missing from the real matrix would look documented.
+    """
+    assert "server.motd" not in dd.extract_reload_matrix(RELOAD_DOC)
+
+
+def test_reload_matrix_is_empty_when_the_section_is_absent():
+    assert dd.extract_reload_matrix("## Runtime administration\n\nNo matrix here.\n") == {}
+
+
+def test_config_doc_keys_ignores_the_reload_matrix():
+    """The matrix rows are fully qualified (`section.key`), so they are not section keys."""
+    assert dd.extract_config_doc_keys(RELOAD_DOC) == set()
+
+
 def test_config_doc_keys_does_not_leak_across_an_unbracketed_heading():
     """Keys after a prose h2 must not be attributed to the last config section.
 

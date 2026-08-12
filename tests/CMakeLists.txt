@@ -486,6 +486,13 @@ if(TARGET platform-enet)
     target_include_directories(test_server_config PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     catch_discover_tests(test_server_config)
 
+    # The per-key reload-class table (#1081). Links the server library because the table's hot rows
+    # carry the code that applies them.
+    add_executable(test_config_reload test_config_reload.cpp)
+    target_link_libraries(test_config_reload PRIVATE Catch2::Catch2WithMain fl-server-lib)
+    target_include_directories(test_config_reload PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    catch_discover_tests(test_config_reload)
+
     # Pure geometry for the #573 load-test spawn spread (header-only, no link deps).
     add_executable(test_load_spawn test_load_spawn.cpp)
     target_link_libraries(test_load_spawn PRIVATE Catch2::Catch2WithMain)

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ServerCommands.h"
 
+#include "ConfigReload.h"
+
 #include "ai/AiControllerFactory.h"
 #include "atc/AtcService.h" // atc_status/atc_scramble/atc_hold (#705)
 #include "entity/EntityTypeRegistry.h"
@@ -1406,91 +1408,74 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
     // reload_config
     registry.registerCommand(
         "reload_config",
-        "reload_config  -- re-read server.toml and apply: name (beacon), motd, motd_display_s,"
-        " entity_soft_cap, draw_distance_km, snapshot_budget_bytes, jitter_buffer_depth,"
-        " jitter_buffer_adapt_window, jitter_buffer_hysteresis, jitter_buffer_jitter_multiplier,"
-        " congestion_enabled, congestion_min_send_hz, congestion_loss_threshold,"
-        " congestion_budget_floor_bytes, overrun_governor_enabled, overrun_high_watermark,"
-        " overrun_low_watermark, overrun_min_snapshot_hz, overrun_max_ai_stride,"
-        " overrun_budget_floor_bytes, overrun_min_interest_fraction, compress_snapshots,"
-        " sensor_check_hz, gameplay.friendly_fire, gameplay.crash_damage, ai.difficulty (other"
-        " fields, incl. max_catchup_ticks and gns_nagle_time_us, require restart)",
+        "reload_config  -- re-read server.toml, apply every hot-reloadable key and NAME the"
+        " restart-only keys whose values changed (see the reload matrix in server-config.md)",
         capBit(Capability::ServerConfig), [ctx](std::span<std::string_view>) -> std::string {
             if (!ctx->env.configPath || ctx->env.configPath->empty())
                 return "reload_config: not available";
+            if (!ctx->env.runningConfig)
+                return "reload_config: not available (no running config)";
             std::ifstream f(*ctx->env.configPath);
             if (!f)
                 return "reload_config: cannot open " + *ctx->env.configPath;
             std::ostringstream ss;
             ss << f.rdbuf();
-            ServerConfig newCfg = parseServerConfig(ss.str(), ctx->env.logger);
-            if (ctx->env.beacon)
-                ctx->env.beacon->setName(newCfg.name);
+            // A parse error must not reach the appliers: parseServerConfig answers a syntax error with
+            // a DEFAULT config, and applying that would silently reset the live MOTD, draw distance
+            // and congestion levers because the operator mistyped a bracket.
+            bool parseFailed = false;
+            const auto incoming =
+                std::make_shared<ServerConfig>(parseServerConfig(ss.str(), ctx->env.logger, &parseFailed));
+            if (parseFailed)
+                return "reload_config: " + *ctx->env.configPath +
+                       " has a TOML syntax error (see the log) -- nothing was applied";
+
+            // Resolve the difficulty preset OFF the sim thread (it may read data/difficulty.toml
+            // through the AssetManager); only the resulting POD crosses into the callback.
+            const auto scaling = std::make_shared<std::optional<fl::AiScaling>>();
+            if (ctx->env.resolveAiScaling)
+                *scaling = ctx->env.resolveAiScaling(incoming->ai.difficulty);
+
+            // The diff is computed HERE, on the calling thread, so the operator gets it in the
+            // synchronous response rather than a tick later on stdout. It reads two plain configs and
+            // touches nothing live.
+            const ServerConfig& running = *ctx->env.runningConfig;
+            const std::vector<fl::ConfigKeyDiff> ignored = fl::restartOnlyDiffs(running, *incoming);
+
             if (ctx->sim.broadcaster && ctx->sim.gameLoop) {
-                auto newMotd = newCfg.motd;
-                auto newMotdDisplayS = newCfg.motdDisplayS;
-                // Entity soft cap (#1049). Hot-reloadable like the other [world] levers: raising it is
-                // how an operator relieves a world that is refusing spawns, and waiting for a restart
-                // to do that is waiting through the outage. LOWERING it never kills anything — it only
-                // refuses new spawns until the live count falls back under the new ceiling.
-                const auto newCap = static_cast<uint32_t>(newCfg.entitySoftCap < 0 ? 0 : newCfg.entitySoftCap);
-                const auto newReserve = static_cast<uint32_t>(newCfg.maxPeers < 0 ? 0 : newCfg.maxPeers);
-                auto newDraw = static_cast<float>(newCfg.drawDistanceKm);
-                auto newSnapshotBudget = newCfg.snapshotBudgetBytes;
-                auto newJitterDepth = newCfg.jitterBufferDepth;
-                auto newAdaptWindow = newCfg.jitterAdaptWindow;
-                auto newHysteresis = newCfg.jitterHysteresis;
-                auto newMultiplier = newCfg.jitterMultiplier;
-                auto newCongestion =
-                    fl::makeCongestionParams(newCfg.congestionEnabled, newCfg.congestionMinSendHz,
-                                             newCfg.congestionLossThreshold, newCfg.congestionBudgetFloorBytes);
-                auto newGovernor = fl::makeTickGovernorParams(
-                    newCfg.overrunGovernorEnabled, newCfg.overrunHighWatermark, newCfg.overrunLowWatermark,
-                    newCfg.overrunMinSnapshotHz, newCfg.overrunMaxAiStride, newCfg.overrunBudgetFloorBytes,
-                    newCfg.overrunMinInterestFraction);
-                auto newCompress = newCfg.network.compressSnapshots;
-                auto newSensorHz = static_cast<float>(newCfg.sensorCheckHz);
-                auto newRules = fl::DamageRules{newCfg.friendlyFire, newCfg.crashDamage};
-                // Resolve the preset OFF the sim thread (it may read data/difficulty.toml through the
-                // AssetManager); only the resulting POD crosses into the callback. Null resolver ⇒
-                // nullopt ⇒ the running scaling is left alone rather than reset to a default.
-                std::optional<fl::AiScaling> newAiScaling;
-                if (ctx->env.resolveAiScaling)
-                    newAiScaling = ctx->env.resolveAiScaling(newCfg.aiDifficulty);
-                ctx->sim.gameLoop->enqueueSimCallback([ctx, newMotd, newMotdDisplayS, newCap, newReserve, newDraw,
-                                                       newSnapshotBudget, newJitterDepth, newAdaptWindow, newHysteresis,
-                                                       newMultiplier, newCongestion, newGovernor, newCompress,
-                                                       newSensorHz, newRules, newAiScaling]() mutable {
-                    if (ctx->sim.entityManager)
-                        ctx->sim.entityManager->setSoftCap(newCap, newReserve);
-                    ctx->sim.broadcaster->setMotd(std::move(newMotd));
-                    ctx->sim.broadcaster->setMotdDisplaySeconds(newMotdDisplayS);
-                    ctx->sim.broadcaster->setDrawDistance(newDraw);
-                    ctx->sim.broadcaster->setSnapshotBudget(newSnapshotBudget);
-                    ctx->sim.broadcaster->setSnapshotCompression(newCompress);
-                    ctx->sim.broadcaster->setJitterBufferDepth(newJitterDepth);
-                    ctx->sim.broadcaster->setJitterAdaptWindow(newAdaptWindow);
-                    ctx->sim.broadcaster->setJitterHysteresis(newHysteresis);
-                    ctx->sim.broadcaster->setJitterMultiplier(newMultiplier);
-                    ctx->sim.broadcaster->setCongestionParams(newCongestion);
-                    ctx->sim.broadcaster->setGovernorParams(newGovernor);
-                    ctx->sim.broadcaster->setSensorCheckHz(newSensorHz);
-                    ctx->sim.broadcaster->setDamageRules(newRules);
-                    if (newAiScaling)
-                        ctx->sim.broadcaster->setAiScaling(*newAiScaling);
+                ctx->sim.gameLoop->enqueueSimCallback([ctx, incoming, scaling]() {
+                    const fl::ReloadApplyContext rc{*ctx, *incoming, *ctx->env.runningConfig, *scaling};
+                    fl::applyHotKeys(rc);
                 });
             }
-            return "reload_config: name=\"" + newCfg.name + "\"  motd=\"" + newCfg.motd +
-                   "\"  motd_display_s=" + std::to_string(newCfg.motdDisplayS) +
-                   "  entity_soft_cap=" + std::to_string(newCfg.entitySoftCap) +
-                   "  draw_distance_km=" + std::to_string(newCfg.drawDistanceKm) +
-                   "  snapshot_budget_bytes=" + std::to_string(newCfg.snapshotBudgetBytes) +
-                   "  jitter_buffer_depth=" + std::to_string(newCfg.jitterBufferDepth) +
-                   "  jitter_buffer_adapt_window=" + std::to_string(newCfg.jitterAdaptWindow) +
-                   "  jitter_buffer_hysteresis=" + std::to_string(newCfg.jitterHysteresis) +
-                   "  jitter_buffer_jitter_multiplier=" + std::to_string(newCfg.jitterMultiplier) +
-                   "  sensor_check_hz=" + std::to_string(newCfg.sensorCheckHz) + "  ai.difficulty=\"" +
-                   newCfg.aiDifficulty + "\"" + "  (other fields require restart)";
+
+            // Every hot key is applied unconditionally, as it always was; what is reported is what
+            // CHANGED, because a list of 26 key names an operator did not edit is not information.
+            std::string out = "reload_config: applied " + std::to_string(fl::hotKeyCount()) + " hot key(s)";
+            const std::vector<fl::ConfigKeyDiff> changedHot = fl::changedHotKeys(running, *incoming);
+            if (!changedHot.empty()) {
+                out += "\n  changed: ";
+                bool first = true;
+                for (const auto& d : changedHot) {
+                    if (!first)
+                        out += ", ";
+                    first = false;
+                    out += std::string(d.key) + " " + d.running + " -> " + d.incoming;
+                }
+            }
+            if (!ignored.empty()) {
+                // The half an operator used to get silence for. Naming the key AND both values is the
+                // difference between "nothing happened" and "this needs a restart to take effect".
+                out += "\n  restart required for " + std::to_string(ignored.size()) + " changed key(s): ";
+                bool first = true;
+                for (const auto& d : ignored) {
+                    if (!first)
+                        out += ", ";
+                    first = false;
+                    out += std::string(d.key) + " " + d.running + " -> " + d.incoming;
+                }
+            }
+            return out;
         });
 
     // reload_banlist

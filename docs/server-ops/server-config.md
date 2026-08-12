@@ -1973,7 +1973,7 @@ for any authenticated caller.
 | `spectate` | `<peerId> <entityIdx\|off>` | Lock a dead or observer peer's view onto a specific entity (#403), or `off` to release it back to free camera (requires `spectate_any`). Moves that peer's interest centre too, so the entity is actually in their snapshot rather than merely aimed at. Queued to the sim tick |
 | `seats` | `<entityIdx>` | Show a crewed aircraft's seat roster and occupancy (#974): per seat the role, occupancy (`human peer=N` / `bot` / `empty`), and the Fly-seat marker. Reports an error for a single-seat / unknown entity |
 | `set_seat` | `<entityIdx> <seat> <peerId\|bot\|empty>` | Force a **non-fly** seat's occupancy (#974): bind a human peer, resume the authored bot, or silence the seat. The Fly seat is not settable (use `set_role` / respawn). Queued to the sim tick |
-| `reload_config` | — | Re-read `server.toml` and apply: `name` (beacon), `motd`, `motd_display_s`, `entity_soft_cap`, `draw_distance_km`, `snapshot_budget_bytes`, `jitter_buffer_depth`, `jitter_buffer_adapt_window`, `jitter_buffer_hysteresis`, `jitter_buffer_jitter_multiplier`, `congestion_*`, `overrun_governor_enabled`, `overrun_high_watermark`, `overrun_low_watermark`, `overrun_min_snapshot_hz`, `overrun_max_ai_stride`, `overrun_budget_floor_bytes` (all take effect on the next sim tick; `max_catchup_ticks`, `sim_worker_threads`, `spatial_cell_size_km`, and the `test_spawn_*` keys require restart) |
+| `reload_config` | — | Re-read `server.toml`, apply every hot-reloadable key, and name the restart-only keys whose values changed (with both values; credentials as `<set>`/`<unset>`). The per-key reload matrix is above — it is generated-equivalent, checked against `ConfigReload.cpp` by `docs_drift.py` |
 | `reload_banlist` | — | Re-read `security.banlist_path` from disk and apply immediately |
 | `reload_allowlist` | — | Re-read `security.allowlist_path` from disk and apply immediately |
 | `trace_start` | `[dir]` | Start recording each peer's accepted `MsgClientInput` to per-peer FLIT traces (`[trace] input_trace_dir` if `dir` omitted, else `traces/`); replay with `bot_swarm --pattern trace:<file>` |
@@ -1985,30 +1985,178 @@ for any authenticated caller.
 
 #### Hot-reload behaviour (`reload_config`)
 
-`reload_config` re-reads the config file and applies a subset of fields immediately:
+`reload_config` re-reads the config file, applies every **hot** key below, and **names the
+restart-only keys whose values changed** — so an operator who edited one gets an explanation instead
+of silence:
 
-| Field | Takes effect |
+    reload_config: applied 26 hot key(s)
+      changed: world.draw_distance_km 100 -> 50
+      restart required for 2 changed key(s): server.port 4778 -> 4779, rcon.enabled false -> true
+
+Credentials are reported as `<set>` / `<unset>`, never by value: this output goes to stdout, the
+shell ring, the RCON socket and the `/events` mirror at once.
+
+**The reload class is per KEY, not per section**, and `[world]` is why: `entity_soft_cap` is hot
+deliberately (raising it is how you relieve a world that is refusing spawns, and waiting for a
+restart to do that is waiting through the outage) while `max_catchup_ticks` — three lines away in the
+same section — is a `GameLoop` constructor value. `entity_soft_cap` re-derives its player reserve
+from the **running** `max_peers`, which is restart-only, so a reload cannot widen the reserve beyond
+what the server was started with.
+
+⚑ **This matrix is the authority, and it is gate-checked.** It lives in
+`server/fl-server/ConfigReload.cpp` as a table whose hot rows carry the code that applies them — a
+key cannot be advertised as hot without an applier — and `tools/docs_drift.py config-keys` fails CI
+if this table disagrees with it in either direction. Prose elsewhere on this page describes
+individual keys; this is what the server actually does.
+
+| Key | Reload |
 |---|---|
-| `server.name` | Next LAN beacon broadcast |
-| `server.motd` | Takes effect for each subsequent client connection |
-| `server.motd_display_s` | Takes effect for each subsequent client connection |
-| `security.banlist_path` | On next `reload_banlist` command |
-| `security.allowlist_path` | On next `reload_allowlist` command |
-
-Most `[world]` fields are also hot-reloaded on the next sim tick — `entity_soft_cap`,
-`draw_distance_km`, `snapshot_budget_bytes`, the `jitter_buffer_*` set, the `congestion_*` set, and
-the `overrun_*` set (see the `reload_config` command row above). `entity_soft_cap` re-derives its
-player reserve from the **running** `max_peers`, which is restart-only, so a reload cannot widen the
-reserve beyond what the server was started with.
-
-Fields that **require a restart** to take effect: `port`, `bind_address`, `max_peers`,
-`game_modes`, `password`, `discovery.*`, `mods.stack`, `rotation.*`, `world.sim_worker_threads`,
-`world.max_catchup_ticks`, `world.planet_radius_m`, `world.earth_rotation`, `world.spatial_cell_size_km`,
-`world.test_spawn_ai_count`, `world.test_spawn_spread_km`, `world.test_spawn_agl_m`, `ai.*`,
-`security.connect_rate_limit_*`,
-`security.packet_flood_multiplier`, `security.*_bandwidth_bps`,
-`security.pre_handshake_rate_limit_count`, `security.pre_handshake_window_ms`,
-`security.max_connections_per_ip`, `rcon.*`.
+| `server.name` | **Hot** |
+| `server.port` | Restart |
+| `server.bind_address` | Restart |
+| `server.max_peers` | Restart |
+| `server.motd` | **Hot** |
+| `server.motd_display_s` | **Hot** |
+| `server.password` | Restart |
+| `server.game_modes` | Restart |
+| `rotation.order` | Restart |
+| `rotation.items` | Restart |
+| `rotation.time_limit_min` | Restart |
+| `match.mode` | Restart |
+| `match.end_screen_s` | Restart |
+| `match.reconnect_grace_s` | Restart |
+| `bots.fill` | Restart |
+| `bots.max_bots` | Restart |
+| `bots.entity_type` | Restart |
+| `bots.ai_script` | Restart |
+| `bots.balance_teams` | Restart |
+| `lobby.register` | Restart |
+| `lobby.url` | Restart |
+| `lobby.visibility` | Restart |
+| `mods.stack` | Restart |
+| `mods.required` | Restart |
+| `mods.required_policy` | Restart |
+| `world.player_entity_type` | Restart |
+| `world.allow_observers` | Restart |
+| `world.entity_soft_cap` | **Hot** |
+| `world.time_scale` | Restart |
+| `world.planet_radius_m` | Restart |
+| `world.earth_rotation` | Restart |
+| `world.draw_distance_km` | **Hot** |
+| `world.spectate_delay_s` | Restart |
+| `world.spatial_cell_size_km` | Restart |
+| `world.snapshot_budget_bytes` | **Hot** |
+| `world.jitter_buffer_depth` | **Hot** |
+| `world.jitter_buffer_adapt_window` | **Hot** |
+| `world.jitter_buffer_hysteresis` | **Hot** |
+| `world.jitter_buffer_jitter_multiplier` | **Hot** |
+| `world.congestion_enabled` | **Hot** |
+| `world.congestion_min_send_hz` | **Hot** |
+| `world.congestion_loss_threshold` | **Hot** |
+| `world.congestion_budget_floor_bytes` | **Hot** |
+| `world.overrun_governor_enabled` | **Hot** |
+| `world.overrun_high_watermark` | **Hot** |
+| `world.overrun_low_watermark` | **Hot** |
+| `world.overrun_min_snapshot_hz` | **Hot** |
+| `world.overrun_max_ai_stride` | **Hot** |
+| `world.overrun_budget_floor_bytes` | **Hot** |
+| `world.overrun_min_interest_fraction` | **Hot** |
+| `world.max_catchup_ticks` | Restart |
+| `world.sensor_check_hz` | **Hot** |
+| `world.sim_worker_threads` | Restart |
+| `world.test_spawn_ai_count` | Restart |
+| `world.test_spawn_spread_km` | Restart |
+| `world.test_spawn_agl_m` | Restart |
+| `world.test_spawn_ai_mix` | Restart |
+| `world.test_spawn_entity_type` | Restart |
+| `world.test_projectile_rate` | Restart |
+| `world.test_projectile_ttl_s` | Restart |
+| `world.player_faction` | Restart |
+| `ai.difficulty` | **Hot** |
+| `ai.difficulty_floor` | Restart |
+| `ai.mcp.enabled` | Restart |
+| `ai.mcp.path` | Restart |
+| `ai.mcp.autonomy` | Restart |
+| `ai.mcp.rate_limit_per_min` | Restart |
+| `ai.mcp.max_sessions` | Restart |
+| `ai.mcp.allowlist` | Restart |
+| `ai.provider.enabled` | Restart |
+| `ai.provider.plugin` | Restart |
+| `ai.provider.endpoint` | Restart |
+| `ai.provider.model` | Restart |
+| `ai.provider.api_key_env` | Restart |
+| `ai.provider.max_calls_per_minute` | Restart |
+| `ai.provider.world_evolution_interval_min` | Restart |
+| `ai.chat_intent.enabled` | Restart |
+| `ai.chat_intent.rate_limit_per_min` | Restart |
+| `ai.chat_intent.notify_on_decline` | Restart |
+| `gameplay.friendly_fire` | **Hot** |
+| `gameplay.crash_damage` | **Hot** |
+| `discovery.enabled` | Restart |
+| `discovery.interval_ms` | Restart |
+| `discovery.query_enabled` | Restart |
+| `discovery.query_port` | Restart |
+| `shutdown.warning_interval_s` | Restart |
+| `shutdown.min_shutdown_delay_s` | Restart |
+| `shutdown.require_confirm` | Restart |
+| `security.connect_rate_limit_count` | Restart |
+| `security.connect_rate_limit_window_s` | Restart |
+| `security.packet_flood_multiplier` | Restart |
+| `security.banlist_path` | Restart |
+| `security.allowlist_path` | Restart |
+| `security.incoming_bandwidth_bps` | Restart |
+| `security.outgoing_bandwidth_bps` | Restart |
+| `security.operator_password` | Restart |
+| `security.pre_handshake_rate_limit_count` | Restart |
+| `security.pre_handshake_window_ms` | Restart |
+| `security.max_connections_per_ip` | Restart |
+| `security.admin_auth_max_failures` | Restart |
+| `security.admin_auth_lockout_s` | Restart |
+| `security.idle_timeout_s` | Restart |
+| `security.seat_request_rate_limit_per_s` | Restart |
+| `security.team_switch_cooldown_s` | Restart |
+| `security.heartbeat_rate_limit_per_s` | Restart |
+| `rcon.enabled` | Restart |
+| `rcon.port` | Restart |
+| `rcon.password` | Restart |
+| `rcon.max_auth_failures` | Restart |
+| `rcon.lockout_seconds` | Restart |
+| `http_admin.enabled` | Restart |
+| `http_admin.port` | Restart |
+| `http_admin.bind_address` | Restart |
+| `http_admin.max_auth_failures` | Restart |
+| `http_admin.lockout_seconds` | Restart |
+| `metrics.tick_json_path` | Restart |
+| `metrics.tick_json_interval_ms` | Restart |
+| `wind.profile_path` | Restart |
+| `trace.input_trace_dir` | Restart |
+| `replay.enabled` | Restart |
+| `replay.dir` | Restart |
+| `replay.keyframe_interval_ticks` | Restart |
+| `replay.max_file_mb` | Restart |
+| `replay.max_files` | Restart |
+| `replay.hash_log` | Restart |
+| `spawn.agl_offset` | Restart |
+| `flight.size` | Restart |
+| `flight.entity_type` | Restart |
+| `flight.lateral_m` | Restart |
+| `flight.aft_m` | Restart |
+| `flight.vertical_m` | Restart |
+| `flight.engage_range_m` | Restart |
+| `flight.cover_range_m` | Restart |
+| `flight.designate_range_m` | Restart |
+| `flight.designate_half_angle_deg` | Restart |
+| `flight.command_rate_limit_per_s` | Restart |
+| `atc.enabled` | Restart |
+| `atc.scramble_entity_type` | Restart |
+| `chat.enabled` | Restart |
+| `chat.rate_limit_per_s` | Restart |
+| `voice.enabled` | Restart |
+| `voice.frame_rate_limit` | Restart |
+| `network.transport` | Restart |
+| `network.allow_insecure` | Restart |
+| `network.compress_snapshots` | **Hot** |
+| `network.gns_nagle_time_us` | Restart |
 
 #### Access control
 

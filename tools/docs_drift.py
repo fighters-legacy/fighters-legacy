@@ -103,6 +103,10 @@ CONFIG_SUBTABLE_ROOTS = {"ai.mcp", "ai.provider", "ai.chat_intent"}
 # `tbl`, so the tbl["a"]["b"] pattern cannot see them; the docs spell them as
 # `[[section.array]].field`. Listed here so both sides agree on what is out of scope for
 # the automated key diff (they are still verified by hand in the audit).
+# Keys the parser recognises only in order to REFUSE them, so they hold no value and have no reload
+# class. Mirrors rejectedConfigKeys() in ConfigReload.cpp.
+CONFIG_REJECTED_KEYS = {"ai.provider.api_key"}
+
 CONFIG_ARRAY_FIELDS = {
     "http_admin.tokens",
     "spawn.points",
@@ -156,7 +160,58 @@ def check_config_keys() -> CheckResult:
 
     result.code_only = code - doc
     result.doc_only = doc - code
+
+    # The reload class of every key (#1081, D15). Three sources have to agree, not two: the parser,
+    # the reload-class TABLE, and the documented matrix. Without this, a key could be added to the
+    # parser and documented while nothing classified it -- which is the state this issue found, and
+    # the state that let the doc claim security.banlist_path hot-reloads when it never has.
+    table = extract_reload_table(read("server/fl-server/ConfigReload.cpp"))
+    if not floor_check(result, "ConfigReload.cpp rows", len(table), 100):
+        return result
+    # Array keys are invisible to the parser-side regex above (the parser reads them off the array,
+    # not through tbl[...]), but they ARE classified: an operator editing mods.stack should be told
+    # it needs a restart. They are the only legitimate table-not-in-parser rows.
+    result.code_only |= (code - set(table)) - CONFIG_REJECTED_KEYS
+    result.doc_only |= {k for k in set(table) - code if not is_array_row_field(k)}
+
+    matrix = extract_reload_matrix(read("docs/server-ops/server-config.md"))
+    if not floor_check(result, "documented reload matrix rows", len(matrix), 100):
+        return result
+    for key in sorted(set(table) | set(matrix)):
+        if key not in matrix:
+            result.code_only.add(f"{key} (reload class missing from the documented matrix)")
+        elif key not in table:
+            result.doc_only.add(f"{key} (documented reload class for a key with no table row)")
+        elif table[key] != matrix[key]:
+            result.doc_only.add(f"{key} (table says {table[key]}, docs say {matrix[key]})")
     return result
+
+
+def extract_reload_table(text: str) -> dict[str, str]:
+    """`{"section.key", ReloadClass::Hot, ...}` rows from the reload-class table."""
+    return {k: c.lower() for k, c in re.findall(r'\{"([a-z_.]+)",\s*ReloadClass::(Hot|Restart)', text)}
+
+
+def extract_reload_matrix(text: str) -> dict[str, str]:
+    """The `| `key` | Hot/Restart |` matrix under the hot-reload heading in server-config.md."""
+    matrix: dict[str, str] = {}
+    in_matrix = False
+    for line in text.splitlines():
+        if line.startswith("#### Hot-reload behaviour"):
+            in_matrix = True
+            continue
+        if in_matrix and line.startswith("#"):
+            break
+        if not in_matrix or not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) != 2:
+            continue
+        key = re.match(r"^`([a-z_.]+)`$", cells[0])
+        if not key:
+            continue
+        matrix[key.group(1)] = cells[1].replace("*", "").strip().lower()
+    return matrix
 
 
 def extract_config_doc_keys(text: str) -> set[str]:
