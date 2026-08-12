@@ -464,9 +464,11 @@ TEST_CASE("a non-zero payload reaches BOTH integrators and they still agree", "[
 
     auto assets = makeAssets(log);
 
-    WorldBroadcaster broadcaster(em, serverRegistry, net, log);
-    broadcaster.setPayloadResolver(
-        [&weapons, &log](const EntityDef& d) -> PayloadEffect { return defaultPayload(d, weapons, log); });
+    fl::WorldQueries q_broadcaster;
+    q_broadcaster.payload = [&weapons, &log](const EntityDef& d) -> PayloadEffect {
+        return defaultPayload(d, weapons, log);
+    };
+    WorldBroadcaster broadcaster(em, serverRegistry, net, log, nullptr, std::move(q_broadcaster));
     connectPilot(broadcaster, 0u);
 
     const std::vector<uint8_t>* ack = findConnectAck(net);

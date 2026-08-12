@@ -255,10 +255,25 @@ static_assert(kWingmanCommandCount == static_cast<uint8_t>(fl::ai::WingmanComman
 static_assert(kNoFlightId == fl::kNoFormation, "GameProtocol kNoFlightId is out of sync with fl::kNoFormation");
 
 WorldBroadcaster::WorldBroadcaster(EntityManager& entityManager, EntityTypeRegistry& registry, INetwork& net,
-                                   ILogger& logger, WeatherController* weather)
-    : m_entityManager(entityManager), m_registry(registry), m_net(net), m_logger(logger), m_weather(weather),
-      m_sensorSystem(entityManager, registry), m_gravity(&fl::CentralGravityField::earthInstance()),
-      m_planetRadiusKm(6371.f) {
+                                   ILogger& logger, WeatherController* weather, WorldQueries queries,
+                                   WorldBroadcasterHooks hooks)
+    : m_queries(std::move(queries)), m_hooks(std::move(hooks)), m_entityManager(entityManager), m_registry(registry),
+      m_net(net), m_logger(logger), m_weather(weather), m_sensorSystem(entityManager, registry),
+      m_gravity(&fl::CentralGravityField::earthInstance()), m_planetRadiusKm(6371.f) {
+    // Aircraft radars and missile seeker heads resolve through the SAME function (#627): one
+    // vocabulary, one resolution path, one cache. Both systems keep their own copy, so the query
+    // struct is where a caller states it and this is the one forward.
+    if (m_queries.sensorDefs) {
+        m_projectileSystem.setSensorResolver(m_queries.sensorDefs);
+        m_sensorSystem.setResolver(m_queries.sensorDefs);
+    }
+    // What setReplaySink used to do besides storing the sink. 0 = the documented 120-tick default, and
+    // the first tick is always a keyframe so a recording never opens with deltas whose baseline is
+    // not in the file.
+    if (m_hooks.snapshot.replayKeyframeIntervalTicks != 0)
+        m_replayKeyframeInterval = m_hooks.snapshot.replayKeyframeIntervalTicks;
+    m_replayForceKeyframe = true;
+
     // The compiled-in radio-net stack (Epic J). Seeded here so voice works with zero configuration;
     // fl-server's [[voice.nets]] replaces it wholesale via setRadioNets().
     for (auto& def : builtinRadioNets())
@@ -428,7 +443,8 @@ EjectionOutcome WorldBroadcaster::ejectPilot(EntityId eid) {
     // Seat envelope from the live flight state: AGL, speed, and the radial sink rate.
     const double pos[3] = {st->transform.pos[0], st->transform.pos[1], st->transform.pos[2]};
     const glm::dvec3 posv(pos[0], pos[1], pos[2]);
-    const float terrainElev = m_groundQuery ? m_groundQuery(posv) : m_groundElevation.load(std::memory_order_relaxed);
+    const float terrainElev =
+        m_queries.groundElevation ? m_queries.groundElevation(posv) : m_groundElevation.load(std::memory_order_relaxed);
     const double geoAlt = m_gravity ? m_gravity->geodeticAltitude(pos) : pos[1];
     const std::array<float, 3> up = m_gravity ? m_gravity->geodeticUp(pos) : std::array<float, 3>{0.f, 1.f, 0.f};
 
@@ -455,9 +471,10 @@ EjectionOutcome WorldBroadcaster::ejectPilot(EntityId eid) {
     const uint16_t faction = st->factionIndex;
     m_entityManager.kill(eid); // the airframe is lost regardless of whether the pilot made it
 
-    // Resolve the landing territory: a campaign wires m_territoryQuery to its frontline (rescued over
+    // Resolve the landing territory: a campaign wires m_queries.territory to its frontline (rescued over
     // friendly ground, captured over hostile); a plain server leaves it unset, so a survivor is MIA.
-    const TerritoryControl territory = m_territoryQuery ? m_territoryQuery(posv, faction) : TerritoryControl::Neutral;
+    const TerritoryControl territory =
+        m_queries.territory ? m_queries.territory(posv, faction) : TerritoryControl::Neutral;
     const EjectionOutcome outcome = pilotOutcome(survived, territory);
     char m[144];
     std::snprintf(m, sizeof(m), "ejection: entity %u -> pilot %s (%.0f m AGL, %.0f m/s)", eid.index,
@@ -527,39 +544,8 @@ void WorldBroadcaster::setPlayerFaction(uint16_t faction) noexcept {
     m_playerFaction = faction;
 }
 
-void WorldBroadcaster::setFlightSpawner(FlightSpawner fn) {
-    m_flightSpawner = std::move(fn);
-}
-
-void WorldBroadcaster::setFlightOrderHandler(FlightOrderHandler fn) {
-    m_flightOrderHandler = std::move(fn);
-}
-
-void WorldBroadcaster::setTargetDesignator(TargetDesignator fn) {
-    m_targetDesignator = std::move(fn);
-}
-
 void WorldBroadcaster::setFlightCommandRateLimit(int perSecond) noexcept {
     m_flightCmdRateLimit = perSecond > 0 ? perSecond : 1;
-}
-
-void WorldBroadcaster::setFlightModelResolver(FlightModelResolver fn) {
-    m_flightModelResolver = std::move(fn);
-}
-
-void WorldBroadcaster::setPayloadResolver(PayloadResolver fn) {
-    m_payloadResolver = std::move(fn);
-}
-
-void WorldBroadcaster::setSeatControllerFactory(SeatControllerFactory fn) {
-    m_seatControllerFactory = std::move(fn);
-}
-
-void WorldBroadcaster::setSensorDefResolver(sensor::SensorSystem::SensorDefResolver fn) {
-    // Aircraft radars and missile seeker heads resolve through the SAME function (#627): one
-    // vocabulary, one resolution path, one cache.
-    m_projectileSystem.setSensorResolver(fn);
-    m_sensorSystem.setResolver(std::move(fn));
 }
 
 void WorldBroadcaster::setSensorCheckHz(float hz) noexcept {
@@ -594,24 +580,12 @@ void WorldBroadcaster::setOperatorPassword(std::string password) {
     m_operatorPassword = std::move(password);
 }
 
-void WorldBroadcaster::setAdminChannel(AdminChannel* channel) noexcept {
-    m_adminChannel = channel;
-}
-
 void WorldBroadcaster::setGravityField(const IGravityField& field, float planetRadiusKm) noexcept {
     m_gravity = &field;
     m_planetRadiusKm = planetRadiusKm;
     // Projectiles fall in the same field as everything else (#625). Re-armed here so the
     // setWeaponRegistry/setGravityField call order does not matter.
     m_projectileSystem.configure(m_weaponRegistry, m_gravity);
-}
-
-void WorldBroadcaster::setGroundElevationQuery(std::function<float(glm::dvec3)> fn) {
-    m_groundQuery = std::move(fn);
-}
-
-void WorldBroadcaster::setGroundSurfaceQuery(std::function<SurfaceType(glm::dvec3)> fn) {
-    m_groundSurfaceQuery = std::move(fn);
 }
 
 void WorldBroadcaster::applyConfig(const WorldBroadcasterConfig& cfg) {
@@ -763,8 +737,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             else
                 ++it;
         }
-        if (m_adminChannel)
-            m_adminChannel->pruneExpiredLockouts();
+        if (m_hooks.comms.adminChannel)
+            m_hooks.comms.adminChannel->pruneExpiredLockouts();
         // Reconnection grace (#524): purge expired held identities.
         for (auto it = m_disconnectGrace.begin(); it != m_disconnectGrace.end();) {
             if (m_currentTick > it->second.expiresTick)
@@ -792,8 +766,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     // Fire deferred admin drains: deliver CommandShell output written by enqueueSimCallback lambdas as
     // follow-on MsgAdminResponseChunk packets. The wall-clock deadline lives in AdminChannel now (#1079)
     // — it is 20 ms there for both this frontend and RCON, which each hand-rolled the same number.
-    if (m_adminChannel) {
-        m_adminChannel->serviceDrains([this](uint64_t token, const std::vector<std::string>& lines) {
+    if (m_hooks.comms.adminChannel) {
+        m_hooks.comms.adminChannel->serviceDrains([this](uint64_t token, const std::vector<std::string>& lines) {
             // The liveness check the transport-agnostic channel deliberately does not have: a peer that
             // left between dispatch and the deadline has no session to answer.
             const uint32_t peerId = adminDrainPeer(token);
@@ -1001,8 +975,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     if (m_atcService && (tickIndex % fl::atc::AtcService::kIntervalTicks == 0)) {
         m_atcService->tick(m_entityManager, tickIndex);
         for (const fl::atc::RadioTransmission& tx : m_atcService->drainTransmissions()) {
-            if (m_atcTransmissionSink)
-                m_atcTransmissionSink(tx);
+            if (m_hooks.comms.atcTransmissionSink)
+                m_hooks.comms.atcTransmissionSink(tx);
             else
                 sendRadioTransmission(tx); // #703: the wire message is the default route
         }
@@ -1408,7 +1382,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     // hash (#644) is computed over the quantized integer domain, which is the only domain in which a
     // recorded and a replayed world can be compared at all. Populated only when a sink is installed.
     std::vector<std::pair<uint32_t, QuantEntity>> replayEnts;
-    if (m_replaySink)
+    if (m_hooks.snapshot.replaySink)
         replayEnts.reserve(snapMap.size());
     for (const auto& [encIdx, snap] : snapMap) {
         const EntityState& st = *snap.state;
@@ -1442,7 +1416,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         qe.isFull = false;
         encodeStandaloneRecord(rec.deltaBlob, qe, rec.origin, /*sendGen=*/false);
         encoded.emplace(encIdx, std::move(rec));
-        if (m_replaySink)
+        if (m_hooks.snapshot.replaySink)
             replayEnts.emplace_back(encIdx, qe);
     }
 
@@ -1451,7 +1425,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     // is an unordered_map, and a file (or a state hash) whose byte layout depended on hash-table
     // iteration order would differ between two runs of the same session and make the #644 gate
     // meaningless.
-    if (m_replaySink) {
+    if (m_hooks.snapshot.replaySink) {
         std::sort(replayEnts.begin(), replayEnts.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 
         const bool keyframe =
@@ -1529,7 +1503,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         }
         out.stateHash = hashTickState(tickIndex, hashEnts.data(), hashEnts.size());
         m_replayForceKeyframe = false;
-        m_replaySink(out);
+        m_hooks.snapshot.replaySink(out);
     }
 
     // Crew turret-pose table (#972): for each CREWED entity that has turrets, the quantized mount-frame
@@ -2197,8 +2171,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             m_shuttingDown = false;
             m_shutdownActiveShared.store(false, std::memory_order_relaxed); // #226
             m_shutdownSecsShared.store(0, std::memory_order_relaxed);
-            if (m_shutdownCallback)
-                m_shutdownCallback();
+            if (m_hooks.match.shutdown)
+                m_hooks.match.shutdown();
         } else {
             // Publish the live remaining seconds each tick for the LAN beacon (#226).
             m_shutdownSecsShared.store(static_cast<uint32_t>(duration_cast<seconds>(m_shutdownAt - now).count()),
@@ -2270,7 +2244,7 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
     }
 
     // Admin auth lockout — refuse reconnections from IPs with an active lockout.
-    if (m_adminChannel && m_adminChannel->lockedOut(ip)) {
+    if (m_hooks.comms.adminChannel && m_hooks.comms.adminChannel->lockedOut(ip)) {
         rejectConnection(peerId, ip, ConnectRefusalCode::AdminLockout);
         return;
     }
@@ -2426,8 +2400,8 @@ void WorldBroadcaster::releaseMissionSlot(uint32_t peerId) {
         // Unbind the mission object id (#884): the slot is open again, so destroy(<id>) must report the
         // slot as unoccupied (not destroyed) rather than tracking the just-despawned aircraft.
         const MissionSpawnSlot& slot = m_missionSlots[static_cast<std::size_t>(idx)];
-        if (m_missionSlotBinder && !slot.missionObjectId.empty())
-            m_missionSlotBinder(slot.missionObjectId, EntityId{});
+        if (m_hooks.admission.missionSlotBinder && !slot.missionObjectId.empty())
+            m_hooks.admission.missionSlotBinder(slot.missionObjectId, EntityId{});
     }
     m_peerSlot.erase(it);
 }
@@ -2635,8 +2609,8 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
     // Team assignment (#522): consult the mode balancer BEFORE claiming a slot. nullopt = every team is
     // full → refuse. Unset assigner ⇒ kNoFaction, preserving the legacy slot/player-faction behavior.
     uint16_t assignedFaction = kNoFaction;
-    if (grantedRole == PeerRole::Pilot && m_teamAssigner) {
-        std::optional<uint16_t> team = m_teamAssigner(peerId);
+    if (grantedRole == PeerRole::Pilot && m_queries.teamAssigner) {
+        std::optional<uint16_t> team = m_queries.teamAssigner(peerId);
         if (!team.has_value()) {
             rejectConnection(peerId, peerIp, ConnectRefusalCode::MatchFull);
             return;
@@ -2677,10 +2651,10 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
                 if (!assigned.valid()) {
                     releaseMissionSlot(peerId); // slot type unspawnable — free it and use the default path
                     assigned = admitPilot(peerId, resolvePlayerEntityType(req.requestedEntityType), assignedFaction);
-                } else if (m_missionSlotBinder && !slot.missionObjectId.empty()) {
+                } else if (m_hooks.admission.missionSlotBinder && !slot.missionObjectId.empty()) {
                     // Register the pilot's aircraft under the slot's mission object id so destroy(<id>) tracks
                     // it (#884). slot is a reference into m_missionSlots; read its id before any further work.
-                    m_missionSlotBinder(slot.missionObjectId, assigned);
+                    m_hooks.admission.missionSlotBinder(slot.missionObjectId, assigned);
                 }
             } else {
                 assigned = admitPilot(peerId, resolvePlayerEntityType(req.requestedEntityType), assignedFaction);
@@ -2738,8 +2712,8 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
     // controllers); with no spawner installed the peer simply flies alone, which is exactly the
     // pre-#610 behavior. A seat-claim joiner (#974) OWNS no airframe (not in m_peerEntities), so it
     // forms no flight — it is a gunner on someone else's aircraft.
-    if (assigned.valid() && m_flightSpawner && m_peerEntities.count(peerId) != 0u) {
-        const fl::FormationId fid = m_flightSpawner(peerId, assigned);
+    if (assigned.valid() && m_queries.flightSpawner && m_peerEntities.count(peerId) != 0u) {
+        const fl::FormationId fid = m_queries.flightSpawner(peerId, assigned);
         if (const fl::Formation* f = m_formations.get(fid)) {
             // Unsolicited check-in: this is how the client learns it HAS a flight, how big it is, and
             // what id to address it by. MsgConnectAck cannot carry it — it is immediately followed by
@@ -3130,8 +3104,9 @@ void WorldBroadcaster::onDisconnect(uint32_t peerId) {
     m_respawn.erase(peerId); // drop any pending respawn (#648)
     m_activePeerCount.fetch_sub(1, std::memory_order_relaxed);
 
-    if (m_adminChannel)
-        m_adminChannel->cancelDrainsWhere([peerId](uint64_t token) { return adminDrainPeer(token) == peerId; });
+    if (m_hooks.comms.adminChannel)
+        m_hooks.comms.adminChannel->cancelDrainsWhere(
+            [peerId](uint64_t token) { return adminDrainPeer(token) == peerId; });
 }
 
 const FlightIntegrator* WorldBroadcaster::integratorFor(uint32_t entityIdx) const noexcept {
@@ -3312,7 +3287,7 @@ void WorldBroadcaster::executeFireRequest(const FireRequest& req, uint64_t tickI
 EntityId WorldBroadcaster::designateFor(const EntityState& shooter, uint32_t ownerPeer) const {
     // The designator is the #610 seam (fl-server wires the contact-honest lambda); the look axis
     // is the peer's viewAxis for a player and the nose for an AI.
-    if (!m_targetDesignator)
+    if (!m_queries.targetDesignator)
         return EntityId::null();
     float axis[3];
     bool haveAxis = false;
@@ -3332,7 +3307,7 @@ EntityId WorldBroadcaster::designateFor(const EntityState& shooter, uint32_t own
         axis[1] = nose.y;
         axis[2] = nose.z;
     }
-    return m_targetDesignator(shooter, axis);
+    return m_queries.targetDesignator(shooter, axis);
 }
 
 void WorldBroadcaster::runWeaponsPass(double simDt, uint64_t tickIndex) {
@@ -3454,8 +3429,8 @@ void WorldBroadcaster::runWeaponsPass(double simDt, uint64_t tickIndex) {
     // 3. Projectile flight + endings. Detection inside step(), application here — the over-G
     // discipline: applyWarheadAt fires event handlers and must never run inside a traversal.
     m_tickImpacts.clear();
-    m_projectileSystem.step(m_entityManager, m_spatialIndex, static_cast<float>(simDt), m_groundQuery, tickIndex,
-                            m_sensingEnv, m_tickImpacts);
+    m_projectileSystem.step(m_entityManager, m_spatialIndex, static_cast<float>(simDt), m_queries.groundElevation,
+                            tickIndex, m_sensingEnv, m_tickImpacts);
     for (const ProjectileImpact& imp : m_tickImpacts) {
         const WeaponDef* def = m_weaponRegistry->byIndex(imp.weaponIndex);
         if (!def)
@@ -4534,7 +4509,7 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         // issuer (#946): (1) the operator password grants Admin caps for this command; (2) an
         // empty-token peer is authenticated by its GRANTED caps (the grant channel). With neither a
         // password set nor any peer granted caps, the channel is effectively off.
-        if (!m_adminChannel)
+        if (!m_hooks.comms.adminChannel)
             return;
 
         // The peer's IP — used for both failure and success tracking below. Resolved once at connect
@@ -4576,13 +4551,13 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
             if (diff == 0) {
                 issuer = CommandIssuer{peerId, kAdminCaps, factionForPeer(peerId)};
                 authorized = true;
-                m_adminChannel->recordAuthResult(adminIp, /*authenticated=*/true);
+                m_hooks.comms.adminChannel->recordAuthResult(adminIp, /*authenticated=*/true);
             } else if (!tokenAllZero) {
                 // A non-empty wrong token is a brute-force attempt: log + lockout, exactly as before.
                 char lmsg[96];
                 std::snprintf(lmsg, sizeof(lmsg), "peer %u: MsgAdminCommand bad token — discarding", peerId);
                 m_logger.log(LogLevel::Warn, __FILE__, __LINE__, lmsg);
-                if (m_adminChannel->recordAuthResult(adminIp, /*authenticated=*/false)) {
+                if (m_hooks.comms.adminChannel->recordAuthResult(adminIp, /*authenticated=*/false)) {
                     char lk[128];
                     std::snprintf(lk, sizeof(lk), "peer %u (%s): admin auth lockout triggered — kicking", peerId,
                                   adminIp.c_str());
@@ -4635,7 +4610,7 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         // Dispatch on the sim thread (same as stdin admin loop). The registry permission-checks the
         // command against issuer.caps and refuses with a clear message when insufficient.
         // Mutating commands enqueue via gameLoop.enqueueSimCallback() internally.
-        std::string result = m_adminChannel->dispatch(cmdView, issuer);
+        std::string result = m_hooks.comms.adminChannel->dispatch(cmdView, issuer);
 
         // The audit record docs/developer/ai-architecture.md §4 requires (#600): until now the only trace an admin
         // command left was the Info log line below, which no consumer can read.
@@ -4661,7 +4636,7 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         // Queue a wall-clock-deferred drain: mark taken after dispatch (skips any sync
         // shell.print() calls made during dispatch); fires after kENetAdminDrainDelayMs ms,
         // giving enqueueSimCallback lambdas time to run regardless of tick-batch catch-up.
-        m_adminChannel->armDrain(adminDrainToken(peerId, reqId));
+        m_hooks.comms.adminChannel->armDrain(adminDrainToken(peerId, reqId));
     } else if (msgId == static_cast<uint8_t>(MsgId::Heartbeat)) {
         MsgHeartbeat hb;
         if (!readMsg(data, size, hb))
@@ -4741,7 +4716,8 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
             if (!cooling) {
                 ps.lastTeamRequest = now;
                 ps.hasTeamRequest = true;
-                const bool allowed = !m_teamSwitchGuard || m_teamSwitchGuard(peerId, req.factionIndex);
+                const bool allowed =
+                    !m_hooks.match.teamSwitchGuard || m_hooks.match.teamSwitchGuard(peerId, req.factionIndex);
                 if (allowed) {
                     setPeerFaction(peerId, req.factionIndex);
                 } else {
@@ -5062,8 +5038,9 @@ void WorldBroadcaster::handleBaseOpsCommand(uint32_t peerId, EntityId flight, st
     // SERVER-AUTHORITATIVE eligibility: shut down on the ground AT A BASE — an airfield ramp (the
     // injected proximity query; unset = any ground, the zero-pack sandbox) or a carrier deck.
     const glm::dvec3 pos{fs.pos_world[0], fs.pos_world[1], fs.pos_world[2]};
-    float floor = m_groundQuery ? m_groundQuery(pos) : m_groundElevation.load(std::memory_order_relaxed);
-    bool atBase = !m_baseProximityQuery || m_baseProximityQuery(pos);
+    float floor =
+        m_queries.groundElevation ? m_queries.groundElevation(pos) : m_groundElevation.load(std::memory_order_relaxed);
+    bool atBase = !m_queries.baseProximity || m_queries.baseProximity(pos);
     for (const DeckRec& rec : m_decks) {
         if (rec.entityIdx == flight.index)
             continue;
@@ -5100,7 +5077,7 @@ void WorldBroadcaster::handleBaseOpsCommand(uint32_t peerId, EntityId flight, st
         // one cannot differ. Crewed aircraft partition per seat and are out of scope here.
         if (m_weaponRegistry && def && !def->hardpoints.empty() && def->crew.empty()) {
             ce.fire.loadout = buildLoadout(*def, *m_weaponRegistry);
-            ce.payload = m_payloadResolver ? m_payloadResolver(*def) : PayloadEffect{};
+            ce.payload = m_queries.payload ? m_queries.payload(*def) : PayloadEffect{};
         }
         if (def && (def->chaffCount > 0 || def->flareCount > 0))
             m_countermeasures.registerDispenser(flight.index, def->chaffCount, def->flareCount); // refill
@@ -5301,7 +5278,7 @@ void WorldBroadcaster::handleChat(uint32_t peerId, const void* data, std::size_t
     }
 
     // Moderation hook: false = suppress (fl-server default logs an audit line and allows).
-    if (m_chatModerationHook && !m_chatModerationHook(peerId, hdr.channel, text))
+    if (m_hooks.comms.chatModeration && !m_hooks.comms.chatModeration(peerId, hdr.channel, text))
         return;
 
     // Record what was actually said (#600) -- after the veto, so a suppressed line is absent from
@@ -5602,7 +5579,7 @@ void WorldBroadcaster::handleWingmanCommand(uint32_t peerId, const void* data, s
 
     // The order channel is off (no handler wired): discard rather than acking, so a server without
     // the feature is indistinguishable from one that never received the packet.
-    if (!m_flightOrderHandler)
+    if (!m_hooks.comms.flightOrders)
         return;
 
     auto& ps = m_peerInputs[peerId];
@@ -5642,7 +5619,7 @@ void WorldBroadcaster::handleWingmanCommand(uint32_t peerId, const void* data, s
 // through the scripted grammar" actually means in code.
 WingmanResult WorldBroadcaster::issueWingmanOrder(uint32_t peerId, uint8_t command, uint16_t flightId,
                                                   uint32_t memberIdx, bool cascade) {
-    if (!m_flightOrderHandler)
+    if (!m_hooks.comms.flightOrders)
         return WingmanResult::Rejected;
     auto& ps = m_peerInputs[peerId];
 
@@ -5685,8 +5662,8 @@ WingmanResult WorldBroadcaster::issueWingmanOrder(uint32_t peerId, uint8_t comma
     if (cmd == fl::ai::WingmanCommand::AttackMyTarget) {
         const auto peerEnt = m_peerEntities.find(peerId);
         const EntityState* commander = peerEnt != m_peerEntities.end() ? m_entityManager.get(peerEnt->second) : nullptr;
-        if (commander && m_targetDesignator) {
-            designated = m_targetDesignator(*commander, ps.viewAxis);
+        if (commander && m_queries.targetDesignator) {
+            designated = m_queries.targetDesignator(*commander, ps.viewAxis);
         }
         if (!designated.valid()) {
             const auto liveNow = static_cast<uint8_t>(std::min<std::size_t>(formation->members.size(), 255));
@@ -5733,7 +5710,7 @@ WorldBroadcaster::FlightOrderReport WorldBroadcaster::dispatchOrder(fl::Formatio
                                                                     EntityId designatedTarget, uint32_t callerPeerId,
                                                                     uint32_t callerEntityIdx) {
     FlightOrderReport rep{};
-    if (!m_flightOrderHandler || !fl::ai::isWingmanCommandOrdinal(command))
+    if (!m_hooks.comms.flightOrders || !fl::ai::isWingmanCommandOrdinal(command))
         return rep;
     const auto cmd = static_cast<fl::ai::WingmanCommand>(command);
 
@@ -5764,7 +5741,7 @@ WorldBroadcaster::FlightOrderReport WorldBroadcaster::dispatchOrder(fl::Formatio
 
             if (m.isAi()) {
                 // The server owns this aircraft: retask its controller.
-                if (m_flightOrderHandler(*f, m, command, designatedTarget)) {
+                if (m_hooks.comms.flightOrders(*f, m, command, designatedTarget)) {
                     ++rep.aiRetasked;
                     // Record the weapons hold. It has no teeth until weapons land (#583) - this is
                     // where the firing trigger will read it - but the order is stored rather than
@@ -5824,9 +5801,9 @@ std::shared_ptr<const FlightModelData> WorldBroadcaster::resolveFlightModel(Enti
     if (!st)
         return nullptr;
     const EntityDef* def = m_registry.byIndex(st->typeIndex);
-    if (!def || def->flightModelAsset.empty() || !m_flightModelResolver)
+    if (!def || def->flightModelAsset.empty() || !m_queries.flightModel)
         return nullptr;
-    std::shared_ptr<const FlightModelData> model = m_flightModelResolver(def->flightModelAsset);
+    std::shared_ptr<const FlightModelData> model = m_queries.flightModel(def->flightModelAsset);
     if (!model) {
         char wmsg[160];
         std::snprintf(wmsg, sizeof(wmsg), "flight model '%s' not found -- using builtin model",
@@ -5891,8 +5868,8 @@ void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityC
     // payload.extra_mass_kg to the effective mass on every tick, so doing both would count the
     // stores twice.
     const EntityDef* spawnDef = m_registry.byIndex(st->typeIndex);
-    if (m_payloadResolver && spawnDef)
-        ce.payload = m_payloadResolver(*spawnDef);
+    if (m_queries.payload && spawnDef)
+        ce.payload = m_queries.payload(*spawnDef);
 
     // Live stations (#625). Born from the same default loadout the payload above describes; from
     // here on the LOADOUT is the truth — a released store shrinks both, in evaluateFire.
@@ -5989,9 +5966,9 @@ void WorldBroadcaster::buildCrew(ControlledEntity& ce, const EntityDef& def) {
         // gunner). The Fly seat flies via ce.controller and never gets a seatBot. The bot context (#976)
         // starts at the seat's authored skill (mission seed 0); a mission crew: block overrides it in
         // applyCrewSpawnConfig.
-        if (!seat.isFlySeat && seat.botOccupied && m_seatControllerFactory) {
+        if (!seat.isFlySeat && seat.botOccupied && m_queries.seatControllerFactory) {
             const SeatBotContext botCtx{sd.defaultSkill, sd.defaultSkill, 0};
-            seat.seatBot = m_seatControllerFactory(sd, static_cast<uint8_t>(s), botCtx);
+            seat.seatBot = m_queries.seatControllerFactory(sd, static_cast<uint8_t>(s), botCtx);
             if (seat.seatBot)
                 seat.seatBot->setPlanetRadius(planetRadiusM);
         }
@@ -6046,9 +6023,9 @@ void WorldBroadcaster::applyCrewSpawnConfig(EntityId id, const CrewSpawnConfig& 
 
         seat.skill = skillMin; // the roll refines within [min,max]; store the floor as the seat's baseline
         seat.botOccupied = wantBot;
-        if (wantBot && m_seatControllerFactory) {
+        if (wantBot && m_queries.seatControllerFactory) {
             const SeatBotContext botCtx{skillMin, skillMax, cfg.missionSeed};
-            seat.seatBot = m_seatControllerFactory(effDef, static_cast<uint8_t>(s), botCtx);
+            seat.seatBot = m_queries.seatControllerFactory(effDef, static_cast<uint8_t>(s), botCtx);
             if (seat.seatBot)
                 seat.seatBot->setPlanetRadius(planetRadiusM);
         } else {
@@ -6374,12 +6351,13 @@ void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, c
         wind.turbulence_body[2] += buffet[2];
     }
     const glm::dvec3 groundPos{fi.state().pos_world[0], fi.state().pos_world[1], fi.state().pos_world[2]};
-    float groundElev = m_groundQuery ? m_groundQuery(groundPos) : m_groundElevation.load(std::memory_order_relaxed);
+    float groundElev = m_queries.groundElevation ? m_queries.groundElevation(groundPos)
+                                                 : m_groundElevation.load(std::memory_order_relaxed);
     // Per-surface ground handling (#487): grass/gravel/water differ from a paved runway in the rollout.
     // groundFrictionFor is pure table math, shared with ClientPrediction, so the server and the client
     // shed ground speed identically. No query set ⇒ default (paved) ⇒ bit-identical to before.
     fl::GroundFriction ground =
-        m_groundSurfaceQuery ? groundFrictionFor(m_groundSurfaceQuery(groundPos)) : fl::GroundFriction{};
+        m_queries.groundSurface ? groundFrictionFor(m_queries.groundSurface(groundPos)) : fl::GroundFriction{};
 
     const bool isVessel = fi.flightModel().isVessel();
     if (isVessel) {
@@ -6464,7 +6442,7 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned, PeerRo
         std::snprintf(typeDef.flightModel, sizeof(typeDef.flightModel), "%s", def->flightModelAsset.c_str());
         // ...carrying the same stores, at the same cost (#812). The client gets two floats rather
         // than the hardpoints and a weapon registry it would need to derive them itself.
-        const PayloadEffect payload = m_payloadResolver ? m_payloadResolver(*def) : PayloadEffect{};
+        const PayloadEffect payload = m_queries.payload ? m_queries.payload(*def) : PayloadEffect{};
         typeDef.payloadMassKg = payload.extra_mass_kg;
         typeDef.payloadCd0 = payload.extra_cd0;
         // Friendly display name for the observer entity picker (#860); empty falls back to id client-side.
@@ -6743,8 +6721,8 @@ void WorldBroadcaster::readmitPilots() {
     }
     for (uint32_t peerId : pilots) {
         uint16_t fac = kNoFaction;
-        if (m_teamAssigner) {
-            std::optional<uint16_t> t = m_teamAssigner(peerId);
+        if (m_queries.teamAssigner) {
+            std::optional<uint16_t> t = m_queries.teamAssigner(peerId);
             if (!t.has_value())
                 continue; // no room — leave the pilot entity-less (a rare edge; they can retry)
             fac = *t;
@@ -6813,8 +6791,8 @@ void WorldBroadcaster::respawnParticipant(uint32_t participantId) {
     if (const auto rit = m_respawn.find(participantId); rit != m_respawn.end())
         faction = rit->second.factionIndex;
     // If the team was removed (e.g. by rotation) re-balance.
-    if (faction == kNoFaction && m_teamAssigner) {
-        std::optional<uint16_t> t = m_teamAssigner(participantId);
+    if (faction == kNoFaction && m_queries.teamAssigner) {
+        std::optional<uint16_t> t = m_queries.teamAssigner(participantId);
         if (t.has_value())
             faction = *t;
     }
@@ -6993,10 +6971,6 @@ void WorldBroadcaster::rejectConnection(uint32_t peerId, const std::string& ip, 
 // ---------------------------------------------------------------------------
 // Shutdown countdown
 // ---------------------------------------------------------------------------
-
-void WorldBroadcaster::setShutdownCallback(std::function<void()> fn) {
-    m_shutdownCallback = std::move(fn);
-}
 
 void WorldBroadcaster::initiateShutdown(uint32_t secondsDelay, uint32_t warningIntervalS, std::string reason) {
     using namespace std::chrono;

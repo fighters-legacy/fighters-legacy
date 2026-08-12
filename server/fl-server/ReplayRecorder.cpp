@@ -53,7 +53,7 @@ bool ReplayRecorder::start(const Options& opts, const ReplaySections& sections, 
     return true;
 }
 
-void ReplayRecorder::onTick(const WorldBroadcaster::ReplayTickRecords& rec, std::vector<MatchEvent> events) {
+void ReplayRecorder::onTick(const ReplayTickRecords& rec, std::vector<MatchEvent> events) {
     if (!m_running.load(std::memory_order_acquire))
         return;
 

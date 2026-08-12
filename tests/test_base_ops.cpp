@@ -35,15 +35,20 @@ struct BaseOpsFixture {
     EntityTypeRegistry registry;
     WeaponRegistry weapons;
     std::unique_ptr<EntityManager> em;
+    // Set before the fixture body builds the broadcaster: queries are frozen at construction (#1082).
+    fl::WorldQueries queries;
     std::unique_ptr<WorldBroadcaster> wb;
     uint64_t t{0};
 
-    explicit BaseOpsFixture(bool spawnOnGround) {
+    // The base-proximity query is frozen at construction (#1082), so a test that wants one passes it
+    // in rather than setting it afterwards.
+    explicit BaseOpsFixture(bool spawnOnGround, std::function<bool(glm::dvec3)> baseProximity = {}) {
+        queries.baseProximity = std::move(baseProximity);
         registry.registerType(builtinDebugEntityDef());
         registerBuiltinWeapons(weapons);
 
         em = std::make_unique<EntityManager>(logger, registry);
-        wb = std::make_unique<WorldBroadcaster>(*em, registry, net, logger);
+        wb = std::make_unique<WorldBroadcaster>(*em, registry, net, logger, nullptr, std::move(queries));
         wb->setWeaponRegistry(&weapons);
         wb->setGroundElevation(0.f);
         if (spawnOnGround)
@@ -132,8 +137,8 @@ TEST_CASE("Base ops: refused while airborne (#55)", "[base_ops]") {
 }
 
 TEST_CASE("Base ops: refused away from any base when a proximity query is set (#55)", "[base_ops]") {
-    BaseOpsFixture f(/*spawnOnGround=*/true);
-    f.wb->setBaseProximityQuery([](glm::dvec3) { return false; }); // nowhere is a base
+    BaseOpsFixture f(/*spawnOnGround=*/true, [](glm::dvec3) { return false; }); // nowhere is a base
+
     f.sendBaseOp("refuel");
     CHECK(f.lastRadioText().find("Get to a base") != std::string::npos);
 }

@@ -38,6 +38,11 @@ RULES: list[tuple[str, str, str]] = [
      "a channel's drain reads the shell's ring buffer"),
     ("stdinChannel", "rconServer",
      "the RCON I/O thread dispatches through its AdminChannel (#1079)"),
+    ("adminRegistry", "enetChannel",
+     "the channel's dispatcher calls into the command registry"),
+    ("enetChannel", "broadcaster",
+     "the broadcaster holds the ENet admin channel as a raw pointer from construction (#1082), so "
+     "the channel has to outlive it"),
     ("httpChannel", "httpAdminServer",
      "the HTTP listener threads dispatch through their AdminChannel (#1079)"),
     ("entityManager", "broadcaster",

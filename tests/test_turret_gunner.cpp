@@ -116,16 +116,15 @@ struct GunnerFixture {
         registry.registerType(makeTargetDef());
 
         em = std::make_unique<EntityManager>(logger, registry);
-        wb = std::make_unique<WorldBroadcaster>(*em, registry, net, logger);
+        fl::WorldQueries q_wb;
+        q_wb.seatControllerFactory = [this](const SeatDef& sd, uint8_t i,
+                                            const SeatBotContext& ctx) -> std::unique_ptr<ISeatController> {
+            return fl::ai::makeSeatController(sd, i, *em, ctx.skillMin, ctx.skillMax, ctx.missionSeed);
+        };
+        wb = std::make_unique<WorldBroadcaster>(*em, registry, net, logger, nullptr, std::move(q_wb));
         wb->setWeaponRegistry(&weapons);
         wb->setGroundElevation(0.f);
         wb->setSensorCheckHz(60.f); // sense every tick — this is about the engagement, not cadence
-        const EntityManager& emRef = *em;
-        wb->setSeatControllerFactory(
-            [&emRef](const SeatDef& sd, uint8_t i,
-                     const WorldBroadcaster::SeatBotContext& ctx) -> std::unique_ptr<ISeatController> {
-                return fl::ai::makeSeatController(sd, i, emRef, ctx.skillMin, ctx.skillMax, ctx.missionSeed);
-            });
 
         // Bomber (faction 1) parked at the origin facing +X; a hostile target (faction 2) parked 150 m
         // dead ahead, inside the eyeball's forward cone and the turret's reach. Both on the ground, so

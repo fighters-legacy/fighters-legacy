@@ -497,7 +497,14 @@ TEST_CASE("WorldBroadcaster::ejectPilot spawns a parachute and resolves the pilo
     registry.registerType(makeDebugDef());
     registry.registerType(fl::builtinParachuteDef());
     fl::EntityManager em(logger, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    // A query is frozen at construction (#1082), so the per-SECTION value is a variable the query
+    // reads at call time rather than two different queries installed after the fact.
+    // Neutral is what an UNSET query means, so the sections that never touch this see the plain-server
+    // behaviour they saw when no query was installed at all.
+    fl::TerritoryControl territory = fl::TerritoryControl::Neutral;
+    fl::WorldQueries q_broadcaster;
+    q_broadcaster.territory = [&territory](glm::dvec3, uint16_t) { return territory; };
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, nullptr, std::move(q_broadcaster));
     broadcaster.setParachuteType("builtin:parachute");
 
     const uint32_t chuteType = registry.indexById("builtin:parachute");
@@ -552,9 +559,9 @@ TEST_CASE("WorldBroadcaster::ejectPilot spawns a parachute and resolves the pilo
             t.quat[3] = 1.f;
             return em.spawn("builtin:debug-entity", t);
         };
-        broadcaster.setTerritoryQuery([](glm::dvec3, uint16_t) { return fl::TerritoryControl::Friendly; });
+        territory = fl::TerritoryControl::Friendly;
         CHECK(broadcaster.ejectPilot(spawnHigh()) == fl::EjectionOutcome::Rescued);
-        broadcaster.setTerritoryQuery([](glm::dvec3, uint16_t) { return fl::TerritoryControl::Hostile; });
+        territory = fl::TerritoryControl::Hostile;
         CHECK(broadcaster.ejectPilot(spawnHigh()) == fl::EjectionOutcome::Captured);
     }
 }
@@ -1396,13 +1403,13 @@ TEST_CASE("WorldBroadcaster: flight model resolver is consulted for a flightMode
     def.flightModelAsset = "models/x";
     registry.registerType(def);
 
-    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-
     std::string requestedId;
-    broadcaster.setFlightModelResolver([&](const std::string& id) -> std::shared_ptr<const fl::FlightModelData> {
+    fl::WorldQueries q_broadcaster;
+    q_broadcaster.flightModel = [&](const std::string& id) -> std::shared_ptr<const fl::FlightModelData> {
         requestedId = id;
         return nullptr; // unknown id -> WorldBroadcaster falls back to the builtin model
-    });
+    };
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, nullptr, std::move(q_broadcaster));
 
     connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onTick(1.0 / 60.0, 1u);
@@ -1418,13 +1425,13 @@ TEST_CASE("WorldBroadcaster: flight model resolver is skipped when flightModelAs
     fl::EntityManager em(logger, registry);
     registry.registerType(makeDebugDef()); // empty flightModelAsset
 
-    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-
     bool called = false;
-    broadcaster.setFlightModelResolver([&](const std::string&) -> std::shared_ptr<const fl::FlightModelData> {
+    fl::WorldQueries q_broadcaster;
+    q_broadcaster.flightModel = [&](const std::string&) -> std::shared_ptr<const fl::FlightModelData> {
         called = true;
         return nullptr;
-    });
+    };
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, nullptr, std::move(q_broadcaster));
 
     connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onTick(1.0 / 60.0, 1u);
@@ -1780,17 +1787,22 @@ TEST_CASE("WorldBroadcaster: team assigner stamps faction, refuses when full (#5
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
     registry.registerType(makeDebugDef());
-    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    // Frozen at construction (#1082): each SECTION sets what the assigner answers, it does not
+    // install a different assigner.
+    std::optional<uint16_t> assignedTeam = uint16_t{7};
+    fl::WorldQueries q_broadcaster;
+    q_broadcaster.teamAssigner = [&assignedTeam](uint32_t) { return assignedTeam; };
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, nullptr, std::move(q_broadcaster));
 
     SECTION("assigner faction is stamped onto the spawned aircraft") {
-        broadcaster.setTeamAssigner([](uint32_t) -> std::optional<uint16_t> { return uint16_t{7}; });
+        assignedTeam = uint16_t{7};
         connectPilotPeer(broadcaster, net, 0u);
         broadcaster.onTick(1.0 / 60.0, 1u);
         CHECK(broadcaster.factionForPeer(0u) == 7u);
     }
 
     SECTION("assigner returning nullopt refuses with MatchFull") {
-        broadcaster.setTeamAssigner([](uint32_t) -> std::optional<uint16_t> { return std::nullopt; });
+        assignedTeam = std::nullopt;
         broadcaster.onConnect(0u);
         fl::MsgConnectRequest req{};
         req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Pilot);
@@ -1888,14 +1900,20 @@ TEST_CASE("WorldBroadcaster: MsgTeamRequest honors the switch guard (#522)", "[w
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
     registry.registerType(makeDebugDef());
-    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.setTeamAssigner([](uint32_t) -> std::optional<uint16_t> { return uint16_t{1}; });
+    fl::WorldQueries q_broadcaster;
+    fl::WorldBroadcasterHooks h_broadcaster;
+    q_broadcaster.teamAssigner = [](uint32_t) -> std::optional<uint16_t> { return uint16_t{1}; };
+    // Frozen at construction (#1082): the SECTION sets the verdict, not the guard.
+    bool switchAllowed = false;
+    h_broadcaster.match.teamSwitchGuard = [&switchAllowed](uint32_t, uint16_t) { return switchAllowed; };
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, nullptr, std::move(q_broadcaster),
+                                     std::move(h_broadcaster));
     connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onTick(1.0 / 60.0, 1u);
     REQUIRE(broadcaster.factionForPeer(0u) == 1u);
 
     SECTION("a denied switch keeps the current team and sends a notice") {
-        broadcaster.setTeamSwitchGuard([](uint32_t, uint16_t) { return false; });
+        switchAllowed = false;
         net.sends.clear();
         fl::MsgTeamRequest req{};
         req.factionIndex = 2;
@@ -1910,7 +1928,7 @@ TEST_CASE("WorldBroadcaster: MsgTeamRequest honors the switch guard (#522)", "[w
     }
 
     SECTION("an allowed switch respawns on the new team") {
-        broadcaster.setTeamSwitchGuard([](uint32_t, uint16_t) { return true; });
+        switchAllowed = true;
         fl::MsgTeamRequest req{};
         req.factionIndex = 2;
         broadcaster.onReceive(0u, &req, sizeof(req));
@@ -1961,11 +1979,18 @@ TEST_CASE("WorldBroadcaster: chat routing, mute, sanitize, rate limit, hook (#64
     fl::EntityManager em(logger, registry);
     registry.registerType(makeDebugDef());
     fl::ManualClock clock;
-    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    fl::WorldQueries q_broadcaster;
+    fl::WorldBroadcasterHooks h_broadcaster;
+    q_broadcaster.teamAssigner = [](uint32_t p) -> std::optional<uint16_t> {
+        return static_cast<uint16_t>(p == 1u ? 2 : 1);
+    };
+    h_broadcaster.comms.chatModeration = [](uint32_t, uint8_t, std::string_view text) {
+        return text.find("badword") == std::string_view::npos;
+    };
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, nullptr, std::move(q_broadcaster),
+                                     std::move(h_broadcaster));
     broadcaster.setClock(clock);
     // Peer 0 -> faction 1, peer 1 -> faction 2, peer 2 -> faction 1 (peer 0's teammate).
-    broadcaster.setTeamAssigner(
-        [](uint32_t p) -> std::optional<uint16_t> { return static_cast<uint16_t>(p == 1u ? 2 : 1); });
     connectPilotPeer(broadcaster, net, 0u);
     connectPilotPeer(broadcaster, net, 1u);
     connectPilotPeer(broadcaster, net, 2u);
@@ -2038,8 +2063,6 @@ TEST_CASE("WorldBroadcaster: chat routing, mute, sanitize, rate limit, hook (#64
     }
 
     SECTION("the moderation hook can suppress a line") {
-        broadcaster.setChatModerationHook(
-            [](uint32_t, uint8_t, std::string_view text) { return text.find("badword") == std::string_view::npos; });
         net.sends.clear();
         const auto blocked = makeChatPkt(fl::ChatChannel::All, "a badword here");
         broadcaster.onReceive(0u, blocked.data(), blocked.size());
@@ -4461,10 +4484,10 @@ TEST_CASE("WorldBroadcaster: shutdown callback fires at T=0", "[world_broadcaste
     MockLogger logger;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-
     bool called = false;
-    broadcaster.setShutdownCallback([&called]() { called = true; });
+    fl::WorldBroadcasterHooks h_broadcaster;
+    h_broadcaster.match.shutdown = [&called]() { called = true; };
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, nullptr, {}, std::move(h_broadcaster));
 
     fl::ManualClock t;
     broadcaster.setClock(t);
@@ -4502,10 +4525,10 @@ TEST_CASE("WorldBroadcaster: initiateShutdown delay=0 fires on very next tick", 
     MockLogger logger;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-
     bool called = false;
-    broadcaster.setShutdownCallback([&called]() { called = true; });
+    fl::WorldBroadcasterHooks h_broadcaster;
+    h_broadcaster.match.shutdown = [&called]() { called = true; };
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, nullptr, {}, std::move(h_broadcaster));
 
     fl::ManualClock t;
     broadcaster.setClock(t);
@@ -4765,11 +4788,13 @@ struct ShellDrainMock {
 struct TestAdminChannel {
     fl::AdminChannel ch;
 
-    TestAdminChannel(fl::WorldBroadcaster& wb, fl::AdminChannel::Dispatcher fn,
+    // Registers itself into the hooks struct, which is then handed to the constructor: the channel is
+    // frozen at construction with everything else now (#1082), so it is declared BEFORE the broadcaster.
+    TestAdminChannel(fl::WorldBroadcasterHooks& hooks, fl::AdminChannel::Dispatcher fn,
                      const fl::IClock& clock = fl::SystemClock::instance(), int maxFailures = 5,
                      int lockoutSeconds = 300)
         : ch(std::move(fn), makeCfg(maxFailures, lockoutSeconds), clock) {
-        wb.setAdminChannel(&ch);
+        hooks.comms.adminChannel = &ch;
     }
 
     void attachShell(ShellDrainMock& shell) {
@@ -5022,9 +5047,11 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand discarded when no password configur
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
-    TestAdminChannel admin(
-        broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "pong"; }); // password NOT set
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(h_broadcaster, [](std::string_view, const CommandIssuer&) -> std::string {
+        return "pong";
+    }); // password NOT set
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -5042,9 +5069,10 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand discarded on wrong token", "[world_
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(h_broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "pong"; });
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
     broadcaster.setOperatorPassword("secret");
-    TestAdminChannel admin(broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "pong"; });
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -5063,13 +5091,14 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand dispatches on correct token and sen
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
-    broadcaster.setOperatorPassword("secret");
-    TestAdminChannel admin(broadcaster, [](std::string_view cmd, const CommandIssuer&) -> std::string {
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(h_broadcaster, [](std::string_view cmd, const CommandIssuer&) -> std::string {
         if (cmd == "ping")
             return "pong";
         return "";
     });
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
+    broadcaster.setOperatorPassword("secret");
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -5094,15 +5123,16 @@ TEST_CASE("WorldBroadcaster: empty-token admin command dispatches with granted c
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
-    broadcaster.setOperatorPassword("secret");
     fl::CapabilityMask seenCaps = 0;
     uint32_t seenPeer = 0xFFFFFFFFu;
-    TestAdminChannel admin(broadcaster, [&](std::string_view, const CommandIssuer& iss) -> std::string {
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(h_broadcaster, [&](std::string_view, const CommandIssuer& iss) -> std::string {
         seenCaps = iss.caps;
         seenPeer = iss.peerId;
         return "ok";
     });
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
+    broadcaster.setOperatorPassword("secret");
 
     connectPilotPeer(broadcaster, net, 0u);
     // Grant the peer game-master caps; it now authenticates by caps, not the operator password.
@@ -5295,13 +5325,14 @@ TEST_CASE("WorldBroadcaster: password auth grants Admin caps (rung 1 unchanged, 
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
-    broadcaster.setOperatorPassword("secret");
     fl::CapabilityMask seenCaps = 0;
-    TestAdminChannel admin(broadcaster, [&](std::string_view, const CommandIssuer& iss) -> std::string {
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(h_broadcaster, [&](std::string_view, const CommandIssuer& iss) -> std::string {
         seenCaps = iss.caps;
         return "ok";
     });
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
+    broadcaster.setOperatorPassword("secret");
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -5319,19 +5350,20 @@ TEST_CASE("WorldBroadcaster: zero-cap empty-token command refused without lockou
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
-    broadcaster.setOperatorPassword("secret");
     bool dispatched = false;
+    fl::WorldBroadcasterHooks h_broadcaster;
     TestAdminChannel admin(
-        broadcaster,
+        h_broadcaster,
         [&](std::string_view, const CommandIssuer&) -> std::string {
             dispatched = true;
             return "ok";
         },
         fl::SystemClock::instance(), /*maxFailures=*/3, /*lockoutSeconds=*/60); // 3 genuine failures = lockout
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
 
     connectPilotPeer(broadcaster, net, 0u); // peer holds zero caps
     net.sends.clear();
+    broadcaster.setOperatorPassword("secret");
 
     // Several empty-token commands: refused every time, never dispatched, and — critically — never
     // an auth failure, so the peer is never locked out or kicked (a permission refusal is not a
@@ -5356,9 +5388,10 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand discarded if packet too small", "[w
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(h_broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "pong"; });
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
     broadcaster.setOperatorPassword("secret");
-    TestAdminChannel admin(broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "pong"; });
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -5378,9 +5411,10 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand token without null terminator fails
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(h_broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "pong"; });
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
     broadcaster.setOperatorPassword("secret");
-    TestAdminChannel admin(broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "pong"; });
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -5405,10 +5439,11 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand with empty command string is discar
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
-    broadcaster.setOperatorPassword("secret");
+    fl::WorldBroadcasterHooks h_broadcaster;
     TestAdminChannel admin(
-        broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "should not be called"; });
+        h_broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "should not be called"; });
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
+    broadcaster.setOperatorPassword("secret");
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -5433,10 +5468,11 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand empty dispatcher result still sends
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(h_broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return ""; });
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
     broadcaster.setOperatorPassword("secret");
     // Dispatcher returns empty string (e.g. fire-and-forget command).
-    TestAdminChannel admin(broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return ""; });
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -5459,10 +5495,11 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand result >123 chars streams as MsgAdm
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
-    broadcaster.setOperatorPassword("secret");
-    TestAdminChannel admin(broadcaster,
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(h_broadcaster,
                            [](std::string_view, const CommandIssuer&) -> std::string { return std::string(200, 'x'); });
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
+    broadcaster.setOperatorPassword("secret");
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -5485,10 +5522,11 @@ TEST_CASE("WorldBroadcaster: sendAdminResponse fast-path for result <=123 chars"
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
-    broadcaster.setOperatorPassword("secret");
-    TestAdminChannel admin(broadcaster,
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(h_broadcaster,
                            [](std::string_view, const CommandIssuer&) -> std::string { return std::string(50, 'a'); });
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
+    broadcaster.setOperatorPassword("secret");
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -5509,10 +5547,11 @@ TEST_CASE("WorldBroadcaster: sendAdminResponse fast-path at exactly 123 chars", 
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
-    broadcaster.setOperatorPassword("secret");
-    TestAdminChannel admin(broadcaster,
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(h_broadcaster,
                            [](std::string_view, const CommandIssuer&) -> std::string { return std::string(123, 'x'); });
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
+    broadcaster.setOperatorPassword("secret");
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -5534,9 +5573,10 @@ TEST_CASE("WorldBroadcaster: sendAdminResponse echoes reqId in MsgAdminResponse"
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(h_broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "ok"; });
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
     broadcaster.setOperatorPassword("secret");
-    TestAdminChannel admin(broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "ok"; });
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -5558,10 +5598,11 @@ TEST_CASE("WorldBroadcaster: sendAdminResponse 124-char result sends one chunk w
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
-    broadcaster.setOperatorPassword("secret");
-    TestAdminChannel admin(broadcaster,
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(h_broadcaster,
                            [](std::string_view, const CommandIssuer&) -> std::string { return std::string(124, 'y'); });
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
+    broadcaster.setOperatorPassword("secret");
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -5586,10 +5627,11 @@ TEST_CASE("WorldBroadcaster: sendAdminResponse >505 chars sends two chunks", "[w
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
-    broadcaster.setOperatorPassword("secret");
-    TestAdminChannel admin(broadcaster,
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(h_broadcaster,
                            [&](std::string_view, const CommandIssuer&) -> std::string { return longResult; });
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
+    broadcaster.setOperatorPassword("secret");
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -5623,10 +5665,11 @@ TEST_CASE("WorldBroadcaster: sendAdminResponse echoes reqId in every MsgAdminRes
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
-    broadcaster.setOperatorPassword("secret");
-    TestAdminChannel admin(broadcaster,
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(h_broadcaster,
                            [&](std::string_view, const CommandIssuer&) -> std::string { return longResult; });
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
+    broadcaster.setOperatorPassword("secret");
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -5650,17 +5693,21 @@ TEST_CASE("WorldBroadcaster: sendAdminResponse echoes reqId in every MsgAdminRes
 // Shared setup helper: broadcaster with password "pw", dispatch noop, 3-failure threshold, 60 s
 // lockout on the injected clock, and peer 0 connected from 1.2.3.4. Returns the channel because the
 // broadcaster holds a pointer to it -- the caller has to outlive the broadcaster's use of it.
-static std::unique_ptr<TestAdminChannel> setupAuthFixture(fl::WorldBroadcaster& broadcaster, MockNetwork& net,
-                                                          fl::ManualClock& now) {
+// The channel these tests share. Built BEFORE the broadcaster and handed to it through the hooks
+// struct, because an admin channel is frozen at construction now (#1082).
+static std::unique_ptr<TestAdminChannel> makeAuthChannel(fl::WorldBroadcasterHooks& hooks, fl::ManualClock& now) {
+    return std::make_unique<TestAdminChannel>(
+        hooks, [](std::string_view, const CommandIssuer&) -> std::string { return "ok"; }, now,
+        /*maxFailures=*/3, /*lockoutSeconds=*/60);
+}
+
+// The rest of the old setupAuthFixture, run once the broadcaster exists.
+static void startAuthFixture(fl::WorldBroadcaster& broadcaster, MockNetwork& net, fl::ManualClock& now) {
     broadcaster.setOperatorPassword("pw");
     broadcaster.setClock(now);
-    auto admin = std::make_unique<TestAdminChannel>(
-        broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "ok"; }, now,
-        /*maxFailures=*/3, /*lockoutSeconds=*/60);
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
     net.disconnectedPeers.clear();
-    return admin;
 }
 
 TEST_CASE("WorldBroadcaster: admin auth no lockout before threshold", "[world_broadcaster][admin_command]") {
@@ -5670,9 +5717,11 @@ TEST_CASE("WorldBroadcaster: admin auth no lockout before threshold", "[world_br
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
     fl::ManualClock now;
-    auto admin = setupAuthFixture(broadcaster, net, now);
+    fl::WorldBroadcasterHooks h_broadcaster;
+    auto admin = makeAuthChannel(h_broadcaster, now);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
+    startAuthFixture(broadcaster, net, now);
 
     // N-1 = 2 failures; peer must remain connected after each
     for (int i = 0; i < 2; ++i) {
@@ -5690,9 +5739,11 @@ TEST_CASE("WorldBroadcaster: admin auth lockout triggered on Nth failure -- peer
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
     fl::ManualClock now;
-    auto admin = setupAuthFixture(broadcaster, net, now);
+    fl::WorldBroadcasterHooks h_broadcaster;
+    auto admin = makeAuthChannel(h_broadcaster, now);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
+    startAuthFixture(broadcaster, net, now);
 
     // 2 failures — no kick
     for (int i = 0; i < 2; ++i) {
@@ -5716,9 +5767,11 @@ TEST_CASE("WorldBroadcaster: admin auth onConnect refused while locked", "[world
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
     fl::ManualClock now;
-    auto admin = setupAuthFixture(broadcaster, net, now);
+    fl::WorldBroadcasterHooks h_broadcaster;
+    auto admin = makeAuthChannel(h_broadcaster, now);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
+    startAuthFixture(broadcaster, net, now);
 
     // Trigger lockout on peer 0
     for (int i = 0; i < 3; ++i) {
@@ -5745,9 +5798,11 @@ TEST_CASE("WorldBroadcaster: admin auth lockout expires after TTL", "[world_broa
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
     fl::ManualClock now;
-    auto admin = setupAuthFixture(broadcaster, net, now);
+    fl::WorldBroadcasterHooks h_broadcaster;
+    auto admin = makeAuthChannel(h_broadcaster, now);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
+    startAuthFixture(broadcaster, net, now);
 
     // Trigger lockout
     for (int i = 0; i < 3; ++i) {
@@ -5777,9 +5832,11 @@ TEST_CASE("WorldBroadcaster: admin auth per-IP isolation", "[world_broadcaster][
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
     fl::ManualClock now;
-    auto admin = setupAuthFixture(broadcaster, net, now);
+    fl::WorldBroadcasterHooks h_broadcaster;
+    auto admin = makeAuthChannel(h_broadcaster, now);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
+    startAuthFixture(broadcaster, net, now);
 
     // Connect peer 1 from IP B
     connectPilotPeer(broadcaster, net, 1u);
@@ -5813,9 +5870,11 @@ TEST_CASE("WorldBroadcaster: admin auth failure counter persists across disconne
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
     fl::ManualClock now;
-    auto admin = setupAuthFixture(broadcaster, net, now);
+    fl::WorldBroadcasterHooks h_broadcaster;
+    auto admin = makeAuthChannel(h_broadcaster, now);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
+    startAuthFixture(broadcaster, net, now);
 
     // 2 failures on peer 0 — below threshold
     for (int i = 0; i < 2; ++i) {
@@ -5847,9 +5906,11 @@ TEST_CASE("WorldBroadcaster: admin auth correct token resets failure counter", "
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
     fl::ManualClock now;
-    auto admin = setupAuthFixture(broadcaster, net, now);
+    fl::WorldBroadcasterHooks h_broadcaster;
+    auto admin = makeAuthChannel(h_broadcaster, now);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
+    startAuthFixture(broadcaster, net, now);
 
     // N-1 = 2 failures
     for (int i = 0; i < 2; ++i) {
@@ -5909,9 +5970,11 @@ TEST_CASE("WorldBroadcaster: admin auth pruneExpired fires after 600 onTick call
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
     fl::ManualClock now;
-    auto admin = setupAuthFixture(broadcaster, net, now);
+    fl::WorldBroadcasterHooks h_broadcaster;
+    auto admin = makeAuthChannel(h_broadcaster, now);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
+    startAuthFixture(broadcaster, net, now);
 
     // Trigger lockout
     for (int i = 0; i < 3; ++i) {
@@ -5950,9 +6013,11 @@ TEST_CASE("WorldBroadcaster: admin_unlock clears lockout -- onConnect succeeds",
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
     fl::ManualClock now;
-    auto admin = setupAuthFixture(broadcaster, net, now);
+    fl::WorldBroadcasterHooks h_broadcaster;
+    auto admin = makeAuthChannel(h_broadcaster, now);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
+    startAuthFixture(broadcaster, net, now);
 
     // Trigger lockout on peer 0
     for (int i = 0; i < 3; ++i) {
@@ -5982,9 +6047,11 @@ TEST_CASE("WorldBroadcaster: admin_unlock is a no-op when IP is not locked", "[w
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
     fl::ManualClock now;
-    auto admin = setupAuthFixture(broadcaster, net, now);
+    fl::WorldBroadcasterHooks h_broadcaster;
+    auto admin = makeAuthChannel(h_broadcaster, now);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
+    startAuthFixture(broadcaster, net, now);
 
     // No failures — clearing must report the IP was not locked
     CHECK_FALSE(admin->ch.clearLockout("1.2.3.4"));
@@ -6006,12 +6073,13 @@ TEST_CASE("WorldBroadcaster: admin shell drain sends no follow-on when shell not
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
     fl::ManualClock t;
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(
+        h_broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "queued"; }, t);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
     broadcaster.setClock(t);
     broadcaster.setOperatorPassword("secret");
-    TestAdminChannel admin(
-        broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "queued"; }, t);
     // no shell tap on the channel — this frontend has no drain
 
     connectPilotPeer(broadcaster, net, 0u);
@@ -6035,12 +6103,13 @@ TEST_CASE("WorldBroadcaster: admin shell drain does not fire before wall-clock d
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
     fl::ManualClock t;
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(
+        h_broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "queued"; }, t);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
     broadcaster.setClock(t);
     broadcaster.setOperatorPassword("secret");
-    TestAdminChannel admin(
-        broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "queued"; }, t);
 
     ShellDrainMock shell;
     admin.attachShell(shell);
@@ -6067,12 +6136,13 @@ TEST_CASE("WorldBroadcaster: admin shell drain fires after wall-clock deadline a
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
     fl::ManualClock t;
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(
+        h_broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "queued"; }, t);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
     broadcaster.setClock(t);
     broadcaster.setOperatorPassword("secret");
-    TestAdminChannel admin(
-        broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "queued"; }, t);
 
     ShellDrainMock shell;
     admin.attachShell(shell);
@@ -6107,12 +6177,13 @@ TEST_CASE("WorldBroadcaster: admin shell drain sends nothing when drain returns 
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
     fl::ManualClock t;
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(
+        h_broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "queued"; }, t);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
     broadcaster.setClock(t);
     broadcaster.setOperatorPassword("secret");
-    TestAdminChannel admin(
-        broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "queued"; }, t);
 
     ShellDrainMock shell; // lines stays empty
     admin.attachShell(shell);
@@ -6137,12 +6208,13 @@ TEST_CASE("WorldBroadcaster: admin shell drain skips disconnected peer", "[world
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
     fl::ManualClock t;
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(
+        h_broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "queued"; }, t);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
     broadcaster.setClock(t);
     broadcaster.setOperatorPassword("secret");
-    TestAdminChannel admin(
-        broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "queued"; }, t);
 
     ShellDrainMock shell;
     admin.attachShell(shell);
@@ -6173,12 +6245,13 @@ TEST_CASE("WorldBroadcaster: admin shell drain echoes correct reqId in follow-on
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
     fl::ManualClock t;
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(
+        h_broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "queued"; }, t);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
     broadcaster.setClock(t);
     broadcaster.setOperatorPassword("secret");
-    TestAdminChannel admin(
-        broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "queued"; }, t);
 
     ShellDrainMock shell;
     admin.attachShell(shell);
@@ -6210,12 +6283,13 @@ TEST_CASE("WorldBroadcaster: two admin commands queue independent drains with se
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
     fl::ManualClock t;
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(
+        h_broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "queued"; }, t);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
     broadcaster.setClock(t);
     broadcaster.setOperatorPassword("secret");
-    TestAdminChannel admin(
-        broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "queued"; }, t);
 
     ShellDrainMock shell;
     admin.attachShell(shell);
@@ -6259,12 +6333,13 @@ TEST_CASE("WorldBroadcaster: admin shell drain fires exactly once", "[world_broa
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
     fl::ManualClock t;
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(
+        h_broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "queued"; }, t);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
     broadcaster.setClock(t);
     broadcaster.setOperatorPassword("secret");
-    TestAdminChannel admin(
-        broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "queued"; }, t);
 
     ShellDrainMock shell;
     admin.attachShell(shell);
@@ -6299,12 +6374,13 @@ TEST_CASE("WorldBroadcaster: admin shell drain with long output streams as MsgAd
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
     fl::ManualClock t;
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(
+        h_broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "queued"; }, t);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
     broadcaster.setClock(t);
     broadcaster.setOperatorPassword("secret");
-    TestAdminChannel admin(
-        broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "queued"; }, t);
 
     ShellDrainMock shell;
     admin.attachShell(shell);
@@ -6340,12 +6416,13 @@ TEST_CASE("WorldBroadcaster: admin shell drain joins multiple lines with newline
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
     fl::ManualClock t;
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(
+        h_broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "queued"; }, t);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
     broadcaster.setClock(t);
     broadcaster.setOperatorPassword("secret");
-    TestAdminChannel admin(
-        broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "queued"; }, t);
 
     ShellDrainMock shell;
     admin.attachShell(shell);
@@ -6378,12 +6455,13 @@ TEST_CASE("WorldBroadcaster: admin shell drain sends nothing when all drain line
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
     fl::ManualClock t;
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(
+        h_broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "queued"; }, t);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
     broadcaster.setClock(t);
     broadcaster.setOperatorPassword("secret");
-    TestAdminChannel admin(
-        broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "queued"; }, t);
 
     ShellDrainMock shell;
     admin.attachShell(shell);
@@ -6412,12 +6490,13 @@ TEST_CASE("WorldBroadcaster: admin shell drain fires at wall-clock deadline rega
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
     fl::ManualClock t;
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(
+        h_broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "queued"; }, t);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
     broadcaster.setClock(t);
     broadcaster.setOperatorPassword("secret");
-    TestAdminChannel admin(
-        broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "queued"; }, t);
 
     ShellDrainMock shell;
     admin.attachShell(shell);
@@ -6452,12 +6531,13 @@ TEST_CASE("WorldBroadcaster: two admin commands at staggered deadlines drain ind
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, log);
     fl::ManualClock t;
+    fl::WorldBroadcasterHooks h_broadcaster;
+    TestAdminChannel admin(
+        h_broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "queued"; }, t);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, {}, std::move(h_broadcaster));
     broadcaster.setClock(t);
     broadcaster.setOperatorPassword("secret");
-    TestAdminChannel admin(
-        broadcaster, [](std::string_view, const CommandIssuer&) -> std::string { return "queued"; }, t);
 
     ShellDrainMock shell;
     admin.attachShell(shell);
@@ -9434,17 +9514,20 @@ TEST_CASE("WorldBroadcaster: the flight check-in tells the client its flight id 
     fl::EntityManager em(logger, registry);
     registry.registerType(makeDebugDef());
 
-    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.setFlightSpawner([&](uint32_t peerId, fl::EntityId lead) {
-        const fl::FormationId fid = broadcaster.formations().create("Viper", lead, peerId);
+    fl::WorldBroadcaster* bcPtr = nullptr; // the spawner calls back in; set below
+    fl::WorldQueries q_broadcaster;
+    q_broadcaster.flightSpawner = [&](uint32_t peerId, fl::EntityId lead) {
+        const fl::FormationId fid = bcPtr->formations().create("Viper", lead, peerId);
         fl::EntityTransform t{};
         const fl::EntityId ai = em.spawn("builtin:debug-entity", t);
         fl::FormationMember m{};
         m.id = ai;
         m.peerId = fl::kNoPeer; // AI
-        broadcaster.formations().addMember(fid, m);
+        bcPtr->formations().addMember(fid, m);
         return fid;
-    });
+    };
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, nullptr, std::move(q_broadcaster));
+    bcPtr = &broadcaster;
     connectPilotPeer(broadcaster, net, 0u);
 
     const auto acks = acksFor(net, 0);
@@ -9461,22 +9544,26 @@ TEST_CASE("WorldBroadcaster: an order retasks an AI member and is acknowledged",
     fl::EntityManager em(logger, registry);
     registry.registerType(makeDebugDef());
 
-    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    fl::WorldBroadcaster* bcPtr = nullptr; // the spawner calls back in; set below
     fl::FormationId theFlight = fl::kNoFormation;
-    broadcaster.setFlightSpawner([&](uint32_t peerId, fl::EntityId lead) {
-        theFlight = broadcaster.formations().create("Viper", lead, peerId);
+    fl::WorldQueries q_broadcaster;
+    int handlerCalls = 0;
+    fl::WorldBroadcasterHooks h_broadcaster;
+    q_broadcaster.flightSpawner = [&](uint32_t peerId, fl::EntityId lead) {
+        theFlight = bcPtr->formations().create("Viper", lead, peerId);
         fl::EntityTransform t{};
         fl::FormationMember m{};
         m.id = em.spawn("builtin:debug-entity", t);
-        broadcaster.formations().addMember(theFlight, m);
+        bcPtr->formations().addMember(theFlight, m);
         return theFlight;
-    });
-
-    int handlerCalls = 0;
-    broadcaster.setFlightOrderHandler([&](const fl::Formation&, const fl::FormationMember&, uint8_t, fl::EntityId) {
+    };
+    h_broadcaster.comms.flightOrders = [&](const fl::Formation&, const fl::FormationMember&, uint8_t, fl::EntityId) {
         ++handlerCalls;
         return true;
-    });
+    };
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, nullptr, std::move(q_broadcaster),
+                                     std::move(h_broadcaster));
+    bcPtr = &broadcaster;
 
     connectPilotPeer(broadcaster, net, 0u);
     net.perPeerSends.clear();
@@ -9501,24 +9588,28 @@ TEST_CASE("WorldBroadcaster: a peer cannot order a flight it does not command", 
     fl::EntityManager em(logger, registry);
     registry.registerType(makeDebugDef());
 
-    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    fl::WorldBroadcaster* bcPtr = nullptr; // the spawner calls back in; set below
+    fl::WorldQueries q_broadcaster;
     fl::FormationId peer0Flight = fl::kNoFormation;
-    broadcaster.setFlightSpawner([&](uint32_t peerId, fl::EntityId lead) {
-        const fl::FormationId fid = broadcaster.formations().create("Viper", lead, peerId);
+    int handlerCalls = 0;
+    fl::WorldBroadcasterHooks h_broadcaster;
+    q_broadcaster.flightSpawner = [&](uint32_t peerId, fl::EntityId lead) {
+        const fl::FormationId fid = bcPtr->formations().create("Viper", lead, peerId);
         fl::EntityTransform t{};
         fl::FormationMember m{};
         m.id = em.spawn("builtin:debug-entity", t);
-        broadcaster.formations().addMember(fid, m);
+        bcPtr->formations().addMember(fid, m);
         if (peerId == 0)
             peer0Flight = fid;
         return fid;
-    });
-
-    int handlerCalls = 0;
-    broadcaster.setFlightOrderHandler([&](const fl::Formation&, const fl::FormationMember&, uint8_t, fl::EntityId) {
+    };
+    h_broadcaster.comms.flightOrders = [&](const fl::Formation&, const fl::FormationMember&, uint8_t, fl::EntityId) {
         ++handlerCalls;
         return true;
-    });
+    };
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, nullptr, std::move(q_broadcaster),
+                                     std::move(h_broadcaster));
+    bcPtr = &broadcaster;
 
     connectPilotPeer(broadcaster, net, 0u);
     connectPilotPeer(broadcaster, net, 1u);
@@ -9542,21 +9633,26 @@ TEST_CASE("WorldBroadcaster: an unknown command ordinal is rejected without call
     fl::EntityManager em(logger, registry);
     registry.registerType(makeDebugDef());
 
-    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    fl::WorldBroadcaster* bcPtr = nullptr; // the spawner calls back in; set below
     fl::FormationId theFlight = fl::kNoFormation;
-    broadcaster.setFlightSpawner([&](uint32_t peerId, fl::EntityId lead) {
-        theFlight = broadcaster.formations().create("Viper", lead, peerId);
+    fl::WorldQueries q_broadcaster;
+    int handlerCalls = 0;
+    fl::WorldBroadcasterHooks h_broadcaster;
+    q_broadcaster.flightSpawner = [&](uint32_t peerId, fl::EntityId lead) {
+        theFlight = bcPtr->formations().create("Viper", lead, peerId);
         fl::EntityTransform t{};
         fl::FormationMember m{};
         m.id = em.spawn("builtin:debug-entity", t);
-        broadcaster.formations().addMember(theFlight, m);
+        bcPtr->formations().addMember(theFlight, m);
         return theFlight;
-    });
-    int handlerCalls = 0;
-    broadcaster.setFlightOrderHandler([&](const fl::Formation&, const fl::FormationMember&, uint8_t, fl::EntityId) {
+    };
+    h_broadcaster.comms.flightOrders = [&](const fl::Formation&, const fl::FormationMember&, uint8_t, fl::EntityId) {
         ++handlerCalls;
         return true;
-    });
+    };
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, nullptr, std::move(q_broadcaster),
+                                     std::move(h_broadcaster));
+    bcPtr = &broadcaster;
 
     connectPilotPeer(broadcaster, net, 0u);
     net.perPeerSends.clear();
@@ -9578,23 +9674,28 @@ TEST_CASE("WorldBroadcaster: attack_my_target refuses when nothing is in the bor
     fl::EntityManager em(logger, registry);
     registry.registerType(makeDebugDef());
 
-    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    fl::WorldBroadcaster* bcPtr = nullptr; // the spawner calls back in; set below
+    fl::WorldQueries q_broadcaster;
+    int handlerCalls = 0;
     fl::FormationId theFlight = fl::kNoFormation;
-    broadcaster.setFlightSpawner([&](uint32_t peerId, fl::EntityId lead) {
-        theFlight = broadcaster.formations().create("Viper", lead, peerId);
+    fl::WorldBroadcasterHooks h_broadcaster;
+    q_broadcaster.flightSpawner = [&](uint32_t peerId, fl::EntityId lead) {
+        theFlight = bcPtr->formations().create("Viper", lead, peerId);
         fl::EntityTransform t{};
         fl::FormationMember m{};
         m.id = em.spawn("builtin:debug-entity", t);
-        broadcaster.formations().addMember(theFlight, m);
+        bcPtr->formations().addMember(theFlight, m);
         return theFlight;
-    });
-    int handlerCalls = 0;
-    broadcaster.setFlightOrderHandler([&](const fl::Formation&, const fl::FormationMember&, uint8_t, fl::EntityId) {
+    };
+    h_broadcaster.comms.flightOrders = [&](const fl::Formation&, const fl::FormationMember&, uint8_t, fl::EntityId) {
         ++handlerCalls;
         return true;
-    });
+    };
+    q_broadcaster.targetDesignator = [](const fl::EntityState&, const float[3]) { return fl::EntityId{}; };
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, nullptr, std::move(q_broadcaster),
+                                     std::move(h_broadcaster));
+    bcPtr = &broadcaster;
     // A designator that finds nothing — the same thing an empty sky produces.
-    broadcaster.setTargetDesignator([](const fl::EntityState&, const float[3]) { return fl::EntityId{}; });
 
     connectPilotPeer(broadcaster, net, 0u);
     net.perPeerSends.clear();
@@ -9620,13 +9721,14 @@ TEST_CASE("WorldBroadcaster: an order to a HUMAN member is relayed, not applied"
     fl::EntityManager em(logger, registry);
     registry.registerType(makeDebugDef());
 
-    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    fl::FormationId theFlight = fl::kNoFormation;
     int handlerCalls = 0;
-    broadcaster.setFlightOrderHandler([&](const fl::Formation&, const fl::FormationMember&, uint8_t, fl::EntityId) {
+    fl::WorldBroadcasterHooks h_broadcaster;
+    h_broadcaster.comms.flightOrders = [&](const fl::Formation&, const fl::FormationMember&, uint8_t, fl::EntityId) {
         ++handlerCalls;
         return true;
-    });
+    };
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, nullptr, {}, std::move(h_broadcaster));
+    fl::FormationId theFlight = fl::kNoFormation;
 
     connectPilotPeer(broadcaster, net, 0u); // the commander
     connectPilotPeer(broadcaster, net, 1u); // the human wingman
@@ -9676,18 +9778,24 @@ TEST_CASE("WorldBroadcaster: the order rate limit acks once per window, not once
     fl::EntityManager em(logger, registry);
     registry.registerType(makeDebugDef());
 
-    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    fl::WorldBroadcaster* bcPtr = nullptr; // the spawner calls back in; set below
+    fl::WorldQueries q_broadcaster;
     fl::FormationId theFlight = fl::kNoFormation;
-    broadcaster.setFlightSpawner([&](uint32_t peerId, fl::EntityId lead) {
-        theFlight = broadcaster.formations().create("Viper", lead, peerId);
+    fl::WorldBroadcasterHooks h_broadcaster;
+    q_broadcaster.flightSpawner = [&](uint32_t peerId, fl::EntityId lead) {
+        theFlight = bcPtr->formations().create("Viper", lead, peerId);
         fl::EntityTransform t{};
         fl::FormationMember m{};
         m.id = em.spawn("builtin:debug-entity", t);
-        broadcaster.formations().addMember(theFlight, m);
+        bcPtr->formations().addMember(theFlight, m);
         return theFlight;
-    });
-    broadcaster.setFlightOrderHandler(
-        [&](const fl::Formation&, const fl::FormationMember&, uint8_t, fl::EntityId) { return true; });
+    };
+    h_broadcaster.comms.flightOrders = [&](const fl::Formation&, const fl::FormationMember&, uint8_t, fl::EntityId) {
+        return true;
+    };
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, nullptr, std::move(q_broadcaster),
+                                     std::move(h_broadcaster));
+    bcPtr = &broadcaster;
     broadcaster.setFlightCommandRateLimit(2);
 
     connectPilotPeer(broadcaster, net, 0u);
@@ -9714,12 +9822,13 @@ TEST_CASE("WorldBroadcaster: a truncated or mis-versioned order is discarded", "
     fl::EntityManager em(logger, registry);
     registry.registerType(makeDebugDef());
 
-    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     int handlerCalls = 0;
-    broadcaster.setFlightOrderHandler([&](const fl::Formation&, const fl::FormationMember&, uint8_t, fl::EntityId) {
+    fl::WorldBroadcasterHooks h_broadcaster;
+    h_broadcaster.comms.flightOrders = [&](const fl::Formation&, const fl::FormationMember&, uint8_t, fl::EntityId) {
         ++handlerCalls;
         return true;
-    });
+    };
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, nullptr, {}, std::move(h_broadcaster));
     connectPilotPeer(broadcaster, net, 0u);
     net.perPeerSends.clear();
 
@@ -9743,15 +9852,18 @@ TEST_CASE("WorldBroadcaster: disconnect tears the peer's flight down", "[world_b
     fl::EntityManager em(logger, registry);
     registry.registerType(makeDebugDef());
 
-    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.setFlightSpawner([&](uint32_t peerId, fl::EntityId lead) {
-        const fl::FormationId fid = broadcaster.formations().create("Viper", lead, peerId);
+    fl::WorldBroadcaster* bcPtr = nullptr; // the spawner calls back in; set below
+    fl::WorldQueries q_broadcaster;
+    q_broadcaster.flightSpawner = [&](uint32_t peerId, fl::EntityId lead) {
+        const fl::FormationId fid = bcPtr->formations().create("Viper", lead, peerId);
         fl::EntityTransform t{};
         fl::FormationMember m{};
         m.id = em.spawn("builtin:debug-entity", t);
-        broadcaster.formations().addMember(fid, m);
+        bcPtr->formations().addMember(fid, m);
         return fid;
-    });
+    };
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, nullptr, std::move(q_broadcaster));
+    bcPtr = &broadcaster;
 
     connectPilotPeer(broadcaster, net, 0u);
     CHECK(broadcaster.formations().size() == 1u);
@@ -10341,17 +10453,30 @@ TEST_CASE("WorldBroadcaster: a designated IR missile launch flies out and kills 
     fl::registerBuiltinWeapons(weapons);
 
     fl::EntityManager em(logger, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    fl::WorldQueries q_broadcaster;
+    q_broadcaster.sensorDefs = [](const std::string& id) -> std::shared_ptr<const fl::sensor::SensorDef> {
+        if (id == "builtin:ir-seeker")
+            return {std::shared_ptr<const fl::sensor::SensorDef>{}, &fl::sensor::BuiltinSensors::irSeeker()};
+        return nullptr;
+    };
+    // Declared above the queries and captured BY REFERENCE: the designator is frozen at construction
+    // now, but it is not called until the shot, by which point the spawn below has filled this in.
+    // The designator is frozen at construction now, but this test installed it only AFTER the victim
+    // existed -- and when it is consulted matters, because a designation is latched. `armed` puts the
+    // switch-on back exactly where it was: the query is present from the start and answers "no target"
+    // until the test arms it. A default-constructed EntityId would NOT do: that is index 0, a real
+    // entity.
+    fl::EntityId victim = fl::EntityId::null();
+    bool designatorArmed = false;
+    q_broadcaster.targetDesignator = [&](const fl::EntityState&, const float*) -> fl::EntityId {
+        return designatorArmed ? victim : fl::EntityId::null();
+    };
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, nullptr, std::move(q_broadcaster));
     em.addEventHandler(&broadcaster);
     broadcaster.setWeaponRegistry(&weapons);
     // Missiles get projectile entity types the same way the server registers them at startup.
     fl::registerProjectileEntityDefs(weapons, registry, logger);
     // Seeker heads resolve to the compiled-in defs (the fl-server resolver does the same, #440).
-    broadcaster.setSensorDefResolver([](const std::string& id) -> std::shared_ptr<const fl::sensor::SensorDef> {
-        if (id == "builtin:ir-seeker")
-            return {std::shared_ptr<const fl::sensor::SensorDef>{}, &fl::sensor::BuiltinSensors::irSeeker()};
-        return nullptr;
-    });
 
     connectPilotPeer(broadcaster, net, 0u);
     const auto ack = parseSendAck(net);
@@ -10365,8 +10490,8 @@ TEST_CASE("WorldBroadcaster: a designated IR missile launch flies out and kills 
     vt.pos[1] = shooter->transform.pos[1];
     vt.pos[2] = shooter->transform.pos[2];
     vt.quat[3] = 1.f;
-    const fl::EntityId victim = em.spawn("builtin:debug-entity", vt);
-    broadcaster.setTargetDesignator([victim](const fl::EntityState&, const float*) -> fl::EntityId { return victim; });
+    victim = em.spawn("builtin:debug-entity", vt);
+    designatorArmed = true;
 
     fl::MsgClientInput inp{};
     inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
@@ -10396,12 +10521,8 @@ TEST_CASE("WorldBroadcaster: every builtin flying store releases from the zero-p
     fl::registerBuiltinWeapons(weapons);
 
     fl::EntityManager em(logger, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    em.addEventHandler(&broadcaster);
-    broadcaster.setWeaponRegistry(&weapons);
-    fl::registerProjectileEntityDefs(weapons, registry, logger);
-    // Resolve every builtin seeker head like fl-server does at startup.
-    broadcaster.setSensorDefResolver([](const std::string& id) -> std::shared_ptr<const fl::sensor::SensorDef> {
+    fl::WorldQueries q_broadcaster;
+    q_broadcaster.sensorDefs = [](const std::string& id) -> std::shared_ptr<const fl::sensor::SensorDef> {
         if (id == "builtin:ir-seeker")
             return {std::shared_ptr<const fl::sensor::SensorDef>{}, &fl::sensor::BuiltinSensors::irSeeker()};
         if (id == "builtin:radar-seeker")
@@ -10409,7 +10530,24 @@ TEST_CASE("WorldBroadcaster: every builtin flying store releases from the zero-p
         if (id == "builtin:sarh-seeker")
             return {std::shared_ptr<const fl::sensor::SensorDef>{}, &fl::sensor::BuiltinSensors::sarhSeeker()};
         return nullptr;
-    });
+    };
+    // Declared above the queries and captured BY REFERENCE: the designator is frozen at construction
+    // now, but it is not called until the shot, by which point the spawn below has filled this in.
+    // The designator is frozen at construction now, but this test installed it only AFTER the victim
+    // existed -- and when it is consulted matters, because a designation is latched. `armed` puts the
+    // switch-on back exactly where it was: the query is present from the start and answers "no target"
+    // until the test arms it. A default-constructed EntityId would NOT do: that is index 0, a real
+    // entity.
+    fl::EntityId victim = fl::EntityId::null();
+    bool designatorArmed = false;
+    q_broadcaster.targetDesignator = [&](const fl::EntityState&, const float*) -> fl::EntityId {
+        return designatorArmed ? victim : fl::EntityId::null();
+    };
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, nullptr, std::move(q_broadcaster));
+    em.addEventHandler(&broadcaster);
+    broadcaster.setWeaponRegistry(&weapons);
+    fl::registerProjectileEntityDefs(weapons, registry, logger);
+    // Resolve every builtin seeker head like fl-server does at startup.
 
     connectPilotPeer(broadcaster, net, 0u);
     const auto ack = parseSendAck(net);
@@ -10422,8 +10560,8 @@ TEST_CASE("WorldBroadcaster: every builtin flying store releases from the zero-p
     vt.pos[1] = shooter->transform.pos[1];
     vt.pos[2] = shooter->transform.pos[2];
     vt.quat[3] = 1.f;
-    const fl::EntityId victim = em.spawn("builtin:debug-entity", vt);
-    broadcaster.setTargetDesignator([victim](const fl::EntityState&, const float*) -> fl::EntityId { return victim; });
+    victim = em.spawn("builtin:debug-entity", vt);
+    designatorArmed = true;
 
     // Count live entities of a given projectile type currently in the world.
     auto projectileCount = [&](const char* id) {
@@ -10483,13 +10621,26 @@ TEST_CASE("WorldBroadcaster: the pre-launch LOCK cue reaches the own record's we
     fl::registerBuiltinWeapons(weapons);
 
     fl::EntityManager em(logger, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.setWeaponRegistry(&weapons);
-    broadcaster.setSensorDefResolver([](const std::string& id) -> std::shared_ptr<const fl::sensor::SensorDef> {
+    fl::WorldQueries q_broadcaster;
+    q_broadcaster.sensorDefs = [](const std::string& id) -> std::shared_ptr<const fl::sensor::SensorDef> {
         if (id == "builtin:ir-seeker")
             return {std::shared_ptr<const fl::sensor::SensorDef>{}, &fl::sensor::BuiltinSensors::irSeeker()};
         return nullptr;
-    });
+    };
+    // Declared above the queries and captured BY REFERENCE: the designator is frozen at construction
+    // now, but it is not called until the shot, by which point the spawn below has filled this in.
+    // The designator is frozen at construction now, but this test installed it only AFTER the victim
+    // existed -- and when it is consulted matters, because a designation is latched. `armed` puts the
+    // switch-on back exactly where it was: the query is present from the start and answers "no target"
+    // until the test arms it. A default-constructed EntityId would NOT do: that is index 0, a real
+    // entity.
+    fl::EntityId victim = fl::EntityId::null();
+    bool designatorArmed = false;
+    q_broadcaster.targetDesignator = [&](const fl::EntityState&, const float*) -> fl::EntityId {
+        return designatorArmed ? victim : fl::EntityId::null();
+    };
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, nullptr, std::move(q_broadcaster));
+    broadcaster.setWeaponRegistry(&weapons);
 
     connectPilotPeer(broadcaster, net, 0u);
     const auto ack = parseSendAck(net);
@@ -10503,8 +10654,8 @@ TEST_CASE("WorldBroadcaster: the pre-launch LOCK cue reaches the own record's we
     vt.pos[1] = shooter->transform.pos[1];
     vt.pos[2] = shooter->transform.pos[2];
     vt.quat[3] = 1.f;
-    const fl::EntityId victim = em.spawn("builtin:debug-entity", vt);
-    broadcaster.setTargetDesignator([victim](const fl::EntityState&, const float*) -> fl::EntityId { return victim; });
+    victim = em.spawn("builtin:debug-entity", vt);
+    designatorArmed = true;
 
     // Run past a full cue cadence window (the cue is computed at ~10 Hz per peer).
     for (uint64_t t = 1; t <= 12; ++t)
@@ -10975,14 +11126,14 @@ TEST_CASE("WorldBroadcaster: crewed aircraft replicate roster on connect; single
     weapons.registerWeapon(makeRktWeapon());
 
     fl::EntityManager em(logger, registry);
-    fl::WorldBroadcaster wb(em, registry, net, logger);
+    fl::WorldQueries q_wb;
+    q_wb.seatControllerFactory = [](const fl::SeatDef&, uint8_t,
+                                    const fl::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> {
+        return nullptr; // no gunner bot: the turret rests at az=el=0, which still replicates
+    };
+    fl::WorldBroadcaster wb(em, registry, net, logger, nullptr, std::move(q_wb));
     wb.setWeaponRegistry(&weapons);
     wb.setGroundElevation(0.f);
-    wb.setSeatControllerFactory(
-        [](const fl::SeatDef&, uint8_t,
-           const fl::WorldBroadcaster::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> {
-            return nullptr; // no gunner bot: the turret rests at az=el=0, which still replicates
-        });
 
     // Spawn an AI crewed bomber near the origin so an observer sees it.
     fl::EntityTransform t{};
@@ -11105,12 +11256,14 @@ TEST_CASE("WorldBroadcaster: a human joins a gunner seat; a second human is deni
     fl::WeaponRegistry weapons;
     weapons.registerWeapon(makeRktWeapon());
     fl::EntityManager em(logger, registry);
-    fl::WorldBroadcaster wb(em, registry, net, logger);
+    fl::WorldQueries q_wb;
+    q_wb.seatControllerFactory = [](const fl::SeatDef&, uint8_t,
+                                    const fl::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> {
+        return nullptr;
+    };
+    fl::WorldBroadcaster wb(em, registry, net, logger, nullptr, std::move(q_wb));
     wb.setWeaponRegistry(&weapons);
     wb.setGroundElevation(0.f);
-    wb.setSeatControllerFactory(
-        [](const fl::SeatDef&, uint8_t,
-           const fl::WorldBroadcaster::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> { return nullptr; });
 
     fl::EntityTransform t{};
     t.pos[1] = 800.0;
@@ -11159,12 +11312,14 @@ TEST_CASE("WorldBroadcaster: a peer-spawned crewed airframe persists while a hum
     fl::WeaponRegistry weapons;
     weapons.registerWeapon(makeRktWeapon());
     fl::EntityManager em(logger, registry);
-    fl::WorldBroadcaster wb(em, registry, net, logger);
+    fl::WorldQueries q_wb;
+    q_wb.seatControllerFactory = [](const fl::SeatDef&, uint8_t,
+                                    const fl::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> {
+        return nullptr;
+    };
+    fl::WorldBroadcaster wb(em, registry, net, logger, nullptr, std::move(q_wb));
     wb.setWeaponRegistry(&weapons);
     wb.setGroundElevation(0.f);
-    wb.setSeatControllerFactory(
-        [](const fl::SeatDef&, uint8_t,
-           const fl::WorldBroadcaster::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> { return nullptr; });
 
     // Peer 1 spawns and OWNS a crewed bomber (requests that type).
     connectPilotPeer(wb, net, 1u, "test:crewbomber");
@@ -11232,12 +11387,14 @@ TEST_CASE("WorldBroadcaster: seats/set_seat operator surface reads and forces oc
     fl::WeaponRegistry weapons;
     weapons.registerWeapon(makeRktWeapon());
     fl::EntityManager em(logger, registry);
-    fl::WorldBroadcaster wb(em, registry, net, logger);
+    fl::WorldQueries q_wb;
+    q_wb.seatControllerFactory = [](const fl::SeatDef&, uint8_t,
+                                    const fl::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> {
+        return nullptr;
+    };
+    fl::WorldBroadcaster wb(em, registry, net, logger, nullptr, std::move(q_wb));
     wb.setWeaponRegistry(&weapons);
     wb.setGroundElevation(0.f);
-    wb.setSeatControllerFactory(
-        [](const fl::SeatDef&, uint8_t,
-           const fl::WorldBroadcaster::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> { return nullptr; });
 
     fl::EntityTransform t{};
     t.pos[1] = 800.0;
@@ -11281,12 +11438,14 @@ TEST_CASE("WorldBroadcaster: two humans on one crewed airframe each get an own r
     fl::WeaponRegistry weapons;
     weapons.registerWeapon(makeRktWeapon());
     fl::EntityManager em(logger, registry);
-    fl::WorldBroadcaster wb(em, registry, net, logger);
+    fl::WorldQueries q_wb;
+    q_wb.seatControllerFactory = [](const fl::SeatDef&, uint8_t,
+                                    const fl::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> {
+        return nullptr;
+    };
+    fl::WorldBroadcaster wb(em, registry, net, logger, nullptr, std::move(q_wb));
     wb.setWeaponRegistry(&weapons);
     wb.setGroundElevation(0.f);
-    wb.setSeatControllerFactory(
-        [](const fl::SeatDef&, uint8_t,
-           const fl::WorldBroadcaster::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> { return nullptr; });
 
     // Peer 1 owns a crewed bomber; peer 2 joins its gunner seat. Both now occupy a seat in the SAME
     // airframe, so each must receive that airframe as its OWN record (omega + loadout block) — the
@@ -11535,13 +11694,13 @@ TEST_CASE("WorldBroadcaster: the replay tap records entities no peer can see (#6
     farT.pos[1] = 500.0;
     REQUIRE(em.spawn("builtin:debug-entity", farT).valid());
 
-    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    std::vector<fl::ReplayTickRecords> taps;
+    fl::WorldBroadcasterHooks h_broadcaster;
+    h_broadcaster.snapshot.replaySink = [&taps](const fl::ReplayTickRecords& r) { taps.push_back(r); };
+    h_broadcaster.snapshot.replayKeyframeIntervalTicks = 4;
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, nullptr, {}, std::move(h_broadcaster));
     broadcaster.setDrawDistance(5.f);
     connectPilotPeer(broadcaster, net, 0u);
-
-    std::vector<fl::WorldBroadcaster::ReplayTickRecords> taps;
-    broadcaster.setReplaySink([&taps](const fl::WorldBroadcaster::ReplayTickRecords& r) { taps.push_back(r); },
-                              /*keyframeIntervalTicks=*/4);
 
     for (uint64_t t = 0; t < 8; ++t)
         broadcaster.onTick(1.0 / 60.0, t);
@@ -11581,11 +11740,13 @@ TEST_CASE("WorldBroadcaster: the replay tap does not change a single byte a peer
         t.pos[1] = 800.0;
         REQUIRE(em.spawn("builtin:debug-entity", t).valid());
 
-        fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+        fl::WorldBroadcasterHooks h_broadcaster;
+        h_broadcaster.snapshot.replaySink = [](const fl::ReplayTickRecords&) {};
+        h_broadcaster.snapshot.replayKeyframeIntervalTicks = 4;
+        fl::WorldBroadcaster broadcaster(em, registry, net, logger, nullptr, {}, std::move(h_broadcaster));
         connectPilotPeer(broadcaster, net, 0u);
         if (withSink)
-            broadcaster.setReplaySink([](const fl::WorldBroadcaster::ReplayTickRecords&) {}, 4);
-        clearSnapshots(net);
+            clearSnapshots(net);
         for (uint64_t i = 0; i < 10; ++i)
             broadcaster.onTick(1.0 / 60.0, i);
         return snapshotsFor(net, 0u);
@@ -11613,10 +11774,11 @@ TEST_CASE("WorldBroadcaster: the replay tap's state hash tracks the world, not t
     const fl::EntityId id = em.spawn("builtin:debug-entity", t);
     REQUIRE(id.valid());
 
-    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     std::vector<uint64_t> hashes;
-    broadcaster.setReplaySink(
-        [&hashes](const fl::WorldBroadcaster::ReplayTickRecords& r) { hashes.push_back(r.stateHash); }, 4);
+    fl::WorldBroadcasterHooks h_broadcaster;
+    h_broadcaster.snapshot.replaySink = [&hashes](const fl::ReplayTickRecords& r) { hashes.push_back(r.stateHash); };
+    h_broadcaster.snapshot.replayKeyframeIntervalTicks = 4;
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, nullptr, {}, std::move(h_broadcaster));
 
     for (uint64_t i = 0; i < 4; ++i)
         broadcaster.onTick(1.0 / 60.0, i);
@@ -11668,7 +11830,11 @@ std::vector<uint64_t> runDeterminismScenario(fl::JobSystem* jobs, int entityCoun
     registry.registerType(makeDebugDef());
     fl::EntityManager em(logger, registry);
 
-    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    std::vector<uint64_t> hashes;
+    fl::WorldBroadcasterHooks h_broadcaster;
+    h_broadcaster.snapshot.replaySink = [&hashes](const fl::ReplayTickRecords& r) { hashes.push_back(r.stateHash); };
+    h_broadcaster.snapshot.replayKeyframeIntervalTicks = 30;
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, nullptr, {}, std::move(h_broadcaster));
     if (jobs)
         broadcaster.setJobSystem(*jobs);
     connectPilotPeer(broadcaster, net, 0u);
@@ -11691,11 +11857,6 @@ std::vector<uint64_t> runDeterminismScenario(fl::JobSystem* jobs, int entityCoun
         ctl->ctrl.aileron = 0.05f * static_cast<float>((i % 3) - 1);
         broadcaster.registerController(id, std::move(ctl));
     }
-
-    std::vector<uint64_t> hashes;
-    broadcaster.setReplaySink(
-        [&hashes](const fl::WorldBroadcaster::ReplayTickRecords& r) { hashes.push_back(r.stateHash); },
-        /*keyframeIntervalTicks=*/30);
 
     for (uint64_t tick = 1; tick <= 180; ++tick)
         broadcaster.onTick(1.0 / 60.0, tick);
@@ -11971,15 +12132,17 @@ TEST_CASE("WorldBroadcaster: seat requests are rate-limited and over-limit ones 
     fl::WeaponRegistry weapons;
     weapons.registerWeapon(makeRktWeapon());
     fl::EntityManager em(logger, registry);
-    fl::WorldBroadcaster wb(em, registry, net, logger);
+    fl::WorldQueries q_wb;
+    q_wb.seatControllerFactory = [](const fl::SeatDef&, uint8_t,
+                                    const fl::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> {
+        return nullptr;
+    };
+    fl::WorldBroadcaster wb(em, registry, net, logger, nullptr, std::move(q_wb));
     fl::ManualClock clock;
     wb.setClock(clock);
     wb.setWeaponRegistry(&weapons);
     wb.setGroundElevation(0.f);
     wb.setSeatRequestRateLimit(2);
-    wb.setSeatControllerFactory(
-        [](const fl::SeatDef&, uint8_t,
-           const fl::WorldBroadcaster::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> { return nullptr; });
 
     fl::EntityTransform t{};
     t.pos[1] = 800.0;
@@ -12018,15 +12181,17 @@ TEST_CASE("WorldBroadcaster: a seat-request flood cannot amplify past the limite
     fl::WeaponRegistry weapons;
     weapons.registerWeapon(makeRktWeapon());
     fl::EntityManager em(logger, registry);
-    fl::WorldBroadcaster wb(em, registry, net, logger);
+    fl::WorldQueries q_wb;
+    q_wb.seatControllerFactory = [](const fl::SeatDef&, uint8_t,
+                                    const fl::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> {
+        return nullptr;
+    };
+    fl::WorldBroadcaster wb(em, registry, net, logger, nullptr, std::move(q_wb));
     fl::ManualClock clock;
     wb.setClock(clock);
     wb.setWeaponRegistry(&weapons);
     wb.setGroundElevation(0.f);
     wb.setSeatRequestRateLimit(2);
-    wb.setSeatControllerFactory(
-        [](const fl::SeatDef&, uint8_t,
-           const fl::WorldBroadcaster::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> { return nullptr; });
 
     fl::EntityTransform t{};
     t.pos[1] = 800.0;
@@ -12069,16 +12234,16 @@ TEST_CASE("WorldBroadcaster: team switches are on a cooldown, and a rejected one
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
     fl::EntityManager em(logger, registry);
-    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    int guardCalls = 0;
+    fl::WorldBroadcasterHooks h_broadcaster;
+    h_broadcaster.match.teamSwitchGuard = [&guardCalls](uint32_t, uint16_t) {
+        ++guardCalls;
+        return true;
+    };
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, nullptr, {}, std::move(h_broadcaster));
     fl::ManualClock clock;
     broadcaster.setClock(clock);
     broadcaster.setTeamSwitchCooldownSeconds(5);
-
-    int guardCalls = 0;
-    broadcaster.setTeamSwitchGuard([&guardCalls](uint32_t, uint16_t) {
-        ++guardCalls;
-        return true;
-    });
 
     connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
@@ -12210,14 +12375,16 @@ TEST_CASE("WorldBroadcaster: a re-ack omits the unchanged entity-type table (#10
     fl::WeaponRegistry weapons;
     weapons.registerWeapon(makeRktWeapon());
     fl::EntityManager em(logger, registry);
-    fl::WorldBroadcaster wb(em, registry, net, logger);
+    fl::WorldQueries q_wb;
+    q_wb.seatControllerFactory = [](const fl::SeatDef&, uint8_t,
+                                    const fl::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> {
+        return nullptr;
+    };
+    fl::WorldBroadcaster wb(em, registry, net, logger, nullptr, std::move(q_wb));
     fl::ManualClock clock;
     wb.setClock(clock);
     wb.setWeaponRegistry(&weapons);
     wb.setGroundElevation(0.f);
-    wb.setSeatControllerFactory(
-        [](const fl::SeatDef&, uint8_t,
-           const fl::WorldBroadcaster::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> { return nullptr; });
 
     fl::EntityTransform t{};
     t.pos[1] = 800.0;

@@ -802,18 +802,39 @@ struct WbFixture {
     MockNetworkWb net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em{log, registry};
-    fl::WorldBroadcaster broadcaster{em, registry, net, log};
     NoopSim2 noop;
     GameLoop loop{noop, log}; // do NOT call loop.start()
     fl::AdminChannelRegistry channels;
     std::vector<std::unique_ptr<fl::AdminChannel>> owned;
     ServerCommandContext ctx;
 
-    WbFixture() {
-        ctx.sim.broadcaster = &broadcaster;
+    // An admin channel is frozen at construction now (#1082), so which frontends this fixture wires is
+    // a CONSTRUCTOR argument rather than something a test switches on afterwards. `enetMaxFailures`
+    // of 0 means "no ENet frontend", which is what leaves MsgAdminCommand handling off.
+    std::unique_ptr<fl::WorldBroadcaster> bc;
+    fl::AdminChannel* enetCh{nullptr};
+
+    explicit WbFixture(int enetMaxFailures = 0, int enetLockoutSeconds = 300) {
+        fl::WorldBroadcasterHooks hooks;
+        if (enetMaxFailures > 0) {
+            enetCh = &addChannel("enet", enetMaxFailures, enetLockoutSeconds);
+            hooks.comms.adminChannel = enetCh;
+        }
+        bc = std::make_unique<fl::WorldBroadcaster>(em, registry, net, log, nullptr, fl::WorldQueries{},
+                                                    std::move(hooks));
+        ctx.sim.broadcaster = bc.get();
         ctx.sim.entityManager = &em;
         ctx.sim.gameLoop = &loop;
         ctx.adminChannels = &channels;
+    }
+
+    fl::WorldBroadcaster& broadcaster() {
+        return *bc;
+    }
+
+    // The ENet channel this fixture wired, for a test that inspects its lockout directly.
+    fl::AdminChannel& enet() {
+        return *enetCh;
     }
 
     // Register a channel the way fl-server does. Kept explicit per test: which frontends exist is
@@ -830,14 +851,6 @@ struct WbFixture {
             [](std::string_view, const fl::CommandIssuer&) { return std::string{}; }, c, fl::SystemClock::instance()));
         channels.add(*owned.back());
         return *owned.back();
-    }
-
-    // The ENet frontend: registered AND attached to the broadcaster, which is what turns
-    // MsgAdminCommand handling on.
-    fl::AdminChannel& enableEnet(int maxFailures = 5, int lockoutSeconds = 300) {
-        fl::AdminChannel& ch = addChannel("enet", maxFailures, lockoutSeconds);
-        broadcaster.setAdminChannel(&ch);
-        return ch;
     }
 };
 } // namespace
@@ -886,13 +899,13 @@ TEST_CASE("AdminConsole wb: revoke validates and queues with a synchronous ack (
 TEST_CASE("AdminConsole wb: grant -> act -> revoke -> refused end to end (#947)", "[admin_console][wb][permission]") {
     WbFixture f;
     f.registry.registerType(makeWbEntityDef());
-    f.broadcaster.onConnect(0u); // creates the peer's input slot so authority can be set
+    f.broadcaster().onConnect(0u); // creates the peer's input slot so authority can be set
     auto reg = makeRegistry(f.ctx);
 
     // Grant game-master caps directly (the enqueued callback body is what `grant` runs on the loop).
-    REQUIRE(f.broadcaster.setPeerAuthority(
+    REQUIRE(f.broadcaster().setPeerAuthority(
         0u, fl::PeerAuthority{fl::kGameMasterCaps, fl::PeerAuthority::kNoFactionBinding}));
-    fl::PeerAuthority a = f.broadcaster.getPeerAuthority(0u);
+    fl::PeerAuthority a = f.broadcaster().getPeerAuthority(0u);
     CHECK(a.caps == fl::kGameMasterCaps);
 
     // The granted peer, dispatched with its issuer, may spawn (SpawnAny) but not config (ServerConfig).
@@ -901,8 +914,8 @@ TEST_CASE("AdminConsole wb: grant -> act -> revoke -> refused end to end (#947)"
     CHECK(reg.dispatch("set_weather storm", granted).find("permission denied") != std::string::npos);
 
     // Revoke, and the same peer is now refused everything privileged.
-    REQUIRE(f.broadcaster.setPeerAuthority(0u, fl::PeerAuthority{}));
-    const fl::PeerAuthority after = f.broadcaster.getPeerAuthority(0u);
+    REQUIRE(f.broadcaster().setPeerAuthority(0u, fl::PeerAuthority{}));
+    const fl::PeerAuthority after = f.broadcaster().getPeerAuthority(0u);
     CHECK(after.caps == 0);
     const fl::CommandIssuer revoked{0u, after.caps, after.factionIndex};
     CHECK(reg.dispatch("spawn x 0 0 0", revoked).find("permission denied") != std::string::npos);
@@ -926,7 +939,7 @@ TEST_CASE("AdminConsole wb: peers with no connected peers returns 0 peer(s) conn
 TEST_CASE("AdminConsole wb: peers with one connected peer returns 1 peer(s) connected", "[admin_console][wb]") {
     WbFixture f;
     f.registry.registerType(makeWbEntityDef());
-    f.broadcaster.onConnect(0u);
+    f.broadcaster().onConnect(0u);
 
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("peers", systemIssuer());
@@ -968,7 +981,7 @@ TEST_CASE("AdminConsole wb: status with zero peers contains peers: 0", "[admin_c
 TEST_CASE("AdminConsole wb: status with one connected peer contains peers: 1", "[admin_console][wb]") {
     WbFixture f;
     f.registry.registerType(makeWbEntityDef());
-    f.broadcaster.onConnect(0u);
+    f.broadcaster().onConnect(0u);
 
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("status", systemIssuer());
@@ -1038,9 +1051,9 @@ TEST_CASE("AdminConsole wb: tickstats before any tick reports no samples", "[adm
 TEST_CASE("AdminConsole wb: tickstats reports per-phase rows after ticks", "[admin_console][wb]") {
     WbFixture f;
     f.registry.registerType(makeWbEntityDef());
-    f.broadcaster.onConnect(0u);
+    f.broadcaster().onConnect(0u);
     for (uint64_t tick = 1; tick <= 5; ++tick)
-        f.broadcaster.onTick(1.0 / 60.0, tick);
+        f.broadcaster().onTick(1.0 / 60.0, tick);
 
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("tickstats", systemIssuer());
@@ -1065,8 +1078,7 @@ TEST_CASE("AdminConsole: admin_auth_status with null broadcaster returns not ava
 }
 
 TEST_CASE("AdminConsole wb: admin_auth_status with no lockouts returns section header", "[admin_console][wb]") {
-    WbFixture f;
-    f.enableEnet();
+    WbFixture f{/*enetMaxFailures=*/5};
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("admin_auth_status", systemIssuer());
     CHECK(out == "[admin] enet channel:");
@@ -1080,25 +1092,24 @@ TEST_CASE("AdminConsole wb: status with no lockouts does not show lockout line",
 }
 
 TEST_CASE("AdminConsole wb: status and admin_auth_status reflect active lockout", "[admin_console][wb]") {
-    WbFixture f;
+    WbFixture f{/*enetMaxFailures=*/1, /*enetLockoutSeconds=*/300};
     f.net.peerAddr = "1.2.3.4";
-    f.enableEnet(/*maxFailures=*/1, /*lockoutSeconds=*/300);
-    f.broadcaster.setOperatorPassword("correct");
+    f.broadcaster().setOperatorPassword("correct");
     f.registry.registerType(makeWbEntityDef());
-    f.broadcaster.onConnect(0u);
+    f.broadcaster().onConnect(0u);
     // Complete the handshake: since #1069 an un-admitted peer's MsgAdminCommand is dropped in the
     // dispatch preamble, so it can no longer burn admin-auth attempts — and lock out an IP — without
     // ever having joined. A real operator's client is always admitted before it opens the console.
     {
         fl::MsgConnectRequest creq{};
         creq.requestedRole = static_cast<uint8_t>(fl::PeerRole::Pilot);
-        f.broadcaster.onReceive(0u, &creq, sizeof(creq));
+        f.broadcaster().onReceive(0u, &creq, sizeof(creq));
     }
 
     fl::MsgAdminCommand cmd{};
     std::snprintf(cmd.token, sizeof(cmd.token), "%s", "wrongpass");
     std::snprintf(cmd.command, sizeof(cmd.command), "%s", "status");
-    f.broadcaster.onReceive(0u, &cmd, sizeof(cmd));
+    f.broadcaster().onReceive(0u, &cmd, sizeof(cmd));
 
     auto reg = makeRegistry(f.ctx);
 
@@ -1113,25 +1124,24 @@ TEST_CASE("AdminConsole wb: status and admin_auth_status reflect active lockout"
 }
 
 TEST_CASE("AdminConsole wb: admin_auth_status shows pending failure line", "[admin_console][wb]") {
-    WbFixture f;
+    WbFixture f{/*enetMaxFailures=*/3, /*enetLockoutSeconds=*/300};
     f.net.peerAddr = "1.2.3.4";
-    f.enableEnet(/*maxFailures=*/3, /*lockoutSeconds=*/300);
-    f.broadcaster.setOperatorPassword("correct");
+    f.broadcaster().setOperatorPassword("correct");
     f.registry.registerType(makeWbEntityDef());
-    f.broadcaster.onConnect(0u);
+    f.broadcaster().onConnect(0u);
     // Complete the handshake: since #1069 an un-admitted peer's MsgAdminCommand is dropped in the
     // dispatch preamble, so it can no longer burn admin-auth attempts — and lock out an IP — without
     // ever having joined. A real operator's client is always admitted before it opens the console.
     {
         fl::MsgConnectRequest creq{};
         creq.requestedRole = static_cast<uint8_t>(fl::PeerRole::Pilot);
-        f.broadcaster.onReceive(0u, &creq, sizeof(creq));
+        f.broadcaster().onReceive(0u, &creq, sizeof(creq));
     }
 
     fl::MsgAdminCommand cmd{};
     std::snprintf(cmd.token, sizeof(cmd.token), "%s", "wrongpass");
     std::snprintf(cmd.command, sizeof(cmd.command), "%s", "status");
-    f.broadcaster.onReceive(0u, &cmd, sizeof(cmd)); // 1 failure, threshold=3, no lockout
+    f.broadcaster().onReceive(0u, &cmd, sizeof(cmd)); // 1 failure, threshold=3, no lockout
 
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("admin_auth_status", systemIssuer());
@@ -1148,8 +1158,7 @@ TEST_CASE("AdminConsole wb: admin_auth_status with no channels registered says s
 }
 
 TEST_CASE("AdminConsole wb: admin_auth_status reports one section per registered channel", "[admin_console][wb]") {
-    WbFixture f;
-    f.enableEnet();
+    WbFixture f{/*enetMaxFailures=*/5};
     f.addChannel("rcon");
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("admin_auth_status", systemIssuer());
@@ -1161,8 +1170,7 @@ TEST_CASE("AdminConsole wb: admin_auth_status shows a channel added later withou
           "[admin_console][wb]") {
     // The failure mode #1079 exists to fix: a frontend nobody remembered to name in these commands was
     // invisible to an operator during an incident. Registering it is now the whole wiring.
-    WbFixture f;
-    f.enableEnet();
+    WbFixture f{/*enetMaxFailures=*/5};
     fl::AdminChannel& seventh = f.addChannel("seventh-frontend");
     seventh.recordAuthResult("5.6.7.8", /*authenticated=*/false);
     auto reg = makeRegistry(f.ctx);
@@ -1214,8 +1222,7 @@ TEST_CASE("AdminConsole wb: status counts lockouts across every channel, not jus
           "[admin_console][wb]") {
     // The old count read the broadcaster's tracker alone, so an operator locked out of RCON saw a
     // clean `status`.
-    WbFixture f;
-    f.enableEnet();
+    WbFixture f{/*enetMaxFailures=*/5};
     fl::AdminChannel& rcon = f.addChannel("rcon", /*maxFailures=*/1);
     CHECK(rcon.recordAuthResult("5.6.7.8", /*authenticated=*/false));
     auto reg = makeRegistry(f.ctx);
@@ -1224,17 +1231,17 @@ TEST_CASE("AdminConsole wb: status counts lockouts across every channel, not jus
 }
 
 TEST_CASE("AdminConsole wb: status shows no lockout line after admin_unlock clears it", "[admin_console][wb]") {
-    WbFixture f;
+    WbFixture f{/*enetMaxFailures=*/1, /*enetLockoutSeconds=*/300};
     f.net.peerAddr = "1.2.3.4";
-    fl::AdminChannel& enet = f.enableEnet(/*maxFailures=*/1, /*lockoutSeconds=*/300);
-    f.broadcaster.setOperatorPassword("correct");
+    fl::AdminChannel& enet = f.enet();
+    f.broadcaster().setOperatorPassword("correct");
     f.registry.registerType(makeWbEntityDef());
-    f.broadcaster.onConnect(0u);
+    f.broadcaster().onConnect(0u);
 
     fl::MsgAdminCommand cmd{};
     std::snprintf(cmd.token, sizeof(cmd.token), "%s", "wrongpass");
     std::snprintf(cmd.command, sizeof(cmd.command), "%s", "status");
-    f.broadcaster.onReceive(0u, &cmd, sizeof(cmd)); // triggers lockout
+    f.broadcaster().onReceive(0u, &cmd, sizeof(cmd)); // triggers lockout
 
     enet.clearLockout("1.2.3.4");
 
@@ -1267,17 +1274,20 @@ TEST_CASE("WorldBroadcaster: default MsgConnectAck carries Earth planet radius",
     CHECK(found);
 }
 
-TEST_CASE("WorldBroadcaster: setGroundElevationQuery is called per entity during onTick", "[admin_console][wb]") {
+TEST_CASE("WorldBroadcaster: the ground-elevation query is called per entity during onTick", "[admin_console][wb]") {
     WbFixture f;
     f.registry.registerType(makeWbEntityDef());
 
     int queryCalls = 0;
-    f.broadcaster.setGroundElevationQuery([&](glm::dvec3) {
+    // Built here rather than through the fixture: a query is frozen at construction now (#1082).
+    fl::WorldQueries queries;
+    queries.groundElevation = [&](glm::dvec3) {
         ++queryCalls;
         return 42.f;
-    });
-    connectPilotWb(f.broadcaster);
-    f.broadcaster.onTick(1.0 / 60.0, 1u);
+    };
+    fl::WorldBroadcaster wb(f.em, f.registry, f.net, f.log, nullptr, std::move(queries));
+    connectPilotWb(wb);
+    wb.onTick(1.0 / 60.0, 1u);
 
     CHECK(queryCalls > 0);
 }
