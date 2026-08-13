@@ -34,6 +34,11 @@ on:
       - "engine/net/GameProtocol.h"
       - "engine/script/LuaController.cpp"
       - "tools/CMakeLists.txt"
+      # The binding table and its enum. Their absence here is how the #1047 regression reached the
+      # published site: #1060 changed every flight default and #1062 reshaped the table, and
+      # neither PR touched a path that ran this gate.
+      - "engine/input/InputAction.h"
+      - "engine/input/InputBindings.cpp"
   push:
     branches: [main]
     paths:
@@ -42,6 +47,8 @@ on:
       - "server/fl-server/**"
       - "engine/net/GameProtocol.h"
       - "engine/script/LuaController.cpp"
+      - "engine/input/InputAction.h"
+      - "engine/input/InputBindings.cpp"
   schedule:
     - cron: "17 6 * * 3" # Wednesdays 06:17 UTC — off the Tuesday fuzz and Monday CodeQL sweeps
   workflow_dispatch:

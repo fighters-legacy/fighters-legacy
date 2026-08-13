@@ -11,7 +11,7 @@ closes it. It auto-closes after 8 s if you leave it open.
 is up, because a radio call is a sub-second action and freezing the jet to make one would be wrong in
 a fight. Only the discrete keys the menu consumes are taken; the axes stay live.
 
-| Key | Command | What the wingman does |
+| Item | Command | What the wingman does |
 |---|---|---|
 | 1 | `attack_my_target` | Attacks whatever you are **looking at** — the hostile nearest your boresight. Nothing in the cone means the order is **refused** ("Two, no joy"), not quietly redirected at something else. |
 | 2 | `engage_bandits` | Engages hostiles near **itself**, at will; returns to formation when the sky is clear. |
@@ -53,11 +53,11 @@ bottom-left HUD shows which net your push-to-talk key will use, a `TX` indicator
 follows your live microphone level — the first thing to check when nobody answers — and who is
 currently transmitting.
 
-| Key | Does |
-|---|---|
-| `V` | Push-to-talk, primary net |
-| `B` | Push-to-talk, secondary net |
-| `M` | Cycle nets |
+| Key | Does | Binding |
+|---|---|---|
+| `V` | Push-to-talk on the selected net. Held, never latched | `PushToTalkPrimary` |
+| `Left Ctrl` | Push-to-talk on the **flight** net; wins if both are held | `PushToTalkSecondary` |
+| `` `\` `` | Cycle the primary key through the server's nets | `VoiceNetCycle` |
 
 Transmission is suppressed entirely while the console, the chat box or the game-master map has
 focus, so a push-to-talk key cannot send a room full of your typing to the whole team.

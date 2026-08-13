@@ -156,9 +156,14 @@ to work around. Policy write-up: architecture.md → "Module Boundary Policy".
 
 `docs/` is the published site (<https://fighterslegacy.org/fighters-legacy/>). `mkdocs build
 --strict` enforces nav membership, so an orphaned page fails the build, and `tools/docs_drift.py`
-diffs six documented surfaces against the code **in both directions** — config keys, message ids,
-Lua names, admin commands, the tool list and input actions. If you change one of those surfaces,
-the paired document is not optional.
+diffs seven documented surfaces against the code **in both directions** — config keys, message ids,
+Lua names, admin commands, the tool list, input actions and the **keys** those actions are bound to.
+If you change one of those surfaces, the paired document is not optional.
+
+**A user-guide table with a `Key` column must carry a `Binding` column** naming the `InputAction`,
+or `input-keys` fails: that column is the only thing that makes the row checkable, and the two pages
+that lacked it published the pre-#1060 flight keys for two releases (#1047). A table of menu items
+that happens to list digits is not a key map — head its first column `Item`.
 
 | Area | Document |
 |---|---|
