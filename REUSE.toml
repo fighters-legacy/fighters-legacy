@@ -47,6 +47,13 @@ path = ["AUTHORS", "NOTICE"]
 SPDX-FileCopyrightText = "2026 MKZ Systems LLC"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
+# GitHub Pages custom-domain file (#1176). Its entire contents must be the bare hostname -- Pages
+# reads the whole file as the domain, so a comment line would break the binding. No inline header.
+[[annotations]]
+path = "docs/CNAME"
+SPDX-FileCopyrightText = "2026 MKZ Systems LLC"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
 [[annotations]]
 path = "LICENSES/**"
 SPDX-FileCopyrightText = "Free Software Foundation, Inc."
