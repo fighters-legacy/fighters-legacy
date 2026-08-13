@@ -12,14 +12,15 @@ You start airborne. There is no takeoff to get wrong.
 
 ## Fly it
 
-| Key | Does |
-|---|---|
-| `W` / `S` | Nose down / up |
-| `A` / `D` | Roll left / right |
-| `Q` / `E` | Rudder left / right |
-| `↑` / `↓` | Throttle up / down |
-| `Left Shift` | Afterburner |
-| `Space` | Airbrake |
+| Key | Does | Binding |
+|---|---|---|
+| `↑` / `↓` | Nose down / up | `PitchDown` / `PitchUp` |
+| `←` / `→` | Roll left / right | `RollLeft` / `RollRight` |
+| `Z` / `X` | Rudder left / right | `YawLeft` / `YawRight` |
+| `Page Up` / `Page Down` | Throttle up / down | `ThrottleUp` / `ThrottleDown` |
+| `Left Shift` | Max throttle while held | `ThrottleMax` |
+| `Tab` | Afterburner | `Afterburner` |
+| `K` | Airbrake — held, not latched | `Airbrake` |
 
 Pull gently. These are combat aircraft with real aerodynamics behind them — yank the stick at speed
 and you will bleed energy, buffet and depart. The HUD's left column shows airspeed, altitude and
@@ -29,12 +30,15 @@ The full map is in [Controls](controls.md).
 
 ## Look around
 
-| Key | View |
-|---|---|
-| `F1` | Cockpit |
-| `F2` | Chase |
-| `F4` | Free camera — fly the camera anywhere with `WASD`/`QE`, drag with the left mouse button |
-| `F5` | Padlock — keeps the target in view |
+| Key | View | Binding |
+|---|---|---|
+| `F1` | Cockpit | `CameraCockpit` |
+| `F2` | Chase | `CameraChase` |
+| `F4` | Free camera — fly the camera anywhere with `WASD`/`QE`, drag with the left mouse button | `CameraFree` |
+| `F5` | Padlock — keeps the target in view | `PadlockToggle` |
+
+The cockpit view pans with the **keypad** cross (`Numpad 8` / `2` / `4` / `6`). The arrows fly the
+aircraft, so they are not also the view.
 
 Hold the right mouse button in cockpit view to look around without changing where the aircraft is
 going.
@@ -43,12 +47,12 @@ going.
 
 Your aircraft starts armed.
 
-| Key | Does |
-|---|---|
-| `N` / `P` | Cycle to the next / previous target |
-| `Num 1` / `Num 2` | Select the next / previous weapon station |
-| `Space` | Fire the gun |
-| `Enter` | Release the selected store |
+| Key | Does | Binding |
+|---|---|---|
+| `N` / `P` | Cycle to the next / previous target | `NextTarget` / `PrevTarget` |
+| `1` / `2` | Select the next / previous weapon station | `NextWeapon` / `PrevWeapon` |
+| `Space` | Fire the gun | `FireWeapon` |
+| `Enter` | Release the selected store | `FireStore` |
 
 The HUD's right column reads `ARM <weapon> x<rounds>`. In cockpit view you get a gun pipper with
 ballistic lead, and a designator box around the target with range and closure.
@@ -60,7 +64,7 @@ triggers.
 
 Press `C`, then a number.
 
-| Key | Order |
+| Item | Order |
 |---|---|
 | `1` | Attack my target — whatever you are looking at |
 | `2` | Engage bandits near itself |

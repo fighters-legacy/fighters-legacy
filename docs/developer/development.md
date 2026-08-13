@@ -617,7 +617,7 @@ build job.
 | `asan.yml` | PR | ASan + UBSan. |
 | `tsan.yml` | PR | ThreadSanitizer, **Ubuntu only** (no MSVC support). Scoped to the data-parallel sim targets (`test_job_system`, `test_world_broadcaster`) which link no SDL3/OpenAL/ENet/Vulkan; `tools/tsan.supp` suppresses third-party threads. |
 | `scale-gate.yml` | PR + nightly | See below. |
-| `docs-drift.yml` | PR | Runs `tools/docs_drift.py`, which diffs documented surfaces against the code **both ways**. |
+| `docs-drift.yml` | PR | Runs `tools/docs_drift.py`, which diffs documented surfaces against the code **both ways**. `input-keys` additionally reads the **Key** column of every user-guide key table and resolves it against `applyDefaults()`, so a table must carry a `Binding` column naming the `InputAction` — see [Controls](../user-guide/controls.md). |
 | `fuzz-deep.yml` | weekly | 30 min per harness; auto-files a `fuzzing`-labelled findings issue. |
 
 **Scale gate** (#520) is the 128-client perf/soak gate. The Linux `pr-gate` job (Release `fl-server`

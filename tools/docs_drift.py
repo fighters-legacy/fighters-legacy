@@ -645,6 +645,247 @@ def check_input_actions() -> CheckResult:
 
 
 # --------------------------------------------------------------------------------------
+# check: input-keys
+# --------------------------------------------------------------------------------------
+
+# Pages whose key tables are checked against applyDefaults(). The whole user guide, because the
+# defect this check exists for (#1047) was a page OUTSIDE the one the input-actions check reads:
+# quickstart.md and voice-and-wingman.md kept the pre-#1060 keys -- W/A/S/D to fly, B and M for
+# voice -- for two releases, on the public site, in the first table a new player reads. Both named
+# no actions at all, so every name-based check was structurally blind to them.
+USER_GUIDE_DIR = "docs/user-guide"
+
+# First-column headers that mark a table as a key map.
+KEY_COLUMN_HEADERS = {"key", "key / input"}
+
+# Inputs that are real, documented, and not keyboard keys. Listed rather than silently skipped:
+# an unrecognised token must be a typo'd key name, not a token the tokenizer has not met.
+NON_KEYBOARD_INPUTS = {
+    "left mouse",
+    "right mouse",
+    "middle mouse",
+    "lmb",
+    "rmb",
+    "lmb drag",
+    "rmb drag",
+    "scroll wheel",
+    "mouse wheel",
+}
+
+# Doc spellings that are not simply the enumerator name.
+KEY_ALIASES = {
+    "↑": "ArrowUp",
+    "↓": "ArrowDown",
+    "←": "ArrowLeft",
+    "→": "ArrowRight",
+    "arrow up": "ArrowUp",
+    "arrow down": "ArrowDown",
+    "arrow left": "ArrowLeft",
+    "arrow right": "ArrowRight",
+    "page up": "PageUp",
+    "page down": "PageDown",
+    "left shift": "LeftShift",
+    "right shift": "RightShift",
+    "left ctrl": "LeftCtrl",
+    "right ctrl": "RightCtrl",
+    "left alt": "LeftAlt",
+    "right alt": "RightAlt",
+    "-": "Minus",
+    "=": "Equals",
+    ",": "Comma",
+    ".": "Period",
+    "/": "Slash",
+    ";": "Semicolon",
+    "'": "Apostrophe",
+    "[": "LeftBracket",
+    "]": "RightBracket",
+    "\\": "Backslash",
+    "`": "Grave",
+    "keypad +": "NumpadPlus",
+    "keypad -": "NumpadMinus",
+    "keypad −": "NumpadMinus",  # U+2212 MINUS SIGN, which is what the docs actually use
+}
+
+# Cells spell a family once and then abbreviate: "Arrow Up / Down", "Keypad 8 / 2 / 4 / 6".
+# Without redistributing the prefix, "2" resolves to the digit key Num2 rather than Numpad2 --
+# a silent wrong answer, which is worse than no check.
+KEY_PREFIXES = ("arrow", "keypad", "numpad", "page")
+
+# Single-character keys that are also the separator, so the cell must not be split.
+UNSPLITTABLE_CELLS = {"/", ",", ".", ";", "'"}
+
+
+def _strip_markdown(cell: str) -> str:
+    """Unwrap code spans and bold. ``` `` ` `` ``` is the grave key and must survive."""
+    cell = re.sub(r"``\s*(.+?)\s*``", r"\1", cell)
+    cell = re.sub(r"`([^`]*)`", r"\1", cell)
+    return cell.replace("**", "").strip()
+
+
+def _resolve_key(token: str) -> str | None:
+    """Doc spelling -> Key enumerator name, or None if it is not a keyboard key."""
+    token = token.strip()
+    if not token:
+        return None
+    lowered = token.lower()
+    if lowered in KEY_ALIASES:
+        return KEY_ALIASES[lowered]
+    if re.fullmatch(r"f([1-9]|1[0-2])", lowered):
+        return token.upper()
+    if re.fullmatch(r"[a-z]", lowered):
+        return lowered.upper()
+    if re.fullmatch(r"[0-9]", lowered):
+        return f"Num{lowered}"
+    if match := re.fullmatch(r"(?:keypad|numpad)\s*([0-9])", lowered):
+        return f"Numpad{match.group(1)}"
+    for name in ("Space", "Enter", "Tab", "Backspace", "Delete", "Escape", "Home", "End", "Insert"):
+        if lowered == name.lower():
+            return name
+    return None
+
+
+def _tokenize_key_cell(cell: str) -> tuple[list[str], list[str]]:
+    """Split a key cell into (resolved Key enumerators, unrecognised tokens)."""
+    text = _strip_markdown(cell)
+    if text in UNSPLITTABLE_CELLS:
+        parts = [text]
+    else:
+        text = re.sub(r"\*?\bor\b\*?", "/", text)
+        parts = [p.strip() for p in text.split("/") if p.strip()]
+
+    prefix = ""
+    if parts:
+        first = parts[0].lower()
+        for candidate in KEY_PREFIXES:
+            if first.startswith(candidate):
+                prefix = candidate
+                break
+
+    keys: list[str] = []
+    unknown: list[str] = []
+    for part in parts:
+        # The prefixed reading wins: in "Keypad 8 / 2 / 4 / 6" a bare "2" resolves on its own to
+        # the digit key Num2, so trying it first would quietly check the wrong key.
+        resolved = None
+        if prefix and not part.lower().startswith(prefix):
+            resolved = _resolve_key(f"{prefix} {part}")
+        if resolved is None:
+            resolved = _resolve_key(part)
+        if resolved is not None:
+            keys.append(resolved)
+        elif part.lower() not in NON_KEYBOARD_INPUTS:
+            unknown.append(part)
+    return keys, unknown
+
+
+def _markdown_tables(doc: str) -> list[tuple[list[str], list[list[str]]]]:
+    """Every pipe table in a document, as (header cells, data rows)."""
+
+    def cells(line: str) -> list[str]:
+        return [c.strip() for c in line.strip().strip("|").split("|")]
+
+    tables: list[tuple[list[str], list[list[str]]]] = []
+    lines = doc.splitlines()
+    i = 0
+    while i < len(lines):
+        is_table_head = (
+            lines[i].lstrip().startswith("|")
+            and i + 1 < len(lines)
+            and re.fullmatch(r"\|[\s:|-]+\|", lines[i + 1].strip())
+        )
+        if is_table_head:
+            header = cells(lines[i])
+            rows = []
+            i += 2
+            while i < len(lines) and lines[i].lstrip().startswith("|"):
+                rows.append(cells(lines[i]))
+                i += 1
+            tables.append((header, rows))
+            continue
+        i += 1
+    return tables
+
+
+def _default_keyboard_bindings(src: str) -> dict[str, set[str]]:
+    """InputAction -> the Key enumerators applyDefaults() binds it to."""
+    bindings: dict[str, set[str]] = {}
+    for action, key in re.findall(r"\{InputAction::(\w+),\s*kb\(Key::(\w+)\)\}", src):
+        bindings.setdefault(action, set()).add(key)
+    return bindings
+
+
+def check_input_keys() -> CheckResult:
+    """Every key the user guide prints must be what applyDefaults() actually binds.
+
+    input-actions proves the key map NAMES every action. It cannot prove the key beside the name
+    is right, and it reads one page. This check pairs the Key column against the Binding column
+    and resolves both against the shipped defaults, across the whole user guide.
+
+    A user-guide table with a Key column and real keys in it must carry a Binding column, so a
+    new table cannot opt out of the check by omitting the one column that makes it checkable.
+    """
+    result = CheckResult("input-keys: applyDefaults() vs docs/user-guide/*.md key columns")
+    defaults = _default_keyboard_bindings(read("engine/input/InputBindings.cpp"))
+    actions = _input_action_names(read("engine/input/InputAction.h"))
+    if not defaults:
+        result.errors.append(
+            "no {InputAction::X, kb(Key::Y)} defaults found in engine/input/InputBindings.cpp"
+        )
+        return result
+
+    guide = sorted(p for p in (REPO_ROOT / USER_GUIDE_DIR).glob("*.md"))
+    checked = 0
+    for path in guide:
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        for header, rows in _markdown_tables(path.read_text(encoding="utf-8")):
+            if not header or header[0].lower() not in KEY_COLUMN_HEADERS:
+                continue
+            lowered = [h.lower() for h in header]
+            if "binding" not in lowered:
+                # Only a table that actually prints keyboard keys needs one: the mouse-only
+                # camera tables and the user.toml settings tables share the "Key" header.
+                if any(_tokenize_key_cell(row[0])[0] for row in rows if row):
+                    shown = " | ".join(header)
+                    result.errors.append(f"{rel}: a key table names real keys but has no `Binding` column: {shown}")
+                continue
+            bind_col = lowered.index("binding")
+
+            for row in rows:
+                if len(row) <= bind_col:
+                    continue
+                named = [n for n in re.findall(r"`(\w+)`", row[bind_col]) if n in actions]
+                if not named:
+                    continue  # "—", or a row whose binding cell names no action
+                keys, unknown = _tokenize_key_cell(row[0])
+                if unknown:
+                    result.errors.append(f"{rel}: unrecognised key {unknown!r} in row: {row[0]}")
+                    continue
+                if not keys:
+                    result.errors.append(f"{rel}: row binds {named} but names no key: {row[0]}")
+                    continue
+                if len(keys) == len(named):
+                    pairs = list(zip(keys, named))
+                elif len(named) == 1:
+                    pairs = [(k, named[0]) for k in keys]
+                else:
+                    result.errors.append(
+                        f"{rel}: cannot pair {len(keys)} key(s) with {len(named)} action(s): {row[0]}"
+                    )
+                    continue
+                for key, action in pairs:
+                    checked += 1
+                    actual = defaults.get(action, set())
+                    if key not in actual:
+                        shown = ", ".join(sorted(actual)) or "nothing"
+                        result.doc_only.add(f"{rel}: {action} documented on {key}, actually bound to {shown}")
+
+    result.code_count = len(defaults)
+    result.doc_count = checked
+    floor_check(result, "documented key/action pairs", checked, 60)
+    return result
+
+
+# --------------------------------------------------------------------------------------
 # Driver
 # --------------------------------------------------------------------------------------
 
@@ -655,6 +896,7 @@ CHECKS = {
     "commands": check_commands,
     "tools-list": check_tools_list,
     "input-actions": check_input_actions,
+    "input-keys": check_input_keys,
 }
 
 

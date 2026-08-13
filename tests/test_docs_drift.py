@@ -426,3 +426,166 @@ def test_input_actions_check_flags_an_undocumented_action(tmp_path, monkeypatch)
     result = dd.check_input_actions()
     assert result.code_only == {"RollAxis", "MasterArm"}
     assert not result.ok
+
+
+# ---- input keys --------------------------------------------------------------------------------
+
+BINDINGS_SRC = """\
+constexpr Default kDefaults[] = {
+    {InputAction::PitchUp, kb(Key::ArrowDown)},
+    {InputAction::PitchDown, kb(Key::ArrowUp)},
+    {InputAction::Afterburner, kb(Key::Tab)},
+    {InputAction::Afterburner, gb(GamepadButton::LeftShoulder)},
+    {InputAction::FireWeapon, kb(Key::Space)},
+    {InputAction::FireWeapon, mb(MouseButton::Left)},
+    {InputAction::ViewDown, kb(Key::Numpad2)},
+    {InputAction::CrewSeatLeave, kb(Key::Slash)},
+    {InputAction::ConsoleToggle, kb(Key::Grave)},
+};
+"""
+
+KEY_ACTIONS_SRC = """\
+enum class InputAction : uint32_t {
+    PitchUp,
+    PitchDown,
+    Afterburner,
+    FireWeapon,
+    ViewDown,
+    CrewSeatLeave,
+    ConsoleToggle,
+    Count
+};
+"""
+
+
+def test_default_keyboard_bindings_collects_every_key_per_action():
+    bindings = dd._default_keyboard_bindings(BINDINGS_SRC)
+    assert bindings["PitchUp"] == {"ArrowDown"}
+    assert bindings["FireWeapon"] == {"Space"}  # the mouse binding is not a Key
+    assert "gb" not in str(bindings)
+
+
+def test_strip_markdown_preserves_the_grave_key():
+    """`` ` `` is a code span whose content is a backtick -- stripping naively empties the cell."""
+    assert dd._strip_markdown("`` ` ``") == "`"
+    assert dd._strip_markdown("`\\`") == "\\"
+    assert dd._strip_markdown("**Space**") == "Space"
+
+
+@pytest.mark.parametrize(
+    ("spelling", "expected"),
+    [
+        ("Space", "Space"),
+        ("Z", "Z"),
+        ("4", "Num4"),
+        ("F12", "F12"),
+        ("↑", "ArrowUp"),
+        ("Arrow Left", "ArrowLeft"),
+        ("Page Down", "PageDown"),
+        ("Left Ctrl", "LeftCtrl"),
+        ("Keypad 8", "Numpad8"),
+        ("Keypad −", "NumpadMinus"),  # U+2212, the spelling the docs use
+        ("`", "Grave"),
+        ("\\", "Backslash"),
+    ],
+)
+def test_resolve_key_covers_the_doc_spellings(spelling, expected):
+    assert dd._resolve_key(spelling) == expected
+
+
+def test_resolve_key_rejects_a_non_key():
+    assert dd._resolve_key("left mouse") is None
+    assert dd._resolve_key("Wingman") is None
+
+
+def test_tokenize_distributes_a_family_prefix_over_the_abbreviated_tail():
+    """"Keypad 8 / 2 / 4 / 6": a bare "2" resolves on its own to the DIGIT key Num2.
+
+    Resolving the prefixed reading second would make the check quietly verify the wrong key --
+    it would pass while the doc and the code disagreed, which is the failure mode this whole
+    script exists to prevent.
+    """
+    keys, unknown = dd._tokenize_key_cell("Keypad 8 / 2 / 4 / 6")
+    assert keys == ["Numpad8", "Numpad2", "Numpad4", "Numpad6"]
+    assert unknown == []
+    assert dd._tokenize_key_cell("Arrow Down / Up")[0] == ["ArrowDown", "ArrowUp"]
+
+
+def test_tokenize_does_not_split_the_slash_key_on_itself():
+    assert dd._tokenize_key_cell("/") == (["Slash"], [])
+    assert dd._tokenize_key_cell(";")[0] == ["Semicolon"]
+
+
+def test_tokenize_accepts_documented_mouse_inputs_and_flags_anything_else():
+    keys, unknown = dd._tokenize_key_cell("Space *or* left mouse")
+    assert keys == ["Space"]
+    assert unknown == []
+    assert dd._tokenize_key_cell("Spacebar")[1] == ["Spacebar"]
+
+
+def test_markdown_tables_reads_the_header_and_rows():
+    doc = "intro\n\n| Key | Does | Binding |\n|---|---|---|\n| `Tab` | AB | `Afterburner` |\n\ntail\n"
+    tables = dd._markdown_tables(doc)
+    assert len(tables) == 1
+    header, rows = tables[0]
+    assert header == ["Key", "Does", "Binding"]
+    assert rows == [["`Tab`", "AB", "`Afterburner`"]]
+
+
+def _run_input_keys(tmp_path, monkeypatch, page: str):
+    def fake_read(rel_path: str) -> str:
+        if rel_path.endswith("InputBindings.cpp"):
+            return BINDINGS_SRC
+        return KEY_ACTIONS_SRC
+
+    guide = tmp_path / "docs" / "user-guide"
+    guide.mkdir(parents=True, exist_ok=True)
+    (guide / "quickstart.md").write_text(page, encoding="utf-8")
+    monkeypatch.setattr(dd, "read", fake_read)
+    monkeypatch.setattr(dd, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(dd, "floor_check", lambda *a, **k: True)
+    return dd.check_input_keys()
+
+
+def test_input_keys_passes_when_the_column_matches_the_defaults(tmp_path, monkeypatch):
+    page = "| Key | Does | Binding |\n|---|---|---|\n| `Tab` | Afterburner | `Afterburner` |\n"
+    assert _run_input_keys(tmp_path, monkeypatch, page).ok
+
+
+def test_input_keys_flags_a_key_the_code_does_not_bind(tmp_path, monkeypatch):
+    """The #1047 regression: the page kept the pre-#1060 key beside the right action name."""
+    page = "| Key | Does | Binding |\n|---|---|---|\n| `Left Shift` | Afterburner | `Afterburner` |\n"
+    result = _run_input_keys(tmp_path, monkeypatch, page)
+    assert not result.ok
+    assert any("Afterburner documented on LeftShift" in g for g in result.doc_only)
+    assert any("actually bound to Tab" in g for g in result.doc_only)
+
+
+def test_input_keys_pairs_a_multi_key_row_positionally(tmp_path, monkeypatch):
+    page = "| Key | Does | Binding |\n|---|---|---|\n| `↑` / `↓` | Nose | `PitchDown` / `PitchUp` |\n"
+    assert _run_input_keys(tmp_path, monkeypatch, page).ok
+    swapped = "| Key | Does | Binding |\n|---|---|---|\n| `↓` / `↑` | Nose | `PitchDown` / `PitchUp` |\n"
+    assert not _run_input_keys(tmp_path, monkeypatch, swapped).ok
+
+
+def test_input_keys_requires_a_binding_column_on_a_real_key_table(tmp_path, monkeypatch):
+    """The structural half: a table with no Binding column cannot be checked at all.
+
+    quickstart.md and voice-and-wingman.md had exactly this shape, which is why every
+    name-based check passed while they printed the wrong keys.
+    """
+    page = "| Key | Does |\n|---|---|\n| `Tab` | Afterburner |\n"
+    result = _run_input_keys(tmp_path, monkeypatch, page)
+    assert not result.ok
+    assert any("no `Binding` column" in e for e in result.errors)
+
+
+def test_input_keys_leaves_a_mouse_only_table_alone(tmp_path, monkeypatch):
+    """The chase/cockpit camera tables are Key-headed, mouse-only, and have nothing to bind."""
+    page = "| Key / Input | Action |\n|---|---|\n| LMB drag | Orbit |\n| Scroll wheel | Zoom |\n"
+    assert _run_input_keys(tmp_path, monkeypatch, page).ok
+
+
+def test_input_keys_ignores_a_row_that_binds_nothing(tmp_path, monkeypatch):
+    page = "| Key / Input | Action | Binding |\n|---|---|---|\n| LMB drag | Orbit | — |\n"
+    assert _run_input_keys(tmp_path, monkeypatch, page).ok
