@@ -92,6 +92,9 @@ NAME_MAP: dict[str, tuple[str, str]] = {
     ".gitignore": ("config", "Config"),
     ".gitattributes": ("config", "Config"),
     "CODEOWNERS": ("config", "Config"),
+    # The GitHub Pages custom domain (#1176). Extension-less, so it lands here rather than in
+    # EXT_MAP -- it is deployment configuration, not documentation, despite living under docs/.
+    "CNAME": ("config", "Config"),
     "AUTHORS": ("docs", "Plain text"),
     "LICENSE": ("docs", "Plain text"),
     "NOTICE": ("docs", "Plain text"),
