@@ -260,7 +260,13 @@ struct ServerRuntime::Impl {
     CommandRegistry m_adminRegistry;
     std::unique_ptr<fl::AdminChannel> m_enetChannel;
     std::unique_ptr<fl::WorldBroadcaster> m_broadcaster;
-    std::shared_ptr<std::unordered_map<std::string, std::shared_ptr<const fl::FlightModelData>>> m_fmCache;
+    // ⚑ Default-initialized HERE, not in an init phase (#1178): initWorld's queries.flightModel
+    // resolver and initAdmin's reloadContent hook both capture this shared_ptr BY VALUE, so it must
+    // already point at the one map when those lambdas are built. A phase-ordered make_shared ran
+    // after the captures — the resolver held a null copy and the first pack aircraft spawn crashed
+    // the server; a later one would silently hand resolver and reload two DIFFERENT maps.
+    using FlightModelCache = std::unordered_map<std::string, std::shared_ptr<const fl::FlightModelData>>;
+    std::shared_ptr<FlightModelCache> m_fmCache = std::make_shared<FlightModelCache>();
     std::unique_ptr<fl::DifficultyMultipliers> m_difficultyTable;
     std::function<fl::AiScaling(const std::string&)> m_resolveAiScaling;
     fl::ai::WingmanParams m_wingmanParams{};
@@ -1000,6 +1006,10 @@ bool ServerRuntime::Impl::initWorld() {
         return airportRegistry.nearestTo(pos.x, pos.z, kBaseServiceRangeM) != nullptr;
     };
 
+    // Resolve EntityDef::flightModelAsset -> parsed FlightModelData on the spawn path. Loads the raw
+    // TOML asset via AssetManager, parses it with engine-flight's parseFlightModel, and caches the
+    // result by id (sim-thread-only access). Empty/unknown ids fall back to the builtin model in
+    // WorldBroadcaster. Captures the cache pointer by value — see m_fmCache's declaration (#1178).
     queries.flightModel = [&assets, fmCache](const std::string& id) -> std::shared_ptr<const fl::FlightModelData> {
         // The compiled-in carrier's vessel model (#38): a "builtin:" name never touches the
         // filesystem, same rule as every other builtin asset.
@@ -1197,12 +1207,6 @@ bool ServerRuntime::Impl::initWorld() {
     }
     // Earth-fixed rotating world frame: Coriolis + centrifugal on every integrator (#482).
     broadcaster.setEarthRotationRate(cfg.world.earthRotation ? fl::kEarthRotationRate : 0.0);
-    // Resolve EntityDef::flightModelAsset -> parsed FlightModelData on the spawn path. Loads the raw
-    // TOML asset via AssetManager, parses it with engine-flight's parseFlightModel, and caches the
-    // result by id (sim-thread-only access). Empty/unknown ids fall back to the builtin model in
-    // WorldBroadcaster.
-    fmCache = std::make_shared<std::unordered_map<std::string, std::shared_ptr<const fl::FlightModelData>>>();
-
     broadcaster.setSensorCheckHz(static_cast<float>(cfg.world.sensorCheckHz));
 
     // ---- Server-side difficulty (#682) -----------------------------------------------------------

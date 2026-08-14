@@ -441,6 +441,22 @@ if(TARGET fl-server AND Python3_Interpreter_FOUND)
                 --min-triggers 2
                 --min-spawned 2
     )
+    # ci_smoke uses only builtin:debug-entity, so it never resolves a PACK flight model — the path
+    # every real content pack hits on its first aircraft spawn, and the one a null cache crashed in
+    # v0.3.16 (#1178). This leg spawns the fixture pack's one flight-model-bearing entity; the
+    # survivor floor asserts the aircraft is still flying at mission end, not just that we didn't
+    # crash getting it into the air.
+    add_test(NAME mission_harness_pack_flight_model
+        COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_SOURCE_DIR}/tools/mission_test/mission_test.py"
+                --server $<TARGET_FILE:fl-server>
+                --assets "${CMAKE_SOURCE_DIR}/tests/fixtures/mission_root"
+                --mission ci_flight_model
+                --expect-outcome success
+                --min-triggers 1
+                --min-spawned 1
+                --min-survivors 1
+    )
 endif()
 
 # Integration: verify locale files are in sync with source key references
