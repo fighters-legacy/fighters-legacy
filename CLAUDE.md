@@ -154,7 +154,7 @@ to work around. Policy write-up: architecture.md → "Module Boundary Policy".
 
 ## Key documents
 
-`docs/` is the published site (<https://fighterslegacy.org/fighters-legacy/>). `mkdocs build
+`docs/` is the published site (<https://docs.fighterslegacy.org/>). `mkdocs build
 --strict` enforces nav membership, so an orphaned page fails the build, and `tools/docs_drift.py`
 diffs seven documented surfaces against the code **in both directions** — config keys, message ids,
 Lua names, admin commands, the tool list, input actions and the **keys** those actions are bound to.
