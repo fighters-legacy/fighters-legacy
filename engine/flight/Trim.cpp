@@ -167,11 +167,24 @@ TrimResult trim(const FlightModelData& d, const TrimPoint& pt, const PayloadEffe
     // if no alpha holds 1 g at this speed, the wing genuinely cannot carry the weight, and nothing
     // faster changes that (CL_max only falls with Mach). "Cannot hold" is NaN -- a negative trim
     // alpha is a real flight condition on a cambered wing, not a failure (see alphaForLoad).
+    // The DYNAMIC-PRESSURE PLACARD (#1181), if the model declares one. A real top speed is the
+    // lesser of what thrust can push and what the airframe is cleared to withstand — flight manuals
+    // say "710 KEAS or Mach 1.3, whichever is less" — and until this field existed only the second
+    // half could be modelled. Where the placard binds, the aircraft is limited by structure, not by
+    // drag, so no amount of drag-table shaping is the right answer.
+    //
+    // EAS rises monotonically with TAS at a fixed altitude, so once it exceeds the placard every
+    // faster speed does too: break, exactly like the cannot-hold case above.
+    constexpr float kKnotToMps = 0.514444f;
+    const float placardEas = d.limits.max_keas > 0.f ? d.limits.max_keas * kKnotToMps : 0.f;
+
     float maxLevel = 0.f;
     float minLevel = 0.f;
     for (float v = r.stall_speed_1g_mps; v <= kSpeedMax; v += kSpeedStep) {
         const float a = alphaForLoad(d, payload, c, v, 1.f);
         if (std::isnan(a))
+            break;
+        if (placardEas > 0.f && equivalentAirspeed(v, c.atmos.density_kg_m3) > placardEas)
             break;
         if (excessThrustAt(d, payload, c, a, v, hasAb) >= 0.f) {
             if (minLevel <= 0.f)

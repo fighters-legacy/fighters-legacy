@@ -524,6 +524,8 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
 
         // Optional FLCS AoA cap (#900); 0 = unset = structural-g limiting only, as before.
         d.limits.alpha_limit_deg = static_cast<float>(lim["alpha_limit_deg"].value<double>().value_or(0.0));
+        // Optional dynamic-pressure placard in KEAS (#1181); 0 = unset = Mach-limited only, as before.
+        d.limits.max_keas = static_cast<float>(lim["max_keas"].value<double>().value_or(0.0));
     }
 
     // ── [aero.controls] ───────────────────────────────────────────────────────
