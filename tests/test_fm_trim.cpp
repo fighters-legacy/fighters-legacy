@@ -561,3 +561,60 @@ TEST_CASE("fm-trim: ps_mps and max_lift_g demand the condition they need", "[fm_
     INFO("errors: " << (ok.errors.empty() ? std::string("none") : ok.errors[0]));
     CHECK(ok.checked == 1);
 }
+
+// --- #1181: the dynamic-pressure placard caps level speed, and only where it binds ----------------
+
+TEST_CASE("fm-trim: a KEAS placard caps max level speed at low altitude", "[fm_trim]") {
+    // Real top speed is the LESSER of what thrust can push and what the airframe is cleared to
+    // withstand. Before this field only the Mach half was expressible, so an aircraft with thrust to
+    // spare down low flew as fast as its drag allowed — for the B-1B, ~11% past its published limit
+    // in exactly the low-level regime it exists for.
+    const FlightModelData clean = parseFlightModel(kLightFighter);
+    const TrimResult unplacarded = trim(clean, at(0.f, 6500.f));
+    REQUIRE(unplacarded.converged);
+
+    // Placard it a good way below whatever it was reaching, and the cap must bite.
+    std::string s(kLightFighter);
+    const auto pos = s.find("max_mach");
+    REQUIRE(pos != std::string::npos);
+    s.insert(pos, "max_keas         = 300.0\n");
+
+    const FlightModelData placarded = parseFlightModel(s);
+    REQUIRE(placarded.limits.max_keas == Catch::Approx(300.f));
+    const TrimResult limited = trim(placarded, at(0.f, 6500.f));
+    REQUIRE(limited.converged);
+
+    INFO("unplacarded " << unplacarded.max_level_mach << " M, placarded " << limited.max_level_mach << " M");
+    CHECK(limited.max_level_mach < unplacarded.max_level_mach);
+
+    // 300 kn EAS at sea level is 300 kn TAS, ~M0.45. Allow a step of scan granularity either side.
+    CHECK(limited.max_level_mach == Catch::Approx(0.453f).margin(0.03f));
+}
+
+TEST_CASE("fm-trim: a KEAS placard does NOT bind in the stratosphere", "[fm_trim]") {
+    // The whole reason the field is EAS and not TAS or Mach: one number covers every altitude,
+    // biting hard down low and not at all up high, which is exactly how a real placard behaves.
+    std::string s(kLightFighter);
+    const auto pos = s.find("max_mach");
+    REQUIRE(pos != std::string::npos);
+    s.insert(pos, "max_keas         = 710.0\n"); // the F-5E / T-38A placard
+
+    const FlightModelData placarded = parseFlightModel(s);
+    const FlightModelData clean = parseFlightModel(kLightFighter);
+
+    const TrimResult hiPlacard = trim(placarded, at(12000.f, 6500.f));
+    const TrimResult hiClean = trim(clean, at(12000.f, 6500.f));
+    REQUIRE(hiPlacard.converged);
+    REQUIRE(hiClean.converged);
+
+    // At 12 km, 710 KEAS is far faster than this jet can go, so the placard is inert.
+    CHECK(hiPlacard.max_level_mach == Catch::Approx(hiClean.max_level_mach));
+}
+
+TEST_CASE("fm-trim: omitting the placard changes nothing", "[fm_trim]") {
+    // Every existing flight model omits this field; none of them may move.
+    const FlightModelData d = parseFlightModel(kLightFighter);
+    CHECK(d.limits.max_keas == Catch::Approx(0.f));
+    const TrimResult r = trim(d, at(4572.f, 6500.f));
+    CHECK(r.converged);
+}

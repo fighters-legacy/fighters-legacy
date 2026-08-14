@@ -134,6 +134,21 @@ struct AeroLimits {
     // FLCS holds 25.5° while the wing stalls at ~35°. When set (>0) and has_fbw, the limiter also
     // holds |alpha| ≤ this cap, tighter than the g-limit at low q. 0 = unset (structural-g only).
     float alpha_limit_deg{0.f};
+
+    // Optional DYNAMIC-PRESSURE PLACARD, in knots equivalent airspeed (#1181). 0 = unset.
+    //
+    // Real flight manuals state a top speed as a PAIR — "710 KEAS or Mach 1.3, whichever is less" —
+    // and only the Mach half was expressible. The difference is not cosmetic: below about 10 km the
+    // q limit is what binds, and for an aircraft with thrust to spare it binds a long way below the
+    // Mach number. The B-1B is limited to 608 kn at 200–500 ft while carrying roughly 655 kN of
+    // installed thrust against roughly 276 kN of drag there — nothing aerodynamic holds it, so a
+    // model without this field flies about 11% fast in exactly the low-level regime the aircraft
+    // exists for, and no cd_wave shape can fix it (a curve steep enough to hold M0.92 at sea level
+    // walls off the transonic climb at altitude, where dynamic pressure is 4.7x lower).
+    //
+    // EAS, not TAS or Mach, because that is what a placard is: EAS is the airspeed that carries the
+    // same dynamic pressure as sea level, so one number covers every altitude.
+    float max_keas{0.f};
 };
 
 // Control-surface travel, in degrees of deflection at full stick.

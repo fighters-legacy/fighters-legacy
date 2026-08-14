@@ -514,6 +514,7 @@ max_g_structural =   9.0
 min_g_structural =  -3.0
 max_mach         =   1.8
 alpha_limit_deg  =  25.5   # optional (#900): FBW FLCS AoA cap, below the aero stall
+max_keas         = 710.0   # optional (#1181): dynamic-pressure placard, knots EAS
 ```
 
 | Field | Meaning |
@@ -523,6 +524,21 @@ alpha_limit_deg  =  25.5   # optional (#900): FBW FLCS AoA cap, below the aero s
 | `min_g_structural` | Negative structural limit. Typical −2.5 g to −3.5 g. Same damage rule; on an FBW aircraft the limiter now holds forward stick off it (#900). |
 | `max_mach` | Never-exceed Mach. **Not** enforced by an artificial drag wall: an aircraft's top speed comes from drag rising to meet thrust. `fm-trim` fails a model that can exceed this in level flight — if it can, the *model* is wrong, and you should fix `cd_wave` or the thrust deck. |
 | `alpha_limit_deg` | *Optional (#900).* The FBW flight computer's AoA cap, **distinct from `alpha_stall_deg`** (the aero peak). When set (>0) and `has_fbw`, the limiter also holds `|alpha|` below this — the F-16's FLCS holds 25.5° while its wing stalls near 35°. Must sit below `alpha_stall_deg` or it never binds (the validator warns). 0 / omitted = structural-g limiting only, as before. |
+| `max_keas` | *Optional (#1181).* The airframe's **dynamic-pressure placard**, in knots equivalent airspeed. Flight manuals state a top speed as a pair — "710 KEAS **or** Mach 1.3, whichever is less" — and this is the half `max_mach` cannot express. `fm-trim` caps max level speed at whichever binds first, so one number covers every altitude: EAS is the speed carrying sea-level dynamic pressure, so the placard bites hard down low and not at all in the stratosphere. 0 / omitted = Mach-limited only, as before. |
+
+### When you need `max_keas`
+
+If your aircraft has thrust to spare at low altitude, `max_mach` alone will let it fly far too fast
+down low, and **no `cd_wave` shape can fix it**. The B-1B is the worked case: it is placarded at
+608 kn at 200–500 ft while carrying roughly 655 kN of installed thrust against roughly 276 kN of
+drag there, so nothing aerodynamic holds it — the model trims to ~M1.02 against a published M0.92,
+about 11% fast in exactly the low-level regime the aircraft exists for.
+
+Shaping `cd_wave` steeply enough to stop it at sea level does not work either: the same curve then
+prevents the aircraft accelerating through M1.0 at 50,000 ft, where dynamic pressure is 4.7× lower,
+and its *other* published number — max Mach at altitude — becomes unreachable. One Mach-dependent
+drag term cannot serve both a sea-level q limit and a stratospheric thrust limit. That is what this
+field is for.
 
 **On FBW aircraft** (`has_fbw = true`) the flight computer keeps the pilot inside the envelope by
 limiting AoA to whatever produces the applicable limit at the current dynamic pressure: aft stick

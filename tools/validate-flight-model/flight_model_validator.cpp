@@ -618,6 +618,21 @@ static void validateAeroLimits(const toml::table& tbl, FlightModelValidationResu
                                  "; the FLCS cap should sit below the aerodynamic stall or it never binds");
         }
     }
+
+    // Optional dynamic-pressure placard in KEAS (#1181). Real placards run from a light trainer's
+    // ~300 kn to the F-5E's and T-38A's 710 kn; the band is wide because it can only ever catch a
+    // unit error — knots confused with m/s, or a Mach number typed into a knots field.
+    if (auto keas = lim["max_keas"].value<double>()) {
+        if (*keas <= 0.0) {
+            r.errors.push_back("aero.limits.max_keas must be > 0 when present (got " + std::to_string(*keas) +
+                               "); omit the key entirely for an aircraft with no placard");
+            r.ok = false;
+        } else if (*keas < 100.0 || *keas > 900.0) {
+            r.warnings.push_back("aero.limits.max_keas " + std::to_string(*keas) +
+                                 " is outside the plausible placard range [100, 900] knots EAS; it is KNOTS "
+                                 "equivalent airspeed, not m/s and not a Mach number");
+        }
+    }
 }
 
 static void validateAeroControls(const toml::table& tbl, FlightModelValidationResult& r) {

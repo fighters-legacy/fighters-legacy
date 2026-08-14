@@ -950,3 +950,39 @@ TEST_CASE("#1182: a role with no band set says it was not checked", "[flight-mod
     CHECK(announced);
     CHECK(res.ok); // a note, not a failure
 }
+
+// --- #1181: the dynamic-pressure placard ----------------------------------------------------------
+
+TEST_CASE("#1181: max_keas is optional and a plausible placard validates", "[flight-model-validator]") {
+    std::string s(kValidFighter);
+    const auto pos = s.find("max_mach");
+    REQUIRE(pos != std::string::npos);
+    s.insert(pos, "max_keas         = 710.0\n");
+    const auto res = validateFlightModel(s);
+    INFO("warnings: " << (res.warnings.empty() ? std::string("none") : res.warnings[0]));
+    CHECK(res.ok);
+    CHECK(res.warnings.empty());
+}
+
+TEST_CASE("#1181: a placard given in m/s instead of knots is caught", "[flight-model-validator]") {
+    // 710 KEAS is ~365 m/s. Typing the m/s figure lands well under the band and must be flagged —
+    // this is the only unit error the field can suffer, so it is the one the band exists for.
+    std::string s(kValidFighter);
+    const auto pos = s.find("max_mach");
+    REQUIRE(pos != std::string::npos);
+    s.insert(pos, "max_keas         = 3.0\n"); // a Mach number typed into a knots field
+    const auto res = validateFlightModel(s);
+    bool flagged = false;
+    for (const auto& w : res.warnings)
+        if (w.find("max_keas") != std::string::npos)
+            flagged = true;
+    CHECK(flagged);
+}
+
+TEST_CASE("#1181: a non-positive placard is an error, not a warning", "[flight-model-validator]") {
+    std::string s(kValidFighter);
+    const auto pos = s.find("max_mach");
+    REQUIRE(pos != std::string::npos);
+    s.insert(pos, "max_keas         = 0.0\n");
+    CHECK_FALSE(validateFlightModel(s).ok);
+}
