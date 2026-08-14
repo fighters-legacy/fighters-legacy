@@ -248,7 +248,7 @@ function compute_control(state, tick, dt)
             -- Steer at the LAST-KNOWN position. If the contact is coasting, this is a guess —
             -- age_s tells you how old a guess it is.
             local herr = guidance.heading_error(state.quat, state.pos, c.pos)
-            return { aileron = guidance.turn_aileron(quat, pos, herr), throttle = 1.0 }
+            return { aileron = guidance.turn_aileron(state.quat, state.pos, herr), throttle = 1.0 }
         end
     end
     return { throttle = 0.6 }   -- nothing detected: no target to chase
