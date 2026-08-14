@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: Contributors to Fighters Legacy
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# ci_flight_model -- the flight-model resolve regression mission (#1178). ci_smoke deliberately uses
+# only builtin:debug-entity (#856), which leaves EntityDef.flight_model empty -- so the v0.3.16
+# null-cache crash sailed through a green harness. This mission spawns ONE entity whose def names a
+# pack flight model, with a scripted AI so the spawn registers a controller: that is the exact call
+# chain (applyMission -> registerController -> resolveFlightModel -> queries.flightModel) that
+# crashed. Deterministic by the same construction as ci_smoke: level flight, no opponents, success
+# on a timer; min_survivors=1 in the ctest asserts the aircraft is still flying at the end.
+name: "CI Flight Model"
+map: world
+layer: world_clear
+time: { hour: 12, minute: 0 }
+wind: { heading: 0, speed: 0 }
+sides: [blue, red]
+objects:
+  - { type: ci:fm-probe, id: probe1, side: blue, pos: [0, 3000, 0], heading: 90, ai: "lua builtin:fighter" }
+triggers:
+  - on: timer(2)
+    do: mission_success

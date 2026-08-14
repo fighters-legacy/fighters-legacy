@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: Contributors to Fighters Legacy
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The fixture pack's one flight-model-bearing entity (#1178). `flight_model` is the point: it is
+# the field every real pack aircraft sets and no builtin entity does, and the field whose resolve
+# path (WorldBroadcaster::resolveFlightModel -> queries.flightModel) CI never exercised before this
+# entity existed. Everything else is the parser-required minimum -- no mesh, no sensors, no
+# hardpoints: fl-server runs headless, and validate-entity does not gate this fixture pack.
+
+[entity]
+id           = "ci:fm-probe"
+name         = "FM Probe"
+category     = "air_vehicle"
+max_hp       = 100.0
+flight_model = "fm_probe"    # -> aircraft/fm_probe.toml (FolderContentPack prepends the type dir)
