@@ -18,6 +18,8 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <string_view>
+#include <vector>
 
 using namespace fl;
 
@@ -30,6 +32,46 @@ struct NullLoggerL : ILogger {
     void setMinLevel(LogLevel) override {}
     void flush() override {}
 };
+
+// The ONE ```lua block in docs/modding/ai.md containing `needle`, lifted at run time (#1180).
+//
+// The doc-example tests used to hold a hand-typed copy of the guide's Lua and call it "verbatim".
+// It drifted twice: #830 (the guide documented a two-argument pitch_error_from_alt nobody could
+// call), and then #1147, which rewrote the guide onto the safe guidance primitives, corrected THIS
+// TEST to `state.quat`/`state.pos`, and left the guide itself calling undefined locals. A copy is
+// only verbatim until the next edit, and a pin that is silently repaired is not a pin — so the
+// examples are read out of the document the reader actually reads.
+//
+// Requiring exactly one match is deliberate: an ambiguous needle should fail loudly here rather
+// than silently pin whichever block happened to come first.
+static std::string aiMdLuaBlock(std::string_view needle) {
+    std::ifstream f{FL_AI_MD_PATH};
+    REQUIRE_FALSE(!f);
+
+    std::vector<std::string> matches;
+    std::string line, block;
+    bool inBlock = false;
+    while (std::getline(f, line)) {
+        if (!inBlock && line.rfind("```lua", 0) == 0) {
+            inBlock = true;
+            block.clear();
+            continue;
+        }
+        if (inBlock && line.rfind("```", 0) == 0) {
+            inBlock = false;
+            if (block.find(needle) != std::string::npos)
+                matches.push_back(block);
+            continue;
+        }
+        if (inBlock) {
+            block += line;
+            block += '\n';
+        }
+    }
+    INFO("ai.md lua blocks containing \"" << needle << "\": " << matches.size());
+    REQUIRE(matches.size() == 1);
+    return matches.front();
+}
 
 static fl::EntityState makeState(double px = 0.0, double py = 600.0, double pz = 0.0, float hp = 100.f,
                                  float maxHp = 100.f) {
@@ -576,18 +618,10 @@ TEST_CASE("LuaController: guidance elevator_for_altitude_hold commands toward th
 
 TEST_CASE("LuaController: the detected_contacts() example from docs/modding/ai.md runs as documented") {
     // The acceptance bullet for #694 is "docs/modding/ai.md examples run against the implemented Lua
-    // API". A doc example that has never been executed is a promise, not a fact — so this IS the
-    // example, verbatim from the guide. If someone changes the API and forgets the docs, this fails.
-    auto c =
-        makeCtrl("function compute_control(state, tick, dt)\n"
-                 "    for _, c in ipairs(detected_contacts()) do\n"
-                 "        if c.reacted and c.faction ~= 0 and c.faction ~= state.faction then\n"
-                 "            local herr = guidance.heading_error(state.quat, state.pos, c.pos)\n"
-                 "            return { aileron = guidance.turn_aileron(state.quat, state.pos, herr), throttle = 1.0 }\n"
-                 "        end\n"
-                 "    end\n"
-                 "    return { throttle = 0.6 }   -- nothing detected: no target to chase\n"
-                 "end");
+    // API". A doc example that has never been executed is a promise, not a fact — so this runs the
+    // example, READ OUT OF THE GUIDE (#1180) rather than copied here. If someone changes the API and
+    // forgets the docs, or edits the docs into something that does not run, this fails.
+    auto c = makeCtrl(aiMdLuaBlock("ipairs(detected_contacts())").c_str());
     REQUIRE(c->isValid());
 
     // With no contacts it cruises — it does not chase a target it has not found.
@@ -621,37 +655,14 @@ TEST_CASE("LuaController: the detected_contacts() example from docs/modding/ai.m
 TEST_CASE("LuaController: the Script-anatomy loiter example from docs/modding/ai.md runs as documented") {
     // #830: the doc's own worked example called pitch_error_from_alt with the two-argument form the
     // guide mis-documented, so anyone who copied it got a Lua error every tick and an AI that flew
-    // straight ahead forever. This is that example, verbatim from the guide (only the loiter centre
-    // constants matter to the assertions). If the binding signature and the doc drift again, this
-    // fails instead of the next content author's evening.
+    // straight ahead forever. #1143 then rewrote the example onto the safe guidance primitives,
+    // because bank_to_turn_aileron + coordinated_rudder roll a scripted aircraft onto its back on an
+    // orbit exactly as they did the engine's own loiter controllers.
     //
-    // Updated with the example in #1143: it used to teach bank_to_turn_aileron + coordinated_rudder,
-    // which roll a scripted aircraft onto its back on an orbit exactly as they did the engine's own
-    // loiter controllers. Keeping this test in step with the guide is the whole point of it existing,
-    // so it moves when the guide moves.
-    auto c = makeCtrl("local cx, cz, alt = 0, 0, 600\n"
-                      "local radius = 3000\n"
-                      "\n"
-                      "function compute_control(state, tick, dt)\n"
-                      "    local pos  = state.pos\n"
-                      "    local quat = state.quat\n"
-                      "    local nx   = cx - pos.x\n"
-                      "    local nz   = cz - pos.z\n"
-                      "    local dist = math.sqrt(nx * nx + nz * nz)\n"
-                      "    if dist < 1 then\n"
-                      "        return {throttle = 0.65}\n"
-                      "    end\n"
-                      "    nx, nz = nx / dist, nz / dist\n"
-                      "    local tx   = pos.x + nx * math.min(dist, 1000) + nz * 1000\n"
-                      "    local tz   = pos.z + nz * math.min(dist, 1000) - nx * 1000\n"
-                      "    local herr = guidance.heading_error(quat, pos, {x = tx, y = pos.y, z = tz})\n"
-                      "    return {\n"
-                      "        aileron  = guidance.turn_aileron(quat, pos, herr),\n"
-                      "        rudder   = guidance.rudder_to_coordinate(guidance.sideslip(quat, state.vel)),\n"
-                      "        elevator = guidance.elevator_for_altitude_hold(quat, pos, state.vel, alt),\n"
-                      "        throttle = 0.65,\n"
-                      "    }\n"
-                      "end");
+    // Both times the fix was to re-type the guide's Lua here. Since #1180 it is READ FROM THE GUIDE
+    // instead, so the two cannot drift apart again — this test moves when the document moves,
+    // without anyone remembering to move it.
+    auto c = makeCtrl(aiMdLuaBlock("local cx, cz, alt").c_str());
     REQUIRE(c->isValid());
 
     // Away from the loiter centre the full guidance path runs. A Lua error in any of the calls

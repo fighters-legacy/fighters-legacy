@@ -1396,6 +1396,11 @@ add_executable(test_lua_controller test_lua_controller.cpp)
 target_link_libraries(test_lua_controller PRIVATE
     Catch2::Catch2WithMain engine-script engine-spatial engine-sensor)
 target_include_directories(test_lua_controller PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+# The doc-example tests LIFT their Lua out of ai.md at run time rather than holding a copy of it
+# (#1180). A hand-transcribed "verbatim" copy is only verbatim until the next edit, and it drifted
+# twice before this: #830 first, then #1147 corrected the test and left the guide broken.
+target_compile_definitions(test_lua_controller PRIVATE
+    FL_AI_MD_PATH="${CMAKE_SOURCE_DIR}/docs/modding/ai.md")
 catch_discover_tests(test_lua_controller)
 
 add_executable(test_haptic_controller test_haptic_controller.cpp)
