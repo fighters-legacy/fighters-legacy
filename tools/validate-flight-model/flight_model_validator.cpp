@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace fl {
@@ -59,6 +60,77 @@ static constexpr double kFighterAspectRatioMin = 1.5;
 static constexpr double kFighterAspectRatioMax = 5.0;
 static constexpr double kTrainerAspectRatioMin = 2.5;
 static constexpr double kTrainerAspectRatioMax = 6.0;
+
+// ── one band set per airframe CLASS (#1182) ───────────────────────────────────
+//
+// The bands above describe a fighter, and the early return that used to sit below them meant every
+// other role -- bomber, transport, tanker, awacs, ew, maritime_patrol -- was checked against
+// NOTHING. fl-base-pack's B-1B validated clean while none of its numbers were range-checked, and
+// would have validated equally clean with its mass in pounds.
+//
+// Applying the fighter bands to a bomber instead would be worse: the B-1B legitimately sits outside
+// every one of them (87 t against a 40 t ceiling, 181 m^2 against 90, 41.8 m of span against 24,
+// 481 kg/m^2 of wing loading, aspect ratio 9.6 against 5.0). So large aircraft get their own set,
+// with the same philosophy as the originals -- wide enough that only a unit error or a typo trips
+// them, and cross-checked against real airframes rather than invented:
+//
+//   empty mass    B-52 83 t, C-17 128 t, C-5 172 t, KC-135 45 t, C-130 34 t, B-1B 87 t
+//   wing area     C-130 162, B-1B 181, KC-135 226, B-52 370, C-5 576 m^2
+//   span          KC-135 39.9, B-1B 41.8 (spread), B-52 56.4, C-5 67.9 m
+//   wing loading  KC-135 198, B-52 225, C-17 363, B-1B 481 kg/m^2   (on EMPTY mass, as computed here)
+//   aspect ratio  KC-135 7.0, C-17 7.6, B-52 8.6, B-1B 9.6 (spread)
+//
+// A variable-sweep wing reports the aspect ratio of whichever configuration `wingspan_m` describes,
+// which is the spread planform and therefore the high end -- hence the headroom above 9.6.
+struct BandSet {
+    const char* name;
+    double massMin, massMax;
+    double areaMin, areaMax;
+    double spanMin, spanMax;
+    double wingLoadingMin, wingLoadingMax;
+    double arMin, arMax;
+};
+
+static constexpr BandSet kFighterBands{"fighter",
+                                       kMassMin_kg,
+                                       kMassMax_kg,
+                                       kWingAreaMin_m2,
+                                       kWingAreaMax_m2,
+                                       kWingspanMin_m,
+                                       kWingspanMax_m,
+                                       kFighterWingLoadingMin,
+                                       kFighterWingLoadingMax,
+                                       kFighterAspectRatioMin,
+                                       kFighterAspectRatioMax};
+
+static constexpr BandSet kTrainerBands{"trainer",
+                                       kMassMin_kg,
+                                       kMassMax_kg,
+                                       kWingAreaMin_m2,
+                                       kWingAreaMax_m2,
+                                       kWingspanMin_m,
+                                       kWingspanMax_m,
+                                       kTrainerWingLoadingMin,
+                                       kTrainerWingLoadingMax,
+                                       kTrainerAspectRatioMin,
+                                       kTrainerAspectRatioMax};
+
+static constexpr BandSet kLargeBands{"large-aircraft", 20000.0, 450000.0, 60.0, 700.0, 25.0, 80.0, 150.0,
+                                     1000.0,           5.0,     12.0};
+
+// `recon` deliberately has NO band set: the role spans an RF-5 through a U-2 to a Global Hawk, and
+// no single honest range covers them. It takes the "not checked" note instead, which is the truthful
+// answer rather than a band nobody could justify.
+static const BandSet* bandsForRole(std::string_view type) {
+    if (type == "fighter" || type == "interceptor" || type == "attacker")
+        return &kFighterBands;
+    if (type == "trainer")
+        return &kTrainerBands;
+    if (type == "bomber" || type == "transport" || type == "tanker" || type == "awacs" || type == "ew" ||
+        type == "maritime_patrol")
+        return &kLargeBands;
+    return nullptr;
+}
 
 // ── valid enum strings ────────────────────────────────────────────────────────
 
@@ -180,14 +252,18 @@ static void validateFlightModelGeometry(const toml::table& tbl, FlightModelValid
         }
     }
 
-    // `interceptor` and `attacker` are the same class of aeroplane for this purpose.
-    const bool isFighterClass =
-        (aircraftType == "fighter" || aircraftType == "interceptor" || aircraftType == "attacker");
-    const bool isTrainer = (aircraftType == "trainer");
-    if (!isFighterClass && !isTrainer)
+    const BandSet* bands = bandsForRole(aircraftType);
+    if (bands == nullptr) {
+        // A validator that cannot check something should SAY it did not check, rather than pass in
+        // silence (#1182). Silence is what let fl-base-pack's B-1B validate clean while nothing at
+        // all was range-checked -- it would have validated equally clean with its mass in pounds.
+        r.warnings.push_back("aircraft.type \"" + aircraftType +
+                             "\" has no plausibility band set, so mass, wing area, span, wing loading "
+                             "and aspect ratio were NOT range-checked");
         return;
+    }
 
-    auto band = [&](const char* field, double value, double lo, double hi, const char* what) {
+    auto band = [&](const char* field, double value, double lo, double hi, const std::string& what) {
         if (value < lo || value > hi)
             r.warnings.push_back(std::string(field) + " " + std::to_string(value) + " is outside the plausible " +
                                  what + " range [" + std::to_string(lo) + ", " + std::to_string(hi) + "]");
@@ -195,27 +271,23 @@ static void validateFlightModelGeometry(const toml::table& tbl, FlightModelValid
 
     // Absolutes: unit-error and typo detection only (see the note on the constants).
     if (mass && *mass > 0.0)
-        band("flight_model.mass_kg", *mass, kMassMin_kg, kMassMax_kg, "airframe");
+        band("flight_model.mass_kg", *mass, bands->massMin, bands->massMax, "airframe");
     if (wing && *wing > 0.0)
-        band("flight_model.wing_area_m2", *wing, kWingAreaMin_m2, kWingAreaMax_m2, "airframe");
+        band("flight_model.wing_area_m2", *wing, bands->areaMin, bands->areaMax, "airframe");
     if (span && *span > 0.0)
-        band("flight_model.wingspan_m", *span, kWingspanMin_m, kWingspanMax_m, "airframe");
+        band("flight_model.wingspan_m", *span, bands->spanMin, bands->spanMax, "airframe");
 
     // Ratios: the checks that actually describe an aeroplane, and the reason the F-5E and the F-15C
     // can both pass despite a 3x difference in mass.
     if (mass && wing && *mass > 0.0 && *wing > 0.0) {
         const double wingLoading = *mass / *wing;
-        band("wing loading (mass_kg / wing_area_m2)", wingLoading,
-             isTrainer ? kTrainerWingLoadingMin : kFighterWingLoadingMin,
-             isTrainer ? kTrainerWingLoadingMax : kFighterWingLoadingMax,
-             isTrainer ? "trainer wing-loading" : "fighter wing-loading");
+        band("wing loading (mass_kg / wing_area_m2)", wingLoading, bands->wingLoadingMin, bands->wingLoadingMax,
+             std::string(bands->name) + " wing-loading");
     }
     if (span && wing && *span > 0.0 && *wing > 0.0) {
         const double aspectRatio = (*span * *span) / *wing;
-        band("aspect ratio (wingspan_m^2 / wing_area_m2)", aspectRatio,
-             isTrainer ? kTrainerAspectRatioMin : kFighterAspectRatioMin,
-             isTrainer ? kTrainerAspectRatioMax : kFighterAspectRatioMax,
-             isTrainer ? "trainer aspect-ratio" : "fighter aspect-ratio");
+        band("aspect ratio (wingspan_m^2 / wing_area_m2)", aspectRatio, bands->arMin, bands->arMax,
+             std::string(bands->name) + " aspect-ratio");
     }
 }
 

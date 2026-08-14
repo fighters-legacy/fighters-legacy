@@ -821,3 +821,132 @@ TEST_CASE("#38: a vessel without [vessel] fails", "[flight-model-validator]") {
     REQUIRE(pos != std::string::npos);
     CHECK_FALSE(validateFlightModel(s.substr(0, pos)).ok);
 }
+
+// --- #1182: every airframe class gets bands, and a role without them SAYS so -----------------------
+//
+// Before this, the band section early-returned for any role that was not fighter/interceptor/
+// attacker/trainer, so a bomber was checked against nothing at all: fl-base-pack's B-1B validated
+// clean while none of its numbers were range-checked, and would have validated equally clean with
+// its mass in pounds. These pin both halves of the fix — the large-aircraft bands exist and bite,
+// and an unbanded role is announced rather than passed in silence.
+
+// Real B-1B numbers (fl-base-pack#66): 87,090 kg empty over 181.16 m^2, 41.758 m spread span.
+static const char* kValidBomber = R"toml(
+[aircraft]
+name         = "Generic Bomber"
+type         = "bomber"
+engine_type  = "turbofan"
+has_fbw      = false
+cruise_alt_m = 12000
+
+[flight_model]
+mass_kg      = 87090.0
+wing_area_m2 = 181.16
+wingspan_m   = 41.758
+mac_m        = 4.758
+fuel_kg      = 120326.0
+ixx_kg_m2    = 7451784.0
+iyy_kg_m2    = 10571333.0
+izz_kg_m2    = 13313039.0
+
+[aero.cl_table]
+alpha  = [-4.0, 0.0, 4.0, 8.0, 13.0, 17.0]
+mach   = [0.30, 0.60]
+values = [
+    -0.29, -0.33,
+     0.06,  0.06,
+     0.41,  0.45,
+     0.75,  0.84,
+     1.18,  1.33,
+     0.97,  1.09,
+]
+
+[aero.drag_polar]
+cd0           = 0.0175
+k             = 0.0413
+speedbrake_cd = 0.04
+gear_cd       = 0.025
+
+[aero.moments]
+cm_alpha = -2.06
+cm_q     = -22.68
+cm_de    = -1.27
+cl_beta  = -0.29
+cl_p     = -0.68
+cl_da    =  0.37
+cn_beta  =  0.15
+cn_r     = -0.16
+cn_dr    = -0.09
+
+[aero.limits]
+alpha_stall_deg  = 13.0
+max_g_structural =  2.5
+min_g_structural = -1.0
+max_mach         =  1.25
+
+[aero.controls]
+max_elevator_deg = 25.0
+max_aileron_deg  = 20.0
+max_rudder_deg   = 25.0
+
+[engine]
+fuel_flow_idle_kg_s = 0.9
+fuel_flow_mil_kg_s  = 4.91
+fuel_flow_ab_kg_s   = 29.5
+spool_time_s        = 5.5
+
+[engine.mil_thrust]
+mach   = [0.0, 0.9]
+alt_km = [0.0, 11.0]
+values = [309.4, 110.3,
+          366.5, 130.6]
+)toml";
+
+TEST_CASE("#1182: a real bomber's geometry produces zero band warnings", "[flight-model-validator]") {
+    const auto res = validateFlightModel(kValidBomber);
+    INFO("warnings: " << (res.warnings.empty() ? std::string("none") : res.warnings[0]));
+    CHECK(res.ok);
+    CHECK(res.warnings.empty());
+}
+
+TEST_CASE("#1182: a bomber mass entered in pounds is caught", "[flight-model-validator]") {
+    // The whole point: this used to pass in silence. 192,000 lb read as kg puts wing loading at
+    // 1,060 kg/m^2, outside the large-aircraft band.
+    std::string s(kValidBomber);
+    const auto pos = s.find("mass_kg      = 87090.0");
+    REQUIRE(pos != std::string::npos);
+    s.replace(pos, std::string("mass_kg      = 87090.0").size(), "mass_kg      = 192000.0");
+
+    const auto res = validateFlightModel(s);
+    bool flagged = false;
+    for (const auto& w : res.warnings)
+        if (w.find("wing loading") != std::string::npos && w.find("large-aircraft") != std::string::npos)
+            flagged = true;
+    INFO("warnings: " << res.warnings.size());
+    CHECK(flagged);
+}
+
+TEST_CASE("#1182: fighter bands are NOT applied to a bomber", "[flight-model-validator]") {
+    // A bomber legitimately sits outside every fighter band. Applying them would make an honest
+    // B-1B unvalidatable, which is why the early return existed in the first place.
+    const auto res = validateFlightModel(kValidBomber);
+    for (const auto& w : res.warnings)
+        CHECK(w.find("fighter") == std::string::npos);
+}
+
+TEST_CASE("#1182: a role with no band set says it was not checked", "[flight-model-validator]") {
+    // `recon` spans an RF-5 through a U-2 to a Global Hawk; no honest single band covers it. The
+    // validator must say that rather than pass silently.
+    std::string s(kValidBomber);
+    const auto pos = s.find("type         = \"bomber\"");
+    REQUIRE(pos != std::string::npos);
+    s.replace(pos, std::string("type         = \"bomber\"").size(), "type         = \"recon\"");
+
+    const auto res = validateFlightModel(s);
+    bool announced = false;
+    for (const auto& w : res.warnings)
+        if (w.find("no plausibility band set") != std::string::npos)
+            announced = true;
+    CHECK(announced);
+    CHECK(res.ok); // a note, not a failure
+}
