@@ -5,6 +5,7 @@
 // subprocessing (#651). Each contributes its own {ok, errors, warnings}; we prefix + merge.
 #include "campaign_validator.h"     // validateCampaign, classifyPackYaml
 #include "entity_validator.h"       // validateEntityPack
+#include "expect.h"                 // checkExpectations — fm-trim's acceptance gate (#1104)
 #include "flight_model_validator.h" // validateFlightModel
 #include "license_validator.h"      // validateLicenses
 #include "livery_validator.h"       // validateLiveryPack
@@ -18,6 +19,7 @@
 #include "campaign/TheaterManifest.h"
 #include "content/ModManifest.h"
 #include "crypto/Sha256.h"
+#include "flight/FlightModelParser.h" // parseFlightModel — pairs an expect fixture with its model
 #include "world/AirportDefParser.h"
 
 #include <toml++/toml.hpp>
@@ -57,6 +59,64 @@ template <typename R> void merge(ModValidationResult& out, const char* domain, c
         out.errors.push_back(std::string(domain) + ": " + e);
     for (const auto& w : r.warnings)
         out.warnings.push_back(std::string(domain) + ": " + w);
+}
+
+// `<id>.expect.toml` — fm-trim's expectation fixture, which lives alongside the flight model it
+// gates and is NOT one itself (#1104).
+bool isExpectFixture(const fs::path& p) {
+    const std::string stem = p.stem().string(); // "b1b.expect" for b1b.expect.toml
+    return stem.size() > 7 && stem.compare(stem.size() - 7, 7, ".expect") == 0;
+}
+
+// Run an expectation fixture against the flight model it belongs to — the same gate
+// `fm-trim --expect` applies, which is the Phase-4 acceptance criterion for a flight model.
+void checkExpectFixture(ModValidationResult& out, const fs::path& p) {
+    const std::string stem = p.stem().string();
+    const fs::path model = p.parent_path() / (stem.substr(0, stem.size() - 7) + ".toml");
+    if (!fs::exists(model)) {
+        out.errors.push_back("expectations: " + p.filename().string() + ": no flight model " +
+                             model.filename().string() + " beside it to gate");
+        return;
+    }
+
+    FlightModelData data;
+    try {
+        data = parseFlightModel(readFile(model));
+    } catch (const std::exception& e) {
+        // The flight-model leg reports the parse failure itself; don't say it twice.
+        (void)e;
+        return;
+    }
+
+    const ExpectResult r = checkExpectations(data, readFile(p));
+    for (const auto& e : r.errors)
+        out.errors.push_back("expectations: " + p.filename().string() + ": " + e);
+    for (const auto& f : r.failures) {
+        // ps_mps's tolerance is ABSOLUTE — it passes through zero, so a percentage of it is
+        // meaningless. Same split fm-trim's own reporting makes.
+        std::string msg = "expectations: " + p.filename().string() + ": " + f.metric + " (" + f.detail +
+                          "): expected " + std::to_string(f.expected);
+        msg += (f.metric == "ps_mps") ? " +/- " + std::to_string(f.tolerance) + " m/s"
+                                      : " +/- " + std::to_string(f.tolerance * 100.f) + "%";
+        out.errors.push_back(msg + ", got " + std::to_string(f.actual));
+    }
+}
+
+// A `<id>_cockpit.glb` carries the pilot eye-point, and 3d-models.md requires a node named
+// `camera_anchor` in it. Geometry is deliberately NOT required here: engine #844 means these files
+// ship anchor-only today, so demanding an instrument panel would warn on every conforming pack for
+// something no pack can currently fix.
+void checkCockpitAnchor(ModValidationResult& out, const fs::path& p) {
+    const auto tree = describeMeshNodes(p.string());
+    if (!tree) {
+        out.errors.push_back("meshes: " + p.filename().string() + ": not parseable as glTF 2.0");
+        return;
+    }
+    for (const auto& n : tree->nodes)
+        if (n.name == "camera_anchor")
+            return;
+    out.errors.push_back("meshes: " + p.filename().string() +
+                         ": cockpit file has no 'camera_anchor' node (the pilot eye-point)");
 }
 
 bool isHex64(const std::string& s) {
@@ -166,13 +226,31 @@ ModValidationResult validateMod(const std::string& packDir, const ModValidateOpt
                 [&](const fs::path& p) { merge(out, "sensors", validateSensor(readFile(p))); });
     forEachFile(root / "modes", ".toml",
                 [&](const fs::path& p) { merge(out, "modes", validateGameMode(readFile(p))); });
-    forEachFile(root / "aircraft", ".toml",
-                [&](const fs::path& p) { merge(out, "flight-models", validateFlightModel(readFile(p))); });
+    // aircraft/**/*.toml is TWO file kinds, and running the wrong validator on one was #1104: every
+    // `*.expect.toml` is an fm-trim expectation fixture, not a flight model, so the flight-model
+    // validator reported a conforming pack's gate files as eight missing tables apiece. They are
+    // routed to the gate that owns them instead of being skipped — a pack's published-performance
+    // expectations are exactly the kind of thing a whole-pack check should be running.
+    forEachFile(root / "aircraft", ".toml", [&](const fs::path& p) {
+        if (isExpectFixture(p)) {
+            checkExpectFixture(out, p);
+            return;
+        }
+        merge(out, "flight-models", validateFlightModel(readFile(p)));
+    });
     forEachFile(root / "aircraft", ".glb", [&](const fs::path& p) {
         // Skip LOD siblings (validateMesh auto-discovers them from the base file).
         const std::string stem = p.stem().string();
         if (stem.find("_lod") != std::string::npos)
             return;
+        // A `*_cockpit.glb` is a CAMERA ANCHOR, not a mesh — the documented cockpit convention, and
+        // a mesh validator run over one correctly reports "no meshes found" for a file that is
+        // correct as authored (#1104, the unresolved half of #844). Check it for what it actually
+        // has to contain instead.
+        if (stem.size() > 8 && stem.compare(stem.size() - 8, 8, "_cockpit") == 0) {
+            checkCockpitAnchor(out, p);
+            return;
+        }
         merge(out, "meshes", validateMesh(p.string()));
     });
     forEachFile(root / "airports", ".toml", [&](const fs::path& p) {
