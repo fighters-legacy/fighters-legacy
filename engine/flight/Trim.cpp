@@ -30,7 +30,15 @@ struct Condition {
 std::array<float, 3> forcesAt(const FlightModelData& d, const PayloadEffect& payload, const Condition& c,
                               float alpha_deg, float speed, bool ab, float throttle) {
     const float mach = machNumber(speed, c.atmos.speed_of_sound_m_s);
-    const float sweep = d.wing_sweep ? d.wing_sweep->ref_sweep_deg : 0.f;
+    // A variable-geometry wing is evaluated WHERE THE SCHEDULE PUTS IT at this Mach, because that is
+    // where the integrator flies it (#1187). ref_sweep_deg is the configuration the base tables were
+    // measured at, not the one the aircraft occupies at speed: evaluating there made the tool gate a
+    // configuration the aircraft never flies and left [wing_sweep.spread]/[.swept] inert to every
+    // number here. The reference is the answer only when no schedule is authored, which the parser
+    // forbids — that path exists for programmatically-built data.
+    const float sweep = d.wing_sweep ? (d.wing_sweep->schedule.keys.empty() ? d.wing_sweep->ref_sweep_deg
+                                                                            : d.wing_sweep->schedule.lookup(mach))
+                                     : 0.f;
     // Trim derives CLEAN performance: gear up, flaps up, brakes in (#842). Passing a default
     // ArticulationState is the statement of that, not an omission.
     return computeForces(alpha_deg * kDegToRad, 0.f, mach, speed, c.altitude_m, sweep, ab, throttle, payload, d,

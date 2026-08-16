@@ -649,6 +649,9 @@ Applied: `CL_eff = CL_table × cl_scale`, etc.
 - `[wing_sweep.schedule]` is the Mach-driven auto programme (Mach is true airspeed —
   aircraft velocity relative to the air mass, not ground speed). Pilots and AI can override it
   with a manual sweep command.
+- `fm-trim` evaluates every metric with the wings where the schedule puts them at that
+  metric's Mach — the same configuration the integrator flies. Calibrate `cd0` / `cd_wave`
+  against the scheduled sweep, not against `ref_sweep_deg`.
 
 **Parser validates** that `min_deg ≤ ref_sweep_deg ≤ max_deg`.
 

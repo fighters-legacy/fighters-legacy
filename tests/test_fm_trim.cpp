@@ -618,3 +618,99 @@ TEST_CASE("fm-trim: omitting the placard changes nothing", "[fm_trim]") {
     const TrimResult r = trim(d, at(4572.f, 6500.f));
     CHECK(r.converged);
 }
+
+namespace {
+
+// kLightFighter with a variable-sweep wing: spread below M0.5, fully swept past M0.8, and a swept
+// configuration that visibly costs lift (cl_scale 0.65). The spread configuration is deliberately
+// the identity (1.0 / 1.0 / 0.0) so that any metric evaluated with the wings forward must equal the
+// fixed-wing model's number exactly — which is what makes the per-Mach resolution provable.
+std::string withVariableSweep(float refSweepDeg) {
+    std::string s(kLightFighter);
+    s += "\n[wing_sweep]\n"
+         "ref_sweep_deg   = " +
+         std::to_string(refSweepDeg) +
+         "\n"
+         "min_deg         = 20.0\n"
+         "max_deg         = 68.0\n"
+         "slew_rate_deg_s = 7.5\n"
+         "[wing_sweep.schedule]\n"
+         "mach  = [0.0, 0.5, 0.8, 2.0]\n"
+         "sweep = [20.0, 20.0, 68.0, 68.0]\n"
+         "[wing_sweep.spread]\n"
+         "cl_scale  = 1.0\n"
+         "k_scale   = 1.0\n"
+         "cd0_delta = 0.0\n"
+         "[wing_sweep.swept]\n"
+         "cl_scale  = 0.65\n"
+         "k_scale   = 1.7\n"
+         "cd0_delta = -0.002\n";
+    return s;
+}
+
+} // namespace
+
+TEST_CASE("fm-trim: a variable-sweep wing is measured where the schedule puts it (#1187)", "[fm_trim][wing_sweep]") {
+    // The integrator flies the schedule — sweep is looked up from Mach every tick — so the tool must
+    // evaluate the same configuration or the acceptance gate measures an aircraft that never flies.
+    // Before #1187 it passed ref_sweep_deg at EVERY Mach, which for the B-1B meant gating the
+    // spread wing at M1.25, a configuration the schedule leaves behind at M0.7.
+    const FlightModelData fixedWing = parseFlightModel(kLightFighter);
+    const FlightModelData vg = parseFlightModel(withVariableSweep(20.f));
+
+    // Low speed = wings forward = the identity configuration: the stall must not move. This is the
+    // half that proves the schedule is resolved at each metric's OWN Mach, not once per run.
+    const TrimResult vgLow = trim(vg, at(4572.f, 6500.f));
+    const TrimResult fixedLow = trim(fixedWing, at(4572.f, 6500.f));
+    REQUIRE(vgLow.converged);
+    REQUIRE(fixedLow.converged);
+    CHECK(vgLow.stall_speed_1g_mps == Approx(fixedLow.stall_speed_1g_mps));
+
+    // Pinned past the schedule's knee = wings aft: max_lift_g is lift-limited, and CL scales
+    // linearly by cl_scale, so the swept number is 0.65 x the fixed-wing number EXACTLY. Before the
+    // fix both evaluated spread and this ratio was 1.0 — [wing_sweep.swept] was dead to the tool.
+    TrimPoint highMach = at(4572.f, 6500.f);
+    highMach.mach = 0.9f;
+    const TrimResult vgHigh = trim(vg, highMach);
+    const TrimResult fixedHigh = trim(fixedWing, highMach);
+    REQUIRE(vgHigh.converged);
+    REQUIRE(fixedHigh.converged);
+    CHECK(vgHigh.max_lift_g == Approx(0.65f * fixedHigh.max_lift_g).epsilon(0.01f));
+}
+
+TEST_CASE("fm-trim: ref_sweep_deg no longer leaks into the measurement (#1187)", "[fm_trim][wing_sweep]") {
+    // ref_sweep_deg says where the base tables were MEASURED, not where the aircraft flies. Two
+    // models differing only in the reference must trim identically, because the schedule — the same
+    // in both — decides the configuration at every Mach. Before the fix these two disagreed on
+    // every number the tool prints.
+    const FlightModelData refSpread = parseFlightModel(withVariableSweep(20.f));
+    const FlightModelData refSwept = parseFlightModel(withVariableSweep(68.f));
+
+    const TrimResult a = trim(refSpread, at(4572.f, 6500.f));
+    const TrimResult b = trim(refSwept, at(4572.f, 6500.f));
+    REQUIRE(a.converged);
+    REQUIRE(b.converged);
+    CHECK(a.stall_speed_1g_mps == b.stall_speed_1g_mps);
+    CHECK(a.max_level_mach == b.max_level_mach);
+    CHECK(a.sustained_turn_deg_s == b.sustained_turn_deg_s);
+    CHECK(a.roc_mps_ab == b.roc_mps_ab);
+}
+
+TEST_CASE("fm-trim: a wing_sweep block with no schedule falls back to the reference sweep (#1187)",
+          "[fm_trim][wing_sweep]") {
+    // The parser refuses [wing_sweep] without a schedule, so this arm exists for programmatically
+    // built data only — but it must not assert or diverge from the integrator's init state, which
+    // parks an unscheduled wing at ref_sweep_deg too.
+    FlightModelData d = parseFlightModel(withVariableSweep(20.f));
+    d.wing_sweep->schedule.keys.clear();
+    d.wing_sweep->schedule.values.clear();
+
+    const FlightModelData fixedWing = parseFlightModel(kLightFighter);
+    const TrimResult r = trim(d, at(4572.f, 6500.f));
+    const TrimResult fixedR = trim(fixedWing, at(4572.f, 6500.f));
+    REQUIRE(r.converged);
+    // Parked at ref = 20 deg = full spread = the identity configuration: every number matches the
+    // fixed-wing model.
+    CHECK(r.stall_speed_1g_mps == fixedR.stall_speed_1g_mps);
+    CHECK(r.max_level_mach == fixedR.max_level_mach);
+}
