@@ -268,7 +268,7 @@ add_library(validate-mod-lib STATIC validate-mod/mod_validator.cpp)
 target_link_libraries(validate-mod-lib
     PUBLIC  validate-entity-lib validate-weapon-lib validate-sensor-lib validate-livery-lib
             validate-mission-lib validate-campaign-lib validate-mode-lib validate-flight-model-lib
-            validate-mesh-lib validate-playlist-lib validate-licenses-lib
+            validate-mesh-lib validate-playlist-lib validate-licenses-lib fm-trim-lib
             engine-content engine-campaign engine-crypto engine-world
     PRIVATE tomlplusplus::tomlplusplus)
 target_include_directories(validate-mod-lib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/validate-mod")

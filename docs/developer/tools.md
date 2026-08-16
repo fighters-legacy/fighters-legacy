@@ -31,6 +31,17 @@ isolation; with it, cross-references are resolved against a real pack — that e
 exists, every weapon a hardpoint allows is defined, every mesh a definition names is present. Most
 real content bugs are reference bugs, and they are invisible without `--pack`.
 
+**`validate-mod` routes by convention, not by extension.** Two file kinds under `aircraft/` are not
+what their extension suggests, and each goes to the check that actually owns it (#1104):
+
+| File | Checked as |
+|---|---|
+| `<id>.expect.toml` | an `fm-trim --expect` gate against the sibling `<id>.toml` — the model must still reproduce its published performance |
+| `<id>_cockpit.glb` | a camera-anchor file: it must carry a `camera_anchor` node, and is not required to carry geometry |
+
+A pack that ships MIT-licensed dev tooling alongside its content passes `--allow MIT`; the license
+leg's default allowlist is `CC0-1.0` and `CC-BY-4.0`.
+
 ## Asset pipeline
 
 | Tool | Usage / purpose |
