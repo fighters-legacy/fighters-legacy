@@ -113,10 +113,18 @@ inline float climbRateCommand(float altErrorM, float maxVsMps = 25.f, float gain
     return std::clamp(altErrorM * gain, -maxVsMps, maxVsMps);
 }
 
+// The default AoA bound is sized for a FIGHTER, and the sizing matters more than it looks (#1186):
+// through the cascade below the bound caps not just the commanded AoA but the equilibrium ELEVATOR,
+// at roughly (2/pi) * (bound - trim alpha). A heavy aircraft needs far more trim elevator per unit
+// of AoA — the B-1B needs ~0.3 of travel to trim the alpha level flight requires, against the ~0.13
+// this default can ever ask for — so a heavy caller MUST widen it or the aircraft descends into
+// terrain at a tenth of available travel while the loop reports itself busy.
+inline constexpr float kDefaultMaxAoaRad = 0.20f;
+
 // Angle of attack [rad] to command for a climb-rate error, bounded well short of the stall.
 // The bound is the load-bearing part: an unbounded demand is what let the loop ask for 40 deg of AoA
 // and get a mushing descent instead of a climb (#1141).
-inline float aoaCommandFromClimbRate(float vsErrorMps, float maxAoaRad = 0.20f, float gain = 0.02f) {
+inline float aoaCommandFromClimbRate(float vsErrorMps, float maxAoaRad = kDefaultMaxAoaRad, float gain = 0.02f) {
     return std::clamp(vsErrorMps * gain, -maxAoaRad, maxAoaRad);
 }
 
@@ -128,8 +136,17 @@ inline float aoaCommandFromClimbRate(float vsErrorMps, float maxAoaRad = 0.20f, 
 // mushing at 40 deg of angle of attack, pointing up and falling. The player autopilot has carried
 // the same term since #640 (kPitchRateDamp on omega[2]); an AI controller cannot see body rates
 // through EntityState, so it differentiates pitch across its own sample interval instead.
+//
+// `maxAoaRad` sizes the loop to the AIRFRAME (#1186). The default serves a fighter; a heavy
+// aircraft needs a wider bound, because the bound caps the equilibrium elevator at roughly
+// (2/pi) * (maxAoaRad - trim alpha) and a large pitch inertia buys nothing back — measured on the
+// B-1B, the default held the elevator at ~0.10 while the sink rate grew -15 to -236 m/s, a tenth
+// of the travel the trim actually needed. Same shape as bankToTurnAileron's maxBank: the primitive
+// cannot know the airframe, so the caller says. The 25 deg attitude ceiling below still binds
+// whatever the caller asks for.
 inline float elevatorForAltitudeHold(const float quat[4], const double ownPos[3], const float velWorld[3],
-                                     float targetAltM, double R = fl::kEarthRadiusM, float pitchRateRadS = 0.f) {
+                                     float targetAltM, double R = fl::kEarthRadiusM, float pitchRateRadS = 0.f,
+                                     float maxAoaRad = kDefaultMaxAoaRad) {
     constexpr float kPitchRateDamp = 0.8f; // s — matches the player autopilot (#640)
     constexpr float kMaxPitchRad = 0.44f;  // 25 deg: a hard ceiling on the attitude, whatever else
     const glm::dvec3 pos(ownPos[0], ownPos[1], ownPos[2]);
@@ -142,8 +159,8 @@ inline float elevatorForAltitudeHold(const float quat[4], const double ownPos[3]
     // nose-DOWN from the 20 deg it was holding, so the wing unloads, flies again, and climbs. The
     // old form saw only "we are low" and commanded more nose-up into the stall.
     const float gamma = std::asin(std::clamp(vs / std::max(1.f, speed), -1.f, 1.f));
-    const float pitchCmd =
-        std::clamp(gamma + aoaCommandFromClimbRate(climbRateCommand(altErr) - vs), -kMaxPitchRad, kMaxPitchRad);
+    const float pitchCmd = std::clamp(gamma + aoaCommandFromClimbRate(climbRateCommand(altErr) - vs, maxAoaRad),
+                                      -kMaxPitchRad, kMaxPitchRad);
     const float pitchErr = pitchCmd - fl::pitchOf(quat, pos, R);
     return std::clamp(elevatorFromPitchError(pitchErr) - kPitchRateDamp * pitchRateRadS, -1.f, 1.f);
 }

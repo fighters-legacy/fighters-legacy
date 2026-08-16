@@ -201,12 +201,20 @@ coming from your right. `vel` is `state.vel`.
 
 Rudder that nulls a skid. This is turn coordination.
 
-### `guidance.elevator_for_altitude_hold(quat, own_pos, vel, target_alt_m[, radius_m]) → number`
+### `guidance.elevator_for_altitude_hold(quat, own_pos, vel, target_alt_m[, radius_m[, max_aoa_rad]]) → number`
 
 Altitude hold closed on **climb rate**, through a bounded angle of attack: altitude → climb rate →
 AoA → pitch, each stage clamped. Prefer it to `pitch_error_from_alt` + `elevator_from_pitch_error`,
 which command a pitch *attitude* and cannot tell "nose up" from "climbing" — an aircraft mushing
 nose-high at 30° while descending 11 m/s satisfies them completely (#1141).
+
+⚠ **`max_aoa_rad` (default 0.20 = 11.5°) is sized for a fighter — a heavy aircraft must widen it.**
+In steady flight the elevator this loop can command settles near `(2/π) × (max_aoa_rad − trim α)`,
+so as your aircraft's trim angle of attack approaches the bound, the authority available to the loop
+goes to zero however far below its altitude the aircraft is. A 200 t bomber cruising at 8 km trims
+near 10°, leaving almost nothing: measured, it sagged **2,530 m** below its commanded altitude on
+the default and held to 222 m at `0.45` (#1186). Size it to your airframe — well clear of the trim
+angle of attack, still short of the stall.
 
 ### `guidance.elevator_from_pitch_error(pitch_error_rad) → number`
 

@@ -123,7 +123,9 @@ catch_discover_tests(test_ai_turn_law)
 # that an AI aircraft asked to hold an altitude actually does, which is how a several-hundred-metre
 # oscillation went unnoticed until it started flying the load-spawn world into the ground.
 add_executable(test_ai_altitude_hold test_ai_altitude_hold.cpp)
-target_link_libraries(test_ai_altitude_hold PRIVATE Catch2::Catch2WithMain engine-flight engine-ai engine-entity)
+target_link_libraries(test_ai_altitude_hold PRIVATE Catch2::Catch2WithMain engine-flight engine-ai engine-entity
+    engine-spatial engine-sensor)
+target_include_directories(test_ai_altitude_hold PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_ai_altitude_hold)
 
 # Client-side target designation (#696): pure snapshot cycling / filtering / best-in-cone.
