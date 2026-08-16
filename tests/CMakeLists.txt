@@ -142,6 +142,13 @@ target_include_directories(test_target_designation PRIVATE
 catch_discover_tests(test_target_designation)
 
 # Padlock tracker (#697): pure aim + lock state machine, scripted trajectories.
+# Wingman brevity voice keys (#1108). Links game-client: the wingman's text and keys are CLIENT-side
+# by policy (the server sends a result code, never a string).
+add_executable(test_wingman_brevity test_wingman_brevity.cpp)
+target_link_libraries(test_wingman_brevity PRIVATE Catch2::Catch2WithMain engine-render engine-entity game-client)
+target_include_directories(test_wingman_brevity PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_wingman_brevity)
+
 add_executable(test_padlock_tracker test_padlock_tracker.cpp)
 target_link_libraries(test_padlock_tracker PRIVATE Catch2::Catch2WithMain engine-spatial platform-hal game-client)
 target_include_directories(test_padlock_tracker PRIVATE
