@@ -73,6 +73,57 @@ to override:
 SFX are one-shot, 3D-spatialised (a 16-voice steal-oldest pool), and scaled by the master + SFX
 volume sliders. Keep them short (< 1 s) — long clips belong to the streaming/music path.
 
+### Radio voice lines (#1108)
+
+Everyone who talks on the radio does so through a **stable voice key**. A key resolves to the asset
+name `radio/<key>`, which `FolderContentPack` reads from `<pack>/audio/radio/<key>.ogg`. Ship the
+file and the line is spoken; ship nothing and it degrades to the subtitle, which is what every line
+does today. There is no manifest to register and no per-key configuration — the filename *is* the
+binding.
+
+A voice line rides the same radio net a human transmission does, so it gets the same band-limiting,
+squelch and music ducking. **Record dry** — the radio effect is applied by the engine (#925).
+
+| Key | Line | Speaker |
+|---|---|---|
+| `atc.hold_short` | hold short, traffic on the runway | tower |
+| `atc.cleared_takeoff` | cleared for takeoff | tower |
+| `atc.cleared_to_land` | cleared to land | tower |
+| `atc.go_around` | go around, runway occupied | tower |
+| `atc.contact_approach` | radar contact, continue inbound | tower |
+| `atc.roger` | roger | tower |
+| `atc.unable` | unable | tower |
+| `atc.taxi_to_parking` | clear of the runway, taxi to parking | tower |
+| `lso.on_glideslope` | on glideslope, on speed | LSO |
+| `lso.high` | you're HIGH | LSO |
+| `lso.low` | you're LOW, power | LSO |
+| `lso.fast` | you're fast | LSO |
+| `lso.slow` | you're slow, power | LSO |
+| `lso.wave_off` | WAVE OFF, WAVE OFF | LSO |
+| `lso.good_trap` | good trap | LSO |
+| `crew.say_again` | say again? | crew chief |
+| `crew.no_aircraft` | you don't have an aircraft | crew chief |
+| `crew.shut_down_first` | shut down on the ramp first | crew chief |
+| `crew.no_base` | nobody out here, get to a base | crew chief |
+| `crew.refueled` | fueled and topped off | crew chief |
+| `crew.rearmed` | rearmed, pins pulled | crew chief |
+| `crew.repaired` | patched up, she'll fly | crew chief |
+| `wingman.check_in` | on your wing | wingman |
+| `wingman.engaged` · `wingman.engaging` | acknowledging an attack order | wingman |
+| `wingman.rejoining` · `wingman.covering` | acknowledging rejoin / cover | wingman |
+| `wingman.weapons_hold` · `wingman.rtb` | acknowledging hold fire / RTB | wingman |
+| `wingman.copy` · `wingman.say_again` | generic ack / not understood | wingman |
+| `wingman.no_joy` | nothing in the boresight cone | wingman |
+| `wingman.no_flight` · `wingman.unavailable` · `wingman.not_lead` | why an order went nowhere | wingman |
+| `lead.attack_my_target` · `lead.engage_bandits` · `lead.rejoin` | an order relayed TO you | flight lead |
+| `lead.cover_me` · `lead.hold_fire` · `lead.return_to_base` · `lead.say_again` | an order relayed TO you | flight lead |
+
+A key is a published name: recording against it is a contract, so keys are added rather than
+renamed. Keys are under 31 characters because the wire field is `char[32]`.
+
+**Partial sets are fine.** Voicing only `lso.wave_off` is a legitimate pack — every key you do not
+ship simply stays a subtitle, so a pack can grow its coverage line by line.
+
 ---
 
 ## Music Playlist — TOML

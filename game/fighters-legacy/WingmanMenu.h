@@ -9,8 +9,10 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 
 namespace fl {
@@ -30,6 +32,13 @@ namespace fl {
 // its labels anyway.
 class WingmanMenu {
   public:
+    // Speak a brevity call, if the host wired audio in (#1108). The menu owns the TEXT — that stays
+    // client-side and localizable, which is why the server sends a result code and never a string —
+    // but it deliberately owns no audio dependency, so the host plays the line through the same
+    // radio path an ATC transmission takes. Second argument is the stable voice key: a pack's OGG
+    // lives at radio/<key>, and an absent one degrades to subtitle-only exactly as ATC does.
+    std::function<void(const std::string& line, const char* voiceKey)> brevityCallback;
+
     void toggle() noexcept;
     void close() noexcept;
     [[nodiscard]] bool isOpen() const noexcept {

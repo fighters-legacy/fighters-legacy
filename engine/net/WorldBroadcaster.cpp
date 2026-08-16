@@ -13,7 +13,8 @@
 // Including it here rather than hardcoding ordinals keeps one source of truth for the vocabulary.
 #include "Utf8Decode.h" // chat text sanitization (#646)
 #include "ai/WingmanCommand.h"
-#include "atc/AtcService.h" // the deterministic ATC FSM ticked at 1 Hz (#702)
+#include "atc/AtcService.h"  // the deterministic ATC FSM ticked at 1 Hz (#702)
+#include "atc/CrewPhrases.h" // LSO + crew-chief phrase vocabulary and their voice keys (#1108)
 #include "entity/EntityManager.h"
 #include "entity/EntityState.h"
 #include "entity/EntityTypeRegistry.h"
@@ -3153,13 +3154,9 @@ void WorldBroadcaster::runDeckOperations(double simDt, uint64_t tickIndex) {
     if (m_decks.empty())
         return;
 
-    // LSO phrase codes (repeat-suppressed per aircraft; 255 = none yet).
-    enum LsoPhrase : uint8_t { kOnGlideslope = 0, kHigh, kLow, kFast, kSlow, kWaveOff };
-    static constexpr const char* kLsoText[] = {
-        "Paddles: on glideslope, on speed.", "Paddles: you're HIGH.",
-        "Paddles: you're LOW. Power!",       "Paddles: you're fast.",
-        "Paddles: you're slow. Power!",      "Paddles: WAVE OFF, WAVE OFF!",
-    };
+    // The phrase vocabulary lives in engine/atc/CrewPhrases.h so a pack can voice it by key (#1108);
+    // ce.lsoLastPhrase stores the ordinal for repeat suppression (255 = none yet).
+    using fl::atc::LsoPhrase;
     constexpr double kLsoRangeM = 5556.0; // 3 nm
     constexpr float kGlideslopeDeg = 3.5f;
 
@@ -3212,12 +3209,7 @@ void WorldBroadcaster::runDeckOperations(double simDt, uint64_t tickIndex) {
                 for (const auto& [pid, eid] : m_peerEntities) {
                     if (eid == ce.id) {
                         sendHapticTo(pid, static_cast<uint8_t>(HapticKind::Triggers), 0.9f, 0.9f, 300);
-                        fl::atc::RadioTransmission tx;
-                        tx.target = ce.id;
-                        tx.speaker = "Paddles";
-                        tx.text = "Paddles: good trap!";
-                        tx.displaySeconds = 4;
-                        m_comms.sendRadioTransmission(tx);
+                        m_comms.sendRadioTransmission(fl::atc::makeLsoTransmission(LsoPhrase::GoodTrap, ce.id));
                         break;
                     }
                 }
@@ -3332,31 +3324,27 @@ void WorldBroadcaster::runDeckOperations(double simDt, uint64_t tickIndex) {
                 static_cast<float>(std::atan2(ownAlt - rec.floorElevM, horiz)) * 180.f / std::numbers::pi_v<float>;
             const float gsErr = pathDeg - kGlideslopeDeg;
             const DeckLocalPoint lp = deckLocalPoint(fs.pos_world, rec.pos, rec.quat, deck);
-            uint8_t phrase;
+            LsoPhrase phrase;
             if (range < 1200.0 && (gsErr > 3.f || std::abs(lp.z) > 40.f)) {
-                phrase = kWaveOff;
+                phrase = LsoPhrase::WaveOff;
             } else if (gsErr > 1.2f) {
-                phrase = kHigh;
+                phrase = LsoPhrase::High;
             } else if (gsErr < -1.0f) {
-                phrase = kLow;
+                phrase = LsoPhrase::Low;
             } else if (const auto& carrier = ce.sim->flightModel().carrier) {
                 const float spd =
                     std::sqrt(float(fs.vel_body[0] * fs.vel_body[0]) + float(fs.vel_body[1] * fs.vel_body[1]) +
                               float(fs.vel_body[2] * fs.vel_body[2]));
-                phrase = (spd > carrier->approach_m_s + 8.f)   ? kFast
-                         : (spd < carrier->approach_m_s - 8.f) ? kSlow
-                                                               : kOnGlideslope;
+                phrase = (spd > carrier->approach_m_s + 8.f)   ? LsoPhrase::Fast
+                         : (spd < carrier->approach_m_s - 8.f) ? LsoPhrase::Slow
+                                                               : LsoPhrase::OnGlideslope;
             } else {
-                phrase = kOnGlideslope;
+                phrase = LsoPhrase::OnGlideslope;
             }
-            if (phrase != ce.lsoLastPhrase || phrase == kWaveOff) {
-                fl::atc::RadioTransmission tx;
-                tx.target = ce.id;
-                tx.speaker = "Paddles";
-                tx.text = kLsoText[phrase];
-                tx.displaySeconds = 4;
-                m_comms.sendRadioTransmission(tx);
-                ce.lsoLastPhrase = phrase;
+            const uint8_t phraseOrdinal = static_cast<uint8_t>(phrase);
+            if (phraseOrdinal != ce.lsoLastPhrase || phrase == LsoPhrase::WaveOff) {
+                m_comms.sendRadioTransmission(fl::atc::makeLsoTransmission(phrase, ce.id));
+                ce.lsoLastPhrase = phraseOrdinal;
             }
             ce.lsoNextTick = tickIndex + 240; // ~4 s between looks
             break;
@@ -3367,25 +3355,24 @@ void WorldBroadcaster::runDeckOperations(double simDt, uint64_t tickIndex) {
 void WorldBroadcaster::handleBaseOpsCommand(uint32_t peerId, EntityId flight, std::string_view op) {
     // The crew chief answers on the radio like everyone else (#55) — routed through the same
     // RadioTransmission wire/subtitle path as ATC, never bespoke UI text.
-    auto reply = [&](const char* text) {
-        fl::atc::RadioTransmission tx;
-        tx.target = flight;
-        tx.speaker = "Crew chief";
-        tx.text = text;
-        tx.displaySeconds = 5;
+    // Taking the PHRASE rather than the text is what keeps the voiceKey attached: a caller cannot
+    // write a line and forget the key a pack voices it by (#1108).
+    auto reply = [&](fl::atc::CrewChiefPhrase phrase) {
+        const fl::atc::RadioTransmission tx = fl::atc::makeCrewChiefTransmission(phrase, flight);
         const MsgRadioTransmission w = buildRadioWire(tx, m_comms.radioNets().indexOf("atc"));
         m_net.send(peerId, &w, sizeof(w), /*reliable=*/true);
     };
+    using fl::atc::CrewChiefPhrase;
 
     const bool knownOp = (op == "refuel" || op == "rearm" || op == "repair");
     if (!knownOp) {
-        reply("Crew chief: say again?");
+        reply(CrewChiefPhrase::SayAgain);
         return;
     }
     EntityState* st = flight.valid() ? m_entityManager.get(flight) : nullptr;
     const auto ceIt = m_controlledEntities.find(flight.index);
     if (!st || st->dead || ceIt == m_controlledEntities.end()) {
-        reply("Crew chief: you don't have an aircraft.");
+        reply(CrewChiefPhrase::NoAircraft);
         return;
     }
     ControlledEntity& ce = ceIt->second;
@@ -3411,11 +3398,11 @@ void WorldBroadcaster::handleBaseOpsCommand(uint32_t peerId, EntityId flight, st
     const double spd =
         std::sqrt(fs.vel_body[0] * fs.vel_body[0] + fs.vel_body[1] * fs.vel_body[1] + fs.vel_body[2] * fs.vel_body[2]);
     if (agl > 2.0 || spd > 3.0) {
-        reply("Crew chief: shut down on the ramp first.");
+        reply(CrewChiefPhrase::ShutDownFirst);
         return;
     }
     if (!atBase) {
-        reply("Crew chief: nobody out here. Get to a base.");
+        reply(CrewChiefPhrase::NoBase);
         return;
     }
 
@@ -3427,7 +3414,7 @@ void WorldBroadcaster::handleBaseOpsCommand(uint32_t peerId, EntityId flight, st
         ce.sim->reset(ns);
         ce.fuelLeakKgS = 0.f;
         ce.sim->setFuelLeakRate(0.f);
-        reply("Crew chief: fueled and topped off.");
+        reply(CrewChiefPhrase::Refueled);
     } else if (op == "rearm") {
         // Fresh full loadout — the same builder a spawn uses (#812), so a rearmed jet and a fresh
         // one cannot differ. Crewed aircraft partition per seat and are out of scope here.
@@ -3437,7 +3424,7 @@ void WorldBroadcaster::handleBaseOpsCommand(uint32_t peerId, EntityId flight, st
         }
         if (def && (def->chaffCount > 0 || def->flareCount > 0))
             m_countermeasures.registerDispenser(flight.index, def->chaffCount, def->flareCount); // refill
-        reply("Crew chief: rearmed, pins pulled.");
+        reply(CrewChiefPhrase::Rearmed);
     } else { // repair
         st->hp = st->maxHp;
         st->damageLevel = DamageLevel::Intact;
@@ -3448,7 +3435,7 @@ void WorldBroadcaster::handleBaseOpsCommand(uint32_t peerId, EntityId flight, st
         ce.sim->setFuelLeakRate(0.f);
         ce.fuelLeakKgS = 0.f;
         ce.sim->setEngineFailFlags(0);
-        reply("Crew chief: patched up. She'll fly.");
+        reply(CrewChiefPhrase::Repaired);
     }
 }
 
