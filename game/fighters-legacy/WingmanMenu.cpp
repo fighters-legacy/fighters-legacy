@@ -71,6 +71,65 @@ std::string_view brevityFor(uint8_t command, WingmanResult result) {
     }
 }
 
+// The voice key each brevity call is recorded against (#1108). Parallel to brevityFor by
+// construction: same switch shape, same order, so a new result or command that gains a line and
+// forgets a key is a visible hole rather than a silent one.
+//
+// ⚠ These are PUBLISHED NAMES a content pack records OGGs against (radio/<key>). Renaming one
+// breaks every pack that voiced it.
+const char* wingmanVoiceKey(uint8_t command, WingmanResult result) {
+    switch (result) {
+    case WingmanResult::CheckIn:
+        return "wingman.check_in";
+    case WingmanResult::NoTarget:
+        return "wingman.no_joy";
+    case WingmanResult::NoFlight:
+        return "wingman.no_flight";
+    case WingmanResult::Unavailable:
+        return "wingman.unavailable";
+    case WingmanResult::RateLimited:
+    case WingmanResult::Rejected:
+        return "wingman.say_again";
+    case WingmanResult::NotLead:
+        return "wingman.not_lead";
+    case WingmanResult::Relayed:
+        switch (static_cast<fl::ai::WingmanCommand>(command)) {
+        case fl::ai::WingmanCommand::AttackMyTarget:
+            return "lead.attack_my_target";
+        case fl::ai::WingmanCommand::EngageBandits:
+            return "lead.engage_bandits";
+        case fl::ai::WingmanCommand::Rejoin:
+            return "lead.rejoin";
+        case fl::ai::WingmanCommand::CoverMe:
+            return "lead.cover_me";
+        case fl::ai::WingmanCommand::HoldFire:
+            return "lead.hold_fire";
+        case fl::ai::WingmanCommand::ReturnToBase:
+            return "lead.return_to_base";
+        default:
+            return "lead.say_again";
+        }
+    case WingmanResult::Acknowledged:
+    default:
+        switch (static_cast<fl::ai::WingmanCommand>(command)) {
+        case fl::ai::WingmanCommand::AttackMyTarget:
+            return "wingman.engaged";
+        case fl::ai::WingmanCommand::EngageBandits:
+            return "wingman.engaging";
+        case fl::ai::WingmanCommand::Rejoin:
+            return "wingman.rejoining";
+        case fl::ai::WingmanCommand::CoverMe:
+            return "wingman.covering";
+        case fl::ai::WingmanCommand::HoldFire:
+            return "wingman.weapons_hold";
+        case fl::ai::WingmanCommand::ReturnToBase:
+            return "wingman.rtb";
+        default:
+            return "wingman.copy";
+        }
+    }
+}
+
 const fl::IClock& clockOf(const fl::IClock* c) {
     return c ? *c : fl::SystemClock::instance();
 }
@@ -172,7 +231,13 @@ void WingmanMenu::onAck(const MsgWingmanAck& ack) {
             m_flightId = ack.flightId;
     }
 
-    setBrevity(brevityFor(ack.command, result));
+    const std::string_view line = brevityFor(ack.command, result);
+    setBrevity(line);
+
+    // Speak it, if the host wired audio in. Only an ACK does this: setVoiceStatus shares the same
+    // brevity slot for speech-recognition status, which is UI feedback and not a radio call.
+    if (brevityCallback)
+        brevityCallback(std::string(line), wingmanVoiceKey(ack.command, result));
 }
 
 std::span<const HudElement> WingmanMenu::buildElements() {

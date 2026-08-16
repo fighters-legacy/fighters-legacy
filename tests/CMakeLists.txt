@@ -122,6 +122,12 @@ catch_discover_tests(test_ai_turn_law)
 # AI altitude hold (#1141): a LoiterController flown through the real integrator. Nothing asserted
 # that an AI aircraft asked to hold an altitude actually does, which is how a several-hundred-metre
 # oscillation went unnoticed until it started flying the load-spawn world into the ground.
+# LSO + crew-chief voice keys (#1108): a pack records OGGs against these names, so the strings are
+# pinned rather than incidental.
+add_executable(test_crew_phrases test_crew_phrases.cpp)
+target_link_libraries(test_crew_phrases PRIVATE Catch2::Catch2WithMain engine-atc)
+catch_discover_tests(test_crew_phrases)
+
 add_executable(test_ai_altitude_hold test_ai_altitude_hold.cpp)
 target_link_libraries(test_ai_altitude_hold PRIVATE Catch2::Catch2WithMain engine-flight engine-ai engine-entity
     engine-spatial engine-sensor)

@@ -1795,6 +1795,23 @@ void Game::startGame(const std::string& mission) {
         d.session.clientHandler->chat = &d.services.chatOverlay;    // in-match chat (#646)
         d.services.chatOverlay.clear();                             // no stale lines across sessions
         d.session.clientHandler->wingman = &d.services.wingmanMenu; // check-ins, order acks, relayed calls
+        // Voice the brevity calls (#1108). The menu keeps the text — it is client-side and
+        // localizable by policy — and hands the line here to be spoken on the FLIGHT net, so a
+        // wingman ack gets the same band-limiting, squelch and ducking an ATC call does. A pack that
+        // ships no radio/<key> OGG degrades to the subtitle, which is what happens today.
+        d.services.wingmanMenu.brevityCallback = [&d](const std::string& line, const char* voiceKey) {
+            const std::string asset =
+                (voiceKey && voiceKey[0] != '\0') ? std::string("radio/") + voiceKey : std::string();
+            const fl::RadioNetTable& nets = d.services.voiceChat.nets();
+            const fl::RadioNetDef* net = nets.byIndex(nets.indexOf("flight"));
+            const bool asRadio = net && net->radioEffect && d.services.userConfig->voice().radioEffect;
+            const fl::RadioProfile profile{};
+            d.services.voiceCallouts.playText(line, asset.empty() ? nullptr : asset.c_str(), 4.f,
+                                              d.services.audioSettings, asRadio ? &profile : nullptr,
+                                              net ? net->gain : 1.f);
+            if (net)
+                d.services.voiceChat.mixer().holdDuck(4.f);
+        };
 
         // Voice wingman commands (#935): a matched phrase becomes the SAME MsgWingmanCommand the
         // radio menu builds, sent on the same channel. The two input tiers converge before the wire,

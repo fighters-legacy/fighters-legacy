@@ -3,6 +3,7 @@
 # foundation below it. A pure deterministic FSM — no model involvement anywhere.
 add_library(engine-atc STATIC
     AtcTypes.cpp
+    CrewPhrases.cpp
     AtcFacility.cpp
     AtcService.cpp
 )
