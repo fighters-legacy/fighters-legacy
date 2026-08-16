@@ -607,6 +607,17 @@ TEST_CASE("LuaController: guidance elevator_for_altitude_hold commands toward th
     low.transform.vel[2] = 0.f;
     CHECK(c->sample(low, 0, 1.0 / 60.0, fl::AiTickContext{}).elevator > 0.f); // below target: nose up
 
+    // The optional AoA bound (#1186) is live from Lua: a heavy airframe's script widens it, and a
+    // wider bound asks for more elevator at the same state. Without it a bomber's script cannot
+    // command the trim its own aircraft needs.
+    auto wide = makeCtrl("function compute_control(s,t,dt)\n"
+                         "  return {elevator = guidance.elevator_for_altitude_hold(s.quat, s.pos, s.vel, 2000.0,"
+                         " 6371000.0, 0.45)}\n"
+                         "end");
+    REQUIRE(wide->isValid());
+    CHECK(wide->sample(low, 0, 1.0 / 60.0, fl::AiTickContext{}).elevator >
+          c->sample(low, 0, 1.0 / 60.0, fl::AiTickContext{}).elevator);
+
     fl::EntityState high = makeState(0.0, 3000.0, 0.0);
     high.transform.vel[0] = 150.f;
     high.transform.vel[1] = 0.f;

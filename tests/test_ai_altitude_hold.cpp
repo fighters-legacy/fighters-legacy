@@ -10,11 +10,14 @@
 // 506–605 m of terrain. Nothing asserted altitude hold, so the load harness had been paying for it
 // with 4000 m of spawn margin instead.
 
+#include "ai_flight_harness.h"
+
 #include "ai/Guidance.h"
 #include "ai/LoiterController.h"
 #include "entity/EntityState.h"
 #include "flight/BuiltinFlightModel.h"
 #include "flight/FlightIntegrator.h"
+#include "flight/FlightModelParser.h"
 #include "flight/Geodetic.h"
 #include "flight/LocalFrame.h"
 
@@ -24,6 +27,7 @@
 #include <algorithm>
 #include <cmath>
 #include <glm/glm.hpp>
+#include <memory>
 
 using namespace fl;
 
@@ -148,6 +152,220 @@ TEST_CASE("LoiterController climbs to a higher commanded altitude and settles (#
     CHECK(t.endAltM > kStart + 500.0);            // it got most of the way there
     CHECK(std::abs(t.endAltM - kTarget) < 200.0); // and settled near it
     CHECK(t.maxAltM < kTarget + 400.0);           // without a wild overshoot
+}
+
+// ---------------------------------------------------------------------------
+// Heavy airframes: the AoA bound has to be sized to the aircraft (#1186)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// A B-1B-class heavy bomber: ~207 t all-up on a 181 m^2 wing, with a pitch inertia of 1.06e7 kg m^2
+// — about 150x the light fighter above. The numbers are fl-base-pack's B-1B, which is the aircraft
+// that found this defect; what matters to the test is the CLASS (heavy, low stall margin, slow in
+// pitch), not the identity.
+const char* kHeavyBomber = R"(
+[aircraft]
+name         = "Test Heavy Bomber"
+type         = "bomber"
+engine_type  = "turbofan"
+has_fbw      = false
+cruise_alt_m = 12000.0
+
+[flight_model]
+mass_kg      = 87090.0
+wing_area_m2 = 181.16
+wingspan_m   = 41.758
+mac_m        = 4.758
+fuel_kg      = 120326.0
+ixx_kg_m2    = 7451784.0
+iyy_kg_m2    = 10571333.0
+izz_kg_m2    = 13313039.0
+
+[aero.cl_table]
+alpha  = [-4.0, 0.0, 4.0, 8.0, 11.0, 13.0, 17.0]
+mach   = [0.30, 0.60, 0.85, 0.95, 1.25]
+values = [
+    -0.2850, -0.3317, -0.3449, -0.3309, -0.2316,
+     0.0600,  0.0600,  0.0600,  0.0600,  0.0600,
+     0.4050,  0.4517,  0.4649,  0.4509,  0.3516,
+     0.7501,  0.8434,  0.8698,  0.8417,  0.6431,
+     1.0089,  1.1372,  1.1735,  1.1349,  0.8618,
+     1.1814,  1.3330,  1.3760,  1.3303,  1.0076,
+     0.9687,  1.0931,  1.1283,  1.0908,  0.8262,
+]
+
+[aero.drag_polar]
+cd0           = 0.0175
+k             = 0.0413
+speedbrake_cd = 0.0400
+gear_cd       = 0.0250
+
+[aero.moments]
+cm_alpha = -2.0631
+cm_q     = -22.6828
+cm_de    = -1.2696
+cl_beta  = -0.2857
+cl_p     = -0.6834
+cl_da    =  0.3740
+cn_beta  =  0.1543
+cn_r     = -0.1565
+cn_dr    = -0.0919
+
+[aero.limits]
+alpha_stall_deg  = 13.0
+max_g_structural =  2.50
+min_g_structural = -1.00
+max_mach         =  1.25
+
+[aero.controls]
+max_elevator_deg = 25.0
+max_aileron_deg  = 20.0
+max_rudder_deg   = 25.0
+
+[engine]
+fuel_flow_idle_kg_s = 0.900
+fuel_flow_mil_kg_s  = 4.910
+fuel_flow_ab_kg_s   = 29.500
+spool_time_s        = 5.500
+
+[engine.mil_thrust]
+mach   = [0.00, 0.60, 0.90, 1.25, 1.60]
+alt_km = [0.00, 5.00, 11.00, 15.24, 18.29]
+values = [
+    309.40, 200.68, 110.27,  62.46,  41.50,
+    322.39, 209.11, 114.90,  65.09,  43.25,
+    366.48, 237.71, 130.61,  73.99,  49.16,
+    428.01, 277.61, 152.54,  86.41,  57.41,
+    374.65, 243.00, 133.52,  75.64,  50.26,
+]
+
+[engine.ab_thrust]
+mach   = [0.00, 0.60, 0.90, 1.25, 1.60]
+alt_km = [0.00, 5.00, 11.00, 15.24, 18.29]
+values = [
+    547.70, 355.24, 195.19, 110.57,  73.47,
+    570.70, 370.16, 203.39, 115.22,  76.56,
+    648.75, 420.79, 231.21, 130.97,  87.02,
+    757.67, 491.43, 270.02, 152.96, 101.63,
+    663.00, 430.00, 236.00, 133.00,  88.00,
+]
+)";
+
+// Altitude hold and NOTHING else: wings level, fixed throttle, elevator straight off the primitive
+// under test. No other loop can mask the result or rescue the aircraft.
+class AltitudeHoldOnly final : public fl::IEntityController {
+  public:
+    AltitudeHoldOnly(float targetAltM, float throttle, float maxAoaRad)
+        : m_targetAltM(targetAltM), m_throttle(throttle), m_maxAoaRad(maxAoaRad) {}
+
+    fl::ControlInput sample(const fl::EntityState& state, uint64_t, double dt, const fl::AiTickContext&) override {
+        fl::ControlInput ctrl{};
+        ctrl.throttle = m_throttle;
+
+        // EntityState carries no body rates, so differentiate pitch across our own sample interval —
+        // the same thing every station-keeping controller does.
+        const glm::dvec3 pos(state.transform.pos[0], state.transform.pos[1], state.transform.pos[2]);
+        const float curPitch = fl::pitchOf(state.transform.quat, pos, kR);
+        float pitchRate = 0.f;
+        if (m_havePrevPitch && dt > 1e-6)
+            pitchRate = static_cast<float>((curPitch - m_prevPitchRad) / dt);
+        m_prevPitchRad = curPitch;
+        m_havePrevPitch = true;
+
+        ctrl.elevator = fl::ai::elevatorForAltitudeHold(state.transform.quat, state.transform.pos, state.transform.vel,
+                                                        m_targetAltM, kR, pitchRate, m_maxAoaRad);
+        m_lastElevator = ctrl.elevator;
+        return ctrl;
+    }
+
+    [[nodiscard]] float lastElevator() const noexcept {
+        return m_lastElevator;
+    }
+
+  private:
+    float m_targetAltM;
+    float m_throttle;
+    float m_maxAoaRad;
+    float m_prevPitchRad{0.f};
+    bool m_havePrevPitch{false};
+    float m_lastElevator{0.f};
+};
+
+// Level at 8 km and 200 m/s. THE CONDITION IS THE TEST: at 207 t and this altitude the wing needs
+// CL ~ 1.03, which is alpha ~ 10 deg = 0.18 rad — within a whisker of the 0.20 rad default bound.
+// That is where the defect lives, and why it is invisible at fighter loadings. (The stall here is
+// ~176 m/s, so this is a legitimately flyable cruise, not a trick condition.)
+fl::FlightState heavyCruiseState(double altM, float speedMps) {
+    return fl::test::levelStateAt(0.0, altM, 0.0, speedMps);
+}
+
+constexpr double kHeavyAltM = 8000.0;
+constexpr float kHeavyCruiseMps = 200.f;
+
+} // namespace
+
+TEST_CASE("elevatorForAltitudeHold holds a HEAVY aircraft when the AoA bound is sized to it (#1186)",
+          "[guidance][altitude][heavy]") {
+    // THE REGRESSION. In steady flight the cascade commands pitch = gamma + bounded AoA, so the
+    // elevator it can ask for settles near (2/pi) * (bound - trim alpha): as a heavy aircraft's trim
+    // alpha approaches the bound, the authority available to the loop goes to ZERO no matter how far
+    // below its altitude the aircraft is. Sized to the airframe, the same primitive, the same
+    // aircraft and the same scenario hold altitude.
+    const auto model = std::make_shared<const fl::FlightModelData>(fl::parseFlightModel(kHeavyBomber));
+
+    AltitudeHoldOnly ctrl(static_cast<float>(kHeavyAltM), /*throttle=*/0.85f, /*maxAoaRad=*/0.45f);
+    const fl::test::FlightTrace t =
+        fl::test::flyController(ctrl, heavyCruiseState(kHeavyAltM, kHeavyCruiseMps), 180, {}, {}, model);
+
+    INFO("alt: start " << t.startAltM << " min " << t.minAltM << " max " << t.maxAltM << " end " << t.endAltM
+                       << " endSpeed " << t.endSpeedMps << " crashTime " << t.crashTimeS);
+    CHECK_FALSE(t.crashed());
+    CHECK(t.secondsFlown == Catch::Approx(180.0));
+    // Held, not merely still airborne. Measured excursion is ~222 m; 400 m is the operational bound
+    // that makes a spawn AGL mean something, the same standard #1141 set for the fighter.
+    CHECK(t.minAltM > kHeavyAltM - 400.0);
+    CHECK(std::abs(t.endAltM - kHeavyAltM) < 400.0);
+}
+
+TEST_CASE("the default AoA bound is fighter-sized, and a heavy aircraft sags kilometres on it (#1186)",
+          "[guidance][altitude][heavy]") {
+    // The reason the parameter exists, pinned so nobody "simplifies" it away. The same aircraft in
+    // the same scenario on the fighter-sized default drops to ~5,470 m — a 2,530 m excursion, an
+    // order of magnitude past the 150 m #1141 called a defect for the fighter, and fatal at any
+    // realistic AGL. It eventually recovers here only because a fixed 0.85 throttle accelerates it
+    // to ~370 m/s, which drops trim alpha far enough to give the loop its authority back; that
+    // rescue is the throttle's doing, not the altitude loop's.
+    //
+    // This pins the DEFAULT's behaviour, not a wish. A change that makes one bound serve both
+    // classes should delete this test deliberately, having read why it was here.
+    const auto model = std::make_shared<const fl::FlightModelData>(fl::parseFlightModel(kHeavyBomber));
+
+    AltitudeHoldOnly ctrl(static_cast<float>(kHeavyAltM), /*throttle=*/0.85f,
+                          /*maxAoaRad=*/fl::ai::kDefaultMaxAoaRad);
+    const fl::test::FlightTrace t =
+        fl::test::flyController(ctrl, heavyCruiseState(kHeavyAltM, kHeavyCruiseMps), 180, {}, {}, model);
+
+    INFO("alt: start " << t.startAltM << " min " << t.minAltM << " end " << t.endAltM << " endSpeed " << t.endSpeedMps);
+    CHECK(t.minAltM < kHeavyAltM - 1500.0); // and the sized-bound case above proves it need not
+}
+
+TEST_CASE("widening the AoA bound does not change what a fighter does (#1186)", "[guidance][altitude]") {
+    // Every existing caller passes no bound. The default must be the pre-#1186 value exactly, and
+    // the 6-argument call must be bit-identical to the 7-argument call at that value — otherwise
+    // this change silently re-tunes every station-keeping controller in the engine.
+    const float quat[4] = {0.f, 0.f, 0.f, 1.f};
+    const double pos[3] = {0.0, 1000.0, 0.0};
+    const float vel[3] = {150.f, -5.f, 0.f};
+
+    CHECK(fl::ai::kDefaultMaxAoaRad == Catch::Approx(0.20f));
+    CHECK(fl::ai::elevatorForAltitudeHold(quat, pos, vel, 1500.f, kR, 0.f) ==
+          fl::ai::elevatorForAltitudeHold(quat, pos, vel, 1500.f, kR, 0.f, fl::ai::kDefaultMaxAoaRad));
+
+    // And the bound is live in both directions: a wider one asks for more, a narrower one for less.
+    const float wide = fl::ai::elevatorForAltitudeHold(quat, pos, vel, 1500.f, kR, 0.f, 0.45f);
+    const float narrow = fl::ai::elevatorForAltitudeHold(quat, pos, vel, 1500.f, kR, 0.f, 0.05f);
+    CHECK(wide > narrow);
 }
 
 // ---------------------------------------------------------------------------

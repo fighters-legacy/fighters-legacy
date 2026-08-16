@@ -11,6 +11,7 @@
 // EntityState carrying position, orientation AND world velocity, and its ControlInput drives the
 // next integrator step.
 
+#include "ai/Guidance.h" // sideslipOf — this header measures it, so it owns the include
 #include "entity/EntityState.h"
 #include "entity/IEntityController.h"
 #include "flight/BuiltinFlightModel.h"
@@ -94,10 +95,13 @@ using TickHook = std::function<void(uint64_t tick, const fl::EntityState& own)>;
 
 // Fly `seconds` of `ctrl`. Stops early on ground contact and records when. `ctxFn` supplies the
 // AiTickContext for controllers that need one (sensor contacts etc.); the default is an empty
-// context, which is NORMATIVE — "not evaluated here", not "saw nothing".
+// context, which is NORMATIVE — "not evaluated here", not "saw nothing". `model` selects the
+// airframe; the default is the builtin fighter-agility model, and passing one is how a test flies
+// a controller against an airframe class the builtin cannot stand in for (#1186's heavy bomber).
 inline FlightTrace flyController(fl::IEntityController& ctrl, FlightState init, int seconds,
-                                 const TickHook& tickHook = {}, const std::function<fl::AiTickContext()>& ctxFn = {}) {
-    FlightIntegrator integ(BuiltinFlightModel::get());
+                                 const TickHook& tickHook = {}, const std::function<fl::AiTickContext()>& ctxFn = {},
+                                 std::shared_ptr<const FlightModelData> model = {}) {
+    FlightIntegrator integ(model ? std::move(model) : BuiltinFlightModel::get());
     integ.reset(init);
     PayloadEffect payload{};
 

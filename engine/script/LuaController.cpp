@@ -269,9 +269,12 @@ static int guidanceRudderToCoordinate(lua_State* L) {
     return 1;
 }
 
-// elevator_for_altitude_hold(quat, own_pos, vel, target_alt_m, [radius_m]) — altitude hold closed on
-// CLIMB RATE. pitch_error_from_alt commands a pitch attitude and cannot tell "nose up" from
-// "climbing": an aircraft mushing nose-high while descending satisfies it completely (#1141).
+// elevator_for_altitude_hold(quat, own_pos, vel, target_alt_m, [radius_m, [max_aoa_rad]]) —
+// altitude hold closed on CLIMB RATE. pitch_error_from_alt commands a pitch attitude and cannot
+// tell "nose up" from "climbing": an aircraft mushing nose-high while descending satisfies it
+// completely (#1141). max_aoa_rad sizes the loop to the airframe (#1186): the default serves a
+// fighter, and a heavy aircraft must widen it or the bounded elevator can never reach the trim its
+// level flight needs.
 static int guidanceElevatorForAltitudeHold(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE); // quat
     luaL_checktype(L, 2, LUA_TTABLE); // own_pos
@@ -285,7 +288,8 @@ static int guidanceElevatorForAltitudeHold(lua_State* L) {
     readVec3(L, 3, vel);
     const float velF[3] = {static_cast<float>(vel[0]), static_cast<float>(vel[1]), static_cast<float>(vel[2])};
     const double R = luaL_optnumber(L, 5, fl::kEarthRadiusM);
-    lua_pushnumber(L, static_cast<double>(fl::ai::elevatorForAltitudeHold(quat, own, velF, targetAlt, R)));
+    const float maxAoa = static_cast<float>(luaL_optnumber(L, 6, static_cast<double>(fl::ai::kDefaultMaxAoaRad)));
+    lua_pushnumber(L, static_cast<double>(fl::ai::elevatorForAltitudeHold(quat, own, velF, targetAlt, R, 0.f, maxAoa)));
     return 1;
 }
 
