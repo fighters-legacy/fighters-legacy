@@ -201,20 +201,73 @@ coming from your right. `vel` is `state.vel`.
 
 Rudder that nulls a skid. This is turn coordination.
 
-### `guidance.elevator_for_altitude_hold(quat, own_pos, vel, target_alt_m[, radius_m[, max_aoa_rad]]) → number`
+### `guidance.elevator_for_altitude_hold(quat, own_pos, vel, target_alt_m[, radius_m[, max_aoa_rad[, pitch_rate_rad_s]]]) → number`
 
 Altitude hold closed on **climb rate**, through a bounded angle of attack: altitude → climb rate →
 AoA → pitch, each stage clamped. Prefer it to `pitch_error_from_alt` + `elevator_from_pitch_error`,
 which command a pitch *attitude* and cannot tell "nose up" from "climbing" — an aircraft mushing
 nose-high at 30° while descending 11 m/s satisfies them completely (#1141).
 
-⚠ **`max_aoa_rad` (default 0.20 = 11.5°) is sized for a fighter — a heavy aircraft must widen it.**
-In steady flight the elevator this loop can command settles near `(2/π) × (max_aoa_rad − trim α)`,
-so as your aircraft's trim angle of attack approaches the bound, the authority available to the loop
-goes to zero however far below its altitude the aircraft is. A 200 t bomber cruising at 8 km trims
-near 10°, leaving almost nothing: measured, it sagged **2,530 m** below its commanded altitude on
-the default and held to 222 m at `0.45` (#1186). Size it to your airframe — well clear of the trim
-angle of attack, still short of the stall.
+#### Sizing `max_aoa_rad` to your airframe
+
+⚠ **The default (0.20 rad = 11.5°) is sized for a fighter. A heavy aircraft must widen it.**
+
+Despite the name, this is **not an angle-of-attack limiter and the stall is not its ceiling.** What
+it bounds is how far above the *current flight path* the loop may point the nose — an increment on
+top of γ, not a commanded α — and its real effect is on **authority**: in steady flight the elevator
+this loop can ask for settles near
+
+```
+(2/π) × (max_aoa_rad − trim α)
+```
+
+So the number that matters is the **margin over your aircraft's trim angle of attack at the
+condition it cruises at**, and the bound has to sit well above that trim α to leave the loop
+anything to work with. A 200 t bomber at 8 km trims near 10°: on the 11.5° default there is 1.5° of
+margin and the loop is effectively out of authority however far below its altitude the aircraft
+gets. Widening the bound to `0.45` restores it, and does so without ever commanding a stalling angle
+of attack — an aircraft holding altitude is flying at its trim α, whatever the bound says.
+
+!!! note "Yes, 0.45 rad is past that aircraft's stall — and that is fine"
+    0.45 rad is 25.8°, and the bomber in question stalls at 13°. Earlier revisions of this page
+    told you to stay "short of the stall", which made the recommended value read as a contradiction
+    and pushed anyone following the rule back onto the fighter-sized default it was warning them
+    away from (#1196). Size the bound by the **authority** you need over trim α; the airframe's own
+    `alpha_stall_deg` still bounds what it will actually fly at.
+
+Measured on fl-base-pack's B-1B at 207 t holding 8,000 m, minimum altitude reached:
+
+| scenario | default `0.20` | sized `0.45` |
+|---|---|---|
+| wings level, 180 s | 3,772 m | 7,708 m |
+| sustained 35° bank, 480 s | 2,365 m | 7,910 m |
+| route with 45°-limited turns, 480 s | 2,399 m | 7,896 m |
+
+**A sized bound holds a heavy aircraft through manoeuvring flight**, not just on a wings-level
+bench — the 35° bank costs it 91 m and the route 105 m, and on this scenario it outperforms the
+older `pitch_error_from_alt` loop (194 m). The default does not, and the cost of a turn falls almost
+entirely on it.
+
+#### `pitch_rate_rad_s`
+
+Inner-loop damping, and **not optional in practice**. The elevator commands a pitch *acceleration*,
+so pitch is a double integrator: proportional feedback alone is marginally stable, and a small
+persistent command winds the nose up degree by degree until the aircraft is mushing nose-high and
+falling. Every engine-side controller passes it; before #1196 this binding pinned it to zero and
+scripts had no way to supply one.
+
+`EntityState` carries world velocity but no body angular rates, so differentiate pitch across your
+own sample interval — which is exactly what the engine's controllers do:
+
+```lua
+local pitch = guidance.pitch_of(state.quat, state.pos)
+local pitch_rate = 0.0
+if prev_pitch then pitch_rate = (pitch - prev_pitch) / dt end
+prev_pitch = pitch
+
+local elev = guidance.elevator_for_altitude_hold(
+    state.quat, state.pos, state.vel, target_alt, nil, 0.45, pitch_rate)
+```
 
 ### `guidance.elevator_from_pitch_error(pitch_error_rad) → number`
 
@@ -223,6 +276,15 @@ Maps pitch error to an elevator command. Gain: `2/π`.
 ### `guidance.body_forward(quat) → {x, y, z}`
 
 Extracts the world-frame forward vector (+X body axis) from the quaternion.
+
+### `guidance.pitch_of(quat, own_pos[, radius_m]) → number`
+
+Pitch attitude (rad) relative to the **local** horizon, so it is correct anywhere on the sphere and
+not just near the world origin. Positive = nose up.
+
+Its main use is the one above: differentiate it across your own sample interval to get the
+`pitch_rate_rad_s` that `elevator_for_altitude_hold` damps on. `state` carries an orientation and a
+world velocity but no body angular rates, on this side of the seam or the engine's.
 
 ---
 
