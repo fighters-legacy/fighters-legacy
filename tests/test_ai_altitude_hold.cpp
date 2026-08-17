@@ -164,6 +164,14 @@ namespace {
 // — about 150x the light fighter above. The numbers are fl-base-pack's B-1B, which is the aircraft
 // that found this defect; what matters to the test is the CLASS (heavy, low stall margin, slow in
 // pitch), not the identity.
+//
+// ⚑ [wing_sweep] IS PART OF THE AIRFRAME, not decoration (#1196). This block was missing, and the
+// omission made the bench a DIFFERENT AEROPLANE from the one the numbers came from: without it the
+// wing carries spread-planform lift at every Mach, while the real aircraft is at 55-67.5 deg of
+// sweep anywhere near its cruise, where it has cl_scale 0.666 and k_scale 1.715 — a quarter less
+// lift slope and 70% more induced drag. That raises trim alpha, which is precisely the quantity
+// this file's whole subject (the AoA bound) is measured against. Restoring it deepened the measured
+// default-bound sag from ~2,530 m to 4,229 m: the defect was worse than the bench could show.
 const char* kHeavyBomber = R"(
 [aircraft]
 name         = "Test Heavy Bomber"
@@ -181,6 +189,27 @@ fuel_kg      = 120326.0
 ixx_kg_m2    = 7451784.0
 iyy_kg_m2    = 10571333.0
 izz_kg_m2    = 13313039.0
+
+[wing_sweep]
+ref_sweep_deg   = 15.0
+min_deg         = 15.0
+max_deg         = 67.5
+slew_rate_deg_s = 5.0
+
+# The four published B-1B sweep detents laid onto the Mach numbers each is flown at.
+[wing_sweep.schedule]
+mach  = [0.00, 0.70, 0.85, 0.95, 1.05, 1.25]
+sweep = [15.0, 15.0, 25.0, 55.0, 67.5, 67.5]
+
+[wing_sweep.spread]
+cl_scale  = 1.000
+k_scale   = 1.000
+cd0_delta = +0.0000
+
+[wing_sweep.swept]
+cl_scale  = 0.666
+k_scale   = 1.715
+cd0_delta = -0.0020
 
 [aero.cl_table]
 alpha  = [-4.0, 0.0, 4.0, 8.0, 11.0, 13.0, 17.0]
@@ -303,6 +332,99 @@ fl::FlightState heavyCruiseState(double altM, float speedMps) {
 constexpr double kHeavyAltM = 8000.0;
 constexpr float kHeavyCruiseMps = 200.f;
 
+// ── the manoeuvring case (#1196) ────────────────────────────────────────────────────────────────
+//
+// AltitudeHoldOnly deliberately has nothing else in the loop, which makes it a clean read on the
+// primitive and a poor model of the regime content actually flies. Two things it cannot show:
+//
+//  1. A HELD AIRSPEED. On a fixed throttle this bomber accelerates to 366-444 m/s at 8 km — M1.19
+//     to M1.44 against its own declared max_mach of 1.25 — and the acceleration is what drops trim
+//     alpha far enough to hand the loop its authority back. A bench whose pass depends on flying
+//     outside the model's envelope is measuring the throttle, not the pitch law. A route-following
+//     controller holds a cruise speed, so these cases do too.
+//  2. TURNS. Rolling into a bank costs lift, and the aircraft has to find the extra somewhere.
+//
+// Everything here beyond the pitch axis is what any route-following controller already has: a bank
+// held on attitude feedback (the #1143 law) and a rudder that coordinates it. Nothing added rescues
+// the pitch axis; the manoeuvre is the only variable.
+class HeavyManoeuvring final : public fl::IEntityController {
+  public:
+    // A route is a square circuit `legM` on a side. Passing bankRad instead flies one sustained
+    // banked turn, which isolates "the aircraft is turning" from "the aircraft is navigating".
+    static HeavyManoeuvring route(float targetAltM, float maxAoaRad, float targetSpeedMps, double legM) {
+        HeavyManoeuvring c(targetAltM, maxAoaRad, targetSpeedMps);
+        c.m_legM = legM;
+        return c;
+    }
+    static HeavyManoeuvring sustainedBank(float targetAltM, float maxAoaRad, float targetSpeedMps, float bankRad) {
+        HeavyManoeuvring c(targetAltM, maxAoaRad, targetSpeedMps);
+        c.m_bankRad = bankRad;
+        return c;
+    }
+
+    fl::ControlInput sample(const fl::EntityState& state, uint64_t, double dt, const fl::AiTickContext&) override {
+        fl::ControlInput ctrl{};
+        const glm::dvec3 pos(state.transform.pos[0], state.transform.pos[1], state.transform.pos[2]);
+        const float spd = std::sqrt(state.transform.vel[0] * state.transform.vel[0] +
+                                    state.transform.vel[1] * state.transform.vel[1] +
+                                    state.transform.vel[2] * state.transform.vel[2]);
+        ctrl.throttle = fl::ai::throttleForSpeed(spd, m_targetSpeedMps, kHeavyTrimThrottle);
+
+        if (m_legM > 0.0) {
+            // Chase the current waypoint; advance when inside the capture radius. The heading error
+            // jumps at each corner, which is what makes the bank swing rather than settle.
+            const glm::dvec3 wps[4] = {{m_legM, 0.0, 0.0}, {m_legM, 0.0, m_legM}, {0.0, 0.0, m_legM}, {0.0, 0.0, 0.0}};
+            glm::dvec3 wp = wps[m_wp % 4];
+            wp.y = pos.y; // the waypoint is a ground track; altitude is the pitch axis's business
+            const double dx = wp.x - pos.x, dz = wp.z - pos.z;
+            if (std::sqrt(dx * dx + dz * dz) < kWaypointCaptureM)
+                ++m_wp;
+            const double wpArr[3] = {wp.x, wp.y, wp.z};
+            const float headErr = fl::ai::horizontalHeadingError(state.transform.quat, state.transform.pos, wpArr, kR);
+            ctrl.aileron =
+                fl::ai::bankToTurnAileron(state.transform.quat, state.transform.pos, headErr, kR, fl::ai::kNavBankRad);
+        } else {
+            ctrl.aileron = fl::ai::aileronFromBankError(m_bankRad - fl::bankOf(state.transform.quat, pos, kR));
+        }
+        ctrl.rudder = fl::ai::rudderToCoordinate(fl::ai::sideslipOf(state.transform.quat, state.transform.vel));
+
+        // EntityState carries no body rates, so differentiate pitch across our own sample interval —
+        // the same thing every station-keeping controller does.
+        const float curPitch = fl::pitchOf(state.transform.quat, pos, kR);
+        float pitchRate = 0.f;
+        if (m_havePrevPitch && dt > 1e-6)
+            pitchRate = static_cast<float>((curPitch - m_prevPitchRad) / dt);
+        m_prevPitchRad = curPitch;
+        m_havePrevPitch = true;
+
+        ctrl.elevator = fl::ai::elevatorForAltitudeHold(state.transform.quat, state.transform.pos, state.transform.vel,
+                                                        m_targetAltM, kR, pitchRate, m_maxAoaRad);
+        return ctrl;
+    }
+
+  private:
+    HeavyManoeuvring(float targetAltM, float maxAoaRad, float targetSpeedMps)
+        : m_targetAltM(targetAltM), m_maxAoaRad(maxAoaRad), m_targetSpeedMps(targetSpeedMps) {}
+
+    static constexpr float kHeavyTrimThrottle = 0.85f;
+    static constexpr double kWaypointCaptureM = 4000.0; // a 207 t aircraft does not hit a point
+
+    float m_targetAltM;
+    float m_maxAoaRad;
+    float m_targetSpeedMps;
+    double m_legM{0.0};
+    float m_bankRad{0.f};
+    float m_prevPitchRad{0.f};
+    bool m_havePrevPitch{false};
+    int m_wp{0};
+};
+
+// The cruise these cases fly: M0.84 at 8 km, which is the bomber's own published cruise and well
+// clear of its ~180 m/s 1 g stall there.
+constexpr float kHeavyRouteMps = 260.f;
+constexpr double kHeavyLegM = 80000.0;
+constexpr int kHeavyRouteSeconds = 480;
+
 } // namespace
 
 TEST_CASE("elevatorForAltitudeHold holds a HEAVY aircraft when the AoA bound is sized to it (#1186)",
@@ -322,8 +444,14 @@ TEST_CASE("elevatorForAltitudeHold holds a HEAVY aircraft when the AoA bound is 
                        << " endSpeed " << t.endSpeedMps << " crashTime " << t.crashTimeS);
     CHECK_FALSE(t.crashed());
     CHECK(t.secondsFlown == Catch::Approx(180.0));
-    // Held, not merely still airborne. Measured excursion is ~222 m; 400 m is the operational bound
+    // Held, not merely still airborne. Measured excursion is ~292 m; 400 m is the operational bound
     // that makes a spawn AGL mean something, the same standard #1141 set for the fighter.
+    //
+    // ⚑ THE FIXED THROTTLE IS DOING PART OF THE WORK HERE, and it is worth knowing which part: over
+    // these 180 s the aircraft accelerates to 366 m/s, which at 8 km is M1.19 — near its declared
+    // max_mach of 1.25 — and the speed is what drops trim alpha. That is the honest limit of a
+    // wings-level fixed-throttle bench and the reason #1196 added the manoeuvring cases below, which
+    // hold a cruise speed instead and reach the same verdict without the assist.
     CHECK(t.minAltM > kHeavyAltM - 400.0);
     CHECK(std::abs(t.endAltM - kHeavyAltM) < 400.0);
 }
@@ -331,11 +459,15 @@ TEST_CASE("elevatorForAltitudeHold holds a HEAVY aircraft when the AoA bound is 
 TEST_CASE("the default AoA bound is fighter-sized, and a heavy aircraft sags kilometres on it (#1186)",
           "[guidance][altitude][heavy]") {
     // The reason the parameter exists, pinned so nobody "simplifies" it away. The same aircraft in
-    // the same scenario on the fighter-sized default drops to ~5,470 m — a 2,530 m excursion, an
-    // order of magnitude past the 150 m #1141 called a defect for the fighter, and fatal at any
-    // realistic AGL. It eventually recovers here only because a fixed 0.85 throttle accelerates it
-    // to ~370 m/s, which drops trim alpha far enough to give the loop its authority back; that
-    // rescue is the throttle's doing, not the altitude loop's.
+    // the same scenario on the fighter-sized default drops to ~3,772 m — a 4,229 m excursion, well
+    // past the 150 m #1141 called a defect for the fighter, and fatal at any realistic AGL. It
+    // eventually recovers here only because a fixed 0.85 throttle accelerates it to ~416 m/s (M1.35,
+    // past its own max_mach), which drops trim alpha far enough to give the loop its authority back;
+    // that rescue is the throttle's doing, not the altitude loop's.
+    //
+    // ⚑ The excursion was measured at 2,530 m before #1196 gave this model its [wing_sweep] block.
+    // The defect was worse than the bench could show, because the bench was flying a fixed-geometry
+    // aeroplane with the B-1B's mass.
     //
     // This pins the DEFAULT's behaviour, not a wish. A change that makes one bound serve both
     // classes should delete this test deliberately, having read why it was here.
@@ -348,6 +480,107 @@ TEST_CASE("the default AoA bound is fighter-sized, and a heavy aircraft sags kil
 
     INFO("alt: start " << t.startAltM << " min " << t.minAltM << " end " << t.endAltM << " endSpeed " << t.endSpeedMps);
     CHECK(t.minAltM < kHeavyAltM - 1500.0); // and the sized-bound case above proves it need not
+}
+
+TEST_CASE("elevatorForAltitudeHold holds a HEAVY aircraft through a route of hard turns (#1196)",
+          "[guidance][altitude][heavy]") {
+    // THE COVERAGE GAP #1196 IS ABOUT. #1186's cases fly wings level on a fixed throttle, which is
+    // neither the regime content flies nor a condition this aircraft can legally sustain (see
+    // HeavyManoeuvring's note on the M1.4 runaway). Put the same airframe at the same weight on a
+    // route with 45 deg-limited turns, holding its published cruise, and the sized bound still
+    // holds: measured min 7,895 m over 480 s, a 105 m excursion.
+    //
+    // That answers the question the issue posed as a fork — "either make the loop hold a heavy
+    // aircraft through a sustained turn, or state plainly that it does not". It does. Measured
+    // against the older explicit law (pitch_error_from_alt on an 18 s lead) on this identical
+    // scenario, the primitive is also BETTER: 105 m of excursion against 194 m.
+    const auto model = std::make_shared<const fl::FlightModelData>(fl::parseFlightModel(kHeavyBomber));
+
+    HeavyManoeuvring ctrl =
+        HeavyManoeuvring::route(static_cast<float>(kHeavyAltM), /*maxAoaRad=*/0.45f, kHeavyRouteMps, kHeavyLegM);
+    const fl::test::FlightTrace t =
+        fl::test::flyController(ctrl, heavyCruiseState(kHeavyAltM, kHeavyRouteMps), kHeavyRouteSeconds, {}, {}, model);
+
+    INFO("alt: min " << t.minAltM << " max " << t.maxAltM << " end " << t.endAltM << " bank " << t.maxAbsBankDeg
+                     << " slip " << t.maxAbsSideslipDeg << " endSpeed " << t.endSpeedMps);
+    CHECK_FALSE(t.crashed());
+    CHECK(t.secondsFlown == Catch::Approx(static_cast<double>(kHeavyRouteSeconds)));
+    // Held, on the same 400 m operational standard #1141 set for the fighter and #1186 for the
+    // wings-level heavy.
+    CHECK(t.minAltM > kHeavyAltM - 400.0);
+    CHECK(std::abs(t.endAltM - kHeavyAltM) < 400.0);
+    // It really did turn, and it turned coordinated — otherwise this is the wings-level case again
+    // under a longer name.
+    CHECK(t.maxAbsBankDeg > 40.f);
+    CHECK(t.maxAbsSideslipDeg < 5.f);
+}
+
+TEST_CASE("the manoeuvring heavy case stays inside the model's own envelope (#1196)", "[guidance][altitude][heavy]") {
+    // A HARNESS-INTEGRITY GUARD, not a behaviour claim. #1186's fixed-throttle bench accelerates
+    // this bomber to 366-444 m/s at 8 km — M1.19 to M1.44 against a declared max_mach of 1.25 — and
+    // the acceleration is what drops trim alpha far enough to rescue the loop. So "the primitive
+    // holds" was partly "the throttle bailed it out", in a regime the aircraft is not cleared for.
+    //
+    // Speed is held here instead, and this pins that it stays held. Without it a future tweak to the
+    // scenario could quietly go supersonic again and nobody would read the result differently.
+    const auto model = std::make_shared<const fl::FlightModelData>(fl::parseFlightModel(kHeavyBomber));
+    REQUIRE(model->limits.max_mach == Catch::Approx(1.25f));
+
+    HeavyManoeuvring ctrl =
+        HeavyManoeuvring::route(static_cast<float>(kHeavyAltM), /*maxAoaRad=*/0.45f, kHeavyRouteMps, kHeavyLegM);
+    const fl::test::FlightTrace t =
+        fl::test::flyController(ctrl, heavyCruiseState(kHeavyAltM, kHeavyRouteMps), kHeavyRouteSeconds, {}, {}, model);
+
+    // Speed of sound at 8,000 m ISA. The aircraft ends near 300 m/s (M0.98) on the throttle loop.
+    constexpr float kSpeedOfSoundAt8kmMps = 308.1f;
+    const float endMach = t.endSpeedMps / kSpeedOfSoundAt8kmMps;
+    INFO("end speed " << t.endSpeedMps << " m/s = M" << endMach);
+    CHECK(endMach < model->limits.max_mach);
+}
+
+TEST_CASE("the fighter-sized default sags kilometres on the same route (#1196)", "[guidance][altitude][heavy]") {
+    // The other half of the pair, and the reason the parameter exists at all. Identical scenario,
+    // identical aircraft, the default bound: measured min 2,398 m — 5.6 km below the commanded
+    // altitude, against the 105 m the sized bound holds to.
+    //
+    // Note this is DEEPER than the 2,530 m #1186's wings-level bench reports, for two compounding
+    // reasons this file previously could not show: the model now carries its [wing_sweep] block, and
+    // the aircraft is turning rather than accelerating away from the problem.
+    const auto model = std::make_shared<const fl::FlightModelData>(fl::parseFlightModel(kHeavyBomber));
+
+    HeavyManoeuvring ctrl =
+        HeavyManoeuvring::route(static_cast<float>(kHeavyAltM), fl::ai::kDefaultMaxAoaRad, kHeavyRouteMps, kHeavyLegM);
+    const fl::test::FlightTrace t =
+        fl::test::flyController(ctrl, heavyCruiseState(kHeavyAltM, kHeavyRouteMps), kHeavyRouteSeconds, {}, {}, model);
+
+    INFO("alt: min " << t.minAltM << " end " << t.endAltM << " endSpeed " << t.endSpeedMps);
+    CHECK(t.minAltM < kHeavyAltM - 1500.0);
+}
+
+TEST_CASE("a sustained banked turn costs the sized bound almost nothing (#1196)", "[guidance][altitude][heavy]") {
+    // Isolates "turning" from "navigating": one 35 deg bank held for the whole run, which is the
+    // bank fl-base-pack's bomber-stream mission flies. The sized bound gives up 91 m; the default
+    // gives up 5.6 km. Sweeping the bank shows the cost is monotonic in it and entirely borne by the
+    // default: 0 deg / 10 / 20 / 35 measure 4,578 / 4,402 / 3,877 / 2,365 m on 0.20 against
+    // 7,930 / 7,929 / 7,924 / 7,909 m on 0.45.
+    const auto model = std::make_shared<const fl::FlightModelData>(fl::parseFlightModel(kHeavyBomber));
+    constexpr float kBank35Rad = 0.611f;
+
+    HeavyManoeuvring sized = HeavyManoeuvring::sustainedBank(static_cast<float>(kHeavyAltM), /*maxAoaRad=*/0.45f,
+                                                             kHeavyRouteMps, kBank35Rad);
+    const fl::test::FlightTrace ts =
+        fl::test::flyController(sized, heavyCruiseState(kHeavyAltM, kHeavyRouteMps), kHeavyRouteSeconds, {}, {}, model);
+    INFO("sized: min " << ts.minAltM << " bank " << ts.maxAbsBankDeg);
+    CHECK_FALSE(ts.crashed());
+    CHECK(ts.minAltM > kHeavyAltM - 400.0);
+    CHECK(ts.maxAbsBankDeg > 30.f);
+
+    HeavyManoeuvring dflt = HeavyManoeuvring::sustainedBank(static_cast<float>(kHeavyAltM), fl::ai::kDefaultMaxAoaRad,
+                                                            kHeavyRouteMps, kBank35Rad);
+    const fl::test::FlightTrace td =
+        fl::test::flyController(dflt, heavyCruiseState(kHeavyAltM, kHeavyRouteMps), kHeavyRouteSeconds, {}, {}, model);
+    INFO("default: min " << td.minAltM);
+    CHECK(td.minAltM < kHeavyAltM - 1500.0);
 }
 
 TEST_CASE("widening the AoA bound does not change what a fighter does (#1186)", "[guidance][altitude]") {

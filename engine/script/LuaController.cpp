@@ -261,6 +261,26 @@ static int guidanceSideslip(lua_State* L) {
     return 1;
 }
 
+// pitch_of(quat, own_pos, [radius_m]) — pitch attitude [rad] relative to the LOCAL horizon, so it is
+// correct anywhere on the sphere rather than only near the world origin (#1196).
+//
+// It exists because elevator_for_altitude_hold's damping term needs a pitch RATE, and a script had
+// no way to observe pitch at all: EntityState carries world velocity and an orientation quaternion
+// but no body angular rates, so a controller differentiates pitch across its own sample interval —
+// which it cannot do without being able to read pitch. Every engine-side controller does exactly
+// this; the seam simply never exposed the first half.
+static int guidancePitchOf(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE); // quat
+    luaL_checktype(L, 2, LUA_TTABLE); // own_pos
+    float quat[4];
+    double own[3];
+    readQuat(L, 1, quat);
+    readVec3(L, 2, own);
+    const double R = luaL_optnumber(L, 3, fl::kEarthRadiusM);
+    lua_pushnumber(L, static_cast<double>(fl::pitchOf(quat, glm::dvec3(own[0], own[1], own[2]), R)));
+    return 1;
+}
+
 // rudder_to_coordinate(sideslip_rad) — rudder that nulls a skid. THIS is turn coordination;
 // coordinated_rudder(aileron) commands nothing in a steady turn, where the aileron is already zero.
 static int guidanceRudderToCoordinate(lua_State* L) {
@@ -269,12 +289,19 @@ static int guidanceRudderToCoordinate(lua_State* L) {
     return 1;
 }
 
-// elevator_for_altitude_hold(quat, own_pos, vel, target_alt_m, [radius_m, [max_aoa_rad]]) —
-// altitude hold closed on CLIMB RATE. pitch_error_from_alt commands a pitch attitude and cannot
-// tell "nose up" from "climbing": an aircraft mushing nose-high while descending satisfies it
-// completely (#1141). max_aoa_rad sizes the loop to the airframe (#1186): the default serves a
-// fighter, and a heavy aircraft must widen it or the bounded elevator can never reach the trim its
-// level flight needs.
+// elevator_for_altitude_hold(quat, own_pos, vel, target_alt_m, [radius_m, [max_aoa_rad,
+// [pitch_rate_rad_s]]]) — altitude hold closed on CLIMB RATE. pitch_error_from_alt commands a pitch
+// attitude and cannot tell "nose up" from "climbing": an aircraft mushing nose-high while descending
+// satisfies it completely (#1141). max_aoa_rad sizes the loop to the airframe (#1186): the default
+// serves a fighter, and a heavy aircraft must widen it or the bounded elevator can never reach the
+// trim its level flight needs.
+//
+// pitch_rate_rad_s is the inner-loop damping (#1196). This binding used to pin it to zero with no
+// way to supply it, so every scripted controller ran the loop WITHOUT the term the primitive's own
+// documentation calls "not optional in practice" — while the engine's C++ controllers all passed it.
+// Content flies the heavy aircraft this cascade was sized for, so content is precisely who needed
+// it. Like the C++ side, a caller differentiates pitch across its own sample interval: EntityState
+// carries world velocity but no body angular rates, on either side of the seam.
 static int guidanceElevatorForAltitudeHold(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE); // quat
     luaL_checktype(L, 2, LUA_TTABLE); // own_pos
@@ -289,7 +316,9 @@ static int guidanceElevatorForAltitudeHold(lua_State* L) {
     const float velF[3] = {static_cast<float>(vel[0]), static_cast<float>(vel[1]), static_cast<float>(vel[2])};
     const double R = luaL_optnumber(L, 5, fl::kEarthRadiusM);
     const float maxAoa = static_cast<float>(luaL_optnumber(L, 6, static_cast<double>(fl::ai::kDefaultMaxAoaRad)));
-    lua_pushnumber(L, static_cast<double>(fl::ai::elevatorForAltitudeHold(quat, own, velF, targetAlt, R, 0.f, maxAoa)));
+    const float pitchRate = static_cast<float>(luaL_optnumber(L, 7, 0.0));
+    lua_pushnumber(
+        L, static_cast<double>(fl::ai::elevatorForAltitudeHold(quat, own, velF, targetAlt, R, pitchRate, maxAoa)));
     return 1;
 }
 
@@ -858,6 +887,7 @@ static void registerGuidanceModule(lua_State* L) {
         {"elevator_for_altitude_hold", guidanceElevatorForAltitudeHold},
         {"elevator_from_pitch_error", guidanceElevatorFromPitchError},
         {"body_forward", guidanceBodyForward},
+        {"pitch_of", guidancePitchOf},
         {nullptr, nullptr},
     };
     lua_newtable(L);

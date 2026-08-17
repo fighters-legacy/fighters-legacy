@@ -623,6 +623,27 @@ TEST_CASE("LuaController: guidance elevator_for_altitude_hold commands toward th
     high.transform.vel[1] = 0.f;
     high.transform.vel[2] = 0.f;
     CHECK(c->sample(high, 0, 1.0 / 60.0, fl::AiTickContext{}).elevator < 0.f); // above target: nose down
+
+    // The inner-loop pitch-rate damping (#1196) is reachable from Lua at all. This binding pinned it
+    // to zero with no argument to supply it, so every scripted controller ran the cascade WITHOUT
+    // the term Guidance.h calls "not optional in practice" — while every C++ controller passed it.
+    // A nose-up rate must subtract from the command, exactly as it does on the C++ side.
+    auto damped = makeCtrl("function compute_control(s,t,dt)\n"
+                           "  return {elevator = guidance.elevator_for_altitude_hold(s.quat, s.pos, s.vel, 2000.0,"
+                           " 6371000.0, 0.20, 0.5)}\n"
+                           "end");
+    REQUIRE(damped->isValid());
+    CHECK(damped->sample(low, 0, 1.0 / 60.0, fl::AiTickContext{}).elevator <
+          c->sample(low, 0, 1.0 / 60.0, fl::AiTickContext{}).elevator);
+
+    // Omitting it is bit-identical to the old behaviour, so no existing script changes.
+    auto omitted = makeCtrl("function compute_control(s,t,dt)\n"
+                            "  return {elevator = guidance.elevator_for_altitude_hold(s.quat, s.pos, s.vel, 2000.0,"
+                            " 6371000.0, 0.20)}\n"
+                            "end");
+    REQUIRE(omitted->isValid());
+    CHECK(omitted->sample(low, 0, 1.0 / 60.0, fl::AiTickContext{}).elevator ==
+          Catch::Approx(c->sample(low, 0, 1.0 / 60.0, fl::AiTickContext{}).elevator));
 }
 
 // --- the documented example actually runs (#694) --------------------------------------------------
