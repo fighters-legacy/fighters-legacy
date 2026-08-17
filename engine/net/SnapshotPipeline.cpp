@@ -5,6 +5,7 @@
 #include "INetwork.h"
 #include "entity/EntityManager.h"
 #include "entity/EntityState.h"
+#include "flight/ArticulationChannels.h"
 #include "flight/EngineFailFlags.h"
 #include "flight/FlightIntegrator.h"
 #include "job/JobSystem.h"
@@ -77,18 +78,22 @@ void SnapshotPipeline::run(uint64_t tickIndex, uint32_t govSnapInterval, float g
         uint8_t fuelPct;
         uint8_t abEngaged;
         uint8_t engineFailFlags;
-        float omega[3];                   // body-frame angular rates p,q,r (rad/s)
-        ArticulationState articulation{}; // actuator positions (#843)
+        float omega[3];                        // body-frame angular rates p,q,r (rad/s)
+        float artChannels[kArtChannelCount]{}; // normalized articulation channels (#843, #1195)
     };
     std::unordered_map<uint32_t, TelemetryEntry> entityTelemetry;
     for (auto& [entityIdx, ce] : m_wb.m_controlledEntities) {
         const auto& s = ce.sim->state();
-        entityTelemetry[entityIdx] = {static_cast<uint8_t>(s.throttle_actual * 100.f),
-                                      static_cast<uint8_t>(std::clamp(s.fuel_kg / 4000.f * 100.f, 0.f, 100.f)),
-                                      static_cast<uint8_t>(s.ab_engaged ? 1u : 0u),
-                                      s.engineFailFlags,
-                                      {s.omega[0], s.omega[1], s.omega[2]},
-                                      s.articulation};
+        TelemetryEntry te{static_cast<uint8_t>(s.throttle_actual * 100.f),
+                          static_cast<uint8_t>(std::clamp(s.fuel_kg / 4000.f * 100.f, 0.f, 100.f)),
+                          static_cast<uint8_t>(s.ab_engaged ? 1u : 0u),
+                          s.engineFailFlags,
+                          {s.omega[0], s.omega[1], s.omega[2]},
+                          {}};
+        // ONE mapping, shared with the client's own-aircraft path (#1195). Reading the channels off
+        // FlightState by hand here is what left `sweep` dark for two releases.
+        fillArtChannels(s, ce.sim->flightModel(), te.artChannels);
+        entityTelemetry[entityIdx] = te;
     }
 
     // Articulation table (#843): the quantized channel values for every entity whose actuators are
@@ -105,17 +110,21 @@ void SnapshotPipeline::run(uint64_t tickIndex, uint32_t govSnapInterval, float g
     };
     std::unordered_map<uint32_t, ArtSnap> artSnap;
     for (const auto& [entityIdx, tel] : entityTelemetry) {
-        const ArticulationState& a = tel.articulation;
-        const float ch[5] = {a.gear, a.flaps, a.speedbrake, a.hook, a.canopy};
-        static constexpr ArtChannel kMap[5] = {ArtChannel::Gear, ArtChannel::Flaps, ArtChannel::Speedbrake,
-                                               ArtChannel::Hook, ArtChannel::Canopy};
         ArtSnap out;
         uint8_t n = 0;
-        for (int i = 0; i < 5; ++i) {
-            if (!(ch[i] > 0.f))
+        for (std::size_t i = 0; i < kArtChannelCount; ++i) {
+            const auto channel = static_cast<ArtChannel>(i);
+            const float v = tel.artChannels[i];
+            if (v == artChannelNeutral(channel))
                 continue; // at neutral: omit, so an unarticulated entity is free
-            out.mask = static_cast<uint16_t>(out.mask | (1u << static_cast<unsigned>(kMap[i])));
-            out.values[n++] = static_cast<uint8_t>(std::lround(std::clamp(ch[i], 0.f, 1.f) * 255.f));
+            out.mask = static_cast<uint16_t>(out.mask | (1u << i));
+            // Signed channels are offset binary around 128; unsigned a plain 0..255 fraction. The
+            // decoder has always read both (ClientNetEventHandler), and testing `> 0.f` here instead
+            // of "off neutral" would silently drop every negative value the moment a signed channel
+            // acquires a writer.
+            out.values[n++] = artChannelIsSigned(channel)
+                                  ? static_cast<uint8_t>(std::lround(std::clamp(v, -1.f, 1.f) * 127.f) + 128)
+                                  : static_cast<uint8_t>(std::lround(std::clamp(v, 0.f, 1.f) * 255.f));
         }
         out.count = n;
         if (out.mask != 0) {

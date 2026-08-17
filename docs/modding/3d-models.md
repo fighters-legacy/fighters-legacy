@@ -281,24 +281,35 @@ A second clip would be duplicate state to keep in sync, and it matches no shippi
 
 One clip per channel. **The clip's name IS the channel name.** A clip may target any number of nodes.
 
-| Clip | Semantics | Range |
-|---|---|---|
-| `gear` | 0 = up, doors closed; 1 = down-locked. One clip sequences struts, doors and linkages | 0..1 |
-| `flaps` | 0 = clean, 1 = full. Slats may live in the same clip | 0..1 |
-| `speedbrake` | 0 = stowed, 1 = deployed | 0..1 |
-| `hook` | 0 = stowed, 1 = down | 0..1 |
-| `canopy` | 0 = closed, 1 = open | 0..1 |
-| `sweep` | 0 = `[wing_sweep] min_deg`, 1 = `max_deg` | 0..1 |
-| `tvc_pitch` | −1 = `[aero.tvc] min_angle_deg`, +1 = `max_angle_deg` | −1..+1 |
-| `tvc_yaw` | reserved (the sim is pitch-only today) | −1..+1 |
-| `elevator` | −1 = full nose-down, +1 = full nose-up | −1..+1 |
-| `aileron` | +1 = right-roll command; one clip animates both surfaces | −1..+1 |
-| `rudder` | +1 = right yaw | −1..+1 |
-| `prop_spin` (also `rotor_spin`, `wheel_spin`) | **Looping**: the playhead advances at `rate × (1/duration)` rev/s | rate |
-| `bay` | 0 = closed, 1 = open | 0..1 |
-| `gear_compress_nose` / `_left` / `_right` | 0 = extended, 1 = bottomed. Oleo compression, derived client-side | 0..1 |
+| Clip | Semantics | Range | Driven |
+|---|---|---|---|
+| `gear` | 0 = up, doors closed; 1 = down-locked. One clip sequences struts, doors and linkages | 0..1 | yes |
+| `flaps` | 0 = clean, 1 = full. Slats may live in the same clip | 0..1 | yes |
+| `speedbrake` | 0 = stowed, 1 = deployed | 0..1 | yes |
+| `hook` | 0 = stowed, 1 = down | 0..1 | yes |
+| `canopy` | 0 = closed, 1 = open | 0..1 | yes |
+| `sweep` | 0 = `[wing_sweep] min_deg`, 1 = `max_deg` | 0..1 | yes |
+| `tvc_pitch` | −1 = `[aero.tvc] min_angle_deg`, +1 = `max_angle_deg` | −1..+1 | **not yet** |
+| `tvc_yaw` | reserved (the sim is pitch-only today) | −1..+1 | **not yet** |
+| `elevator` | −1 = full nose-down, +1 = full nose-up | −1..+1 | **not yet** |
+| `aileron` | +1 = right-roll command; one clip animates both surfaces | −1..+1 | **not yet** |
+| `rudder` | +1 = right yaw | −1..+1 | **not yet** |
+| `prop_spin` (also `rotor_spin`, `wheel_spin`) | **Looping**: the playhead advances at `rate × (1/duration)` rev/s | rate | **not yet** |
+| `bay` | 0 = closed, 1 = open | 0..1 | **not yet** |
+| `gear_compress_nose` / `_left` / `_right` | 0 = extended, 1 = bottomed. Oleo compression, derived client-side | 0..1 | **not yet** |
 
 Gear *compression* is a separate channel from gear *deploy*, as it is in every sim that models both.
+
+!!! warning "“Not yet” means the clip will not move"
+    A channel nothing writes holds its neutral forever, so a clip authored on it validates, loads,
+    and then sits at frame zero for the life of the aircraft. `validate-mesh` cannot tell you — the
+    clip is perfectly well formed; it is the simulation end that is missing.
+
+    This is not hypothetical: `sweep` sat in that state through two releases, and the first content
+    to author a `sweep` clip (fl-base-pack’s B-1B) flew with frozen wings for every observer,
+    including the player in the cockpit, while its flight model swept correctly the whole time
+    (#1195). If you need one of the remaining channels, open an issue rather than authoring against
+    it — wiring one up is a line of engine code, but nothing will tell you it is missing.
 
 ### Authoring rules
 

@@ -50,6 +50,16 @@ struct WorldStateEntity {
     double pos[3]{};          // world position (m)
     float vel[3]{};           // world velocity (m/s)
     float hpFrac{0.f};        // hp / maxHp in [0,1] (0 when maxHp == 0)
+    // Current wing sweep in DEGREES (#1195), 0 for anything without a [wing_sweep] table. Filled by
+    // WorldBroadcaster from the entity's flight integrator, not by buildWorldStateSnapshot — which
+    // sees only the entity pool and stays pure.
+    //
+    // It is here because until #1195 the angle was readable NOWHERE outside the integrator: not on
+    // the Lua state table, not in --mission-report, not in the replay, not from any console command,
+    // so "does this aircraft's sweep follow its Mach schedule" could only be answered by an
+    // in-process C++ test. This is the headless answer, and it is degrees rather than the 0..1 wire
+    // fraction because a reader wants to compare it against the schedule the model publishes.
+    float sweepDeg{0.f};
 };
 
 // One connected peer's summary (the "peer picture" the snapshot carries alongside entities).

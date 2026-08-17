@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "world_broadcaster_test_util.h"
 
+#include <bit>
+
 using namespace fl;
 
 // ---------------------------------------------------------------------------
@@ -1494,6 +1496,108 @@ TEST_CASE("WorldBroadcaster: articulation TLV round-trips channel mask and value
     CHECK((mask & (1u << static_cast<unsigned>(fl::ArtChannel::Canopy))) == 0u); // never commanded
     // Values follow in ascending channel order; gear is first and fully down.
     CHECK(p[6] == 255u);
+}
+
+// ---------------------------------------------------------------------------
+// Wing sweep on the articulation TLV (#1195)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// The wire cases fly a wing parked at 45 deg. On a 15..67.5 range that is 30/52.5 of the travel,
+// and the wire carries round(fraction * 255).
+constexpr float kVgRefSweepDeg = 45.f;
+constexpr uint8_t kExpectedSweepByte = 146u; // round(0.571428 * 255) == 146
+
+// Drive the peer for long enough that the actuators settle, then scan a refresh window for the TLV.
+// Settled state rides the periodic refresh, so no single tick is guaranteed to carry it.
+inline std::vector<uint8_t> settleAndCaptureArtTlv(fl::WorldBroadcaster& wb, MockNetwork& net) {
+    for (uint32_t t = 0; t < 400; ++t) {
+        sendArticulationInput(wb, 0u, t + 1u, fl::kArtButtonGearDown, 0u);
+        wb.onTick(1.0 / 60.0, t + 1u);
+    }
+    std::vector<uint8_t> tlv;
+    for (uint32_t t = 400; t < 400 + 40 && tlv.empty(); ++t) {
+        clearSnapshots(net);
+        sendArticulationInput(wb, 0u, t + 1u, fl::kArtButtonGearDown, 0u);
+        wb.onTick(1.0 / 60.0, t + 1u);
+        const SnapshotExt ext = lastSnapshotExt(net, 0u);
+        if (ext.data == nullptr)
+            continue;
+        uint16_t len = 0;
+        if (const uint8_t* found =
+                fl::findExt(ext.data, ext.size, static_cast<uint16_t>(fl::ExtTag::SnapshotArticulation), len);
+            found != nullptr && len >= 6u)
+            tlv.assign(found, found + len);
+    }
+    return tlv;
+}
+
+} // namespace
+
+TEST_CASE("WorldBroadcaster: a variable-geometry wing reaches the articulation TLV (#1195)",
+          "[world_broadcaster][articulation][sweep]") {
+    // THE DEFECT. ArtChannel::Sweep was declared, documented for mod authors and sampled by the
+    // renderer, and no code anywhere wrote it: the server sent five of sixteen channels and sweep
+    // was not among them, so a swing-wing aircraft rendered permanently at min_deg for every
+    // observer while its flight model swept correctly the entire time.
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityDef def = makeDebugDef();
+    def.flightModelAsset = "models/vg";
+    registry.registerType(def);
+    fl::EntityManager em(logger, registry);
+
+    const auto vg =
+        std::make_shared<const fl::FlightModelData>(fl::parseFlightModel(makeVgFlightModelToml(kVgRefSweepDeg)));
+    fl::WorldQueries queries;
+    queries.flightModel = [&](const std::string&) { return vg; };
+    fl::WorldBroadcaster wb(em, registry, net, logger, nullptr, std::move(queries));
+    wb.setRateLimitParams(100, 10, 1000); // the wall-clock flood guard, as in the #843 cases above
+    connectPilotPeer(wb, net, 0u);
+
+    const std::vector<uint8_t> tlv = settleAndCaptureArtTlv(wb, net);
+    REQUIRE(tlv.size() >= 6u);
+
+    uint16_t mask = 0;
+    std::memcpy(&mask, tlv.data() + 4, 2);
+    REQUIRE((mask & (1u << static_cast<unsigned>(fl::ArtChannel::Sweep))) != 0u);
+    // Gear is down (a pilot spawns parked) and precedes sweep in the enum, so it is the first value
+    // and sweep the second — which pins the ascending-channel-order contract as well.
+    REQUIRE((mask & (1u << static_cast<unsigned>(fl::ArtChannel::Gear))) != 0u);
+    CHECK(tlv[6] == 255u);
+    CHECK(tlv[7] == kExpectedSweepByte);
+
+    // And the receiver recovers the angle. This is the client's own decode arithmetic
+    // (ClientNetEventHandler: unsigned channels are q/255), run back through the wing's limits — so
+    // the assertion is "a client draws the wing where the simulation put it", not "a byte moved".
+    const float decoded = static_cast<float>(tlv[7]) / 255.f;
+    const float deg = 15.f + decoded * (67.5f - 15.f);
+    CHECK(deg == Catch::Approx(45.f).margin(0.2f)); // 1/255 of 52.5 deg is 0.21 deg of quantization
+}
+
+TEST_CASE("WorldBroadcaster: a fixed-geometry aircraft emits no sweep channel (#1195)",
+          "[world_broadcaster][articulation][sweep]") {
+    // The cost claim. Everything without a [wing_sweep] table must stay off the wire entirely: the
+    // channel is neutral, so it is absent, so the snapshot is byte-identical to pre-#1195 for every
+    // aircraft in the game but the swing-wings.
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef()); // no flightModelAsset -> the builtin, fixed-geometry model
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster wb(em, registry, net, logger);
+    wb.setRateLimitParams(100, 10, 1000);
+    connectPilotPeer(wb, net, 0u);
+
+    const std::vector<uint8_t> tlv = settleAndCaptureArtTlv(wb, net);
+    REQUIRE(tlv.size() >= 6u); // gear is down, so there IS a TLV to look at
+
+    uint16_t mask = 0;
+    std::memcpy(&mask, tlv.data() + 4, 2);
+    CHECK((mask & (1u << static_cast<unsigned>(fl::ArtChannel::Sweep))) == 0u);
+    CHECK(std::popcount(static_cast<unsigned>(mask)) == 1); // gear and nothing else — no extra byte
 }
 
 TEST_CASE("WorldBroadcaster: steady-state articulation is not resent every tick (#843)",

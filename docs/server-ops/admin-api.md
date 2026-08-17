@@ -97,6 +97,12 @@ The aggregated world snapshot: entities, the faction table with alert levels and
 matrix, peers, mission and objective state, weather and wind. Rebuilt about once a second and read
 from a published off-thread copy, so requesting it never blocks the simulation.
 
+Each entity row carries `sweep_deg`, the current wing-sweep angle in degrees (#1195), `0` for
+anything without a `[wing_sweep]` table. It is here because the angle was previously readable
+nowhere outside the flight integrator, which made "does this aircraft's sweep follow its Mach
+schedule" a question only an in-process C++ test could answer — poll this route instead, and compare
+against the detents the model publishes.
+
 Empty for the first second of a server's life, before the first snapshot is published.
 
 ### `GET /events`

@@ -3,6 +3,7 @@
 
 #include "RenderTypes.h"       // EnvironmentState
 #include "flight/AeroForces.h" // ControlInput
+#include "flight/ArticulationChannels.h"
 #include "flight/BuiltinFlightModel.h"
 #include "flight/FlightIntegrator.h"
 #include "flight/FlightModelData.h"
@@ -71,9 +72,11 @@ static FlightState entryToFlightState(const EntityRenderEntry& e, const FlightMo
     return fs;
 }
 
-// Overwrite an EntityRenderEntry from a predicted FlightState.
-// maxFuel: model.geometry.fuel_kg — needed to convert fuel_kg back to 0-100 percent.
-static void stateToEntry(const FlightState& fs, float maxFuel, EntityRenderEntry& out) {
+// Overwrite an EntityRenderEntry from a predicted FlightState. The model supplies the tank capacity
+// (fuel_kg goes back out as 0-100 percent) and, since #1195, the wing-sweep limits the `sweep`
+// articulation channel is normalized against.
+static void stateToEntry(const FlightState& fs, const FlightModelData& model, EntityRenderEntry& out) {
+    const float maxFuel = model.geometry.fuel_kg;
     out.position = {fs.pos_world[0], fs.pos_world[1], fs.pos_world[2]};
 
     // glm::quat constructor is (w,x,y,z); FlightState quat is [x,y,z,w]
@@ -94,11 +97,9 @@ static void stateToEntry(const FlightState& fs, float maxFuel, EntityRenderEntry
     // Own-ship articulation (#843): the locally integrated, FULL-PRECISION positions overwrite
     // whatever the cosmetic snapshot TLV carried for us. That is the reason the TLV can be quantized
     // to 1/255 at all — the authoritative path for a peer's own aircraft never reads the wire.
-    out.artChannels[static_cast<std::size_t>(ArtChannel::Gear)] = fs.articulation.gear;
-    out.artChannels[static_cast<std::size_t>(ArtChannel::Flaps)] = fs.articulation.flaps;
-    out.artChannels[static_cast<std::size_t>(ArtChannel::Speedbrake)] = fs.articulation.speedbrake;
-    out.artChannels[static_cast<std::size_t>(ArtChannel::Hook)] = fs.articulation.hook;
-    out.artChannels[static_cast<std::size_t>(ArtChannel::Canopy)] = fs.articulation.canopy;
+    // Built through the SAME fillArtChannels the server sends from (#1195), so the player's own
+    // aircraft can never again render a channel the rest of the world is being told about.
+    fillArtChannels(fs, model, out.artChannels);
 }
 } // namespace
 
@@ -143,7 +144,8 @@ void ClientPrediction::pushHistory(uint32_t seqNum, const BufferedInput& bi) noe
     // Snapshot the actuator positions BEFORE this input is applied (#843), so a replay can rewind to
     // exactly where they were at the acked point rather than re-integrating from a reset zero.
     const ArticulationState artBefore = m_integrator ? m_integrator->state().articulation : ArticulationState{};
-    m_history[writeIdx] = {seqNum, bi, artBefore};
+    const float sweepBefore = m_integrator ? m_integrator->state().current_sweep_deg : 0.f;
+    m_history[writeIdx] = {seqNum, bi, artBefore, sweepBefore};
     if (m_histCount < kHistorySize) {
         ++m_histCount;
     } else {
@@ -326,6 +328,13 @@ void ClientPrediction::reconcile(RenderSnapshot& snap, uint64_t tickIndex, uint3
     }
     serverState.articulation =
         (replayStart < got) ? replayBuf[replayStart].artBefore : m_integrator->state().articulation;
+    // Wing sweep rewinds with it (#1195). entryToFlightState seeds ref_sweep_deg because the wire
+    // record carries no sweep and a first reconcile has nothing better; from the second onward the
+    // integrator does, and taking the reference instead threw away every degree the schedule had
+    // slewed. On a first reconcile this reads back the value the FlightIntegrator constructor just
+    // set, which is the same reference — so the seed path is unchanged.
+    serverState.current_sweep_deg =
+        (replayStart < got) ? replayBuf[replayStart].sweepBefore : m_integrator->state().current_sweep_deg;
 
     m_integrator->reset(serverState);
     m_predictedTick = tickIndex;
@@ -348,14 +357,14 @@ void ClientPrediction::reconcile(RenderSnapshot& snap, uint64_t tickIndex, uint3
             blendedState.pos_world[0] = blended.x;
             blendedState.pos_world[1] = blended.y;
             blendedState.pos_world[2] = blended.z;
-            stateToEntry(blendedState, m_model->geometry.fuel_kg, *playerEntry);
+            stateToEntry(blendedState, *m_model, *playerEntry);
             m_lastPredPos = blended;
             return;
         }
     }
 
     // Hard snap (default path, or divergence exceeds threshold).
-    stateToEntry(m_integrator->state(), m_model->geometry.fuel_kg, *playerEntry);
+    stateToEntry(m_integrator->state(), *m_model, *playerEntry);
     m_lastPredPos = newPredPos;
     m_hasPrevPrediction = true;
 }

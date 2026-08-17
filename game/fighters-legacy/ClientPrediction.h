@@ -117,6 +117,13 @@ class ClientPrediction {
         // this the reset would zero it every reconcile and the gear would stutter, and gear position
         // is drag: the two sides would then disagree about where the aircraft is.
         ArticulationState artBefore{};
+        // Wing sweep BEFORE this input was applied (#1195), for exactly the same reason and with
+        // exactly the same consequence. Sweep is integrator-carried state that never rides the own
+        // entity's wire record, so re-seeding it from the flight model's ref_sweep_deg every
+        // reconcile — which is what the code did — pinned the own aircraft near the reference
+        // configuration however far the schedule had actually swept it. Sweep IS lift and drag
+        // ([wing_sweep.spread] -> [.swept]), so that is a prediction divergence, not just a pose.
+        float sweepBefore{0.f};
     };
 
     void pushHistory(uint32_t seqNum, const BufferedInput& bi) noexcept;

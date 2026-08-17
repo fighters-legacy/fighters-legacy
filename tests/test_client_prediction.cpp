@@ -5,6 +5,7 @@
 #include "flight/BuiltinFlightModel.h"
 #include "net/GameProtocol.h"
 #include "render/RenderSnapshot.h"
+#include "vg_flight_model.h"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -385,4 +386,69 @@ TEST_CASE("ClientPrediction / prediction disabled is a no-op", "[client_predicti
     CHECK(!pred.isInitialized());
     CHECK(snap.entries[0].position.x == Catch::Approx(origPos.x));
     CHECK(snap.entries[0].position.y == Catch::Approx(origPos.y));
+}
+
+// ---------------------------------------------------------------------------
+// Wing sweep on the own aircraft (#1195)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Spawns at 45 deg, schedule commands 67.5 deg, slews at 90 deg/s — so a handful of predicted ticks
+// visibly moves the wing and a reconcile that threw the angle away would be unmissable.
+static ClientPrediction::FlightModelResolver vgResolver(const std::shared_ptr<const FlightModelData>& m) {
+    return [m](uint32_t) { return m; };
+}
+
+constexpr std::size_t kSweepIdx = static_cast<std::size_t>(ArtChannel::Sweep);
+
+} // namespace
+
+TEST_CASE("ClientPrediction / own-ship wing sweep survives a reconcile (#1195)", "[client_prediction][sweep]") {
+    // entryToFlightState re-seeds the flight state from the SERVER's wire record, and the wire record
+    // carries no sweep — so it seeded ref_sweep_deg, every reconcile, forever. The own aircraft was
+    // therefore predicted at the reference configuration however far the schedule had actually swept
+    // it, and sweep IS lift and drag ([wing_sweep.spread] -> [.swept]): that is a prediction
+    // divergence from the server, not merely a pose. Articulation has been rewound through the input
+    // history since #843 for exactly this reason; sweep now rides along.
+    const auto model = std::make_shared<const FlightModelData>(parseFlightModel(makeVgFlightModelToml(45.f, 67.5f)));
+    REQUIRE(model->wing_sweep.has_value());
+
+    ClientPrediction pred;
+    pred.init(PredictionSettings{}, vgResolver(model), noPayload(), flatGround(), 1u, 1u);
+
+    // First reconcile initialises: the integrator is fresh, so the reference IS the right seed.
+    auto snap = makeSnap(1u, 1u, glm::dvec3{0, 8000, 0});
+    pred.reconcile(snap, 1u, 0u, ClientPrediction::kNoAckedSeqNum, makeEnv());
+    const float seeded = snap.entries[0].artChannels[kSweepIdx];
+    CHECK(seeded == Catch::Approx((45.f - 15.f) / 52.5f).margin(0.02f));
+
+    // Predict forward. 30 ticks at 90 deg/s is 45 deg of authority against a 22.5 deg gap, so the
+    // wing reaches the commanded 67.5 and stops there.
+    for (uint32_t i = 1; i <= 30u; ++i)
+        pred.onInput(makeInput(i), makeEnv());
+
+    // ...and reconcile again. THE REGRESSION: this used to snap the wing back to 45 deg.
+    auto snap2 = makeSnap(1u, 1u, glm::dvec3{0, 8000, 0});
+    pred.reconcile(snap2, 31u, 0u, ClientPrediction::kNoAckedSeqNum, makeEnv());
+    CHECK(snap2.entries[0].artChannels[kSweepIdx] == Catch::Approx(1.f).margin(0.02f));
+
+    // The same through the acked-seqNum replay window (#427), which is the path a live client takes:
+    // the rewind reads the angle out of the input history rather than the integrator.
+    for (uint32_t i = 31u; i <= 60u; ++i)
+        pred.onInput(makeInput(i), makeEnv());
+    auto snap3 = makeSnap(1u, 1u, glm::dvec3{0, 8000, 0});
+    pred.reconcile(snap3, 61u, 0u, 45u, makeEnv());
+    CHECK(snap3.entries[0].artChannels[kSweepIdx] == Catch::Approx(1.f).margin(0.02f));
+}
+
+TEST_CASE("ClientPrediction / a fixed-geometry aircraft reports no sweep (#1195)", "[client_prediction][sweep]") {
+    // The builtin model has no [wing_sweep], so the channel must stay at its neutral — the value
+    // that keeps it off the wire and renders every existing aircraft exactly as before.
+    ClientPrediction pred;
+    pred.init(PredictionSettings{}, builtinResolver(), noPayload(), flatGround(), 1u, 1u);
+
+    auto snap = makeSnap(1u, 1u, glm::dvec3{0, 500, 0});
+    pred.reconcile(snap, 1u, 0u, ClientPrediction::kNoAckedSeqNum, makeEnv());
+    CHECK(snap.entries[0].artChannels[kSweepIdx] == artChannelNeutral(ArtChannel::Sweep));
 }

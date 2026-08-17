@@ -247,6 +247,34 @@ TEST_CASE("world state carries wind and mission state", "[world_state]") {
     CHECK(snap.mission.triggersFired == 3);
 }
 
+TEST_CASE("WorldState: sweep_deg defaults to zero and survives the JSON round trip (#1195)", "[world_state]") {
+    // Wing sweep is the first flight-model quantity on this surface, and it is here because until
+    // #1195 the angle was readable NOWHERE outside the integrator — so "does this aircraft's sweep
+    // follow its Mach schedule" could only be answered by an in-process C++ test, which is what
+    // blocked fl-base-pack#66's own acceptance criterion.
+    //
+    // buildWorldStateSnapshot cannot fill it: it sees the entity pool, and the integrators belong to
+    // WorldBroadcaster, which stamps them on afterwards. So the invariant THIS test owns is that the
+    // pure builder leaves it at a defined zero for everything — which is also the honest value for
+    // an entity with no [wing_sweep] table, and for a ground vehicle or a missile.
+    NullLog log;
+    EntityTypeRegistry registry;
+    registry.registerType(makeDef("f22", ObjectCategory::AirVehicle));
+    EntityManager em(log, registry);
+    em.spawn("f22", xform(1.0, 2.0, 3.0));
+
+    WorldStateSnapshot snap =
+        buildWorldStateSnapshot(1, em, registry, nullptr, nullptr, {}, WorldStateEnvironment{}, nullptr);
+    REQUIRE(snap.entities.size() == 1u);
+    CHECK(snap.entities[0].sweepDeg == 0.f);
+    CHECK(toJson(snap).find("\"sweep_deg\": 0") != std::string::npos);
+
+    // And a stamped angle reaches the document unrounded to the degree — a reader compares it
+    // against the schedule detents the model publishes (the B-1B's are 15/25/55/67.5).
+    snap.entities[0].sweepDeg = 67.5f;
+    CHECK(toJson(snap).find("\"sweep_deg\": 67.5") != std::string::npos);
+}
+
 TEST_CASE("world-state JSON is schema-stable and escapes faction names", "[world_state][json]") {
     NullLog log;
     EntityTypeRegistry registry;
@@ -270,9 +298,9 @@ TEST_CASE("world-state JSON is schema-stable and escapes faction names", "[world
 
     // Key presence, not a whole-blob compare: the format is additive, so a new field must not fail
     // this test, but a RENAMED or REMOVED one must.
-    for (const char* key :
-         {"\"tick\": 4242", "\"weather_preset\": 2", "\"time_of_day_hours\"", "\"wind\"", "\"mission\"", "\"factions\"",
-          "\"relationships\"", "\"peers\"", "\"entities\"", "\"alert_level\": 1", "\"idx\"", "\"pos\"", "\"hp_frac\""})
+    for (const char* key : {"\"tick\": 4242", "\"weather_preset\": 2", "\"time_of_day_hours\"", "\"wind\"",
+                            "\"mission\"", "\"factions\"", "\"relationships\"", "\"peers\"", "\"entities\"",
+                            "\"alert_level\": 1", "\"idx\"", "\"pos\"", "\"hp_frac\"", "\"sweep_deg\""})
         CHECK(json.find(key) != std::string::npos);
 
     CHECK(json.find("NATO \\\"North\\\"") != std::string::npos);

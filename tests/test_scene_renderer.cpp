@@ -1379,6 +1379,31 @@ static const char* kRiggedGltf = R"({
   }]
 })";
 
+// The same rig authored on the `sweep` channel instead (#1195): a wing node translating from
+// (0,0,0) at t=0 to (0,-4,0) at t=2. Identical bytes; only the animation and node names differ,
+// because the clip NAME is what binds a clip to its channel.
+static const char* kSweepRiggedGltf = R"({
+  "asset": {"version": "2.0"},
+  "scenes": [{"nodes": [0]}],
+  "nodes": [{"name": "fuselage", "mesh": 0, "children": [1]}, {"name": "wing"}],
+  "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+  "accessors": [
+    {"componentType": 5126, "count": 3, "type": "VEC3"},
+    {"bufferView": 0, "componentType": 5126, "count": 2, "type": "SCALAR", "min": [0.0], "max": [2.0]},
+    {"bufferView": 1, "componentType": 5126, "count": 2, "type": "VEC3"}
+  ],
+  "bufferViews": [
+    {"buffer": 0, "byteOffset": 0, "byteLength": 8},
+    {"buffer": 0, "byteOffset": 8, "byteLength": 24}
+  ],
+  "buffers": [{"byteLength": 32, "uri": "data:application/octet-stream;base64,AAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAACAwAAAAAA="}],
+  "animations": [{
+    "name": "sweep",
+    "samplers": [{"input": 1, "output": 2, "interpolation": "LINEAR"}],
+    "channels": [{"sampler": 0, "target": {"node": 1, "path": "translation"}}]
+  }]
+})";
+
 // A static mesh with no animations at all — the f5e.glb baseline.
 static const char* kStaticGltf = R"({
   "asset": {"version": "2.0"},
@@ -1419,6 +1444,39 @@ TEST_CASE("SceneRenderer populates animPoses for a rigged mesh (#841)") {
     REQUIRE(poses.size() == 1);
     CHECK(poses[0].nodeIndex == 1u);
     CHECK(poses[0].localTransform[3][1] == Catch::Approx(-4.0));
+}
+
+TEST_CASE("SceneRenderer scrubs a sweep clip from the entity's sweep channel (#1195)") {
+    // The last hop of the chain the defect broke. The renderer sampled `sweep` correctly all along —
+    // nothing ever wrote the channel, so every swing-wing mesh scrubbed to t=0 forever. With the
+    // channel driven, the wing tracks it like any other.
+    MockLogger logger;
+    auto pack = std::make_unique<MockContentPack>();
+    pack->meshes["f15c"] = asVec(kSweepRiggedGltf);
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::move(pack));
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockRenderer renderer;
+    SimRenderBridge bridge;
+    SceneRenderer sr{bridge, oneType(), assets, renderer};
+
+    auto renderWithSweep = [&](float sweep) {
+        RenderSnapshot snap = makeSnap();
+        EntityRenderEntry e = makeEntry(0, {0.0, 0.0, 0.0});
+        e.artChannels[static_cast<size_t>(ArtChannel::Sweep)] = sweep;
+        snap.entries.push_back(e);
+        bridge.publish(std::move(snap));
+        sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+        REQUIRE(renderer.lastScene.renderItems.size() == 1);
+        REQUIRE(renderer.lastScene.renderItems[0].animPoses.size() == 1);
+        return renderer.lastScene.renderItems[0].animPoses[0].localTransform[3][1];
+    };
+
+    CHECK(renderWithSweep(0.0f) == Catch::Approx(0.0));  // min_deg — wings fully forward
+    CHECK(renderWithSweep(0.5f) == Catch::Approx(-2.0)); // mid-travel
+    CHECK(renderWithSweep(1.0f) == Catch::Approx(-4.0)); // max_deg — fully aft
 }
 
 TEST_CASE("SceneRenderer poses track the entity's channel values (#841)") {
