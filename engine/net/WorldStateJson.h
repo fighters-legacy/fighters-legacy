@@ -36,14 +36,15 @@ namespace fl {
 // One entity as a compact single-line object — entity lists run to thousands of rows, and one line
 // per row keeps a snapshot readable in a terminal and diffable in a golden test.
 [[nodiscard]] inline std::string toJson(const WorldStateEntity& e) {
-    std::string s =
-        "{ \"idx\": " + std::to_string(e.entityIdx) + ", \"gen\": " + std::to_string(e.gen) +
-        ", \"faction\": " + std::to_string(e.factionIndex) + ", \"type\": " + std::to_string(e.typeIndex) +
-        ", \"owner_peer\": " + std::to_string(e.ownerPeerId) + ", \"formation\": " + std::to_string(e.formationId) +
-        ", \"category\": " + std::to_string(e.category) + ", \"damage_level\": " + std::to_string(e.damageLevel) +
-        ", \"flags\": " + std::to_string(e.flags) + ", \"pos\": [" + json::num(e.pos[0]) + ", " + json::num(e.pos[1]) +
-        ", " + json::num(e.pos[2]) + "], \"vel\": [" + json::num(e.vel[0]) + ", " + json::num(e.vel[1]) + ", " +
-        json::num(e.vel[2]) + "], \"hp_frac\": " + json::num(e.hpFrac) + " }";
+    std::string s = "{ \"idx\": " + std::to_string(e.entityIdx) + ", \"gen\": " + std::to_string(e.gen) +
+                    ", \"faction\": " + std::to_string(e.factionIndex) + ", \"type\": " + std::to_string(e.typeIndex) +
+                    ", \"owner_peer\": " + std::to_string(e.ownerPeerId) +
+                    ", \"formation\": " + std::to_string(e.formationId) +
+                    ", \"category\": " + std::to_string(e.category) +
+                    ", \"damage_level\": " + std::to_string(e.damageLevel) + ", \"flags\": " + std::to_string(e.flags) +
+                    ", \"pos\": [" + json::num(e.pos[0]) + ", " + json::num(e.pos[1]) + ", " + json::num(e.pos[2]) +
+                    "], \"vel\": [" + json::num(e.vel[0]) + ", " + json::num(e.vel[1]) + ", " + json::num(e.vel[2]) +
+                    "], \"hp_frac\": " + json::num(e.hpFrac) + ", \"sweep_deg\": " + json::num(e.sweepDeg) + " }";
     return s;
 }
 

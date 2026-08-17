@@ -1480,6 +1480,16 @@ void WorldBroadcaster::rebuildWorldState(uint64_t tickIndex) {
     m_worldState = buildWorldStateSnapshot(tickIndex, m_entityManager, m_registry, &m_formations, m_factionRegistry,
                                            std::move(peers), env, &m_worldStateMission);
 
+    // Flight telemetry the entity pool does not carry (#1195). buildWorldStateSnapshot is pure over
+    // the pool and stays that way — the integrators live here, so the stamp happens here. Only
+    // server-controlled entities have one; everything else keeps the 0 default, which is also what a
+    // fixed-geometry aircraft reports.
+    for (auto& e : m_worldState.entities) {
+        const auto it = m_controlledEntities.find(e.entityIdx);
+        if (it != m_controlledEntities.end() && it->second.sim && it->second.sim->flightModel().wing_sweep)
+            e.sweepDeg = it->second.sim->state().current_sweep_deg;
+    }
+
     // Publish an immutable copy for off-thread readers (#600). The copy is the cost of letting REST,
     // MCP and the recorder read without touching sim-thread state; at ~1 Hz that is not a budget
     // anyone can measure, and it is what makes those consumers race-free by construction.
@@ -3748,6 +3758,13 @@ void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityC
     fs.fuel_kg = model->geometry.fuel_kg;
     fs.mass_kg = model->geometry.mass_kg + fs.fuel_kg;
     fs.throttle_actual = initialThrottle;
+    // Seed the wing from the MODEL (#1195). FlightState's default is a bare 55 deg, and reset() below
+    // overwrites the value the FlightIntegrator constructor had just derived — so a variable-geometry
+    // aircraft spawned at a sweep its own schedule never commands (the B-1B's range is 15-67.5), and
+    // a fixed-geometry one sat at 55 deg forever because advanceSweep early-returns without a
+    // [wing_sweep] table. Harmless while nothing read the value; not harmless now that it is
+    // telemetry and drives the mesh.
+    fs.current_sweep_deg = model->wing_sweep ? model->wing_sweep->ref_sweep_deg : 0.f;
 
     auto fi = std::make_unique<FlightIntegrator>(model);
     fi->setGravityField(*m_gravity);

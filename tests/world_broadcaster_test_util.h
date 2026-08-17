@@ -31,6 +31,7 @@
 #include "net/WorldBroadcaster.h"
 #include "render/RenderSnapshot.h"
 #include "sensor/BuiltinSensors.h"
+#include "vg_flight_model.h" // makeVgFlightModelToml — the #1195 swing-wing fixture
 #include "weapon/BuiltinWeapon.h"
 #include "weapon/ProjectileSystem.h"
 #include "weapon/WeaponDefParser.h"

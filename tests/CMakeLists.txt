@@ -314,6 +314,13 @@ add_executable(test_flight_integrator test_flight_integrator.cpp)
 target_link_libraries(test_flight_integrator PRIVATE Catch2::Catch2WithMain engine-flight)
 catch_discover_tests(test_flight_integrator)
 
+# ArticulationChannels (#1195): the one FlightState -> ArtChannel mapping the wire codec and the
+# renderer share. engine-flight only — the mapping deliberately pulls in nothing but the
+# dependency-free channel vocabulary.
+add_executable(test_articulation_channels test_articulation_channels.cpp)
+target_link_libraries(test_articulation_channels PRIVATE Catch2::Catch2WithMain engine-flight)
+catch_discover_tests(test_articulation_channels)
+
 add_executable(test_rotor_force_models test_rotor_force_models.cpp)
 target_link_libraries(test_rotor_force_models PRIVATE Catch2::Catch2WithMain engine-flight)
 catch_discover_tests(test_rotor_force_models)

@@ -2586,6 +2586,55 @@ TEST_CASE("WorldBroadcaster: worldState aggregate is rebuilt at ~1 Hz and lists 
     CHECK(broadcaster.worldState().tick == 60u);
 }
 
+TEST_CASE("WorldBroadcaster: worldState reports wing sweep for a variable-geometry aircraft (#1195)",
+          "[world_broadcaster][world_state][sweep]") {
+    // The headless route. Sweep lives in the flight integrator and nothing outside it could read the
+    // angle — not the Lua state table, not --mission-report, not the replay, not any console
+    // command — so a swing-wing aircraft's own acceptance criterion ("sweep follows the Mach
+    // schedule in telemetry") could not be evaluated at all. It is on the ~1 Hz aggregate now, which
+    // the `worldstate` command, GET /worldstate and the MCP resource all serve.
+    MockLogger log;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityDef def = makeDebugDef();
+    def.flightModelAsset = "models/vg";
+    registry.registerType(def);
+    fl::EntityManager em(log, registry);
+
+    // ref_sweep_deg 33, range 15..67.5, schedule flat at 33 — so a parked aircraft is at a sweep
+    // that is neither limit nor FlightState's bare 55 deg default, which is exactly what a mistake
+    // here would report.
+    const auto vg = std::make_shared<const fl::FlightModelData>(fl::parseFlightModel(makeVgFlightModelToml(33.f)));
+    REQUIRE(vg->wing_sweep.has_value());
+    fl::WorldQueries queries;
+    queries.flightModel = [&](const std::string&) { return vg; };
+    fl::WorldBroadcaster broadcaster(em, registry, net, log, nullptr, std::move(queries));
+    connectPilotPeer(broadcaster, net, 0u);
+
+    broadcaster.onTick(1.0 / 60.0, 0u);
+    const fl::WorldStateSnapshot& ws = broadcaster.worldState();
+    REQUIRE(ws.entities.size() == 1u);
+    CHECK(ws.entities[0].sweepDeg == Catch::Approx(33.f).margin(0.5f));
+}
+
+TEST_CASE("WorldBroadcaster: worldState reports zero sweep for a fixed-geometry aircraft (#1195)",
+          "[world_broadcaster][world_state][sweep]") {
+    // FlightState's default is a bare 55 deg and the spawn path used to hand it straight to the
+    // integrator, so every fixed-geometry aircraft in the game carried a wing-sweep angle it does
+    // not have. Harmless while nothing read it; a wrong number the moment it became telemetry.
+    MockLogger log;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef()); // the builtin model — no [wing_sweep]
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    connectPilotPeer(broadcaster, net, 0u);
+
+    broadcaster.onTick(1.0 / 60.0, 0u);
+    REQUIRE(broadcaster.worldState().entities.size() == 1u);
+    CHECK(broadcaster.worldState().entities[0].sweepDeg == 0.f);
+}
+
 TEST_CASE("WorldBroadcaster: password auth grants Admin caps (rung 1 unchanged, #946)",
           "[world_broadcaster][admin_command][permission]") {
     MockLogger log;
