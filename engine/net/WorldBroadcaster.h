@@ -1663,7 +1663,10 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Returns false (leaving `out` untouched) for a single-seat / non-crewed / unknown entity.
     [[nodiscard]] bool buildCrewRosterPacket(EntityId id, std::vector<uint8_t>& out) const;
     // The shooter's designated target through the #610 seam: peer viewAxis or AI nose (#627/#628).
-    EntityId designateFor(const EntityState& shooter, uint32_t ownerPeer) const;
+    // `launchAxis` (optional): the world-space direction the store leaves along, used as the look
+    // axis for an AI shooter whose launcher is not bore-sighted with its airframe (#1208). A peer's
+    // own view axis still wins — a player designates with the eyes, not with a turret.
+    EntityId designateFor(const EntityState& shooter, uint32_t ownerPeer, const float* launchAxis = nullptr) const;
     void queueEffect(uint8_t type, uint8_t weaponClass, uint32_t srcIdx, uint32_t tgtIdx, const double pos[3]);
 
     // ── combat scoring + kill feed (#626) — sim-thread only ─────────────────

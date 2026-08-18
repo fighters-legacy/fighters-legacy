@@ -33,6 +33,7 @@ fl::ControlInput SamEngagementController::sample(const fl::EntityState& state, u
     // Honest sensing (#863): engage only what this battery has actually detected. A null table means
     // sensing was not evaluated (no engagement); a zero look axis makes designateFromContacts use the
     // launcher's body-forward, so it fires into the arc the missile can service.
+    m_designated = {}; // stale designations do not outlive the engagement (#1208)
     if (!ctx.contacts)
         return ctrl;
     // The look axis is the emplacement's own facing (designateFromContacts needs a real axis — it does
@@ -43,6 +44,11 @@ fl::ControlInput SamEngagementController::sample(const fl::EntityState& state, u
         designateFromContacts(state, axis, ctx.contacts, m_engageRangeM, m_coneHalfRad, /*factions=*/nullptr);
     if (!target.valid())
         return ctrl;
+
+    // This battery's choice, published for the fire path (#1208): the store is launched AT it, rather
+    // than at whatever a second designation from the airframe nose would have found — which, for a
+    // launcher whose nose is horizontal, was almost always nothing.
+    m_designated = target;
 
     // A target is in the envelope: launch on the reload interval. release is edge-detected by
     // FireControl, so one pulse = one missile; the interval is longer than the launcher cooldown.

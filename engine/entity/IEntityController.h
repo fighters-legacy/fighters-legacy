@@ -54,6 +54,20 @@ struct IEntityController {
         return {};
     }
 
+    // The target this controller has already designated, for the shot it is asking for THIS tick
+    // (#1208). Null (the default) = this controller designates nothing and the fire path falls back
+    // to designating from the shooter's look axis, exactly as before.
+    //
+    // It exists because a controller whose launcher is not bore-sighted with its airframe cannot be
+    // re-designated for: the fire path's fallback builds the look axis from bodyForward(quat) and
+    // gates it on the server's boresight cone (15 km / ±15 deg by default), which an emplacement's
+    // horizontal nose satisfies almost nowhere. SamEngagementController duly picked a target with
+    // its OWN 30 km / ±90 deg geometry, threw the id away, and every missile it launched flew dumb.
+    // Read serially in the weapons pass, after the (parallel, read-only) AI pass has sampled.
+    [[nodiscard]] virtual EntityId designatedTarget() const {
+        return EntityId::null();
+    }
+
     // Planet radius (m) for local-level (tangent-plane) guidance math. Defaults to Earth so the
     // controllers and unit tests behave correctly near the world origin without any wiring.
     // WorldBroadcaster sets this from its configured planet radius when it takes ownership of a

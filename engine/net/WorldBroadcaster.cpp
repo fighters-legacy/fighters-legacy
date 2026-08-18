@@ -1856,9 +1856,17 @@ void WorldBroadcaster::executeFireRequest(const FireRequest& req, uint64_t tickI
     // Launch designation (#627): a seeker weapon is launched AT something the shooter designated —
     // the missile never invents a target. No designator wired, or nothing designated ⇒ the store
     // flies dumb, which is the honest outcome of firing blind.
+    //
+    // The shooter's own controller gets the first word (#1208). It has already chosen a target,
+    // with the engagement geometry it actually owns; re-deriving one here from the airframe nose
+    // through the boresight cone was how a ground SAM came to launch a full magazine at nothing.
+    // Only when nobody named a target does the fire path designate for itself — and then along the
+    // LAUNCH axis when the shooter supplied one, so the designation cone and the store's departure
+    // vector are the same direction rather than two.
     EntityId designated = EntityId::null();
     if (def->seeker && def->seeker->type != SeekerType::Unguided)
-        designated = designateFor(*shooter, ownerPeer);
+        designated = req.designated.valid() ? req.designated
+                                            : designateFor(*shooter, ownerPeer, req.hasAimDir ? req.aimDir : nullptr);
 
     // A turret-mounted store leaves along the turret bore (#970); a nose store passes null.
     const glm::vec3 aimDir{req.aimDir[0], req.aimDir[1], req.aimDir[2]};
@@ -1870,9 +1878,11 @@ void WorldBroadcaster::executeFireRequest(const FireRequest& req, uint64_t tickI
                     0xFFFFFFFFu, shooter->transform.pos);
 }
 
-EntityId WorldBroadcaster::designateFor(const EntityState& shooter, uint32_t ownerPeer) const {
+EntityId WorldBroadcaster::designateFor(const EntityState& shooter, uint32_t ownerPeer, const float* launchAxis) const {
     // The designator is the #610 seam (fl-server wires the contact-honest lambda); the look axis
-    // is the peer's viewAxis for a player and the nose for an AI.
+    // is the peer's viewAxis for a player, the LAUNCH axis for an AI shooter that supplied one
+    // (#1208 — a launcher that is not bore-sighted with its airframe designates through the cone it
+    // is actually shooting down), and the airframe nose otherwise.
     if (!m_queries.targetDesignator)
         return EntityId::null();
     float axis[3];
@@ -1882,6 +1892,15 @@ EntityId WorldBroadcaster::designateFor(const EntityState& shooter, uint32_t own
             axis[0] = pit->second.viewAxis[0];
             axis[1] = pit->second.viewAxis[1];
             axis[2] = pit->second.viewAxis[2];
+            haveAxis = true;
+        }
+    }
+    if (!haveAxis && launchAxis) {
+        const glm::vec3 aim{launchAxis[0], launchAxis[1], launchAxis[2]};
+        if (glm::dot(aim, aim) > 1e-6f) {
+            axis[0] = launchAxis[0];
+            axis[1] = launchAxis[1];
+            axis[2] = launchAxis[2];
             haveAxis = true;
         }
     }
@@ -1976,6 +1995,15 @@ void WorldBroadcaster::runWeaponsPass(double simDt, uint64_t tickIndex) {
             const bool hold = m_formations.weaponsHoldFor(ce.id); // #610's order, with teeth at last
             const std::size_t firstReq = m_fireRequests.size();
             evaluateFire(ce.fire, *m_weaponRegistry, ce.lastInput, hold, tickIndex, idx, m_fireRequests);
+            // Stamp the target this controller designated (#1208) onto every request it just raised,
+            // so the fire path launches at the contact the controller engaged rather than
+            // re-designating from the airframe nose. Null for a player and for every AI that points
+            // its nose at what it shoots, which leaves those paths byte-identical.
+            if (ce.controller) {
+                if (const EntityId designated = ce.controller->designatedTarget(); designated.valid())
+                    for (std::size_t r = firstReq; r < m_fireRequests.size(); ++r)
+                        m_fireRequests[r].designated = designated;
+            }
             // Stamp the launch direction a non-bore-sighted shooter asked for (#1204), the same way
             // the crewed pass stamps a turret seat's bore. Absent (the aircraft case) the store
             // leaves along the airframe nose exactly as before.
