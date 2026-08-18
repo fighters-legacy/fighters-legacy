@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "script/LuaSandbox.h"
 
+#include "IFilesystem.h"
+
 // Lua is compiled as C++ (see cmake/dependencies.cmake), so its symbols have C++
 // linkage and these headers must NOT be wrapped in extern "C" — nor may lua.hpp
 // be used, since that is precisely an extern "C" wrapper. Building it that way is
@@ -10,9 +12,8 @@
 #include <lualib.h>
 
 #include <cstring>
-#include <filesystem>
-#include <fstream>
-#include <sstream>
+#include <string>
+#include <vector>
 
 namespace fl {
 
@@ -22,12 +23,13 @@ namespace fl {
 
 struct LuaSandbox::Impl {
     lua_State* L = nullptr;
-    std::string packRootDir;
+    ScriptPackSource pack;
     std::string lastError;
 };
 
 // ---------------------------------------------------------------------------
-// Custom require loader — restricted to packRootDir/ai/<module>.lua
+// Custom require loader — restricted to <pack root>/ai/<module>.lua, read in the
+// Assets domain through IFilesystem (#1210)
 // ---------------------------------------------------------------------------
 
 // Raising a Lua error from here unwinds to the enclosing lua_pcall as a C++
@@ -43,6 +45,7 @@ struct LuaSandbox::Impl {
 // reintroduce that pattern; the fix is the build mode, not the code shape.
 static int luaRequireLoader(lua_State* L) {
     const char* root = lua_tostring(L, lua_upvalueindex(1));
+    auto* fs = static_cast<IFilesystem*>(lua_touserdata(L, lua_upvalueindex(2)));
     const char* module = luaL_checkstring(L, 1);
 
     // Reject path traversal and separators: a module name addresses one file
@@ -52,18 +55,32 @@ static int luaRequireLoader(lua_State* L) {
             return luaL_error(L, "require: module name '%s' contains disallowed characters", module);
     }
 
-    const std::filesystem::path scriptPath = std::filesystem::path(root) / "ai" / (std::string(module) + ".lua");
-    std::ifstream f(scriptPath);
-    if (!f.is_open())
+    // The two ways this sandbox can have nothing to read from are named separately: a builtin script
+    // has no pack, and a host that wired no filesystem cannot resolve one. Neither falls back to a
+    // process-relative read — that fallback IS #1210.
+    if (!root || !*root)
+        return luaL_error(L, "require: module '%s' not found — this script belongs to no content pack", module);
+    if (!fs)
+        return luaL_error(L, "require: module '%s' not found — this sandbox has no content filesystem", module);
+
+    // Assets-domain path: '/'-separated whatever the host OS, exactly as every other content read
+    // spells it. IFilesystem maps it onto the real assets root (which is NOT the working directory
+    // under --assets / FL_ASSETS_ROOT / a Flatpak install).
+    const std::string scriptPath = std::string(root) + "/ai/" + module + ".lua";
+    const int handle = fs->openFile(PathDomain::Assets, scriptPath.c_str(), /*write=*/false);
+    if (handle < 0)
         return luaL_error(L, "require: module '%s' not found in pack ai/ directory", module);
 
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    const std::string src = ss.str();
+    std::string src;
+    src.resize(fs->getFileSize(handle));
+    if (!src.empty())
+        src.resize(fs->readFile(handle, src.data(), src.size()));
+    fs->closeFile(handle);
+
     if (!src.empty() && src[0] == '\x1b')
         return luaL_error(L, "require: precompiled Lua bytecode is not permitted");
 
-    if (luaL_loadbuffer(L, src.c_str(), src.size(), scriptPath.string().c_str()) != LUA_OK)
+    if (luaL_loadbuffer(L, src.c_str(), src.size(), scriptPath.c_str()) != LUA_OK)
         return lua_error(L); // error string already on the stack from luaL_loadbuffer
 
     // Execute the compiled chunk and return all of its values as the module.
@@ -73,10 +90,11 @@ static int luaRequireLoader(lua_State* L) {
     return lua_gettop(L) - 1;
 }
 
-static void installCustomRequire(lua_State* L, const std::string& packRootDir) {
-    // Push loader function with packRootDir as upvalue
-    lua_pushstring(L, packRootDir.c_str());
-    lua_pushcclosure(L, luaRequireLoader, 1);
+static void installCustomRequire(lua_State* L, const ScriptPackSource& pack) {
+    // Upvalues: the pack root, then the filesystem that resolves it.
+    lua_pushstring(L, pack.rootDir.c_str());
+    lua_pushlightuserdata(L, pack.fs);
+    lua_pushcclosure(L, luaRequireLoader, 2);
     lua_setglobal(L, "require");
 }
 
@@ -93,9 +111,9 @@ LuaSandbox::~LuaSandbox() {
     }
 }
 
-std::unique_ptr<LuaSandbox> LuaSandbox::create(std::string packRootDir) {
+std::unique_ptr<LuaSandbox> LuaSandbox::create(ScriptPackSource pack) {
     auto sb = std::unique_ptr<LuaSandbox>(new LuaSandbox());
-    sb->m_impl->packRootDir = std::move(packRootDir);
+    sb->m_impl->pack = std::move(pack);
 
     lua_State* L = luaL_newstate();
     if (!L)
@@ -122,7 +140,7 @@ std::unique_ptr<LuaSandbox> LuaSandbox::create(std::string packRootDir) {
     }
 
     // Replace require with the pack-scoped loader
-    installCustomRequire(L, sb->m_impl->packRootDir);
+    installCustomRequire(L, sb->m_impl->pack);
 
     return sb;
 }

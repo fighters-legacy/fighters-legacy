@@ -6,6 +6,7 @@
 
 #include <config/DifficultySettings.h> // AiScaling — server-side difficulty (#682)
 #include <net/AdminChannel.h>          // the enumerable admin-frontend registry (#1079)
+#include <script/LuaSandbox.h>         // ScriptPackSource — a script's pack root + its filesystem (#1210)
 
 #include <csignal>
 #include <functional>
@@ -63,10 +64,12 @@ struct ServerCommandContext {
         volatile sig_atomic_t* quitFlag{nullptr}; // quit command sets this to 1
         DiscoveryBeacon* beacon{nullptr};         // for reload_config name update
         std::string traceDir; // configured [trace] input_trace_dir; trace_start default when no arg (#560)
-        // Loads an AI script by asset name. Returns {source_bytes_as_string, pack_root_dir}.
-        // Empty source = not found. Null = Lua AI scripting unavailable.
+        // Loads an AI script by asset name. Returns {source_bytes_as_string, where its require()
+        // reads modules from}. Empty source = not found. Null = Lua AI scripting unavailable.
+        // The pack root travels WITH the filesystem that resolves it (#1210) — it is an
+        // Assets-domain path, and resolving it any other way lands on the process working directory.
         // Must be safe to call from any thread (pre-loaded read-only cache in fl-server).
-        std::function<std::pair<std::string, std::string>(std::string_view name)> loadAIScript;
+        std::function<std::pair<std::string, fl::ScriptPackSource>(std::string_view name)> loadAIScript;
 
         // Resolves an [ai] difficulty preset name ("cadet"|"pilot"|"ace") to its AiScaling (#682).
         // Injected by fl-server, which owns the DifficultyMultipliers table (mod-overridable

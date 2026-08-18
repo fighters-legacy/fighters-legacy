@@ -913,7 +913,7 @@ static void registerSpatialFuncs(lua_State* L, LuaController::Impl* impl) {
 // LuaController
 // ---------------------------------------------------------------------------
 
-LuaController::LuaController(std::string_view scriptSource, std::string packRootDir,
+LuaController::LuaController(std::string_view scriptSource, ScriptPackSource pack,
                              const fl::EntityManager* entityManager, const fl::WorldApi* worldApi,
                              fl::atc::AtcService* atcService)
     : m_impl(std::make_unique<Impl>()) {
@@ -921,7 +921,7 @@ LuaController::LuaController(std::string_view scriptSource, std::string packRoot
     m_impl->worldApi = worldApi;
     m_impl->atcService = atcService;
 
-    m_impl->sandbox = LuaSandbox::create(std::move(packRootDir));
+    m_impl->sandbox = LuaSandbox::create(std::move(pack));
     if (!m_impl->sandbox) {
         m_impl->lastError = "failed to create Lua sandbox";
         return;

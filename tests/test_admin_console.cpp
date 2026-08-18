@@ -626,7 +626,7 @@ TEST_CASE("AdminConsole: spawn --ai lua returns error when loadAIScript is null"
 
 TEST_CASE("AdminConsole: spawn --ai lua returns error when script not found", "[admin_console][async_ack]") {
     AsyncAckFixture f;
-    f.ctx.env.loadAIScript = [](std::string_view) -> std::pair<std::string, std::string> {
+    f.ctx.env.loadAIScript = [](std::string_view) -> std::pair<std::string, fl::ScriptPackSource> {
         return {}; // empty = not found
     };
     auto reg = makeRegistry(f.ctx);
@@ -637,8 +637,8 @@ TEST_CASE("AdminConsole: spawn --ai lua returns error when script not found", "[
 
 TEST_CASE("AdminConsole: spawn --ai lua returns non-empty ack when script valid", "[admin_console][async_ack]") {
     AsyncAckFixture f;
-    f.ctx.env.loadAIScript = [](std::string_view) -> std::pair<std::string, std::string> {
-        return {"function compute_control(s,t,dt) return {} end", ""};
+    f.ctx.env.loadAIScript = [](std::string_view) -> std::pair<std::string, fl::ScriptPackSource> {
+        return {"function compute_control(s,t,dt) return {} end", fl::ScriptPackSource{}};
     };
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("spawn builtin:debug-entity 0 100 0 --ai lua patrol", systemIssuer());

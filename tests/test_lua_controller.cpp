@@ -13,6 +13,8 @@
 #include "world/AirportRegistry.h"
 #include "world/BuiltinAirport.h"
 
+#include <stdfs/StdFilesystem.h>
+
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
@@ -95,7 +97,7 @@ static fl::EntityState makeState(double px = 0.0, double py = 600.0, double pz =
 }
 
 static std::unique_ptr<LuaController> makeCtrl(const char* src) {
-    auto c = std::make_unique<LuaController>(src, "");
+    auto c = std::make_unique<LuaController>(src, ScriptPackSource{});
     return c;
 }
 
@@ -394,7 +396,7 @@ TEST_CASE("LuaController: get_entity with real EntityManager returns state table
                            "  return {}"
                            "end");
 
-    LuaController c(src, "", &em);
+    LuaController c(src, ScriptPackSource{}, &em);
     REQUIRE(c.isValid());
     auto ctrl = c.sample(makeState(), 0, 1.0 / 60.0);
     CHECK(ctrl.throttle == Catch::Approx(1.f).epsilon(0.001f));
@@ -421,12 +423,14 @@ TEST_CASE("LuaController: Lua state persists between sample calls") {
 
 TEST_CASE("LuaController: script uses require from pack ai dir") {
     namespace fs = std::filesystem;
-    auto tmpDir = fs::temp_directory_path() / "fl_lua_ctrl_test";
-    auto aiDir = tmpDir / "ai";
-    fs::create_directories(aiDir);
+    // A temp ASSETS ROOT with the pack under it, read through a real filesystem — the pack root is an
+    // assets-domain path, not a native one (#1210).
+    const auto assetsRoot = fs::temp_directory_path() / "fl_lua_ctrl_test";
+    fs::remove_all(assetsRoot);
+    fs::create_directories(assetsRoot / "mods" / "testpack" / "ai");
 
     {
-        std::ofstream f(aiDir / "util.lua");
+        std::ofstream f(assetsRoot / "mods" / "testpack" / "ai" / "util.lua");
         f << "return { add = function(a,b) return a+b end }\n";
     }
 
@@ -435,12 +439,13 @@ TEST_CASE("LuaController: script uses require from pack ai dir") {
                       "  return {throttle = util.add(0.4, 0.35)}\n"
                       "end\n";
 
-    LuaController c(src, tmpDir.string());
+    StdFilesystem sfs(assetsRoot, assetsRoot);
+    LuaController c(src, ScriptPackSource{"mods/testpack", &sfs});
     REQUIRE(c.isValid());
     auto ctrl = c.sample(makeState(), 0, 1.0 / 60.0);
     CHECK(ctrl.throttle == Catch::Approx(0.75f).epsilon(0.001f));
 
-    fs::remove_all(tmpDir);
+    fs::remove_all(assetsRoot);
 }
 
 // --- detected_contacts() (#691) ------------------------------------------------------------------
@@ -979,7 +984,7 @@ struct RecordingWorld {
 };
 
 std::unique_ptr<LuaController> makeWorldCtrl(const char* src, const fl::WorldApi* api) {
-    return std::make_unique<LuaController>(src, "", nullptr, api);
+    return std::make_unique<LuaController>(src, ScriptPackSource{}, nullptr, api);
 }
 } // namespace
 
@@ -1141,7 +1146,7 @@ TEST_CASE("rumble / rumble_triggers / stop_rumble route to the host seam (#128)"
                                              "  stop_rumble()\n"
                                              "  return {}\n"
                                              "end",
-                                             "", nullptr, &h.api);
+                                             ScriptPackSource{}, nullptr, &h.api);
     REQUIRE(c->isValid());
     c->sample(makeState(), 0, 1.0 / 60.0);
     REQUIRE(h.rumbles.size() == 1u);
@@ -1158,7 +1163,7 @@ TEST_CASE("rumble clamps intensity to [0,1] and duration to the cap (#128)") {
                                              "  rumble(9.0, -3.0, 999999)\n"
                                              "  return {}\n"
                                              "end",
-                                             "", nullptr, &h.api);
+                                             ScriptPackSource{}, nullptr, &h.api);
     REQUIRE(c->isValid());
     c->sample(makeState(), 0, 1.0 / 60.0);
     REQUIRE(h.rumbles.size() == 1u);
@@ -1205,7 +1210,7 @@ TEST_CASE("LuaController: atc.scramble triggers the spawn handler (#705)", "[lua
                       "  if tick == 0 then atc.scramble('builtin:airfield', 'test:basic', 2) end\n"
                       "  return {}\n"
                       "end";
-    fl::LuaController ctrl(src, "", &em, nullptr, &atc);
+    fl::LuaController ctrl(src, fl::ScriptPackSource{}, &em, nullptr, &atc);
     REQUIRE(ctrl.isValid());
     ctrl.sample(makeState(), 0, 1.0 / 60.0);
     CHECK(spawns == 2);
@@ -1253,7 +1258,7 @@ TEST_CASE("LuaController: atc.request_takeoff sequences the entity when a servic
                       "  if tick == 0 then atc.request_takeoff() end\n"
                       "  return { throttle = (atc.clearance() == 'hold_short') and 1.0 or 0.0 }\n"
                       "end";
-    fl::LuaController ctrl(src, "", &em, nullptr, &atc);
+    fl::LuaController ctrl(src, fl::ScriptPackSource{}, &em, nullptr, &atc);
     REQUIRE(ctrl.isValid());
     fl::EntityState* s = em.get(id);
     REQUIRE(s != nullptr);

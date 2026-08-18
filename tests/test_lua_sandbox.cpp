@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "script/LuaSandbox.h"
 
+#include <stdfs/StdFilesystem.h>
+
 // Lua is compiled as C++, so no extern "C" wrapper (#1015).
 #include <lauxlib.h>
 #include <lua.h>
@@ -13,12 +15,41 @@
 
 using namespace fl;
 
-// All tests use an empty packRootDir — the custom require loader will reject
-// all requires (in-pack file not found), which exercises the error path.
-// Tests that need in-pack require create a temporary directory with a Lua file.
+// All tests use an empty pack source — the custom require loader will reject all requires (this
+// script belongs to no pack), which exercises the error path. Tests that need in-pack require build
+// a temporary ASSETS ROOT with a pack directory under it and read through a real StdFilesystem, the
+// way fl-server does: `rootDir` is an assets-domain path, never a native one (#1210).
 
-static std::unique_ptr<LuaSandbox> makeSandbox(const std::string& root = {}) {
-    auto sb = LuaSandbox::create(root);
+// One temporary assets root holding a pack at `<root>/mods/<packId>`, with the sandbox's pack source
+// pointing at the assets-domain path. Removing the directory is the fixture's job so a failing
+// REQUIRE cannot leak it.
+struct TempPack {
+    std::filesystem::path assetsRoot;
+    std::string packDir; // assets-domain, e.g. "mods/testpack"
+    StdFilesystem fs;
+
+    explicit TempPack(const char* name)
+        : assetsRoot(std::filesystem::temp_directory_path() / name), packDir("mods/testpack"),
+          fs(std::filesystem::temp_directory_path() / name, std::filesystem::temp_directory_path() / name) {
+        std::filesystem::remove_all(assetsRoot);
+        std::filesystem::create_directories(assetsRoot / packDir / "ai");
+    }
+    ~TempPack() {
+        std::error_code ec;
+        std::filesystem::remove_all(assetsRoot, ec);
+    }
+
+    void writeModule(const char* module, std::string_view body) const {
+        std::ofstream out(assetsRoot / packDir / "ai" / (std::string(module) + ".lua"), std::ios::binary);
+        out << body;
+    }
+    [[nodiscard]] ScriptPackSource source() {
+        return ScriptPackSource{packDir, &fs};
+    }
+};
+
+static std::unique_ptr<LuaSandbox> makeSandbox(ScriptPackSource pack = {}) {
+    auto sb = LuaSandbox::create(std::move(pack));
     REQUIRE(sb != nullptr);
     return sb;
 }
@@ -94,7 +125,7 @@ TEST_CASE("LuaSandbox: loadfile global is nil") {
 // ---------------------------------------------------------------------------
 
 TEST_CASE("LuaSandbox: require outside pack ai directory is rejected") {
-    auto sb = makeSandbox(); // empty root — ai/ dir has no files
+    auto sb = makeSandbox(); // no pack at all — a builtin script has no modules to reach
     bool ok = sb->loadScript("require('socket')");
     CHECK_FALSE(ok);
     // Error should mention directory or module not found
@@ -102,16 +133,75 @@ TEST_CASE("LuaSandbox: require outside pack ai directory is rejected") {
 }
 
 TEST_CASE("LuaSandbox: require for in-pack file that does not exist returns error") {
-    // Create a temp dir with no ai/ subdirectory
-    auto tmpDir = std::filesystem::temp_directory_path() / "fl_lua_test_nopkg";
-    std::filesystem::create_directories(tmpDir);
-
-    auto sb = makeSandbox(tmpDir.string());
+    TempPack pack("fl_lua_test_nopkg"); // a real pack directory, with no module in it
+    auto sb = makeSandbox(pack.source());
     bool ok = sb->loadScript("require('mylib')");
     CHECK_FALSE(ok);
-    CHECK_FALSE(sb->lastError().empty());
+    CHECK(sb->lastError().find("not found") != std::string::npos);
+}
 
-    std::filesystem::remove_all(tmpDir);
+// #1210: the pack root is an ASSETS-DOMAIN path, so it means the same thing wherever the process
+// happens to be standing. Before the fix the loader handed it to std::ifstream, which resolved it
+// against the working directory — every pack script's require() failed under --assets, and the whole
+// entity was left with no controller. This runs the successful require from a DIFFERENT directory
+// than the assets root, which is the only arrangement that tells the two apart.
+TEST_CASE("LuaSandbox: require resolves against the assets root, not the process CWD (#1210)") {
+    TempPack pack("fl_lua_test_cwd");
+    pack.writeModule("instructor", "return { field_elev = 570 }");
+
+    const std::filesystem::path here = std::filesystem::current_path();
+    std::filesystem::current_path(std::filesystem::temp_directory_path());
+    auto sb = makeSandbox(pack.source());
+    const bool ok = sb->loadScript("local m = require('instructor')\n"
+                                   "if m.field_elev ~= 570 then error('wrong module') end");
+    const std::string err = sb->lastError();
+    std::filesystem::current_path(here); // restore before asserting, so a failure cannot strand the suite
+
+    CHECK(ok);
+    CHECK(err.empty());
+}
+
+// The other half of the same property: a sandbox with a pack root but NO filesystem refuses rather
+// than reading something CWD-relative that happens to be there.
+TEST_CASE("LuaSandbox: a pack root with no filesystem refuses require (#1210)") {
+    auto sb = makeSandbox(ScriptPackSource{"mods/testpack", nullptr});
+    CHECK_FALSE(sb->loadScript("require('anything')"));
+    CHECK(sb->lastError().find("no content filesystem") != std::string::npos);
+}
+
+// A zero-byte module is an ordinary authoring slip (a file created and not yet written), and it must
+// behave like the empty chunk it is: it loads, it returns nothing, and it does not trip the bytecode
+// guard — which reads src[0] and would be reading past the end of an empty buffer if the guard were
+// written the other way round.
+TEST_CASE("LuaSandbox: an empty module file loads and returns nothing (#1210)") {
+    TempPack pack("fl_lua_test_emptymod");
+    pack.writeModule("blank", "");
+
+    auto sb = makeSandbox(pack.source());
+    CHECK(sb->loadScript("local m = require('blank')\n"
+                         "if m ~= nil then error('an empty module returned a value') end"));
+    CHECK(sb->lastError().empty());
+}
+
+// The loader returns every value the chunk produced, not just the first — the shape a module that
+// hands back several helpers relies on.
+TEST_CASE("LuaSandbox: a module's multiple return values all reach the caller (#1210)") {
+    TempPack pack("fl_lua_test_multiret");
+    pack.writeModule("pair", "return 7, 35");
+
+    auto sb = makeSandbox(pack.source());
+    CHECK(sb->loadScript("local a, b = require('pair')\n"
+                         "if a ~= 7 or b ~= 35 then error('wrong values') end"));
+    CHECK(sb->lastError().empty());
+}
+
+// A BACKSLASH is rejected as well as a forward slash. Windows is a first-class target, so the
+// separator a Windows path uses cannot be the one that slips through the traversal guard.
+TEST_CASE("LuaSandbox: a backslash in a module name is rejected (#1210)") {
+    TempPack pack("fl_lua_test_backslash");
+    auto sb = makeSandbox(pack.source());
+    CHECK_FALSE(sb->loadScript("require('sub\\\\mod')"));
+    CHECK(sb->lastError().find("disallowed") != std::string::npos);
 }
 
 // #1015: the require loader raises its "not found" error from a C++ frame that
@@ -150,40 +240,25 @@ TEST_CASE("LuaSandbox: every require rejection path unwinds cleanly (#1015)") {
         CHECK(sb->lastError().find("disallowed") != std::string::npos);
     }
     SECTION("bytecode rejected") {
-        auto tmpDir = std::filesystem::temp_directory_path() / "fl_lua_test_bytecode";
-        std::filesystem::create_directories(tmpDir / "ai");
-        {
-            std::ofstream out(tmpDir / "ai" / "precompiled.lua", std::ios::binary);
-            out << "\x1bLua fake bytecode";
-        }
-        auto sb2 = makeSandbox(tmpDir.string());
+        TempPack pack("fl_lua_test_bytecode");
+        pack.writeModule("precompiled", "\x1bLua fake bytecode");
+        auto sb2 = makeSandbox(pack.source());
         CHECK_FALSE(sb2->loadScript("require('precompiled')"));
         CHECK(sb2->lastError().find("bytecode") != std::string::npos);
-        std::filesystem::remove_all(tmpDir);
     }
     SECTION("syntax error inside the required module") {
-        auto tmpDir = std::filesystem::temp_directory_path() / "fl_lua_test_badsyntax";
-        std::filesystem::create_directories(tmpDir / "ai");
-        {
-            std::ofstream out(tmpDir / "ai" / "broken.lua");
-            out << "this is not @@@ valid lua";
-        }
-        auto sb2 = makeSandbox(tmpDir.string());
+        TempPack pack("fl_lua_test_badsyntax");
+        pack.writeModule("broken", "this is not @@@ valid lua");
+        auto sb2 = makeSandbox(pack.source());
         CHECK_FALSE(sb2->loadScript("require('broken')"));
         CHECK_FALSE(sb2->lastError().empty());
-        std::filesystem::remove_all(tmpDir);
     }
     SECTION("runtime error raised inside the required module") {
-        auto tmpDir = std::filesystem::temp_directory_path() / "fl_lua_test_runtimeerr";
-        std::filesystem::create_directories(tmpDir / "ai");
-        {
-            std::ofstream out(tmpDir / "ai" / "thrower.lua");
-            out << "error('from inside the module')";
-        }
-        auto sb2 = makeSandbox(tmpDir.string());
+        TempPack pack("fl_lua_test_runtimeerr");
+        pack.writeModule("thrower", "error('from inside the module')");
+        auto sb2 = makeSandbox(pack.source());
         CHECK_FALSE(sb2->loadScript("require('thrower')"));
         CHECK(sb2->lastError().find("from inside the module") != std::string::npos);
-        std::filesystem::remove_all(tmpDir);
     }
 }
 
@@ -233,19 +308,13 @@ TEST_CASE("LuaSandbox: a Lua error unwinds C++ frames and runs destructors (#101
 }
 
 TEST_CASE("LuaSandbox: a successful require still works (#1015)") {
-    auto tmpDir = std::filesystem::temp_directory_path() / "fl_lua_test_goodmod";
-    std::filesystem::create_directories(tmpDir / "ai");
-    {
-        std::ofstream out(tmpDir / "ai" / "mathmod.lua");
-        out << "return { double = function(x) return x * 2 end }";
-    }
+    TempPack pack("fl_lua_test_goodmod");
+    pack.writeModule("mathmod", "return { double = function(x) return x * 2 end }");
 
-    auto sb = makeSandbox(tmpDir.string());
+    auto sb = makeSandbox(pack.source());
     CHECK(sb->loadScript("local m = require('mathmod')\n"
                          "if m.double(21) ~= 42 then error('wrong result') end"));
     CHECK(sb->lastError().empty());
-
-    std::filesystem::remove_all(tmpDir);
 }
 
 // ---------------------------------------------------------------------------

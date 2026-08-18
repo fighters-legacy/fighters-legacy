@@ -1393,6 +1393,13 @@ bool ServerRuntime::Impl::initMission() {
     [[maybe_unused]] auto& terrainStreamer = *m_terrainStreamer;
     [[maybe_unused]] auto& weatherController = *m_weatherController;
     [[maybe_unused]] auto& worldApi = m_worldApi;
+    // Where a mission script's require() reads its modules from (#1210). The AI-script cache records
+    // each script's pack root as an ASSETS-DOMAIN path, so it must travel with the filesystem that
+    // resolves it — reading it any other way resolves it against the process working directory, which
+    // is only the content root by accident.
+    auto packSourceFor = [&p](std::string rootDir) {
+        return fl::ScriptPackSource{std::move(rootDir), p.filesystem.get()};
+    };
     // ---- Load the startup mission (#854/#855) ----
     // Resolve the mission asset, hand its bytes to the engine-mission runtime parser (the same schema
     // validate-mission checks), and set up the sim from it BEFORE gameLoop.start(): spawns + factions
@@ -1695,8 +1702,9 @@ bool ServerRuntime::Impl::initMission() {
                                               name.c_str(), obj.id.c_str());
                                 log->log(LogLevel::Warn, __FILE__, __LINE__, m);
                             } else {
-                                auto lc = std::make_unique<fl::LuaController>(
-                                    cacheIt->second.first, cacheIt->second.second, &entityManager, &worldApi);
+                                auto lc = std::make_unique<fl::LuaController>(cacheIt->second.first,
+                                                                              packSourceFor(cacheIt->second.second),
+                                                                              &entityManager, &worldApi);
                                 if (lc->isValid()) {
                                     ctrl = std::move(lc);
                                 } else {
@@ -1728,8 +1736,9 @@ bool ServerRuntime::Impl::initMission() {
                         if (def && !def->aiScriptAsset.empty()) {
                             auto cacheIt = aiScriptCache.find(def->aiScriptAsset);
                             if (cacheIt != aiScriptCache.end()) {
-                                auto lc = std::make_unique<fl::LuaController>(
-                                    cacheIt->second.first, cacheIt->second.second, &entityManager, &worldApi);
+                                auto lc = std::make_unique<fl::LuaController>(cacheIt->second.first,
+                                                                              packSourceFor(cacheIt->second.second),
+                                                                              &entityManager, &worldApi);
                                 if (lc->isValid())
                                     ctrl = std::move(lc);
                                 else {
@@ -2125,8 +2134,8 @@ bool ServerRuntime::Impl::initMission() {
                     return {};
                 if (fl::EntityState* s = entityManager.get(id); s && faction != 0)
                     s->factionIndex = faction;
-                auto ctrl =
-                    std::make_unique<fl::LuaController>(fighterSrc, std::string(), &entityManager, &worldApi, nullptr);
+                auto ctrl = std::make_unique<fl::LuaController>(fighterSrc, fl::ScriptPackSource{}, &entityManager,
+                                                                &worldApi, nullptr);
                 if (!ctrl->isValid()) {
                     entityManager.kill(id);
                     return {};
@@ -2382,6 +2391,7 @@ bool ServerRuntime::Impl::initSystems() {
     [[maybe_unused]] auto& missionFactions = m_missionFactions;
     [[maybe_unused]] auto& missionRuntime = m_missionRuntime;
     [[maybe_unused]] auto& nearSideSurface = m_nearSideSurface;
+    [[maybe_unused]] auto& p = m_p;
     [[maybe_unused]] auto& planetR = m_planetR;
     [[maybe_unused]] auto& primeSpawnHeightUntil = m_primeSpawnHeightUntil;
     [[maybe_unused]] auto& replayRecorder = m_replayRecorder;
@@ -2633,9 +2643,14 @@ bool ServerRuntime::Impl::initSystems() {
         c.env.uptime = serverUptime; // the process-wide instant, not a fresh one
         c.env.traceDir = cfg.trace.inputTraceDir;
         c.env.resolveAiScaling = resolveAiScaling;
-        c.env.loadAIScript = [&aiScriptCache](std::string_view name) -> std::pair<std::string, std::string> {
+        c.env.loadAIScript = [&aiScriptCache,
+                              &p](std::string_view name) -> std::pair<std::string, fl::ScriptPackSource> {
             auto it = aiScriptCache.find(std::string(name));
-            return (it != aiScriptCache.end()) ? it->second : std::pair<std::string, std::string>{};
+            if (it == aiScriptCache.end())
+                return {};
+            // The cached root is an Assets-domain path; it is only resolvable with the filesystem
+            // that owns that domain (#1210).
+            return {it->second.first, fl::ScriptPackSource{it->second.second, p.filesystem.get()}};
         };
         // reload_content (#152): evict the byte cache + the flight-model resolver cache, then re-resolve
         // every live entity's flight model in place (mass/handling update mid-flight). Runs on the sim
