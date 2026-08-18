@@ -2,6 +2,7 @@
 #pragma once
 
 #include "entity/IEntityController.h"
+#include "script/LuaSandbox.h" // ScriptPackSource — where require() reads modules from (#1210)
 
 #include <memory>
 #include <string>
@@ -56,14 +57,16 @@ class AtcService; // engine/atc/AtcService.h — the atc.* Lua module target (#7
 class LuaController : public IEntityController {
   public:
     // scriptSource: Lua source text (never bytecode — rejected by LuaSandbox)
-    // packRootDir: passed to LuaSandbox to restrict require() to ai/<module>.lua
+    // pack: the script's pack root + the filesystem that resolves it, passed to LuaSandbox to
+    //   restrict require() to <root>/ai/<module>.lua in the Assets domain (#1210). A default-
+    //   constructed source (a builtin script) simply has no require().
     // entityManager: optional; enables get_entity() Lua binding (sim-thread-only)
     // worldApi: optional host seam for the world.* module (#413); null = world.* engine-integration
     //   calls (spawn/despawn/set_relationship/set_music_state/mission_*) are safe no-ops. The pointee
     //   must outlive the controller (the host owns one WorldApi for the sim's lifetime).
     // atcService: optional; enables the atc.* module (#705). Thread-safe (the service takes its own
     //   lock), so a script calling atc.* from the parallel AI pass is safe. Must outlive the controller.
-    LuaController(std::string_view scriptSource, std::string packRootDir, const EntityManager* entityManager = nullptr,
+    LuaController(std::string_view scriptSource, ScriptPackSource pack, const EntityManager* entityManager = nullptr,
                   const WorldApi* worldApi = nullptr, atc::AtcService* atcService = nullptr);
     ~LuaController();
 

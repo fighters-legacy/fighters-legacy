@@ -425,6 +425,10 @@ end
 
 Bytecode (precompiled `.lua` files starting with `\x1b`) is rejected by the sandbox.
 
+A module is read from the **mounted pack**, not from wherever the server happens to have been
+started, so `require()` behaves identically under `--assets <dir>`, `FL_ASSETS_ROOT`, a container,
+or a service unit with its own `WorkingDirectory`.
+
 ---
 
 ## Pack conventions

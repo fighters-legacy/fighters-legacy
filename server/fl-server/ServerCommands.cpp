@@ -1157,7 +1157,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
             // Resolve Lua AI script bytes on the dispatch thread (main or sim thread).
             // ctx->env.loadAIScript reads from a pre-loaded read-only cache — safe from any thread.
             std::string luaScriptSrc;
-            std::string luaScriptRoot;
+            fl::ScriptPackSource luaScriptPack;
             std::string effectiveBehavior = behavior; // may change to "lua" from aiScriptAsset auto-detect
 
             if (behavior == "lua") {
@@ -1166,29 +1166,29 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                 std::string scriptName = behaviorArgStrings.empty() ? "" : behaviorArgStrings[0];
                 if (scriptName.empty())
                     return "spawn: --ai lua requires a script name";
-                auto [src, root] = ctx->env.loadAIScript(scriptName);
+                auto [src, pack] = ctx->env.loadAIScript(scriptName);
                 if (src.empty()) {
                     char em[128];
                     std::snprintf(em, sizeof(em), "spawn: --ai lua: script '%s' not found", scriptName.c_str());
                     return std::string(em);
                 }
                 luaScriptSrc = std::move(src);
-                luaScriptRoot = std::move(root);
+                luaScriptPack = std::move(pack);
             } else if (behavior.empty() && ctx->sim.typeRegistry && ctx->env.loadAIScript) {
                 // Auto-detect: check if the entity type has a default AI script.
                 const fl::EntityDef* def = ctx->sim.typeRegistry->findById(typeId.c_str());
                 if (def && !def->aiScriptAsset.empty()) {
-                    auto [src, root] = ctx->env.loadAIScript(def->aiScriptAsset);
+                    auto [src, pack] = ctx->env.loadAIScript(def->aiScriptAsset);
                     if (!src.empty()) {
                         luaScriptSrc = std::move(src);
-                        luaScriptRoot = std::move(root);
+                        luaScriptPack = std::move(pack);
                         effectiveBehavior = "lua:" + def->aiScriptAsset;
                     }
                 }
             }
 
             ctx->sim.gameLoop->enqueueSimCallback([ctx, typeId, x, y, z, factionIndex, behavior, behaviorArgStrings,
-                                                   luaScriptSrc, luaScriptRoot]() {
+                                                   luaScriptSrc, luaScriptPack]() {
                 fl::EntityTransform t{};
                 t.pos[0] = x;
                 t.pos[1] = y;
@@ -1214,7 +1214,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                             // Lua AI controller — constructed on sim thread; the world.* seam (#413)
                             // lets an admin-spawned script reach spawn/faction/mission/music too.
                             auto luaCtrl = std::make_unique<LuaController>(
-                                luaScriptSrc, luaScriptRoot, ctx->sim.entityManager, ctx->sim.worldApi, ctx->sim.atc);
+                                luaScriptSrc, luaScriptPack, ctx->sim.entityManager, ctx->sim.worldApi, ctx->sim.atc);
                             if (luaCtrl->isValid()) {
                                 ctrl = std::move(luaCtrl);
                             } else {
