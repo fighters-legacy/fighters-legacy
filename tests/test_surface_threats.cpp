@@ -72,9 +72,17 @@ struct ThreatFixture {
         q_wb.sensorDefs = builtinSensorResolver;
         // `this` rather than a pointer taken after construction: the query is frozen at construction
         // now, and the fixture outlives every call into it.
+        //
+        // The geometry is fl-server's SHIPPED default (server_config.h FlightConfig:
+        // designate_range_m = 15000, designate_half_angle_deg = 15), not a permissive stand-in. It
+        // used to be 60 km and a full hemisphere, which quietly made this fixture a different engine
+        // from the one that ships: #1208 -- a battery that designates properly, throws the id away,
+        // and has the fire path re-designate from its horizontal nose through the boresight cone --
+        // could not fail here, because in this fixture that cone swallowed the whole world. Every
+        // SAM test in the file passed while no missile in a real server arrived within kilometres.
         q_wb.targetDesignator = [this](const EntityState& shooter, const float axis[3]) -> EntityId {
-            return ai::designateFromContacts(shooter, axis, wb->contactsFor(shooter.id.index), 60000.f,
-                                             std::numbers::pi_v<float>, nullptr);
+            return ai::designateFromContacts(shooter, axis, wb->contactsFor(shooter.id.index), 15000.f,
+                                             15.f * std::numbers::pi_v<float> / 180.f, nullptr);
         };
         wb = std::make_unique<WorldBroadcaster>(*em, registry, net, logger, nullptr, std::move(q_wb));
         wb->setWeaponRegistry(&weapons);
@@ -316,6 +324,82 @@ TEST_CASE("a SAM launches above the horizon even at a target on its own level (#
         CHECK(elevSin >= std::sin(35.f * std::numbers::pi_v<float> / 180.f) - 1e-3f); // at or above the floor
     }
     CHECK(sawLaunch);
+}
+
+// ── launch designation (#1208) ────────────────────────────────────────────────────────────────────
+//
+// #1204 got the store off the rail. It did not get it to the target: the controller designated with
+// its own 30 km / +/-90 deg engagement geometry and then threw the id away, so `executeFireRequest`
+// re-designated from scratch off `bodyForward(quat)` -- the emplacement's HORIZONTAL nose -- through
+// the server's boresight cone (15 km / +/-15 deg). Measured from the issue, target at 3 km altitude:
+//
+//     horizontal range   elevation off the nose   designated?
+//      2.6 km             ~49 deg                 no  - outside the cone
+//      8   km             ~21 deg                 no
+//     11.6 km             ~15 deg                 marginal
+//     20   km             ~8.5 deg                inside the cone, outside the 15 km range cap
+//
+// Everywhere else the store launched with NO designation and flew ballistically: 0 kills across
+// altitude 1-9 km, engagement range 4-30 km, target speed 100-320 m/s, SARH and IR alike, with
+// closest approaches of 3.7-24.7 km. Aircraft were unaffected because fighter.lua puts the nose on
+// the target before firing, which satisfies the nose cone by construction.
+//
+// The two cases below are the two ways the old fallback failed -- angle and range -- and they only
+// mean something because the fixture's designator now carries the SHIPPED cone (see ThreatFixture).
+
+TEST_CASE("a ground SAM kills a target its own nose cone would never designate (#1208)", "[surface_threats]") {
+    SECTION("well outside the boresight cone: 49 degrees above the nose") {
+        // 2.6 km out, 3 km up. Inside the launcher's engagement geometry, nowhere near its nose.
+        const EngagementResult r = runSamEngagement(/*samAltM=*/0.0, /*rangeM=*/2600.0,
+                                                    /*targetAltAboveSamM=*/3000.0, /*ticks=*/1800);
+        CHECK(r.peakMissiles >= 1); // it always shot -- the trigger was never the problem
+        CHECK(r.targetHit);         // and now it arrives
+    }
+    SECTION("inside the cone but beyond the boresight designation range") {
+        // 20 km out, 3 km up: ~8.5 deg off the nose, so the angle gate passed and the 15 km range
+        // cap refused it anyway.
+        const EngagementResult r = runSamEngagement(0.0, 20000.0, 3000.0, 2400);
+        CHECK(r.peakMissiles >= 1);
+        CHECK(r.targetHit);
+    }
+}
+
+TEST_CASE("SamEngagementController publishes the target it designated (#1208)", "[surface_threats]") {
+    ThreatFixture f;
+    const EntityId sam = f.spawn("builtin:sam-site", 0.0, 0.0, 0.0, 2);
+    const EntityId victim = f.spawn("builtin:debug-entity", 2600.0, 3000.0, 0.0, 1);
+    ai::SamEngagementController controller(*f.em);
+    f.wb->registerController(sam, std::make_unique<ai::SamEngagementController>(*f.em));
+
+    uint64_t t = 0;
+    f.tick(120, t); // let the battery acquire and hold a track
+
+    const EntityState* st = f.em->get(sam);
+    REQUIRE(st != nullptr);
+    fl::AiTickContext ctx;
+    ctx.contacts = f.wb->contactsFor(st->id.index);
+    REQUIRE(ctx.contacts != nullptr);
+
+    CHECK_FALSE(controller.designatedTarget().valid()); // nothing sampled yet
+    controller.sample(*st, 0, 1.0 / 60.0, ctx);
+    CHECK(controller.designatedTarget() == victim); // the id the controller chose, kept
+
+    // A controller that sees nothing publishes nothing: a designation never outlives its engagement.
+    fl::AiTickContext blind;
+    controller.sample(*st, 1, 1.0 / 60.0, blind);
+    CHECK_FALSE(controller.designatedTarget().valid());
+}
+
+TEST_CASE("a plain controller designates nothing, so the fire path decides (#1208)", "[surface_threats]") {
+    // The seam defaults OFF, the same way ControlInput::hasAimDir does: every controller that does
+    // not override designatedTarget() leaves the shooter's own look-axis designation in charge.
+    struct SilentController : fl::IEntityController {
+        fl::ControlInput sample(const fl::EntityState&, uint64_t, double, const fl::AiTickContext&) override {
+            return {};
+        }
+    };
+    SilentController c;
+    CHECK_FALSE(c.designatedTarget().valid());
 }
 
 TEST_CASE("an aircraft's shot still leaves along its nose (#1204 regression guard)", "[surface_threats]") {

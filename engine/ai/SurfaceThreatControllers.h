@@ -48,6 +48,14 @@ class SamEngagementController : public fl::IEntityController {
     fl::ControlInput sample(const fl::EntityState& state, uint64_t tick, double dt,
                             const fl::AiTickContext& ctx = {}) override;
 
+    // The contact this battery is shooting at (#1208). The fire path launches AT it instead of
+    // re-designating from the launcher's horizontal nose through the boresight cone, which is what
+    // it did before — and which is why a battery that senses, tracks and fires correctly still put
+    // every missile kilometres from the target. Null between engagements.
+    [[nodiscard]] fl::EntityId designatedTarget() const override {
+        return m_designated;
+    }
+
   private:
     void setLaunchVector(fl::ControlInput& ctrl, const fl::EntityState& state, const fl::AiTickContext& ctx,
                          fl::EntityId target) const;
@@ -61,6 +69,7 @@ class SamEngagementController : public fl::IEntityController {
     float m_launchElevationMinRad;
     uint64_t m_lastFireTick{0};
     bool m_hasFired{false};
+    fl::EntityId m_designated{}; // last sample()'s designation, for the fire path (#1208)
 };
 
 // Lead an aircraft with the ballistic gun solution and fire when the predicted miss at the target's

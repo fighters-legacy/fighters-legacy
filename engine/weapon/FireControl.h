@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "entity/EntityId.h"
 #include "flight/AeroForces.h"
 #include "weapon/StationState.h"
 
@@ -45,6 +46,14 @@ struct FireRequest {
     // seat's turret pose via turretWorldDir. FireRequest's sort key gains seat when crew lands.
     bool hasAimDir{false};
     float aimDir[3]{0.f, 0.f, 0.f};
+    // ── launch designation (#1208) ──
+    // The target the SHOOTER'S CONTROLLER already picked. Null (the default) = the fire path
+    // designates for itself from the shooter's look axis, which is what a player and a nose-pointing
+    // aircraft AI want. A controller that aims off-nose fills it via IEntityController::designatedTarget,
+    // because re-designating from the airframe nose finds nothing for a launcher whose nose is
+    // horizontal — and a seeker weapon launched with no designation flies dumb by documented rule.
+    // evaluateFire leaves this default; the weapons pass stamps it.
+    EntityId designated{};
 };
 
 // The gun default when a weapon def does not say (rate_of_fire_rpm == 0).
