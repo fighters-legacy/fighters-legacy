@@ -14,6 +14,11 @@ namespace fl {
 
 namespace detail {
 
+// Both missions carry `anchor: home` (#1211), so their coordinates are metres EAST and NORTH of the
+// sandbox home with y as MSL altitude — which is where the builtin airfield stands and where the
+// server spawns a pilot with no mission. Without an anchor a mission's coordinates are raw world
+// XYZ, i.e. the world origin: the north pole, with no sunrise, no stable heading and no runway.
+//
 // builtin:sandbox -- a small skirmish: a joinable blue player slot flanked by a builtin-fighter
 // wingman, versus two builtin-fighter bandits, a crewed builtin:bomber (its bot tail-gunner turret
 // auto-defends -- the #977 zero-pack crew/turret proof), and a SAM site defending a point. Win by
@@ -22,6 +27,7 @@ inline constexpr std::string_view kBuiltinSandboxYaml = R"yaml(
 name: "Sandbox Skirmish"
 map: world
 layer: world_clear
+anchor: home
 time: { hour: 12, minute: 0 }
 wind: { heading: 250, speed: 4 }
 sides: [blue, red]
@@ -33,7 +39,7 @@ objects:
   # A crewed bomber (#977): its AI pilot flies, and its bot tail-gunner turret auto-defends against
   # anyone who slides into its rear quarter -- the whole crew/turret fire path, zero-pack.
   - { type: builtin:bomber, id: redbomber, side: red, pos: [9500, 3000, -400], heading: 270, ai: "lua builtin:fighter" }
-  - { type: builtin:sam-site, id: redsam, side: red, pos: [9500, 0, 0], heading: 90, ai: "sam" }
+  - { type: builtin:sam-site, id: redsam, side: red, pos: [9500, 0, 0], heading: 90, start: ground, ai: "sam" }
 triggers:
   - on: destroy(redsam)
     do: mission_success
@@ -54,6 +60,7 @@ inline constexpr std::string_view kBuiltinShapeGalleryYaml = R"yaml(
 name: "Shape Gallery"
 map: world
 layer: world_clear
+anchor: home
 time: { hour: 12, minute: 0 }
 wind: { heading: 250, speed: 2 }
 sides: [blue, red]

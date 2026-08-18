@@ -1773,8 +1773,8 @@ matches a bundled one **wins** (load order is builtin airfield → packs → bun
     # Placement: EITHER geodetic (lat/lon in DEGREES) OR direct world-XZ (metres). Not both.
     lat  = 36.23                 # geodetic latitude,  degrees (+N)
     lon  = -115.03               # geodetic longitude, degrees (+E)
-    # world_x = 4000.0           # near-origin alternative (the world origin is the north pole,
-    # world_z = 0.0              #   where lat/lon is singular — use world-XZ for sandbox fields)
+    # world_x = 4000.0           # raw world-XZ alternative — only meaningful near the world ORIGIN,
+    # world_z = 0.0              #   which is the north pole (lat/lon is singular there). Prefer lat/lon.
 
     elevation_m      = 569.0     # optional — authoritative field elevation; omit to resolve from terrain
     accepts_landings = true      # optional — default true; false = fly-over-only (or a wrecked field)

@@ -10,6 +10,7 @@
 #include "world/AirportIndexFile.h"
 #include "world/AirportRegistry.h"
 #include "world/BuiltinAirport.h"
+#include "world/SandboxHome.h"
 
 #include <cmath>
 #include <cstdint>
@@ -263,7 +264,11 @@ TEST_CASE("AirportRegistry: nearestTo respects range", "[airport]") {
 TEST_CASE("builtinAirfield is a valid sandbox strip", "[airport]") {
     const AirportDef def = builtinAirfield();
     CHECK(def.id == "builtin:airfield");
-    CHECK(def.useWorldXZ);
+    // Geodetic, at the sandbox home (#1211) — it used to be placed in world-XZ beside the origin,
+    // which is the north pole, because lat/lon is singular there.
+    CHECK_FALSE(def.useWorldXZ);
+    CHECK(def.latRad == Approx(sandboxHome().lat_rad));
+    CHECK(def.lonRad == Approx(sandboxHome().lon_rad));
     CHECK(def.acceptsLandings);
     CHECK(def.elevationM == Approx(kBuiltinAirfieldElevationM)); // fixed for server/client parity (#486)
     REQUIRE(def.runways.size() == 1u);

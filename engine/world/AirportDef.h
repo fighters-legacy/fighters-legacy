@@ -89,9 +89,12 @@ struct RunwayDef {
 // AirportRegistry, which resolves the world position and per-runway geometry once at load.
 //
 // Placement is EITHER geodetic (latRad/lonRad) OR direct world-XZ (useWorldXZ + worldX/worldZ). The
-// world-XZ form exists because the sandbox spawn is the world origin, which is the NORTH POLE in
-// engine coordinates (worldToGeodetic(0,0,0) -> lat = pi/2), where longitude and the ENU basis are
-// singular — a near-origin test airfield must be placed in world-XZ, not lat/lon.
+// world-XZ form exists for a field placed beside the world ORIGIN, which is the NORTH POLE in engine
+// coordinates (worldToGeodetic(0,0,0) -> lat = pi/2), where longitude and the ENU basis are singular
+// and lat/lon cannot express a nearby point usefully.
+//
+// The builtin sandbox strip no longer needs it: the sandbox home moved off the pole (#1211,
+// world/SandboxHome.h) and builtinAirfield() is geodetic like any other airport. Prefer lat/lon.
 struct AirportDef {
     std::string id;   // namespaced def id ("fl-base:homeplate", "builtin:airfield", or an ICAO)
     std::string name; // human-readable

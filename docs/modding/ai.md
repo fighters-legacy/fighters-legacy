@@ -286,6 +286,25 @@ Its main use is the one above: differentiate it across your own sample interval 
 `pitch_rate_rad_s` that `elevator_for_altitude_hold` damps on. `state` carries an orientation and a
 world velocity but no body angular rates, on this side of the seam or the engine's.
 
+### `guidance.altitude(pos[, radius_m]) → number`
+
+MSL altitude (metres) of a world position.
+
+**`state.pos.y` is not altitude.** `state.pos` is world XYZ on a sphere whose centre is at
+`{0, -R, 0}`, so `pos.y` only equals altitude near the world origin — the north pole. At the sandbox
+home it is about −2,604,000. A script that compares `pos.y` against a field elevation is correct
+there and silently wrong everywhere else, which is exactly what this call is for:
+
+```lua
+local agl_ish = guidance.altitude(state.pos) - FIELD_ELEV_M
+if agl_ish < 15 and speed < 40 then  -- on the deck, stopped: landed
+```
+
+### `guidance.geodetic(pos[, radius_m]) → {lat, lon, alt}`
+
+Where on the planet a world position is: `lat` and `lon` in **degrees**, `alt` in metres MSL. Use it
+when a script cares about the place (which side of a border, which theatre) rather than the height.
+
 ---
 
 ## `detected_contacts() → array`

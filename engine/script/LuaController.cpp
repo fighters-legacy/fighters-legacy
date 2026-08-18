@@ -18,6 +18,7 @@
 #include <array>
 #include <cstdint>
 #include <cstdio>
+#include <numbers>
 #include <string>
 #include <vector>
 
@@ -346,6 +347,42 @@ static int guidanceBodyForward(lua_State* L) {
     lua_setfield(L, -2, "y");
     lua_pushnumber(L, static_cast<double>(fwd.z));
     lua_setfield(L, -2, "z");
+    return 1;
+}
+
+// altitude(pos, [radius_m]) — MSL altitude of a world position, in metres.
+//
+// Content needed this the day the world stopped being a plane around the origin (#1211). `state.pos`
+// is world XYZ, and near the origin — the north pole — pos.y happened to equal altitude, so every
+// script and every mission leaned on that shorthand. It is false anywhere else: at the sandbox home
+// pos.y is about -2,604 km. Without this binding a script would have to compute
+// sqrt(x^2 + (y+R)^2 + z^2) - R and know R to do it.
+static int guidanceAltitude(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    double p[3];
+    readVec3(L, 1, p);
+    const double R = luaL_optnumber(L, 2, fl::kEarthRadiusM);
+    lua_pushnumber(L, fl::geodeticAltitude(p[0], p[1], p[2], R));
+    return 1;
+}
+
+// geodetic(pos, [radius_m]) → {lat, lon, alt} — latitude/longitude in DEGREES, altitude in metres.
+// The other half of the same gap: content that wants to know where on the planet it is (which
+// theatre, which side of a border) rather than just how high.
+static int guidanceGeodetic(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    double p[3];
+    readVec3(L, 1, p);
+    const double R = luaL_optnumber(L, 2, fl::kEarthRadiusM);
+    const fl::LatLonAlt lla = fl::worldToGeodetic(p[0], p[1], p[2], R);
+    constexpr double kRadToDeg = 180.0 / std::numbers::pi_v<double>;
+    lua_newtable(L);
+    lua_pushnumber(L, lla.lat_rad * kRadToDeg);
+    lua_setfield(L, -2, "lat");
+    lua_pushnumber(L, lla.lon_rad * kRadToDeg);
+    lua_setfield(L, -2, "lon");
+    lua_pushnumber(L, lla.alt_m);
+    lua_setfield(L, -2, "alt");
     return 1;
 }
 
@@ -888,6 +925,8 @@ static void registerGuidanceModule(lua_State* L) {
         {"elevator_from_pitch_error", guidanceElevatorFromPitchError},
         {"body_forward", guidanceBodyForward},
         {"pitch_of", guidancePitchOf},
+        {"altitude", guidanceAltitude},
+        {"geodetic", guidanceGeodetic},
         {nullptr, nullptr},
     };
     lua_newtable(L);

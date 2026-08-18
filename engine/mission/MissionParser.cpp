@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "mission/MissionParser.h"
 
+#include "flight/Geodetic.h"    // the authoring-frame -> world resolution (#1211)
+#include "world/SandboxHome.h"  // `anchor: home` — where the sandbox lives
 #include "world/ZoneGeometry.h" // isConvexPolygonXZ — airspace_zones convexity check (#162)
 
 #include <yaml-cpp/yaml.h>
@@ -59,7 +61,7 @@ std::optional<WeatherPreset> weatherPresetFromString(const std::string& p) {
 
 } // namespace
 
-MissionParseResult parseMission(std::string_view yamlContent) {
+MissionParseResult parseMission(std::string_view yamlContent, double planetRadiusM) {
     MissionParseResult r;
     Mission& m = r.mission;
 
@@ -94,6 +96,52 @@ MissionParseResult parseMission(std::string_view yamlContent) {
         m.map = doc["map"].as<std::string>("");
     if (hasKey(doc, "layer") && doc["layer"].IsScalar())
         m.layer = doc["layer"].as<std::string>("");
+
+    // ── anchor (optional) ─────────────────────────────────────────────────────
+    // `anchor: home` (the sandbox home, SandboxHome.h) or `anchor: {lat: <deg>, lon: <deg>}`. With an
+    // anchor, every [x, y, z] in the file is [metres east, MSL altitude, metres north] of it. Absent,
+    // the file's x/z are raw world coordinates, which only means anything near the world origin — the
+    // north pole (#1211).
+    if (hasKey(doc, "anchor")) {
+        const YAML::Node& an = doc["anchor"];
+        constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
+        if (an.IsScalar()) {
+            const std::string a = an.as<std::string>("");
+            if (a == "home") {
+                m.anchor = MissionAnchor{sandboxHome().lat_rad, sandboxHome().lon_rad};
+            } else {
+                r.errors.push_back("anchor must be \"home\" or a {lat, lon} mapping (got \"" + a + "\")");
+                r.ok = false;
+            }
+        } else if (an.IsMap()) {
+            if (!hasKey(an, "lat") || !hasKey(an, "lon")) {
+                r.errors.push_back("anchor needs both lat and lon (degrees)");
+                r.ok = false;
+            } else {
+                const double lat = an["lat"].as<double>(0.0);
+                const double lon = an["lon"].as<double>(0.0);
+                if (lat < -90.0 || lat > 90.0) {
+                    r.errors.push_back("anchor.lat must be in [-90, 90] (got " + std::to_string(lat) + ")");
+                    r.ok = false;
+                } else if (lon < -180.0 || lon > 180.0) {
+                    r.errors.push_back("anchor.lon must be in [-180, 180] (got " + std::to_string(lon) + ")");
+                    r.ok = false;
+                } else if (std::abs(lat) > 89.0) {
+                    // The whole reason anchors exist: beside a pole the east offset per degree of
+                    // longitude collapses and a compass heading stops meaning anything.
+                    r.errors.push_back("anchor.lat must be within 89 degrees of the equator — an anchor beside a "
+                                       "pole has no usable east/north frame (got " +
+                                       std::to_string(lat) + ")");
+                    r.ok = false;
+                } else {
+                    m.anchor = MissionAnchor{lat * kDegToRad, lon * kDegToRad};
+                }
+            }
+        } else {
+            r.errors.push_back("anchor must be \"home\" or a {lat, lon} mapping");
+            r.ok = false;
+        }
+    }
 
     // ── time ──────────────────────────────────────────────────────────────────
     if (!hasKey(doc, "time")) {
@@ -461,9 +509,34 @@ MissionParseResult parseMission(std::string_view yamlContent) {
                 for (int c = 0; c < kPosComponents; ++c)
                     mo.pos[c] = obj["pos"][c].as<double>(0.0);
             }
-            // alt (optional) — overrides pos[1] at spawn
+            // alt (optional) — overrides pos[1] (both are MSL altitude; #1211)
             if (hasKey(obj, "alt"))
                 mo.alt = obj["alt"].as<float>(0.f);
+            // lat/lon (optional, #1211) — absolute geodetic placement instead of the anchor-relative
+            // x/z above. Either both or neither: half a coordinate is a slip, not a shorthand.
+            {
+                const bool hasLat = hasKey(obj, "lat");
+                const bool hasLon = hasKey(obj, "lon");
+                if (hasLat != hasLon) {
+                    r.errors.push_back("objects[" + std::to_string(idx) + "] needs both lat and lon, or neither");
+                    r.ok = false;
+                } else if (hasLat) {
+                    const double la = obj["lat"].as<double>(0.0);
+                    const double lo = obj["lon"].as<double>(0.0);
+                    if (la < -90.0 || la > 90.0) {
+                        r.errors.push_back("objects[" + std::to_string(idx) + "].lat must be in [-90, 90] (got " +
+                                           std::to_string(la) + ")");
+                        r.ok = false;
+                    } else if (lo < -180.0 || lo > 180.0) {
+                        r.errors.push_back("objects[" + std::to_string(idx) + "].lon must be in [-180, 180] (got " +
+                                           std::to_string(lo) + ")");
+                        r.ok = false;
+                    } else {
+                        mo.latDeg = la;
+                        mo.lonDeg = lo;
+                    }
+                }
+            }
             // speed (optional) — initial airspeed (m/s) along heading; must be >= 0 (#883)
             if (hasKey(obj, "speed")) {
                 float sp = obj["speed"].as<float>(-1.f);
@@ -921,6 +994,67 @@ MissionParseResult parseMission(std::string_view yamlContent) {
                 m.shots.push_back(std::move(shot));
                 ++sidx;
             }
+        }
+    }
+
+    // ── authoring frame -> world XYZ (#1211) ──────────────────────────────────────────────────────
+    //
+    // Everything above stored what the AUTHOR wrote. This is the one place it becomes world
+    // coordinates, so nothing downstream has to know an authoring frame exists.
+    //
+    //   with an anchor      pos = [metres east, MSL altitude, metres north] of it
+    //   without an anchor   pos = world XYZ, untouched — exactly what every mission meant before
+    //   lat / lon           absolute geodetic placement, anchor or not
+    //
+    // `alt:` folds into pos[1] first, so it means the same thing in either frame.
+    {
+        const double R = planetRadiusM;
+        const LatLonAlt anchor =
+            m.anchor ? LatLonAlt{m.anchor->latRad, m.anchor->lonRad, 0.0} : LatLonAlt{0.0, 0.0, 0.0};
+        const bool anchored = m.anchor.has_value();
+
+        // One authored triple -> one world position. WITHOUT an anchor nothing is converted: the
+        // file's numbers already ARE world coordinates, and near the origin (where such a mission is
+        // the only kind that means anything) world Y is altitude to within tens of metres. Adding
+        // `anchor:` is then the only thing that changes what a coordinate means.
+        auto resolve = [&](double out[3]) {
+            if (!anchored)
+                return;
+            localOffsetToWorld(anchor, /*eastM=*/out[0], /*northM=*/out[2], /*altM=*/out[1], out[0], out[1], out[2], R);
+        };
+
+        for (MissionObject& mo : m.objects) {
+            if (mo.alt)
+                mo.pos[1] = static_cast<double>(*mo.alt); // the override folds in before resolution
+            if (mo.latDeg && mo.lonDeg) {
+                constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
+                geodeticToWorld(LatLonAlt{*mo.latDeg * kDegToRad, *mo.lonDeg * kDegToRad, mo.pos[1]}, mo.pos[0],
+                                mo.pos[1], mo.pos[2], R);
+            } else {
+                resolve(mo.pos);
+            }
+            for (std::array<double, 3>& wp : mo.route)
+                resolve(wp.data());
+        }
+        for (MissionShot& shot : m.shots) {
+            resolve(shot.pos);
+            if (shot.lookAtPointSet)
+                resolve(shot.lookAtPoint);
+            for (ShotKeyframe& kf : shot.keyframes)
+                resolve(kf.pos);
+            // `offset` is a chase-camera DISPLACEMENT in the target's own frame, not a place — it is
+            // deliberately left alone.
+        }
+
+        // Airspace zones (#162) are a PLANAR world-XZ test — a circle in world XZ, evaluated by
+        // AlertSystem without a tangent frame. That is only a real shape near the world origin, and
+        // an anchored mission is by definition not there: projecting a 10 km zone at 36 degrees
+        // north into world XZ turns it into a slanted ellipse. Refusing is the honest answer until
+        // zone geometry itself becomes anchor-relative; silently distorting it is not.
+        if (anchored && !m.airspaceZones.empty()) {
+            r.errors.push_back("airspace_zones cannot be used with an anchor yet: zone geometry is a planar world-XZ "
+                               "test (#162) and is only correct near the world origin");
+            r.ok = false;
         }
     }
 

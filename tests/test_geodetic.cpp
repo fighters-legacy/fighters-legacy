@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "flight/Geodetic.h"
+#include "world/SandboxHome.h"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -91,4 +92,59 @@ TEST_CASE("Geodetic: geodeticAltitude convenience function", "[geodetic]") {
     CHECK(fl::geodeticAltitude(D, 0.0, 0.0) == Approx(expected).epsilon(1e-6));
     // Must differ significantly from world-Y at lateral position
     CHECK_FALSE((fl::geodeticAltitude(D, 0.0, 0.0) == Approx(0.0).margin(1.0)));
+}
+
+// ── the anchor-relative authoring frame (#1211) ────────────────────────────────────────────────
+
+TEST_CASE("Geodetic: a local east/north offset lands the right distance away, ON the sphere", "[geodetic][anchor]") {
+    const fl::LatLonAlt home = fl::sandboxHome();
+
+    // 10 km east and 10 km north of the home, at 3000 m MSL.
+    double x = 0.0, y = 0.0, z = 0.0;
+    fl::localOffsetToWorld(home, /*eastM=*/10000.0, /*northM=*/10000.0, /*altM=*/3000.0, x, y, z);
+
+    // The altitude is EXACT, which is the reason the offset walks lat/lon instead of stepping along
+    // the tangent plane: a tangent step would sit ~16 m below the datum at this distance.
+    CHECK(fl::geodeticAltitude(x, y, z) == Approx(3000.0).margin(0.01));
+
+    // And it really is ~14.14 km from the home (10 km east + 10 km north), measured as a chord.
+    double hx = 0.0, hy = 0.0, hz = 0.0;
+    fl::geodeticToWorld(fl::LatLonAlt{home.lat_rad, home.lon_rad, 3000.0}, hx, hy, hz);
+    const double dist = std::sqrt((x - hx) * (x - hx) + (y - hy) * (y - hy) + (z - hz) * (z - hz));
+    CHECK(dist == Approx(std::sqrt(2.0) * 10000.0).epsilon(1e-3));
+
+    // North increases latitude; east increases longitude.
+    const fl::LatLonAlt lla = fl::worldToGeodetic(x, y, z);
+    CHECK(lla.lat_rad > home.lat_rad);
+    CHECK(lla.lon_rad > home.lon_rad);
+}
+
+TEST_CASE("Geodetic: worldAtAltitude moves a position along its own radial", "[geodetic][anchor]") {
+    const fl::LatLonAlt home = fl::sandboxHome();
+    double x = 0.0, y = 0.0, z = 0.0;
+    fl::localOffsetToWorld(home, 5000.0, -2000.0, 0.0, x, y, z);
+
+    double ax = 0.0, ay = 0.0, az = 0.0;
+    fl::worldAtAltitude(x, y, z, 2500.0, ax, ay, az);
+    CHECK(fl::geodeticAltitude(ax, ay, az) == Approx(2500.0).margin(0.01));
+
+    // Same ground track: latitude and longitude are untouched by a change of altitude.
+    const fl::LatLonAlt before = fl::worldToGeodetic(x, y, z);
+    const fl::LatLonAlt after = fl::worldToGeodetic(ax, ay, az);
+    CHECK(after.lat_rad == Approx(before.lat_rad).epsilon(1e-12));
+    CHECK(after.lon_rad == Approx(before.lon_rad).epsilon(1e-12));
+}
+
+TEST_CASE("Geodetic: the sandbox home is off the pole, which is the point of it", "[geodetic][anchor]") {
+    const fl::LatLonAlt home = fl::sandboxHome();
+    CHECK(home.lat_rad * 180.0 / kPi == Approx(fl::kSandboxHomeLatDeg).epsilon(1e-9));
+    CHECK(home.lon_rad * 180.0 / kPi == Approx(fl::kSandboxHomeLonDeg).epsilon(1e-9));
+    CHECK(home.alt_m == Approx(fl::kSandboxHomeElevationM));
+
+    // Far from the world origin, and far from the pole — a latitude where a compass, a sunrise and a
+    // longitude all mean something.
+    double hx = 0.0, hy = 0.0, hz = 0.0;
+    fl::geodeticToWorld(home, hx, hy, hz);
+    CHECK(std::sqrt(hx * hx + hy * hy + hz * hz) > 5'000'000.0);
+    CHECK(std::abs(home.lat_rad) < kPi / 2.0 - 0.5);
 }

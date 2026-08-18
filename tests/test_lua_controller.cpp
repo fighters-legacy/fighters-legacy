@@ -12,11 +12,13 @@
 #include "spatial/SpatialIndex.h"
 #include "world/AirportRegistry.h"
 #include "world/BuiltinAirport.h"
+#include "world/SandboxHome.h"
 
 #include <stdfs/StdFilesystem.h>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -1316,4 +1318,49 @@ TEST_CASE("world zone bindings are safe no-ops with no host hooks wired (#162)")
     CHECK(w.alerts.empty());
     REQUIRE(w.relations.size() == 1);
     CHECK(w.relations[0] == "peacetime|clean|false");
+}
+
+// ── altitude / geodetic (#1211) ────────────────────────────────────────────────────────────────
+
+TEST_CASE("guidance.altitude reports MSL altitude, not pos.y (#1211)") {
+    // The gap this closes: `state.pos` is world XYZ, and the shorthand "pos.y IS altitude" holds only
+    // near the world origin — the north pole. At the sandbox home pos.y is about -2,604 km, so a
+    // script comparing pos.y against a field elevation is silently wrong the moment home moves.
+    double hx = 0.0, hy = 0.0, hz = 0.0;
+    fl::geodeticToWorld(fl::LatLonAlt{fl::sandboxHome().lat_rad, fl::sandboxHome().lon_rad, 2500.0}, hx, hy, hz);
+
+    char src[512];
+    std::snprintf(src, sizeof(src),
+                  "function compute_control(s,t,dt)\n"
+                  "  local p = {x=%.6f, y=%.6f, z=%.6f}\n"
+                  "  return { throttle = guidance.altitude(p) / 10000.0,\n"
+                  "           elevator = (math.abs(p.y) > 1000000.0) and 1.0 or 0.0 }\n"
+                  "end",
+                  hx, hy, hz);
+
+    auto c = makeCtrl(src);
+    REQUIRE(c->isValid());
+    const fl::ControlInput ctrl = c->sample(makeState(), 0, 1.0 / 60.0);
+    CHECK(ctrl.throttle == Catch::Approx(0.25f).margin(1e-4)); // 2500 m
+    CHECK(ctrl.elevator == Catch::Approx(1.0f));               // and pos.y is nothing like an altitude
+}
+
+TEST_CASE("guidance.geodetic reports where on the planet a position is (#1211)") {
+    double hx = 0.0, hy = 0.0, hz = 0.0;
+    fl::geodeticToWorld(fl::LatLonAlt{fl::sandboxHome().lat_rad, fl::sandboxHome().lon_rad, 1000.0}, hx, hy, hz);
+
+    char src[512];
+    std::snprintf(src, sizeof(src),
+                  "function compute_control(s,t,dt)\n"
+                  "  local g = guidance.geodetic({x=%.6f, y=%.6f, z=%.6f})\n"
+                  "  return { aileron = g.lat / 100.0, rudder = g.lon / 1000.0, throttle = g.alt / 10000.0 }\n"
+                  "end",
+                  hx, hy, hz);
+
+    auto c = makeCtrl(src);
+    REQUIRE(c->isValid());
+    const fl::ControlInput ctrl = c->sample(makeState(), 0, 1.0 / 60.0);
+    CHECK(ctrl.aileron == Catch::Approx(fl::kSandboxHomeLatDeg / 100.0).margin(1e-5));
+    CHECK(ctrl.rudder == Catch::Approx(fl::kSandboxHomeLonDeg / 1000.0).margin(1e-5));
+    CHECK(ctrl.throttle == Catch::Approx(0.1f).margin(1e-4));
 }

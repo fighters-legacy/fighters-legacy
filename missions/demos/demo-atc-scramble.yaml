@@ -1,6 +1,7 @@
 name: "Demo: ATC Scramble"
 map: world
 layer: world_clear
+anchor: home
 time: { hour: 11, minute: 0 }
 wind: { heading: 90, speed: 4 }
 sides: [blue]
@@ -9,12 +10,20 @@ sides: [blue]
 # them avoids stacking aircraft on the single hold-short point; ATC sequences takeoff, rotation, and
 # climbout down the 090 runway. The mission `do:` string runs the same validated admin command an
 # operator would type. Scrambled aircraft are NOT mission-roster objects, so every camera look_at is
-# a fixed world point along the runway (x 2750..5250, z 0, surface ~552 m) and the climbout corridor.
-# Two apron vehicles and a high CAP give the field foreground/scale. Zero content pack.
+# a fixed point along the runway and the climbout corridor. Two apron vehicles and a high CAP give
+# the field foreground/scale. Zero content pack.
+#
+# `anchor: home` (#1211): coordinates are metres EAST and NORTH of the field, y is MSL altitude, and
+# the field elevation is ~570 m. Runway 090 therefore runs along +east from the field centre,
+# x -1250 .. +1250 at z ~ 0. These shots are authored from that geometry rather than traced from a
+# render, which is what the old world-origin coordinates were.
 objects:
-  - { type: builtin:ground-vehicle, id: truck1, side: blue, pos: [4050, 0, 260], heading: 90, start: ground }
-  - { type: builtin:ground-vehicle, id: truck2, side: blue, pos: [3850, 0, 300], heading: 270, start: ground }
-  - { type: builtin:debug-entity, id: cap1, side: blue, pos: [4000, 2600, 0], heading: 0, ai: "loiter 4000 2600 0 3000 2600 0.55" }
+  - { type: builtin:ground-vehicle, id: truck1, side: blue, pos: [60, 0, 260], heading: 90, start: ground }
+  - { type: builtin:ground-vehicle, id: truck2, side: blue, pos: [-140, 0, 300], heading: 270, start: ground }
+  # A high CAP crossing the field for scale. A behaviour's ARGUMENTS are world coordinates and are
+  # not anchor-relative, so the orbit is authored as a route instead of `ai: "loiter ..."`.
+  - { type: builtin:debug-entity, id: cap1, side: blue, pos: [0, 2600, -3000], heading: 0, speed: 170,
+      route: [ [0, 2600, 3000] ] }
 triggers:
   - on: mission_start
     do: atc_scramble builtin:airfield builtin:debug-entity 1
@@ -26,17 +35,15 @@ triggers:
     do: mission_success
 cameras:
   shots:
-    # Down the runway from behind the hold-short — the field, apron traffic, and the first departure
-    # rolling out. The builtin airfield sits near the world origin, so runway 090 runs mostly along
-    # world -Z (hold-short ~(4000,550,1275); rollout toward ~(4200,540,-400)). Coords traced from a
-    # deterministic mission-report run.
-    - { type: static, start: 0, duration: 10, pos: [3900, 600, 1700], look_at: [4185, 540, 250], fov: 48 }
+    # Down the runway from behind the west threshold — the field, apron traffic, and the first
+    # departure rolling out toward +east.
+    - { type: static, start: 0, duration: 10, pos: [-1700, 620, 220], look_at: [200, 575, 0], fov: 48 }
     # Beside the runway at midfield as the departure accelerates and rotates.
-    - { type: static, start: 10, duration: 8, pos: [4760, 645, 320], look_at: [4150, 545, 520], fov: 44 }
+    - { type: static, start: 10, duration: 8, pos: [300, 590, 320], look_at: [900, 580, 0], fov: 44 }
     # Track the climbout as the first departure lifts off and turns toward its CAP orbit.
-    - { type: move, start: 18, duration: 12, look_at: [3950, 1750, 60], ease: smooth,
-        keyframes: [ { time: 0, pos: [4520, 720, -320] }, { time: 12, pos: [4180, 1520, -140] } ] }
+    - { type: move, start: 18, duration: 12, look_at: [2400, 900, 0], ease: smooth,
+        keyframes: [ { time: 0, pos: [1400, 700, -320] }, { time: 12, pos: [2600, 1200, -140] } ] }
     # Wide over the field as the next departures roll and climb out.
-    - { type: static, start: 30, duration: 8, pos: [4050, 1650, 2550], look_at: [4050, 950, 250], fov: 56 }
+    - { type: static, start: 30, duration: 8, pos: [0, 1650, 2550], look_at: [200, 950, 0], fov: 56 }
     # Closing frame down the flight line.
-    - { type: static, start: 38, duration: 6, pos: [3550, 820, 1500], look_at: [4150, 650, 200], fov: 50 }
+    - { type: static, start: 38, duration: 6, pos: [-1600, 840, 500], look_at: [200, 650, 0], fov: 50 }

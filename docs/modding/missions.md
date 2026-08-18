@@ -49,7 +49,8 @@ triggers:
 |---|---|---|---|
 | `weather.preset` | string | `clear` | Initial weather: `clear`, `partly_cloudy`, `overcast`, `rain`, `storm`, `snow`, `blizzard`. Gust amplitude and turbulence intensity scale with the preset. `snow` and `blizzard` produce snow precipitation at any altitude. |
 | `time_scale` | float | server default (10) | Game seconds per real second for this mission. Overrides `[world] time_scale` in `server.toml`. Use `1.0` for real-time cinematic missions. |
-| `airspace_zones` | sequence | none | Restricted airspace the server enforces. See [`airspace_zones`](#airspace_zones--restricted-airspace-optional). |
+| `airspace_zones` | sequence | none | Restricted airspace the server enforces. See [`airspace_zones`](#airspace_zones--restricted-airspace-optional). Cannot be combined with `anchor` — see below. |
+| `anchor` | `home` or mapping | none | Where the mission's coordinates are measured from. See [Where a mission is set](#where-a-mission-is-set). |
 
 Example:
 ```yaml
@@ -57,6 +58,58 @@ weather:
   preset: partly_cloudy
 time_scale: 10.0   # omit to use server default
 ```
+
+---
+
+## Where a mission is set
+
+The world frame is a sphere whose **origin is the north pole**: world +Y is the polar axis, so the
+coordinates `[0, 0, 0]` name a point on the Arctic ice where longitude is undefined, the compass
+basis swings ~74° over 4 km, and the sun holds one elevation for all 24 hours. Authoring there is
+what `anchor` exists to stop.
+
+```yaml
+anchor: home                              # the sandbox home: 36.24917 N, 114.99611 W, elev ~570 m
+anchor: { lat: 36.24917, lon: -114.99611 }  # or any point you like, in degrees
+```
+
+With an anchor, an object's `pos` is read as:
+
+| Component | Meaning |
+|---|---|
+| `pos[0]` | metres **east** of the anchor |
+| `pos[1]` | **MSL altitude** in metres (`alt:` overrides it) |
+| `pos[2]` | metres **north** of the anchor |
+
+so a mission reads in human numbers wherever on the planet it is set, and `pos[1]` is altitude again
+— which raw world coordinates stop being the moment you leave the origin (at the sandbox home the
+world Y of a point on the ground is about −2,604,000). Routes and camera shots use the same frame.
+
+`anchor: home` is the sandbox home, where the builtin airfield stands and where a server with no
+`[spawn] points` puts a pilot. Runway 090 there runs along **+east** from the field centre.
+
+**Without an anchor, coordinates are raw world XYZ** — exactly what they meant before anchors
+existed, and only meaningful near the origin. Existing missions are unaffected; adding one line is
+the whole migration.
+
+Two limits worth knowing before you rely on them:
+
+- **`airspace_zones` cannot be anchored.** Zone geometry is a planar world-XZ test with no tangent
+  frame, so it is only a real shape near the origin; the parser refuses the combination rather than
+  projecting your circle into an ellipse and saying nothing.
+- **Behaviour arguments are not anchored.** The numbers inside `ai: "loiter <x> <y> <z> …"` and
+  inside a trigger's `do: spawn(id,side,x,y,z)` are world coordinates, because they are opaque
+  strings the AI factory and admin grammar parse. In an anchored mission, use `route:` (which *is*
+  anchored) or place a scripted object instead.
+
+An object can also name an absolute position, with or without an anchor:
+
+```yaml
+  - { type: fl-base:f5e, id: crossing, side: blue, lat: 36.4, lon: -115.2, alt: 4500, heading: 180 }
+```
+
+`lat` and `lon` are degrees, and both must be given together. When present they win over `pos`'s
+horizontal components; the altitude still comes from `alt` (or `pos[1]`).
 
 ---
 
@@ -120,7 +173,8 @@ objects:
 | `type` | string | yes | non-empty | Aircraft or unit type ID — must resolve to a TOML asset in `aircraft/` or `entities/` |
 | `id` | string | yes | unique across all objects in the file | Internal ID referenced by triggers and Lua scripts |
 | `side` | string | yes | must appear in top-level `sides` list | Coalition this unit belongs to |
-| `pos` | sequence | yes | exactly 3 numbers: [x, y, z] in metres | World-space spawn position. Y is up; sea level ≈ 0 |
+| `pos` | sequence | yes | exactly 3 numbers: [x, y, z] in metres | Spawn position. With an `anchor`: [metres east, MSL altitude, metres north] of it. Without one: raw world-space XYZ, Y up. See [Where a mission is set](#where-a-mission-is-set) |
+| `lat` / `lon` | float | no | degrees; both or neither | Absolute geodetic placement, instead of `pos`'s horizontal components |
 | `heading` | float | yes | — | Initial heading in degrees (0 = north, clockwise) |
 | `alt` | float | no | — | Altitude above sea level in metres; overrides `pos[1]` if both given |
 | `speed` | float | no | ≥ 0 | Initial airspeed in **m/s** along the object's heading. Absent = a sane cruise default so an airborne object is in stable flight at spawn (an aircraft dropped in at 0 airspeed departs controlled flight); set `0` for a stationary start. Applies to AI objects and player slots alike. Ignored (forced to 0) on a `start: ground` object. |

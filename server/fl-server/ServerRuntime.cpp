@@ -107,7 +107,8 @@
 #include <world/BuiltinAirport.h>
 #include <world/EscalationPolicy.h>
 #include <world/FactionRegistry.h>
-#include <world/NullAiProvider.h>      // the no-provider path (#163)
+#include <world/NullAiProvider.h> // the no-provider path (#163)
+#include <world/SandboxHome.h>    // the sandbox home — the anchor planar spawn coordinates are measured from (#1211)
 #include <world/WorldAiProviderHost.h> // provider loading + WorldEvolutionDelta application (#163)
 
 #include <array>
@@ -669,7 +670,13 @@ bool ServerRuntime::Impl::initContent() {
     // spawn point's covering tile chain is Ready (procedural loads are rate-limited per update;
     // content-pack tiles load asynchronously), so spawn elevations are primed below via
     // primeSpawnHeight() before they are queried.
-    terrainStreamer.update(glm::dvec3(0.0, 0.0, 0.0));
+    // The home, not the origin (#1211) — priming the pole would stream tiles nobody is standing on.
+    // planetR is not read from cfg yet at this point, so use the streamer's own configured radius.
+    {
+        double hx = 0.0, hy = 0.0, hz = 0.0;
+        fl::geodeticToWorld(fl::sandboxHome(), hx, hy, hz, cfg.world.planetRadiusM);
+        terrainStreamer.update(glm::dvec3(hx, hy, hz));
+    }
 
     // ---- Content index (#810) ----
     // Def cross-references (an entity's `sensors`, a hardpoint's `allowed`/`default`) are namespaced
@@ -781,17 +788,21 @@ bool ServerRuntime::Impl::initContent() {
     // startup. Without this the entity spawns too low and the per-tick floor query snaps it up
     // to the terrain surface once it streams in, which the client sees as the camera jumping a
     // couple seconds after load-in.
-    // Spawn config coordinates are planar (x, z) — near-origin theaters. Map a column onto the
-    // sphere's NEAR side at radial altitude `agl` above the terrain: solve geodeticAltitude(x,y,z)
-    // = terrainRadialElev + agl for the near-side y. General ground queries use the radial
-    // heightAt(dvec3) API (#477); this near-side convention stays confined to spawn placement.
+    // Spawn config coordinates are planar (x, z), and they are METRES EAST AND NORTH OF THE SANDBOX
+    // HOME (#1211) — the same authoring frame a mission's `anchor:` gives content. They used to be
+    // raw world x/z mapped onto the sphere's NEAR side, which is a real place only within a few tens
+    // of km of the world origin: the near-side solve (y = -R + sqrt((R+h)^2 - x^2 - z^2)) has no
+    // solution once x^2 + z^2 exceeds R^2, and the home is 5,977 km from the origin. Every existing
+    // number keeps its meaning, because the home is exactly what the origin used to stand in for.
     planetR = cfg.world.planetRadiusM;
     nearSideSurface = [&](double x, double z, double agl) -> glm::dvec3 {
-        const double h = terrainStreamer.heightAt(glm::dvec3{x, 0.0, z}); // radial terrain elevation
-        const double target = planetR + h + agl;
-        const double rr = target * target - x * x - z * z;
-        const double y = rr > 0.0 ? -planetR + std::sqrt(rr) : (h + agl);
-        return glm::dvec3{x, y, z};
+        // The column: the home offset east/north, at sea level, to sample the terrain under.
+        double cx = 0.0, cy = 0.0, cz = 0.0;
+        fl::localOffsetToWorld(fl::sandboxHome(), x, z, 0.0, cx, cy, cz, planetR);
+        const double h = terrainStreamer.heightAt(glm::dvec3{cx, cy, cz}); // radial terrain elevation
+        double sx = 0.0, sy = 0.0, sz = 0.0;
+        fl::localOffsetToWorld(fl::sandboxHome(), x, z, h + agl, sx, sy, sz, planetR);
+        return glm::dvec3{sx, sy, sz};
     };
     // Pump terrain streaming until the covering tile chain above the (x, z) column is Ready to
     // heightReadyAt depth, so the spawn elevation is spawn-accurate rather than a coarse or datum
@@ -828,10 +839,9 @@ bool ServerRuntime::Impl::initContent() {
     {
         const double agl = cfg.spawn.aglOffset;
         if (cfg.spawn.points.empty()) {
-            // Default spawn: origin.
-            constexpr double kDefaultSpawnZ = 0.0;
-            primeSpawnHeight(0.0, kDefaultSpawnZ);
-            const glm::dvec3 s = nearSideSurface(0.0, kDefaultSpawnZ, agl);
+            // Default spawn: the sandbox home itself — where the builtin airfield stands (#1211).
+            primeSpawnHeight(0.0, 0.0);
+            const glm::dvec3 s = nearSideSurface(0.0, 0.0, agl);
             cachedSpawns.push_back(std::array<double, 3>{s.x, s.y, s.z});
         } else {
             for (const auto& pt : cfg.spawn.points) {
@@ -901,6 +911,7 @@ bool ServerRuntime::Impl::initWorld() {
     [[maybe_unused]] auto& entityRegistry = m_entityRegistry;
     [[maybe_unused]] auto& fmCache = m_fmCache;
     [[maybe_unused]] auto& log = m_log;
+    [[maybe_unused]] auto& nearSideSurface = m_nearSideSurface;
     [[maybe_unused]] auto& net = m_net;
     [[maybe_unused]] auto& p = m_p;
     [[maybe_unused]] auto& primeSpawnHeight = m_primeSpawnHeight;
@@ -1337,7 +1348,9 @@ bool ServerRuntime::Impl::initWorld() {
     // Used by FlightIntegrator::step for ground collision. Updated each frame below.
     // Peer spawn positions are set separately via setSpawnPoints() above.
     primeSpawnHeight(0.0, 0.0); // no-op if already Ready (default-spawn path primed it above)
-    broadcaster.setGroundElevation(static_cast<float>(terrainStreamer.heightAt(glm::dvec3{0.0, 0.0, 0.0})));
+    // The reference ground elevation is sampled at the HOME, not the world origin (#1211): the
+    // origin is the north pole, thousands of km from anything this server is simulating.
+    broadcaster.setGroundElevation(static_cast<float>(terrainStreamer.heightAt(nearSideSurface(0.0, 0.0, 0.0))));
 
     // A read-only AI script cache, built before the mission load (so mission `ai: lua <name>` objects
     // can resolve their scripts) and reused later by the ENet admin `spawn --ai lua` path. Safe to read
@@ -1389,6 +1402,7 @@ bool ServerRuntime::Impl::initMission() {
     [[maybe_unused]] auto& nearSideSurface = m_nearSideSurface;
     [[maybe_unused]] auto& net = m_net;
     [[maybe_unused]] auto& p = m_p;
+    [[maybe_unused]] auto& planetR = m_planetR;
     [[maybe_unused]] auto& rotationIndex = m_rotationIndex;
     [[maybe_unused]] auto& terrainStreamer = *m_terrainStreamer;
     [[maybe_unused]] auto& weatherController = *m_weatherController;
@@ -1659,7 +1673,8 @@ bool ServerRuntime::Impl::initMission() {
             std::snprintf(buf, sizeof(buf), "mission '%.96s' not found — starting empty", missionToLoad.c_str());
             log->log(LogLevel::Warn, __FILE__, __LINE__, buf);
         } else {
-            fl::MissionParseResult parsed = fl::parseMission(yaml);
+            // The mission's authoring frame resolves against THIS server's sphere (#1211).
+            fl::MissionParseResult parsed = fl::parseMission(yaml, cfg.world.planetRadiusM);
             if (!parsed.ok) {
                 char buf[192];
                 std::snprintf(buf, sizeof(buf), "mission '%.80s' failed to parse (%zu error(s)) — starting empty",
@@ -1810,7 +1825,11 @@ bool ServerRuntime::Impl::initMission() {
 
                 // Ground-height resolver for `start: ground` objects (#885): the world-Y of the near-side
                 // surface at (x, z), so a parked object sits on the terrain rather than at an altitude.
-                auto groundHeight = [&](double x, double z) -> double { return nearSideSurface(x, z, 0.0).y; };
+                // The MSL elevation under a world position (#1211): applyMission drops a `start: ground`
+                // object onto it along its own radial, which works anywhere on the sphere.
+                auto groundHeight = [&](double x, double y, double z) -> double {
+                    return terrainStreamer.heightAt(glm::dvec3{x, y, z});
+                };
                 fl::MissionSetupResult setup =
                     fl::applyMission(parsed.mission, entityManager, missionFactions, &weatherController,
                                      cfg.world.planetRadiusM, onSpawned, groundHeight);
@@ -2113,22 +2132,22 @@ bool ServerRuntime::Impl::initMission() {
             std::vector<uint16_t> botTeams;
             for (const fl::TeamState& ts : mts.teams)
                 botTeams.push_back(ts.factionIndex);
-            const double botGroundY = terrainStreamer.heightAt(glm::dvec3{0.0, 0.0, 0.0});
+            const double botGroundElevM = terrainStreamer.heightAt(nearSideSurface(0.0, 0.0, 0.0));
             std::string fighterSrc(
                 fl::builtinAiScript(cfg.bots.aiScript.empty() ? std::string("builtin:fighter") : cfg.bots.aiScript));
             if (fighterSrc.empty())
                 fighterSrc = std::string(fl::builtinAiScript("builtin:fighter"));
             const std::string botType = cfg.bots.entityType.empty() ? cfg.world.playerEntityType : cfg.bots.entityType;
 
-            auto botSpawn = [&entityManager, &broadcaster, &worldApi, botGroundY, botType, fighterSrc,
-                             spawnN = uint32_t{0}](uint16_t faction) mutable -> fl::EntityId {
+            auto botSpawn = [&entityManager, &broadcaster, &worldApi, botGroundElevM, botType, fighterSrc,
+                             planetR = planetR, spawnN = uint32_t{0}](uint16_t faction) mutable -> fl::EntityId {
+                // Spread around the HOME on the local east/north frame (#1211), 2 km above its ground.
                 const double ang = static_cast<double>(spawnN) * 2.399963;
                 const double rad = 800.0 + static_cast<double>(spawnN) * 40.0;
                 fl::EntityTransform t{};
                 t.quat[3] = 1.0f;
-                t.pos[0] = rad * std::cos(ang);
-                t.pos[2] = rad * std::sin(ang);
-                t.pos[1] = botGroundY + 2000.0;
+                fl::localOffsetToWorld(fl::sandboxHome(), rad * std::cos(ang), rad * std::sin(ang),
+                                       botGroundElevM + 2000.0, t.pos[0], t.pos[1], t.pos[2], planetR);
                 ++spawnN;
                 const fl::EntityId id = entityManager.spawn(botType.c_str(), t);
                 if (!id.valid())
