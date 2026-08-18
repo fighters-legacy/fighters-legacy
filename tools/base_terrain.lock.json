@@ -1,0 +1,23 @@
+{
+  "_comment": [
+    "Pin for the bundled coarse global base terrain (#474, #1199/#1202).",
+    "The bundle is produced RARELY (the source grids are annual at best) and consumed by EVERY",
+    "release, so it is built once by hand and published as a versioned release asset in its own",
+    "repository. tools/fetch_base_terrain.py reads this file, downloads the asset, verifies the",
+    "sha256 below, and stages base-terrain/ next to the binary.",
+    "",
+    "To pin a newly published bundle: set repo/tag/asset/sha256/size_bytes, and record the source",
+    "grids it was built from in `sources` so the attribution shipped with it can be audited.",
+    "An empty `tag` means NO bundle is pinned yet: the fetch is skipped and the release ships with",
+    "the procedural horizon, exactly as every release to date has. This is a declared state, not a",
+    "silent one -- the fetcher says so on stdout and the release notes say so too."
+  ],
+  "repo": "fighters-legacy/fl-base-terrain",
+  "tag": "",
+  "asset": "",
+  "sha256": "",
+  "size_bytes": 0,
+  "terrain_id": "world",
+  "max_level": 5,
+  "sources": []
+}

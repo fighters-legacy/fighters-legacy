@@ -93,7 +93,8 @@ aircraft's performance.
 | `mission_test/` | Mission harness assertions |
 | `record_demo/` | Headless cinematic capture ([demo recording](demo-recording.md)) |
 | `visual_check.sh` / `.ps1` | Launch the game into a known scene for visual verification |
-| `build_global_base.sh` | Build the coarse global base terrain bundle |
+| `build_global_base.sh` | Build the coarse global base terrain bundle, and write its `ATTRIBUTION.md` ([hosting decision](decisions/base-terrain-hosting.md)) |
+| `fetch_base_terrain.py` | Fetch, checksum-verify and stage the pinned base-terrain bundle at release time; refuses a tree with no sentinel tile or no attribution |
 
 Repository scripts live in `scripts/`: `cut-release.sh` and `tag-release.sh` (the release process
 in [project management](project-management.md)), `roadmap-status.sh`, and the

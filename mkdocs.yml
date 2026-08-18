@@ -126,4 +126,5 @@ nav:
           - Turret hit registration: developer/decisions/turret-hit-registration.md
           - Loopback latency: developer/decisions/loopback-latency-analysis.md
           - AI provider evaluation: developer/decisions/ai-provider-evaluation.md
+          - Base terrain hosting: developer/decisions/base-terrain-hosting.md
           - Distribution strategy: developer/decisions/distribution.md

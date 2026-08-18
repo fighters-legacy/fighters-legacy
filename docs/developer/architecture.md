@@ -298,6 +298,7 @@ development (pre-`kProtocolVersion` freeze), a dated **decision record** (see be
 | Native missions | YAML | Human-readable, tool-friendly |
 | Native campaigns | YAML | Arbitrary theater graph; no FA 6-theater limit |
 | Native terrain | Streaming heightmap chunks + JSON | No tile-count cap; supports large theaters |
+| Bundled base terrain | **Built once by hand, published as a versioned release asset in `fighters-legacy/fl-base-terrain`, pinned by sha256 in `tools/base_terrain.lock.json`, fetched + verified + staged by `release.yml`.** Attribution ships inside the bundle as `base-terrain/ATTRIBUTION.md`. | The artifact is produced rarely (a ~7.5 GB GEBCO grid, annual at best) and consumed every release, so neither committing 15–50 MB of generated PNGs to a source repo nor re-downloading the grid on every tag fits its lifecycle. A pin gives #1098 a checksum, and the fetcher fails the release rather than quietly shipping without terrain. (2026-08-18 decision record, #1199/#1202 — see [docs/developer/decisions/base-terrain-hosting.md](decisions/base-terrain-hosting.md).) |
 | Native AI scripts | Lua 5.5 | Embeddable, sandbox-able, moddable |
 | Multiplayer topology | `fl-server` dedicated binary + `fl-lobby` REST service | Server-authoritative; no P2P player-count cap; self-hostable |
 | Multiplayer scale target | **128+ simultaneous players** (32 = near-term acceptance floor) | Drives the scaling seams below; see [docs/developer/design.md](design.md) "Multiplayer at Scale". (Revised by the 2026-06-28 decision record.) |
@@ -323,6 +324,22 @@ During primary development (before the `kProtocolVersion` freeze) a locked decis
 revised by a dated decision record instead of a full RFC, provided the change is recorded here
 with its rationale. This keeps the velocity of pre-1.0 architecture work without leaving the
 locked table silently stale.
+
+**2026-08-18 — the bundled coarse base terrain is built once by hand and fetched from a pinned
+release asset (#1199, #1202).** `release.yml` had staged `base-terrain/` "if present" since #474,
+under a comment reading "produced out-of-band"; nothing in the repo produced it, so the conditional
+was silently false on every release ever cut. Four routes were weighed — commit it here, build it in
+the release job, publish it as a pinned asset in its own repo, or ship nothing. **Route C wins:**
+the bundle is built on a workstation with GDAL from the ~7.5 GB GEBCO_2024 grid, published as a
+versioned release of `fighters-legacy/fl-base-terrain` tagged by the *data* version, pinned by
+sha256 in `tools/base_terrain.lock.json`, and fetched by `tools/fetch_base_terrain.py` during the
+release. Three consequences worth stating: **attribution ships inside the bundle**
+(`base-terrain/ATTRIBUTION.md`, written by `build_global_base.sh`) because REUSE covers source and
+not a generated tree that leaves this repo; **the fetcher fails the release** on a checksum
+mismatch, a missing sentinel tile, or a missing attribution file, so the modes that look like
+success cannot pass; and **an empty pin is a declared state** that says so in the build log rather
+than an unnoticed false conditional. Full record + publish runbook:
+[decisions/base-terrain-hosting.md](decisions/base-terrain-hosting.md).
 
 **2026-07-30 — strategic architecture review: consolidation lands inside Phase 4, deployment
 artifacts move forward, and the scale gate is made honest (plan #1036 Stages 5–9, epics #1063 /
