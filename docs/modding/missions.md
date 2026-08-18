@@ -99,18 +99,20 @@ Each entry in the `objects` list places one entity in the world at mission start
 
 ```yaml
 objects:
-  - type: F22
+  - type: fl-base:f22
     id: player1
     side: nato
     pos: [12400, 0, 8800]
     heading: 90
     alt: 500
 
-  - type: SA10
+  - type: fl-base:sa10_battery
     id: sam1
     side: russia
     pos: [15000, 0, 9000]
     heading: 0
+    start: ground
+    ai: "sam"
 ```
 
 | Field | Type | Required | Constraints | Description |
@@ -414,18 +416,20 @@ weather:
 sides: [nato, russia]
 
 objects:
-  - type: F22
+  - type: fl-base:f22
     id: player1
     side: nato
     pos: [12400, 0, 8800]
     heading: 90
     alt: 500
 
-  - type: SA10
+  - type: fl-base:sa10_battery
     id: sam1
     side: russia
     pos: [15000, 0, 9000]
     heading: 0
+    start: ground
+    ai: "sam"
 
 triggers:
   - on: destroy(sam1)
