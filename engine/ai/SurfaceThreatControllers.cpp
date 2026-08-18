@@ -7,6 +7,7 @@
 #include "flight/BallisticLead.h"
 #include "flight/LocalFrame.h"
 
+#include <algorithm>
 #include <cmath>
 #include <numbers>
 
@@ -19,9 +20,11 @@ constexpr float degToRad(float d) noexcept {
 } // namespace
 
 SamEngagementController::SamEngagementController(const fl::EntityManager& entityManager, float engageRangeM,
-                                                 float coneHalfAngleDeg, float fireIntervalS)
+                                                 float coneHalfAngleDeg, float fireIntervalS,
+                                                 float launchElevationMinDeg)
     : m_entityManager(entityManager), m_engageRangeM(engageRangeM), m_coneHalfRad(degToRad(coneHalfAngleDeg)),
-      m_fireIntervalTicks(static_cast<uint64_t>(std::max(1.f, fireIntervalS * 60.f))) {}
+      m_fireIntervalTicks(static_cast<uint64_t>(std::max(1.f, fireIntervalS * 60.f))),
+      m_launchElevationMinRad(degToRad(std::clamp(launchElevationMinDeg, 0.f, 89.f))) {}
 
 fl::ControlInput SamEngagementController::sample(const fl::EntityState& state, uint64_t tick, double /*dt*/,
                                                  const fl::AiTickContext& ctx) {
@@ -47,8 +50,50 @@ fl::ControlInput SamEngagementController::sample(const fl::EntityState& state, u
         ctrl.release = true;
         m_lastFireTick = tick;
         m_hasFired = true;
+        setLaunchVector(ctrl, state, ctx, target);
     }
     return ctrl;
+}
+
+// Point the launcher at the designated contact, but never below `m_launchElevationMinRad` above the
+// local horizon (#1204). An emplacement's airframe nose is horizontal, and a store that leaves along
+// it starts at deck level: the projectile ground check ends it within a few steps unless the line of
+// sight happens to be steep. The elevation floor is what a rail launcher does before it fires, and it
+// buys the missile the clearance it needs before proportional navigation pulls it onto the LOS.
+void SamEngagementController::setLaunchVector(fl::ControlInput& ctrl, const fl::EntityState& state,
+                                              const fl::AiTickContext& ctx, fl::EntityId target) const {
+    // The contact's last-known state, never ground truth — the battery aims where it BELIEVES the
+    // target is, exactly as it decided to shoot on that belief.
+    const TargetView tv = resolveTarget(m_entityManager, ctx, target);
+    const glm::dvec3 ownPos{state.transform.pos[0], state.transform.pos[1], state.transform.pos[2]};
+    const glm::vec3 up = fl::radialUp(ownPos, m_planetRadiusM);
+
+    // Without a resolvable contact, fall back to the emplacement's own facing rather than to nothing:
+    // a launcher that cannot resolve its target still elevates, which is the whole point.
+    glm::vec3 want = bodyForward(state.transform.quat);
+    if (tv.valid) {
+        const glm::dvec3 tgtPos{tv.pos[0], tv.pos[1], tv.pos[2]};
+        const glm::dvec3 toTarget = tgtPos - ownPos;
+        if (glm::dot(toTarget, toTarget) > 1.0)
+            want = glm::normalize(glm::vec3(toTarget));
+    }
+
+    // Decompose into the local horizontal and vertical components, then re-tilt to the floor when
+    // the target sits at or below it. A target already above the floor is aimed at directly.
+    const float sinEl = glm::clamp(glm::dot(want, up), -1.f, 1.f);
+    if (sinEl < std::sin(m_launchElevationMinRad)) {
+        glm::vec3 horiz = want - up * sinEl;
+        const float hlen = glm::length(horiz);
+        // Straight down (or straight up) leaves no horizontal reference: launch along the local
+        // vertical, which is the vertical-launch case and is never worse than firing into the dirt.
+        horiz = hlen > 1e-4f ? horiz / hlen : glm::vec3{0.f};
+        want = glm::normalize(horiz * std::cos(m_launchElevationMinRad) + up * std::sin(m_launchElevationMinRad));
+    }
+
+    ctrl.hasAimDir = true;
+    ctrl.aimDir[0] = want.x;
+    ctrl.aimDir[1] = want.y;
+    ctrl.aimDir[2] = want.z;
 }
 
 AaaFireController::AaaFireController(const fl::EntityManager& entityManager, float engageRangeM, float coneHalfAngleDeg,

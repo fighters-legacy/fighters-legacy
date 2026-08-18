@@ -19,6 +19,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <numbers>
 #include <string>
@@ -33,11 +34,21 @@ struct NullLog : ILogger {
     void flush() override {}
 };
 
-// Resolve the builtin sensor heads the surface entities reference (the SAM radar; the eyeball is the
-// implicit default and never asks the resolver).
+// Resolve the builtin sensor heads, exactly as makeSensorDefResolver does for fl-server.
+//
+// This used to answer for "builtin:sam-radar" ALONE, which quietly disabled half of what these tests
+// look at: a SARH missile whose head (builtin:sarh-seeker) does not resolve fails the launch
+// acquisition gate and FLIES DUMB. Every SAM shot in this file was therefore ballistic, and the one
+// test that existed passed only because its target sat dead ahead on the launcher's boresight, where
+// a dumb store arrives anyway. Resolving the whole builtin set is what makes a miss here mean
+// something. (Found while fixing #1204 — an under-wired harness reading as engine behaviour.)
 std::shared_ptr<const sensor::SensorDef> builtinSensorResolver(const std::string& id) {
-    if (id == "builtin:sam-radar")
-        return {std::shared_ptr<const sensor::SensorDef>{}, &sensor::BuiltinSensors::groundRadar()};
+    for (const sensor::SensorDef* builtin :
+         {&sensor::BuiltinSensors::eyeball(), &sensor::BuiltinSensors::irSeeker(),
+          &sensor::BuiltinSensors::radarSeeker(), &sensor::BuiltinSensors::sarhSeeker(),
+          &sensor::BuiltinSensors::groundRadar(), &sensor::BuiltinSensors::interceptRadar()})
+        if (id == builtin->id)
+            return {std::shared_ptr<const sensor::SensorDef>{}, builtin};
     return nullptr;
 }
 
@@ -72,20 +83,20 @@ struct ThreatFixture {
         // has an honest track on (so a SAM's SARH guides at the aircraft instead of flying dumb).
     }
 
-    // Spawn facing +X (identity) unless noseUp, which points the nose at +Y (a 90 deg rotation about
-    // +Z): the vertical-launcher geometry a ground SAM needs so its missile climbs instead of flying
-    // into the dirt off the rail.
-    EntityId spawn(const char* type, double x, double y, double z, uint16_t faction, bool noseUp = false) {
+    // Spawn facing +X (identity). There used to be a `noseUp` option here that pitched an emplacement
+    // to point at +Y, described as "the vertical-launcher geometry a ground SAM needs so its missile
+    // climbs instead of flying into the dirt off the rail" -- i.e. a hand-applied workaround for
+    // #1204, in the fixture, for a defect nothing asserted. The controller elevates its own launcher
+    // now, so an emplacement is spawned the way a mission places one: level.
+    //
+    // The fixture wires no groundElevation query, so the terrain is the y = 0 plane: y == 0 IS the
+    // deck, and that is what makes the ground tests below ground tests.
+    EntityId spawn(const char* type, double x, double y, double z, uint16_t faction) {
         EntityTransform t{};
         t.pos[0] = x;
         t.pos[1] = y;
         t.pos[2] = z;
-        if (noseUp) {
-            t.quat[2] = 0.70710678f; // z
-            t.quat[3] = 0.70710678f; // w
-        } else {
-            t.quat[3] = 1.f; // identity: nose along +X
-        }
+        t.quat[3] = 1.f; // identity: nose along +X
         const EntityId id = em->spawn(type, t);
         if (EntityState* st = em->get(id))
             st->factionIndex = faction;
@@ -131,8 +142,8 @@ TEST_CASE("a builtin SAM site acquires an aircraft on radar and launches a SARH 
     ThreatFixture f;
 
     // SAM (faction 2) facing +X; a hostile aircraft (faction 1) 6 km dead ahead — well inside radar
-    // range and the launcher's forward cone. (Emplacements are tested at altitude to isolate the
-    // engagement logic from ground-contact physics; a ground SAM's launch geometry is a #585 concern.)
+    // range and the launcher's forward cone. This one stays at altitude on purpose: it is the
+    // acquire-and-launch test, and the ground cases below own the launch geometry (#1204).
     const EntityId sam = f.spawn("builtin:sam-site", 0.0, 5000.0, 0.0, 2);
     f.spawn("builtin:debug-entity", 6000.0, 5000.0, 0.0, 1);
     f.wb->registerController(sam, std::make_unique<ai::SamEngagementController>(*f.em));
@@ -179,4 +190,141 @@ TEST_CASE("a builtin AAA leads and fires on an aircraft in its engagement cone (
     const EntityState* vs = f.em->get(victim);
     const bool damagedOrDestroyed = (vs == nullptr) || (vs->hp < 100.f);
     CHECK(damagedOrDestroyed);
+}
+
+// ── ground launch geometry (#1204) ───────────────────────────────────────────────────────────────
+//
+// The defect these pin: a SAM emplaced ON the terrain fired along its airframe nose, which for an
+// emplacement standing on flat ground is horizontal. ProjectileSystem::launch offsets the store 12 m
+// along that vector at the launcher's own altitude, so the missile began its life AT deck level and
+// the ground check in step() ended it within a few steps. Measured on builtin:sam-site against a
+// target at 3 km altitude, before the fix -- the store's lifetime in ticks, and whether the target
+// was ever hit:
+//
+//     range     on the deck        at 600 m
+//      4 km     443, killed        443, killed     <- steep LOS: it climbed off the rail anyway
+//      8 km      39, UNTOUCHED     622, damaged
+//     12 km      28, UNTOUCHED     846, killed
+//     20 km      24, UNTOUCHED    1431, killed
+//     28 km      24, UNTOUCHED    2361, damaged
+//
+// Nothing in this file caught it, for two compounding reasons: every emplacement was tested at
+// altitude (the comment saying so called a ground SAM's launch geometry someone else's concern), and
+// the fixture's sensor resolver did not know the missile's own seeker, so the shots were ballistic
+// and only ever aimed at boresight targets. Both are fixed above.
+//
+// The assertion is PARITY, not an absolute: the same engagement is run from the deck and from
+// altitude, and the emplacement on the deck must do what the one in the air does. That is the honest
+// claim -- "a ground SAM is not worse off than an airborne one" -- and it does not silently re-pass
+// if the missile, the seeker or the flight model is later retuned.
+
+namespace {
+
+// Run one engagement and report whether the target was hit at all, plus how long the store lived.
+// The per-tick sample is deliberate: a launched missile is gone within seconds, so an end-of-run
+// count reads identically to never firing. #1204 records that exact mistake costing an hour.
+struct EngagementResult {
+    int peakMissiles{0};
+    int ticksAlive{0};
+    bool targetHit{false};
+};
+
+EngagementResult runSamEngagement(double samAltM, double rangeM, double targetAltAboveSamM, int ticks) {
+    ThreatFixture f;
+    const EntityId sam = f.spawn("builtin:sam-site", 0.0, samAltM, 0.0, 2);
+    const EntityId victim = f.spawn("builtin:debug-entity", rangeM, samAltM + targetAltAboveSamM, 0.0, 1);
+    f.wb->registerController(sam, std::make_unique<ai::SamEngagementController>(*f.em));
+
+    const EntityState* vs0 = f.em->get(victim);
+    const float startHp = vs0 ? vs0->hp : 0.f;
+
+    EngagementResult r;
+    uint64_t t = 0;
+    for (int i = 0; i < ticks; ++i) {
+        f.tick(1, t);
+        const int n = f.liveOfType("projectile:builtin:sarh-missile");
+        r.peakMissiles = std::max(r.peakMissiles, n);
+        if (n > 0)
+            ++r.ticksAlive;
+    }
+    const EntityState* vs = f.em->get(victim);
+    r.targetHit = (vs == nullptr) || (vs->hp < startHp); // reaped = destroyed outright
+    return r;
+}
+
+} // namespace
+
+TEST_CASE("a SAM emplaced on the ground gets its missile away and kills (#1204)", "[surface_threats]") {
+    // 12 km is past the range where a nose-level launch survived at all: before the fix the store
+    // lived 28 ticks and the aircraft was untouched.
+    const EngagementResult ground = runSamEngagement(/*samAltM=*/0.0, /*rangeM=*/12000.0,
+                                                     /*targetAltAboveSamM=*/3000.0, /*ticks=*/1800);
+    CHECK(ground.peakMissiles >= 1); // it always got this far -- the trigger was never the problem
+    CHECK(ground.ticksAlive > 120);  // it now survives its opening steps instead of being reaped
+    CHECK(ground.targetHit);         // and arrives -- the one observable no test looked at
+}
+
+TEST_CASE("a ground SAM engages as well as an airborne one, across the envelope (#1204)", "[surface_threats]") {
+    // The emplacement on the deck and the identical one 600 m up must behave the same. Anything the
+    // airborne launcher cannot do (28 km is a long shot for this missile inside the run window) is
+    // not held against the ground one -- the claim is parity, not lethality at every range.
+    for (const double rangeM : {8000.0, 12000.0, 20000.0}) {
+        CAPTURE(rangeM);
+        const EngagementResult ground = runSamEngagement(0.0, rangeM, 3000.0, 2400);
+        const EngagementResult airborne = runSamEngagement(600.0, rangeM, 3000.0, 2400);
+        CHECK(ground.peakMissiles == airborne.peakMissiles);
+        CHECK(ground.targetHit == airborne.targetHit);
+        // Before the fix this was 24-39 ticks on the deck against 622-1431 in the air. Half is a
+        // loose bound on purpose: it fails on a reaped store and does not chase small tuning drift.
+        CHECK(ground.ticksAlive >= airborne.ticksAlive / 2);
+    }
+}
+
+TEST_CASE("a SAM launches above the horizon even at a target on its own level (#1204)", "[surface_threats]") {
+    // The elevation FLOOR, at the geometry that most needs it: a target at the launcher's own
+    // altitude, where aiming straight at it would put the store back on the deck. The controller
+    // must still command a climbing launch vector.
+    ThreatFixture f;
+    const EntityId sam = f.spawn("builtin:sam-site", 0.0, 0.0, 0.0, 2);
+    f.spawn("builtin:debug-entity", 20000.0, 0.0, 0.0, 1);
+
+    ai::SamEngagementController controller(*f.em, /*engageRangeM=*/30000.f, /*coneHalfAngleDeg=*/90.f,
+                                           /*fireIntervalS=*/4.f, /*launchElevationMinDeg=*/35.f);
+    f.wb->registerController(sam, std::make_unique<ai::SamEngagementController>(*f.em, 30000.f, 90.f, 4.f, 35.f));
+
+    uint64_t t = 0;
+    f.tick(120, t); // let the battery acquire and hold a lock
+
+    // Sample the controller directly against the world the fixture built, so the assertion is about
+    // the commanded vector rather than about where the missile happened to end up.
+    const EntityState* st = f.em->get(sam);
+    REQUIRE(st != nullptr);
+    fl::AiTickContext ctx;
+    ctx.contacts = f.wb->contactsFor(st->id.index);
+    REQUIRE(ctx.contacts != nullptr);
+
+    bool sawLaunch = false;
+    for (uint64_t i = 0; i < 300 && !sawLaunch; ++i) {
+        const ControlInput ctrl = controller.sample(*st, i, 1.0 / 60.0, ctx);
+        if (!ctrl.release)
+            continue;
+        sawLaunch = true;
+        REQUIRE(ctrl.hasAimDir);
+        // The fixture's world is the y = 0 plane, so local up is +Y and the elevation is aimDir.y.
+        const float elevSin = ctrl.aimDir[1];
+        CHECK(elevSin > 0.f);                                                         // never into the dirt
+        CHECK(elevSin >= std::sin(35.f * std::numbers::pi_v<float> / 180.f) - 1e-3f); // at or above the floor
+    }
+    CHECK(sawLaunch);
+}
+
+TEST_CASE("an aircraft's shot still leaves along its nose (#1204 regression guard)", "[surface_threats]") {
+    // The aim seam defaults OFF: ControlInput::hasAimDir is false for every controller that does not
+    // set it, so a nose-mounted store is unaffected by all of the above. This pins that the SAM's
+    // launch vector did not become everyone's.
+    const ControlInput fresh{};
+    CHECK_FALSE(fresh.hasAimDir);
+    CHECK(fresh.aimDir[0] == 0.f);
+    CHECK(fresh.aimDir[1] == 0.f);
+    CHECK(fresh.aimDir[2] == 0.f);
 }

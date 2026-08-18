@@ -46,6 +46,20 @@ struct ControlInput {
     bool trigger{false};  // gun trigger
     bool release{false};  // fire the selected store (missile/bomb/rocket)
     uint8_t station{255}; // absolute selected station; 255 = keep the current selection
+    // ── launch/bore direction (#1204) ────────────────────────────────────
+    // World-space direction the shot leaves along, for a shooter whose launcher is not
+    // bore-sighted with its airframe. Default (hasAimDir == false) = the airframe nose, so every
+    // aircraft's shot is bit-identical to before and no aircraft controller needs to set it.
+    //
+    // A fixed SURFACE emplacement is why this exists. Its launcher sits on the deck pointing at
+    // the horizon, so a nose-launched store begins its life AT ground level and the projectile's
+    // ground check reaps it within a few steps at any range where the line of sight to the target
+    // is shallow -- the emplacement senses, tracks, designates and pulls the trigger, and no
+    // missile ever arrives. Handing the fire path an elevated launch vector is the minimum fix;
+    // the fuller one is mounting the launcher on a turret seat (#969/#971), which routes through
+    // SeatCommand::aimDirWorld instead and overrides this.
+    bool hasAimDir{false};
+    float aimDir[3]{0.f, 0.f, 0.f};
 
     // ── electronic warfare intent (#529) ─────────────────────────────────────
     // Same one-seam pattern as fire intent. `dispenseCm` pops chaff + flare (edge-detected per entity
