@@ -429,6 +429,14 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: python3 -m pytest tests/test_gpu_contention.py -v
 
+      # The base-terrain pin + its REFUSALS (#1199/#1202). Stdlib only; the one download it does is
+      # a file:// URI to a synthetic bundle in tmp_path, so no network and no GEBCO grid. The
+      # refusals are the point: a tree that extracts cleanly without the sentinel tile mounts
+      # nothing, and that failure is invisible from outside the tool.
+      - name: Unit test fetch_base_terrain.py (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 -m pytest tests/test_fetch_base_terrain.py -v
+
       # The shared free-port probe + bind retry both fl-server launchers use (#1056). Pure logic
       # plus two real loopback UDP binds — no fl-server, no network traffic.
       - name: Unit test common/fl_ports.py (Ubuntu)

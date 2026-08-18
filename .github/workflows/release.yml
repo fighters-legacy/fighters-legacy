@@ -86,6 +86,23 @@ jobs:
           [ -z "$dynpb" ] || (echo "fl-server still dynamically links protobuf: $dynpb" && exit 1)
           echo "fl-server is self-contained:"; ldd "$srv"
 
+      # The coarse global base terrain (#474) is an ENGINE bundle: loadBundledBaseTerrain() mounts it
+      # as builtin:base-terrain at INT_MIN so a zero-pack launch shows a recognisable Earth. It is
+      # built rarely (a ~7.5 GB GEBCO grid + GDAL, on a workstation) and consumed every release, so
+      # it is published once as a versioned release asset in fighters-legacy/fl-base-terrain and
+      # pinned by sha256 in tools/base_terrain.lock.json -- route C of the #1199/#1202 decision
+      # record (docs/developer/decisions/base-terrain-hosting.md).
+      #
+      # This step REPLACES the old `if [ -d base-terrain ]` conditional, which was commented
+      # "produced out-of-band" and had been silently false on every release ever cut, because
+      # nothing in the repo produced or committed the directory. The fetcher fails the release on a
+      # bad download, a checksum mismatch, or a tree missing the sentinel tile the engine gates on;
+      # it exits 0 and says so on stdout while no bundle is pinned yet.
+      - name: Fetch the pinned base-terrain bundle
+        run: python3 tools/fetch_base_terrain.py --output-dir base-terrain
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       # ONE code path, both platforms, no hand-maintained list (#814). The two `cp` lists this
       # replaces had already drifted from each other, and neither shipped validate-weapon,
       # validate-sensor, or fl-server -- which the game spawns for single-player, so every release
@@ -96,8 +113,6 @@ jobs:
         run: |
           cmake --install build/${{ matrix.preset }} --prefix dist --component runtime
           cmake --install build/${{ matrix.preset }} --prefix dist --component tools
-          # Bundle the coarse global base terrain (#474) next to the binary if present (produced
-          # out-of-band by tools/build_global_base.sh). No-op until the base is generated/committed.
           if [ -d base-terrain ]; then cp -r base-terrain dist/base-terrain; fi
           cd dist && zip -r ../${{ matrix.artifact }}.zip .
 
@@ -106,7 +121,6 @@ jobs:
         run: |
           cmake --install build/${{ matrix.preset }} --prefix dist --component runtime
           cmake --install build/${{ matrix.preset }} --prefix dist --component tools
-          # Bundle the coarse global base terrain (#474) next to the binary if present. No-op until generated.
           if (Test-Path base-terrain) { Copy-Item -Recurse base-terrain dist\base-terrain }
           Compress-Archive -Path dist\* -DestinationPath ${{ matrix.artifact }}.zip -Force
         shell: pwsh

@@ -24,6 +24,7 @@ want to know why it behaves that way, read these.
 | [Loopback latency](loopback-latency-analysis.md) | Accept and compensate | #179 |
 | [AI provider evaluation](ai-provider-evaluation.md) | Measured model-size guidance for the agentic surface | #599 |
 | [Distribution strategy](distribution.md) | GPL-compatible monetization and channel strategy | — |
+| [Base terrain hosting](base-terrain-hosting.md) | Built once by hand, published as a pinned release asset in its own repo | #1199 |
 
 Two of these — spatial sharding and physics LOD — are **deferred with a trigger**, which means the
 design is worked out and the decision was not to build it yet. Each names the measurement that
