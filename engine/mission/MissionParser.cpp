@@ -619,11 +619,12 @@ MissionParseResult parseMission(std::string_view yamlContent) {
                 }
             }
 
-            // A player slot is flown by a human, so AI/route/loadout on it are contradictory — warn but
-            // do not reject (the slot simply ignores them).
-            if (mo.playerSlot && (!mo.ai.empty() || !mo.route.empty() || !mo.loadout.empty()))
-                r.warnings.push_back("objects[" + std::to_string(idx) +
-                                     "] is a player slot; its ai/route/loadout are ignored");
+            // A player slot is flown by a human, so `ai` and `route` on it are contradictory — warn but
+            // do not reject (the slot simply ignores them). `loadout` is NOT in that set: a mission
+            // chooses what the pilot takes off with (#1209), which is how a gunnery lesson is flown
+            // with the gun rather than asked for in briefing text while the rails stay live.
+            if (mo.playerSlot && (!mo.ai.empty() || !mo.route.empty()))
+                r.warnings.push_back("objects[" + std::to_string(idx) + "] is a player slot; its ai/route are ignored");
             if (!mo.ai.empty() && !mo.route.empty())
                 r.warnings.push_back("objects[" + std::to_string(idx) +
                                      "] has both ai and route; route takes "

@@ -519,7 +519,7 @@ triggers: []
     CHECK(found);
 }
 
-TEST_CASE("parseMission warns when a player slot also carries ai/route/loadout", "[mission-parser]") {
+TEST_CASE("parseMission warns when a player slot also carries ai/route", "[mission-parser]") {
     const char* yaml = R"yaml(
 name: x
 map: y
@@ -538,6 +538,57 @@ triggers: []
         if (w.find("player slot") != std::string::npos)
             found = true;
     CHECK(found);
+}
+
+// #1209: `loadout:` is the one of the three that a human slot CAN honour — a mission chooses what
+// the pilot takes off with. It must not be warned about, and it must reach the slot.
+TEST_CASE("parseMission accepts a loadout on a player slot without warning (#1209)", "[mission-parser]") {
+    const char* yaml = R"yaml(
+name: x
+map: y
+layer: z
+time: { hour: 0, minute: 0 }
+wind: { heading: 0, speed: 0 }
+sides: [blue]
+objects:
+  - { type: F16, id: p, side: blue, pos: [0, 0, 0], heading: 0, player: true, loadout: ["gun", "~"] }
+triggers: []
+)yaml";
+    auto r = parseMission(yaml);
+    CHECK(r.ok);
+    for (const auto& w : r.warnings)
+        CHECK(w.find("player slot") == std::string::npos);
+    REQUIRE(r.mission.objects.size() == 1u);
+    CHECK(r.mission.objects[0].loadout == std::vector<std::string>{"gun", "~"});
+}
+
+TEST_CASE("applyMission carries a player slot's loadout through to the slot (#1209)", "[mission-setup]") {
+    const char* yaml = R"yaml(
+name: x
+map: y
+layer: z
+time: { hour: 0, minute: 0 }
+wind: { heading: 0, speed: 0 }
+sides: [blue]
+objects:
+  - { type: test:fighter, id: slot, side: blue, pos: [0, 0, 0], heading: 0, player: true,
+      loadout: ["gun", "~"] }
+triggers: []
+)yaml";
+    auto parsed = parseMission(yaml);
+    REQUIRE(parsed.ok);
+
+    NullLogger log;
+    EntityTypeRegistry reg;
+    reg.registerType(makeDef("test:fighter"));
+    EntityManager em(log, reg);
+    FactionRegistry factions;
+
+    auto result = applyMission(parsed.mission, em, factions);
+    REQUIRE(result.playerSlots.size() == 1);
+    // The stores are carried, not resolved: applyMission has no weapon registry, and the caller
+    // applies them when a pilot is assigned to the slot.
+    CHECK(result.playerSlots[0].loadout == std::vector<std::string>{"gun", "~"});
 }
 
 TEST_CASE("applyMission calls the onSpawned hook once per spawned world object", "[mission-setup]") {

@@ -125,10 +125,10 @@ objects:
 | `alt` | float | no | — | Altitude above sea level in metres; overrides `pos[1]` if both given |
 | `speed` | float | no | ≥ 0 | Initial airspeed in **m/s** along the object's heading. Absent = a sane cruise default so an airborne object is in stable flight at spawn (an aircraft dropped in at 0 airspeed departs controlled flight); set `0` for a stationary start. Applies to AI objects and player slots alike. Ignored (forced to 0) on a `start: ground` object. |
 | `start` | string | no | `air` \| `ground` | `air` (default) drops the object in at its `alt`/`pos[1]` with a cruise airspeed. `ground` spawns it **parked on the terrain** — placed at ground level, idle throttle, zero airspeed, held stable until the pilot throttles up and rotates. Use `ground` for a runway/ramp start. |
-| `player` | bool | no | default `false` | When `true`, this object is a **joinable player slot**: the engine does not spawn it as an AI/world entity — a connecting pilot is assigned to it and inherits its faction, spawn position, and aircraft type. Declare more than one for multiplayer. |
+| `player` | bool | no | default `false` | When `true`, this object is a **joinable player slot**: the engine does not spawn it as an AI/world entity — a connecting pilot is assigned to it and inherits its faction, spawn position, aircraft type and `loadout`. Declare more than one for multiplayer. |
 | `ai` | string | no | — | Attach an AI controller (ignored on a player slot). See Scripted bots below. |
-| `route` | sequence | no | each entry is `[x, y, z]` | A waypoint list the object flies. Takes precedence over `ai` when both are given. |
-| `loadout` | sequence of strings | no | each store must be in that station's `allowed` list | Per-station weapon override of the entity's default payload (see Scripted bots). |
+| `route` | sequence | no | each entry is `[x, y, z]` | A waypoint list the object flies. Takes precedence over `ai` when both are given. Ignored on a player slot. |
+| `loadout` | sequence of strings | no | each store must be in that station's `allowed` list | Per-station weapon override of the entity's default payload — **on AI objects and player slots alike** (see Scripted bots). |
 | `crew` | mapping | no | see **Crew configuration** | Bot skill ranges and per-seat overrides for a multi-crew aircraft. Ignored on a player slot. |
 
 Object IDs must be unique — the validator will reject duplicate IDs within a single file.
@@ -225,8 +225,25 @@ and `ai` are present, `route` wins (the object flies its waypoints); the validat
 Overrides the entity's default payload station by station. Each entry names the store on that station in
 hardpoint order; `~`, `-`, or an empty string leaves a station **empty**, and listing fewer stores than
 the aircraft has stations keeps the remaining stations at their defaults. A store that is not in the
-station's `allowed` list (or is an unknown weapon id) is refused and the station is left empty. `ai`,
-`route`, and `loadout` on a `player: true` slot are ignored (a human flies it) — the validator warns.
+station's `allowed` list (or is an unknown weapon id) is refused and the station is left empty. `ai`
+and `route` on a `player: true` slot are ignored (a human flies it) — the validator warns.
+
+`loadout` **does** apply to a player slot: it is how a mission says what the pilot takes off with, and
+it is applied when a pilot is assigned to the slot rather than at spawn. A gunnery lesson can put the
+student on the gun instead of asking for the discipline in briefing text while the rails stay live:
+
+    objects:
+      - type: fl-base:f5e
+        id: student
+        side: blue
+        pos: [4000, 0, 1200]
+        heading: 90
+        start: ground
+        player: true
+        loadout: [fl-base:m39a2, "~", "~"]   # guns only — both wingtip rails stripped
+
+It is a **fixed fit**, not a default the pilot may change: nothing in the engine lets stores be
+re-chosen after the slot is claimed, so what the mission names is what is flown.
 
 ---
 

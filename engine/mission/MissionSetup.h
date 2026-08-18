@@ -41,6 +41,13 @@ struct PlayerSlot {
     float headingDeg{0.f};
     float quat[4]{0.f, 0.f, 0.f, 1.f}; // resolved spawn orientation (heading on the local tangent frame)
     std::optional<float> speed;        // initial airspeed (m/s); absent = a cruise default for the pilot (#883)
+    // Per-station stores the pilot takes off with (#1209), same vocabulary as MissionObject::loadout
+    // ("~"/"-"/"" = an empty station; fewer entries than stations keeps the rest at their defaults).
+    // Empty = the entity def's default fit. It is a FIXED fit, not a suggestion: nothing in the
+    // engine lets a pilot change stores after the fact, so a mission that asks for guns-only gets
+    // guns-only. Applied by the caller when the pilot is assigned to the slot, not at parse time,
+    // because it needs the weapon registry (which engine-mission does not link).
+    std::vector<std::string> loadout;
 };
 
 struct MissionSetupResult {

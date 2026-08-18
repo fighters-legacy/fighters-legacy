@@ -44,6 +44,10 @@ struct MissionSpawnSlot {
     double pos[3]{};
     float quat[4]{0.f, 0.f, 0.f, 1.f};
     float airspeed{kAutoSpawnAirspeed}; // initial airspeed for the joining pilot (#883); auto = cruise
+    // The stores the joining pilot takes off with (#1209), in hardpoint order and in the mission's
+    // own vocabulary ("~"/"-"/"" = empty station; short lists leave later stations at their default).
+    // Empty = the entity def's default fit, which is what every slot had before this existed.
+    std::vector<std::string> loadout;
 };
 
 // Whether and how a peer enters the world (#1085, D13).

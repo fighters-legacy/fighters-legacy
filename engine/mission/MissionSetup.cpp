@@ -98,6 +98,7 @@ MissionSetupResult applyMission(const Mission& mission, EntityManager& em, Facti
             // Initial airspeed for the joining pilot (#883): a ground start is parked (0); else the
             // authored `speed:` or a cruise default (#885).
             slot.speed = obj.groundStart ? std::optional<float>{0.f} : obj.speed;
+            slot.loadout = obj.loadout; // the fit the mission wants the pilot to take off with (#1209)
             yawHeadingToQuat(obj.headingDeg, slot.pos, planetRadiusM, slot.quat);
             result.playerSlots.push_back(std::move(slot));
             continue;

@@ -7169,6 +7169,93 @@ TEST_CASE("WorldBroadcaster: a pilot beyond the slots falls back to the default 
     CHECK(second->typeIndex == registry.indexById("builtin:debug-entity")); // default type, not mission:fighter
 }
 
+// ---------------------------------------------------------------------------
+// A mission slot's loadout (#1209) — the fit a mission chooses for the human
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WorldBroadcaster: a pilot takes off with the loadout the mission slot names (#1209)",
+          "[world_broadcaster][firepath]") {
+    // The training case: a gunnery lesson wants the student on the gun, not holding two missiles.
+    // The slot strips the rail, so pulling the store-release trigger produces NOTHING to launch.
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeArmedDebugDef());
+
+    fl::WeaponRegistry weapons;
+    weapons.registerWeapon(fl::parseWeaponDef(kFpGunToml));
+    const uint32_t aimIdx = weapons.registerWeapon(fl::parseWeaponDef(kFpMissileToml));
+    fl::EntityDef proj;
+    proj.id = fl::projectileTypeId(*weapons.byIndex(aimIdx));
+    proj.name = "proj";
+    proj.category = fl::ObjectCategory::Projectile;
+    proj.maxHp = 1.f;
+    registry.registerType(proj);
+
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setWeaponRegistry(&weapons);
+
+    fl::WorldBroadcaster::MissionSpawnSlot slot;
+    slot.entityType = "builtin:debug-entity"; // makeArmedDebugDef shares this id
+    slot.factionIndex = 1;
+    slot.loadout = {"fp:gun", "~"}; // keep the gun, strip the missile rail
+    broadcaster.setMissionPlayerSlots({slot});
+
+    connectPilotPeer(broadcaster, net, 0u);
+
+    fl::MsgClientInput inp{};
+    inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp.protocolVersion = fl::kProtocolVersion;
+    inp.buttons = 0x04u;        // fire the selected store
+    inp.selectedStation = 255u; // whatever the loadout selected
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    CHECK(em.liveCount() == 1u); // the pilot alone: an empty rail has nothing to release
+}
+
+TEST_CASE("WorldBroadcaster: a mission slot with no loadout keeps the entity's default fit (#1209)",
+          "[world_broadcaster][firepath]") {
+    // The same slot without a loadout: the default rail is still armed and still fires. This is what
+    // every mission slot did before #1209, and the field defaulting empty is what keeps it that way.
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeArmedDebugDef());
+
+    fl::WeaponRegistry weapons;
+    weapons.registerWeapon(fl::parseWeaponDef(kFpGunToml));
+    const uint32_t aimIdx = weapons.registerWeapon(fl::parseWeaponDef(kFpMissileToml));
+    fl::EntityDef proj;
+    proj.id = fl::projectileTypeId(*weapons.byIndex(aimIdx));
+    proj.name = "proj";
+    proj.category = fl::ObjectCategory::Projectile;
+    proj.maxHp = 1.f;
+    registry.registerType(proj);
+
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setWeaponRegistry(&weapons);
+
+    fl::WorldBroadcaster::MissionSpawnSlot slot;
+    slot.entityType = "builtin:debug-entity";
+    slot.factionIndex = 1;
+    broadcaster.setMissionPlayerSlots({slot});
+
+    connectPilotPeer(broadcaster, net, 0u);
+
+    fl::MsgClientInput inp{};
+    inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp.protocolVersion = fl::kProtocolVersion;
+    inp.buttons = 0x04u;
+    inp.selectedStation = 255u;
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    CHECK(em.liveCount() == 2u); // the pilot and the missile it just launched
+}
+
 TEST_CASE("WorldBroadcaster: setEntityLoadout overrides a controlled entity's stores (#855)",
           "[world_broadcaster][firepath]") {
     MockLogger logger;

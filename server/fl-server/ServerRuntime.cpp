@@ -1896,6 +1896,7 @@ bool ServerRuntime::Impl::initMission() {
                     // Initial airspeed for the joining pilot (#883): the slot's `speed:` or the engine's
                     // airborne cruise default, so a mission's airborne player is in stable flight at t=0.
                     s.airspeed = ps.speed ? *ps.speed : fl::kAutoSpawnAirspeed;
+                    s.loadout = ps.loadout; // the mission's chosen fit for whoever takes this slot (#1209)
                     slots.push_back(std::move(s));
                 }
                 broadcaster.setMissionPlayerSlots(std::move(slots));

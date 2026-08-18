@@ -622,10 +622,27 @@ void PeerAdmission::handleConnectRequest(uint32_t peerId, const void* data, std:
                 if (!assigned.valid()) {
                     releaseMissionSlot(peerId); // slot type unspawnable — free it and use the default path
                     assigned = admitPilot(peerId, resolvePlayerEntityType(req.requestedEntityType), assignedFaction);
-                } else if (m_hooks.admission.missionSlotBinder && !slot.missionObjectId.empty()) {
-                    // Register the pilot's aircraft under the slot's mission object id so destroy(<id>) tracks
-                    // it (#884). slot is a reference into m_missionSlots; read its id before any further work.
-                    m_hooks.admission.missionSlotBinder(slot.missionObjectId, assigned);
+                } else {
+                    // The fit the mission chose for this slot (#1209), applied now that the airframe
+                    // exists and has a controller — a gunnery lesson flown with the gun, not with two
+                    // missiles still on the rails. Empty (every slot before this) leaves the entity
+                    // def's default payload untouched. Per-store problems are the AUTHOR's to hear
+                    // about, so they are logged rather than swallowed; the pilot still flies.
+                    if (!slot.loadout.empty()) {
+                        std::vector<std::string> warnings;
+                        const std::vector<std::string> stores = slot.loadout; // slot aliases m_missionSlots
+                        if (!m_wb.setEntityLoadout(assigned, stores, warnings))
+                            m_logger.log(LogLevel::Warn, __FILE__, __LINE__,
+                                         "mission slot loadout not applied (no weapon registry or no stations)");
+                        for (const std::string& w : warnings)
+                            m_logger.log(LogLevel::Warn, __FILE__, __LINE__, ("mission slot loadout: " + w).c_str());
+                    }
+                    if (m_hooks.admission.missionSlotBinder && !slot.missionObjectId.empty()) {
+                        // Register the pilot's aircraft under the slot's mission object id so destroy(<id>)
+                        // tracks it (#884). slot is a reference into m_missionSlots; read its id before any
+                        // further work.
+                        m_hooks.admission.missionSlotBinder(slot.missionObjectId, assigned);
+                    }
                 }
             } else {
                 assigned = admitPilot(peerId, resolvePlayerEntityType(req.requestedEntityType), assignedFaction);
