@@ -16,8 +16,11 @@
 #include "entity/EntityTypeRegistry.h"
 #include "weather/WeatherController.h"
 #include "world/FactionRegistry.h"
+#include "world/SandboxHome.h"
 
 #include "mission_validator.h" // validate-mission's façade — for the parity check
+
+#include <numbers>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -482,8 +485,8 @@ triggers: []
     FactionRegistry factions;
 
     // Terrain sits at 550 m everywhere for this test.
-    auto result =
-        applyMission(parsed.mission, em, factions, nullptr, kEarthRadiusM, {}, [](double, double) { return 550.0; });
+    auto result = applyMission(parsed.mission, em, factions, nullptr, kEarthRadiusM, {},
+                               [](double, double, double) { return 550.0; });
 
     // The AI object is spawned sitting on the ground (550), not at its authored 4000 m alt.
     REQUIRE(result.spawned.size() == 1);
@@ -519,7 +522,7 @@ triggers: []
     CHECK(found);
 }
 
-TEST_CASE("parseMission warns when a player slot also carries ai/route", "[mission-parser]") {
+TEST_CASE("parseMission warns when a player slot also carries ai/route/loadout", "[mission-parser]") {
     const char* yaml = R"yaml(
 name: x
 map: y
@@ -589,6 +592,155 @@ triggers: []
     // The stores are carried, not resolved: applyMission has no weapon registry, and the caller
     // applies them when a pilot is assigned to the slot.
     CHECK(result.playerSlots[0].loadout == std::vector<std::string>{"gun", "~"});
+}
+
+// ── the anchor-relative authoring frame (#1211) ────────────────────────────────────────────────
+
+TEST_CASE("parseMission resolves anchored coordinates to world XYZ (#1211)", "[mission-parser]") {
+    const char* yaml = R"yaml(
+name: x
+map: y
+layer: z
+anchor: home
+time: { hour: 12, minute: 0 }
+wind: { heading: 0, speed: 0 }
+sides: [blue]
+objects:
+  - { type: F16, id: a, side: blue, pos: [0, 3000, 0], heading: 90 }
+  - { type: F16, id: b, side: blue, pos: [10000, 3000, 0], heading: 90, route: [[10000, 4000, 5000]] }
+triggers: []
+)yaml";
+    auto r = parseMission(yaml);
+    REQUIRE(r.ok);
+    REQUIRE(r.mission.anchor.has_value());
+    CHECK(r.mission.anchor->latRad == Catch::Approx(sandboxHome().lat_rad));
+
+    // The object at the anchor sits at the home's world position, 3000 m up — nowhere near the
+    // world origin, and with pos[1] no longer being altitude at all (it is about -2,604 km).
+    double hx = 0.0, hy = 0.0, hz = 0.0;
+    geodeticToWorld(LatLonAlt{sandboxHome().lat_rad, sandboxHome().lon_rad, 3000.0}, hx, hy, hz);
+    REQUIRE(r.mission.objects.size() == 2u);
+    CHECK(r.mission.objects[0].pos[0] == Catch::Approx(hx).margin(0.01));
+    CHECK(r.mission.objects[0].pos[1] == Catch::Approx(hy).margin(0.01));
+    CHECK(r.mission.objects[0].pos[2] == Catch::Approx(hz).margin(0.01));
+    CHECK(geodeticAltitude(r.mission.objects[0].pos[0], r.mission.objects[0].pos[1], r.mission.objects[0].pos[2]) ==
+          Catch::Approx(3000.0).margin(0.01));
+
+    // y stays MSL altitude whatever the horizontal offset, and 10 km east is 10 km away.
+    const auto& b = r.mission.objects[1];
+    CHECK(geodeticAltitude(b.pos[0], b.pos[1], b.pos[2]) == Catch::Approx(3000.0).margin(0.01));
+    const double dx = b.pos[0] - r.mission.objects[0].pos[0], dy = b.pos[1] - r.mission.objects[0].pos[1],
+                 dz = b.pos[2] - r.mission.objects[0].pos[2];
+    CHECK(std::sqrt(dx * dx + dy * dy + dz * dz) == Catch::Approx(10000.0).epsilon(1e-3));
+
+    // Route waypoints travel in the same frame — a route that did not would fly the object off the
+    // planet the moment the mission moved.
+    REQUIRE(b.route.size() == 1u);
+    CHECK(geodeticAltitude(b.route[0][0], b.route[0][1], b.route[0][2]) == Catch::Approx(4000.0).margin(0.01));
+}
+
+TEST_CASE("parseMission leaves an un-anchored mission's coordinates alone (#1211)", "[mission-parser]") {
+    // No anchor = raw world XYZ, byte-identical to every mission written before the frame existed.
+    const char* yaml = R"yaml(
+name: x
+map: y
+layer: z
+time: { hour: 12, minute: 0 }
+wind: { heading: 0, speed: 0 }
+sides: [blue]
+objects:
+  - { type: F16, id: a, side: blue, pos: [15000, 500, -2000], heading: 90 }
+triggers: []
+)yaml";
+    auto r = parseMission(yaml);
+    REQUIRE(r.ok);
+    CHECK_FALSE(r.mission.anchor.has_value());
+    REQUIRE(r.mission.objects.size() == 1u);
+    CHECK(r.mission.objects[0].pos[0] == 15000.0);
+    CHECK(r.mission.objects[0].pos[1] == 500.0);
+    CHECK(r.mission.objects[0].pos[2] == -2000.0);
+}
+
+TEST_CASE("parseMission places an object by lat/lon (#1211)", "[mission-parser]") {
+    const char* yaml = R"yaml(
+name: x
+map: y
+layer: z
+time: { hour: 12, minute: 0 }
+wind: { heading: 0, speed: 0 }
+sides: [blue]
+objects:
+  - { type: F16, id: a, side: blue, pos: [0, 0, 0], heading: 90, lat: 36.0, lon: -115.0, alt: 2000 }
+triggers: []
+)yaml";
+    auto r = parseMission(yaml);
+    REQUIRE(r.ok);
+    REQUIRE(r.mission.objects.size() == 1u);
+    const auto& o = r.mission.objects[0];
+    const LatLonAlt lla = worldToGeodetic(o.pos[0], o.pos[1], o.pos[2]);
+    CHECK(lla.lat_rad * 180.0 / std::numbers::pi == Catch::Approx(36.0).margin(1e-6));
+    CHECK(lla.lon_rad * 180.0 / std::numbers::pi == Catch::Approx(-115.0).margin(1e-6));
+    CHECK(lla.alt_m == Catch::Approx(2000.0).margin(0.01));
+}
+
+TEST_CASE("parseMission rejects the anchors that cannot work (#1211)", "[mission-parser]") {
+    auto parseWith = [](const std::string& extra) {
+        const std::string yaml = "name: x\nmap: y\nlayer: z\n" + extra +
+                                 "\ntime: { hour: 12, minute: 0 }\nwind: { heading: 0, speed: 0 }\nsides: [blue]\n"
+                                 "objects:\n  - { type: F16, id: a, side: blue, pos: [0, 0, 0], heading: 0 }\n"
+                                 "triggers: []\n";
+        return parseMission(yaml);
+    };
+    SECTION("an unknown keyword") {
+        auto r = parseWith("anchor: somewhere");
+        CHECK_FALSE(r.ok);
+    }
+    SECTION("half a coordinate") {
+        auto r = parseWith("anchor: { lat: 36.0 }");
+        CHECK_FALSE(r.ok);
+    }
+    SECTION("beside a pole — where an east/north frame stops existing, which is why anchors exist") {
+        auto r = parseWith("anchor: { lat: 89.6, lon: 0 }");
+        CHECK_FALSE(r.ok);
+        bool named = false;
+        for (const auto& e : r.errors)
+            if (e.find("pole") != std::string::npos)
+                named = true;
+        CHECK(named);
+    }
+    SECTION("a valid explicit anchor is accepted") {
+        auto r = parseWith("anchor: { lat: 36.24917, lon: -114.99611 }");
+        CHECK(r.ok);
+        REQUIRE(r.mission.anchor.has_value());
+        CHECK(r.mission.anchor->latRad == Catch::Approx(sandboxHome().lat_rad).epsilon(1e-9));
+    }
+}
+
+TEST_CASE("parseMission refuses airspace zones in an anchored mission (#1211)", "[mission-parser]") {
+    // Zone geometry is a planar world-XZ test (#162) with no tangent frame, so it is only a real
+    // shape near the world origin. Refusing beats projecting a 10 km circle at 36 degrees north into
+    // world XZ and calling the resulting ellipse a zone.
+    const char* yaml = R"yaml(
+name: x
+map: y
+layer: z
+anchor: home
+time: { hour: 12, minute: 0 }
+wind: { heading: 0, speed: 0 }
+sides: [blue]
+airspace_zones:
+  - { id: z1, type: circle, center: [0, 0, 0], radius: 5000, owner: blue }
+objects:
+  - { type: F16, id: a, side: blue, pos: [0, 1000, 0], heading: 0 }
+triggers: []
+)yaml";
+    auto r = parseMission(yaml);
+    CHECK_FALSE(r.ok);
+    bool named = false;
+    for (const auto& e : r.errors)
+        if (e.find("airspace_zones") != std::string::npos)
+            named = true;
+    CHECK(named);
 }
 
 TEST_CASE("applyMission calls the onSpawned hook once per spawned world object", "[mission-setup]") {

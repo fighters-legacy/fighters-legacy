@@ -3,6 +3,7 @@
 
 #include "entity/EntityManager.h"
 #include "entity/EntityState.h"
+#include "flight/Geodetic.h"   // worldAtAltitude — a ground start sits on its own radial (#1211)
 #include "flight/LocalFrame.h" // enuBasis (local tangent frame)
 #include "mission/Mission.h"
 #include "weather/WeatherController.h"
@@ -45,12 +46,17 @@ MissionSetupResult applyMission(const Mission& mission, EntityManager& em, Facti
                                 const GroundHeightFn& groundHeight) {
     MissionSetupResult result;
 
-    // Resolve an object's spawn altitude: a ground start (#885) sits on the terrain (queried via
-    // groundHeight, when supplied), else the authored `alt` overrides pos[1], else pos[1].
-    auto spawnAlt = [&](const MissionObject& obj) -> double {
-        if (obj.groundStart && groundHeight)
-            return groundHeight(obj.pos[0], obj.pos[2]);
-        return obj.alt ? static_cast<double>(*obj.alt) : obj.pos[1];
+    // Resolve an object's spawn POSITION. The parser has already turned the authored frame into world
+    // XYZ at the authored MSL altitude (#1211), so all that is left here is the ground start: a
+    // `start: ground` object is dropped onto the terrain under its own position, along its radial.
+    auto spawnPos = [&](const MissionObject& obj, double out[3]) {
+        out[0] = obj.pos[0];
+        out[1] = obj.pos[1];
+        out[2] = obj.pos[2];
+        if (obj.groundStart && groundHeight) {
+            const double elev = groundHeight(obj.pos[0], obj.pos[1], obj.pos[2]);
+            worldAtAltitude(out[0], out[1], out[2], elev, out[0], out[1], out[2], planetRadiusM);
+        }
     };
 
     // ── coalition registry ──────────────────────────────────────────────────────
@@ -91,9 +97,7 @@ MissionSetupResult applyMission(const Mission& mission, EntityManager& em, Facti
             slot.id = obj.id; // for the destroy(<id>) binding once a pilot claims the slot (#884)
             slot.type = obj.type;
             slot.factionIndex = fi;
-            slot.pos[0] = obj.pos[0];
-            slot.pos[1] = spawnAlt(obj); // ground start sits on the terrain (#885)
-            slot.pos[2] = obj.pos[2];
+            spawnPos(obj, slot.pos); // ground start sits on the terrain (#885)
             slot.headingDeg = obj.headingDeg;
             // Initial airspeed for the joining pilot (#883): a ground start is parked (0); else the
             // authored `speed:` or a cruise default (#885).
@@ -105,9 +109,7 @@ MissionSetupResult applyMission(const Mission& mission, EntityManager& em, Facti
         }
 
         EntityTransform t{};
-        t.pos[0] = obj.pos[0];
-        t.pos[1] = spawnAlt(obj); // ground start sits on the terrain (#885)
-        t.pos[2] = obj.pos[2];
+        spawnPos(obj, t.pos); // ground start sits on the terrain (#885)
         yawHeadingToQuat(obj.headingDeg, t.pos, planetRadiusM, t.quat);
 
         const EntityId id = em.spawn(obj.type.c_str(), t);

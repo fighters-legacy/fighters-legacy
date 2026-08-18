@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "world_broadcaster_test_util.h"
 
+#include "world/SandboxHome.h"
+
 using namespace fl;
 
 // ---------------------------------------------------------------------------
@@ -44,6 +46,14 @@ TEST_CASE("WorldBroadcaster: an ATC radio command is dispatched and answered (#7
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setAtcService(&atc);
+    // Spawn the pilot AT the field. The builtin strip stands at the sandbox home (#1211), 5,977 km
+    // from the world origin, and an arrival that far out is sequenced but not cleared — which is
+    // correct behaviour and not what this test is about.
+    {
+        double hx = 0.0, hy = 0.0, hz = 0.0;
+        fl::geodeticToWorld(fl::sandboxHome(), hx, hy, hz, fl::kEarthRadiusM);
+        broadcaster.setSpawnPoints({{hx, hy, hz}});
+    }
     connectPilotPeer(broadcaster, net, 0u);
 
     // A recognised verb: dispatched to the service (flight sequenced) + an immediate acknowledgement.

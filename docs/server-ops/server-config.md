@@ -1871,11 +1871,17 @@ configured point is queried from `TerrainStreamer` on the main thread before
 agl_offset = 500.0  # metres AGL above terrain for all spawn points
 
 # Peer spawn locations assigned round-robin to connecting peers.
-# Omit this section to use the default (origin at x=0, z=0).
+# x/z are metres EAST and NORTH of the sandbox home; omit this section to spawn at the home itself.
 # [[spawn.points]]
 # x = 0.0
 # z = 0.0
 ```
+
+Spawn points are measured **from the sandbox home** — 36.24917 N, 114.99611 W, elevation ~570 m,
+where the builtin airfield stands. They used to be raw world coordinates measured from the world
+origin, which is the **north pole**; the home moved off it so that headings, sunrise and longitude
+mean something. Every existing number keeps its meaning, because the home is exactly what the origin
+used to stand in for.
 
 ### `agl_offset`
 
@@ -1888,14 +1894,14 @@ spawn point. Applies to all points uniformly.
 
 ### `[[spawn.points]]`
 
-Array of tables, each with `x` and `z` fields (world-space metres). Peers are
-assigned round-robin in connection order. Omitting this section (or providing
-an empty array) defaults to a single spawn at origin `(0, 0)`.
+Array of tables, each with `x` and `z` fields. Peers are assigned round-robin in
+connection order. Omitting this section (or providing an empty array) defaults to
+a single spawn at the sandbox home, `(0, 0)`.
 
 | Field | Type | Description |
 |---|---|---|
-| `x` | float | World-space X coordinate (metres) |
-| `z` | float | World-space Z coordinate (metres) |
+| `x` | float | Metres **east** of the sandbox home |
+| `z` | float | Metres **north** of the sandbox home |
 
 **Example — two spawn points:**
 

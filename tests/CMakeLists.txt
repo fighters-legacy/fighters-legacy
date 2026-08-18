@@ -340,7 +340,8 @@ target_link_libraries(test_central_gravity PRIVATE Catch2::Catch2WithMain engine
 catch_discover_tests(test_central_gravity)
 
 add_executable(test_geodetic test_geodetic.cpp)
-target_link_libraries(test_geodetic PRIVATE Catch2::Catch2WithMain engine-flight)
+# engine-world for SandboxHome.h — the anchor cases assert against the shipped home (#1211).
+target_link_libraries(test_geodetic PRIVATE Catch2::Catch2WithMain engine-flight engine-world)
 catch_discover_tests(test_geodetic)
 
 # Local-level (ENU tangent-plane) frame utilities (#470); header-only, glm via engine-flight.
@@ -1344,7 +1345,8 @@ target_link_libraries(test_session_comms PRIVATE Catch2::Catch2WithMain engine-n
 catch_discover_tests(test_session_comms)
 
 add_executable(test_weather test_weather.cpp)
-target_link_libraries(test_weather PRIVATE Catch2::Catch2WithMain engine-weather)
+# engine-world for SandboxHome.h — the solar case contrasts the home with the pole it replaced (#1211).
+target_link_libraries(test_weather PRIVATE Catch2::Catch2WithMain engine-weather engine-world)
 
 add_executable(test_celestial test_celestial.cpp)
 target_link_libraries(test_celestial PRIVATE Catch2::Catch2WithMain engine-weather engine-flight)

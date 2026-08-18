@@ -66,6 +66,21 @@ struct MissionCrew {
     std::vector<MissionCrewSeat> seats; // per-seat overrides
 };
 
+// The geodetic point a mission's coordinates are measured from (#1211).
+//
+// With an anchor, an object's `pos` is [metres EAST, MSL altitude, metres NORTH] of the anchor, so a
+// mission is authored in numbers a human can read and review wherever on the planet it is set. The
+// world frame does not change and stored coordinates keep their meaning — this is an AUTHORING
+// frame, resolved to world XYZ once, by the parser.
+//
+// Absent = the mission's coordinates ARE world XYZ, which is what every mission meant before this
+// existed. That frame puts the mission at the world origin, i.e. the north pole (Geodetic.h), where
+// there is no airfield, no sunrise and no stable heading — so shipped content anchors.
+struct MissionAnchor {
+    double latRad{0.0};
+    double lonRad{0.0};
+};
+
 // One entity placement at mission start.
 struct MissionObject {
     std::string type; // aircraft/unit type id — resolved against the EntityTypeRegistry at spawn
@@ -73,7 +88,12 @@ struct MissionObject {
     std::string side; // must appear in the sides list
     double pos[3]{};  // world-space [x, y, z] metres, Y up
     float headingDeg{0.f};
-    std::optional<float> alt;   // MSL altitude (m); overrides pos[1] when present
+    std::optional<float> alt; // MSL altitude (m); overrides pos[1] when present
+    // Absolute geodetic placement (#1211), an alternative to the anchor-relative `pos` above:
+    // when both are given the parser resolves lat/lon and the pos x/z are ignored (pos[1]/alt still
+    // give the altitude). Degrees as authored; the parser folds them into `pos` as world XYZ.
+    std::optional<double> latDeg;
+    std::optional<double> lonDeg;
     std::optional<float> speed; // initial airspeed (m/s) along heading; absent = a sane cruise default
                                 // for an airborne start, or 0 for a ground start (#883/#885)
     bool groundStart{false};    // `start: ground` (#885): spawn parked on the ground, gear down, idle
@@ -163,6 +183,11 @@ struct Mission {
     std::string name;
     std::string map;
     std::string layer;
+    // The `anchor:` block (#1211). Absent = the file's coordinates are raw world XYZ. Present = they
+    // were authored east/north of this point and the parser has already resolved them to world XYZ,
+    // so everything downstream (spawns, routes, camera shots, zone polygons) sees world coordinates
+    // exactly as it always did. Kept on the model so a tool can report where a mission is set.
+    std::optional<MissionAnchor> anchor;
     MissionTime time;
     MissionWind wind;
     std::optional<WeatherPreset> weatherPreset; // absent = engine default (Clear)

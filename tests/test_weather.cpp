@@ -4,6 +4,7 @@
 
 #include "weather/Turbulence.h"
 #include "weather/WeatherController.h"
+#include "world/SandboxHome.h"
 
 #include <algorithm>
 #include <cmath>
@@ -523,6 +524,44 @@ TEST_CASE("WeatherController: geographic sun differs by longitude and points up 
     const glm::vec3 upA = glm::normalize(glm::vec3(atAnti - glm::dvec3{0.0, -kEarthRadiusM, 0.0}));
     CHECK(glm::dot(sunG, upG) > 0.0f); // day at Greenwich
     CHECK(glm::dot(sunA, upA) < 0.0f); // night on the far side
+}
+
+// #1211: the reason the default home moved off the world origin. The sun and moon are true
+// geographic, so at the pole the sun holds ONE elevation for all 24 hours of the default date — a
+// mission's `time:` moved only its azimuth and no sandbox ever had a sunrise. This asserts the
+// difference the move buys, in the engine's own solar model rather than by argument.
+TEST_CASE("WeatherController: the sandbox home has a day and a night; the world origin does not (#1211)",
+          "[weather][solar]") {
+    const glm::dvec3 pole{0.0, 0.0, 0.0}; // the world origin IS the north pole
+    glm::dvec3 home{};
+    geodeticToWorld(sandboxHome(), home.x, home.y, home.z, kEarthRadiusM);
+
+    auto sunElevationAt = [](glm::dvec3 observer, double hourUtc) {
+        const glm::vec3 sun =
+            WeatherController::geographicSunDirection(julianDay(2025, 6, 21, hourUtc), observer, kEarthRadiusM);
+        const glm::vec3 up = glm::normalize(glm::vec3(observer - glm::dvec3{0.0, -kEarthRadiusM, 0.0}));
+        return glm::dot(sun, up);
+    };
+
+    // At the pole on the default date the sun never sets and barely moves in elevation all day.
+    double poleMin = 2.0, poleMax = -2.0;
+    for (int h = 0; h < 24; ++h) {
+        const double e = sunElevationAt(pole, static_cast<double>(h));
+        poleMin = std::min(poleMin, e);
+        poleMax = std::max(poleMax, e);
+    }
+    CHECK(poleMin > 0.0);            // no night, ever
+    CHECK(poleMax - poleMin < 0.05); // and no meaningful change in elevation: `time:` only spins the azimuth
+
+    // At the home it rises and sets: the sun goes well above the horizon and well below it.
+    double homeMin = 2.0, homeMax = -2.0;
+    for (int h = 0; h < 24; ++h) {
+        const double e = sunElevationAt(home, static_cast<double>(h));
+        homeMin = std::min(homeMin, e);
+        homeMax = std::max(homeMax, e);
+    }
+    CHECK(homeMax > 0.9); // ~77 degrees at local noon on the solstice
+    CHECK(homeMin < -0.2);
 }
 
 TEST_CASE("WeatherController: applyGeographicSun sets a lit day sun and a dim night sun (#481)", "[weather][solar]") {
