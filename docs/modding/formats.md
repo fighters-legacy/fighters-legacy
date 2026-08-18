@@ -833,42 +833,103 @@ take a lock.
 
 ---
 
-## Ground & Naval Unit Data — TOML
+## Ground & Naval Units — an Entity Definition, not a `units/` file
 
-> **`[radar]` is scheduled to change.** Like `[seeker]` above, this block is superseded by the
-> shared `SensorDef` vocabulary locked in the 2026-07-12 sensor decision record: `track_range_nm`
-> and the search/track distinction move into a sensor def, and `can_shutdown` generalizes into the
-> per-observer **`emitting`** flag that radar and laser track lobes require (the EMCON/RWR seam).
-> `emitter_id` survives as the sensor-def reference. Migration lands with player avionics (#526);
-> the block below is what the parser accepts today.
+> **There is no `units/` asset directory and there never has been.** Earlier revisions of this page
+> documented a `units/<name>.toml` format with `[unit]`, `[armor]`, `[radar]`, `[[weapons]]` and
+> `[ai] script` tables. No parser for it was ever written: `AssetType` has no `Unit` member, so
+> `units/` is not in the pack's path table, is never enumerated, and is never resolved. Files placed
+> there load **silently** — the engine does not warn, because nothing looks in the directory to be
+> surprised by what it finds. If you have such files, port them using the mapping below.
+
+A ground or naval unit is an ordinary [entity definition](#entity-definition-toml) — the same
+`entities/<name>.toml` schema an aircraft uses, with a surface `category` and no `flight_model`. It
+carries its radar as a [sensor def](#sensor-data--toml), its launcher or gun as
+[`[[hardpoints]]`](#hardpoints-optional--weapon-stations), and its toughness as `max_hp` plus a
+[`[damage.*]`](#entity-definition-toml) model. Behaviour comes from the mission, not from a key in
+the file.
+
+### Porting from the old `units/` block
+
+| Old `units/*.toml` key | Where it lives now |
+|---|---|
+| `[unit] id` / `name` / `mesh` | `[entity] id` / `name` / `mesh` |
+| `[unit] type = "sam"` | `[entity] category` (`ground_vehicle`, `naval_vehicle`, `structure`) + the mission's `ai:` behaviour |
+| `[unit] mobile` | nothing to declare — surface movement is #585; an emplacement simply has no `flight_model` |
+| `[armor] health` | `[entity] max_hp` |
+| `[armor] rating` | the `[damage.light]` / `[damage.heavy]` / `[damage.critical]` model, and `[damage.subsystems.*]` for per-subsystem pools |
+| `[radar] emitter_id` | an entry in `[entity] sensors = [...]`, resolving to a `sensors/<id>.toml` def |
+| `[radar] track_range_nm` | the sensor def's `[track]` block (`max_range_nm`) |
+| `[radar] can_shutdown` | the sensor def's `emitting` flag (the EMCON/RWR seam) |
+| `[[weapons]] weapon_id` | `[[hardpoints]] allowed` / `default`, resolved through the pack index |
+| `[[weapons]] max_range_nm` / `max_alt_ft` | the **weapon** def's `[performance]` block, not the unit's |
+| `[[weapons]] targets` | nothing to declare — engagement is decided by the controller and the seeker |
+| `[ai] script` | `[entity] ai_script` (a pack Lua script), or the mission object's `ai:` behaviour |
+
+### A SAM battery as an entity def
 
 ```toml
-# units/sa10_battery.toml
-[unit]
-id     = "sa10_battery"
-name   = "SA-10 Grumble Battery"
-type   = "sam"
-mesh   = "sa10"
-mobile = false
+# entities/sa10_battery.toml
+[entity]
+id       = "fl-base:sa10_battery"
+name     = "SA-10 Grumble Battery"
+category = "ground_vehicle"
+max_hp   = 100.0
+mesh     = "sa10"                    # ASSET NAME -> aircraft/sa10.glb
+sensors  = ["fl-base:sa10_search"]   # DEF ID -> sensors/sa10_search.toml
 
-[armor]
-rating = 2
-health = 100
-
-[radar]
-emitter_id     = "sa10_search"
-track_range_nm = 90
-can_shutdown   = true
-
-[[weapons]]
-weapon_id    = "s300_missile"
-max_range_nm = 90
-max_alt_ft   = 100000
-targets      = ["air"]
+[signatures]
+rcs    = 3.0
+ir     = 2.0
+visual = 2.0
 
 [ai]
-script = "ai/units/sam_battery.lua"
+skill    = 0.6
+reaction = 0.5
+
+[damage.heavy]
+hp_fraction   = 0.35
+visual_effect = "smoke_heavy"
+
+[damage.critical]
+hp_fraction   = 0.10
+visual_effect = "fire"
+
+[[hardpoints]]
+slot    = 0
+allowed = ["fl-base:s300_missile"]
+default = "fl-base:s300_missile"
 ```
+
+### Driving it from a mission
+
+Surface units are given behaviour by **name** on the mission object, not by a script key in the unit
+file. Two builtin behaviours cover static air defence — `sam` (acquire on radar, launch a SARH) and
+`aaa` (lead with the ballistic solution and fire) — each taking optional tuning arguments:
+
+```yaml
+objects:
+  - { type: fl-base:sa10_battery, id: redsam, side: russia, pos: [9500, 0, 0], heading: 90, start: ground, ai: "sam" }
+  - { type: fl-base:zsu23, id: redaaa, side: russia, pos: [9200, 0, 500], heading: 90, start: ground, ai: "aaa" }
+```
+
+See [`missions.md`](missions.md#objects-entries) for the full object schema, and
+[Scripted bots](missions.md#scripted-bots) for the `ai:` grammar and the behaviours it accepts.
+
+### The reference implementation is compiled in
+
+The engine's own surface entities are built from exactly this schema and are always current — read
+them when this page and the code disagree:
+
+| Builtin | What it demonstrates |
+|---|---|
+| `builtin:sam-site` | `category = "ground_vehicle"`, `sensors = ["builtin:sam-radar"]`, one hardpoint carrying the SARH missile |
+| `builtin:aaa` | a gun hardpoint, sensing on the builtin eyeball (no declared sensors) |
+| `builtin:static-target` | `category = "structure"` — a strike target that does not shoot back |
+| `builtin:ground-vehicle`, `builtin:naval-vessel` | the plain surface categories |
+
+They are defined in `engine/content/ContentBootstrap.cpp` and placed by the `builtin:shape-gallery`
+and `builtin:sandbox` missions.
 
 ---
 
@@ -886,17 +947,19 @@ wind: { heading: 270, speed: 12 }
 sides: [nato, russia]
 
 objects:
-  - type: F22
+  - type: fl-base:f22
     id: player1
     side: nato
     pos: [12400, 0, 8800]
     heading: 90
     alt: 500
 
-  - type: SA10
+  - type: fl-base:sa10_battery
     id: sam1
     side: russia
     pos: [15000, 0, 9000]
+    start: ground
+    ai: "sam"
 
 triggers:
   - on: destroy(sam1)
