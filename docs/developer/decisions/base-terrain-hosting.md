@@ -29,7 +29,11 @@ pack, and therefore the only one that could stall on a decision nobody had been 
 ## What shapes the answer
 
 - **Input is huge, output is small.** GEBCO_2024 is ~7.5 GB (free anonymous download, no API); the
-  level-5 output is ~15–50 MB.
+  level-5 output is **~165 MB** (measured on the first bundle, `gebco2024-r1`: 8,190 tiles,
+  164 MB on disk, 150 MB zipped). This page originally estimated 15–50 MB; that was optimistic
+  by about 3x, and it does not compress away — `ZLEVEL=9` against GDAL's PNG default saves 0.0%.
+  The estimate being wrong does not change the decision: it strengthens it, since committing
+  165 MB of regenerated PNGs to a source repo is worse than committing 50 MB.
 - **It changes almost never.** The source grids are annual at best, and the coarse level is a floor
   for the horizon, not gameplay detail. This is a rarely-regenerated artifact, unlike anything else
   in the release.
@@ -42,7 +46,7 @@ pack, and therefore the only one that could stall on a decision nobody had been 
 
 | | Route | Cost | Downside |
 |---|---|---|---|
-| A | Commit `base-terrain/` into the engine repo | zero new infra | a 15–50 MB binary tree in a source repo, forever, in every clone; every regeneration rewrites it |
+| A | Commit `base-terrain/` into the engine repo | zero new infra | a **165 MB** binary tree in a source repo, forever, in every clone; every regeneration rewrites it |
 | B | Build it in `release.yml` on each tag | always fresh | fetches ~7.5 GB per release job and adds GDAL to the release runner, to regenerate bytes that are identical each time; makes the release long, network-dependent, and newly able to fail on an external download |
 | **C** | **Build once, publish as a versioned release asset in its own repo, fetch + verify + stage at release time** | **source repos stay clean; pinned and checksummed; regeneration is an explicit act with its own version** | **one more repo, and a network fetch in the release job** |
 | D | Don't ship it — users run the script | nothing to host | a zero-pack launch keeps the procedural horizon, which is the state #474 exists to fix |
@@ -99,8 +103,16 @@ Once, on a workstation with GDAL and ~10 GB free:
 2. `tools/build_global_base.sh --elevation gebco_2024.tif [--landcover worldcover.vrt]`
 3. **Edit `base-terrain/ATTRIBUTION.md`** — the generated file hedges between the grids it might
    have been given; replace the conditional wording with the line that applies.
-4. Sanity-check the tree: six `f*` roots, `terrain/world/f0/l0/tile_0_0.png` present, 15–50 MB.
-5. `zip -r base-terrain-<version>.zip base-terrain/` with the tree at the archive root.
+4. Sanity-check the tree: six `f*` roots, `terrain/world/f0/l0/tile_0_0.png` present, and a size in
+   the region of 165 MB at level 5. Decode the sentinel tile and check the elevations are
+   Earth-shaped — `gebco2024-r1` reads −9,322 m … +6,095 m, mean −1,999 m, 32% above sea level.
+   A tree of the right size and shape can still be noise.
+5. **Zip from INSIDE the tree**, so `terrain/` and `ATTRIBUTION.md` are at the archive root:
+   `cd base-terrain && zip -r ../base-terrain-<version>.zip .`
+   The obvious `zip -r base-terrain-<version>.zip base-terrain/` nests everything one level
+   deeper, and the fetcher then stages a tree whose sentinel is at `base-terrain/terrain/...`
+   and refuses it. That is the fetcher working — it caught exactly this on the first bundle —
+   but the wording above sent it there, so it is fixed here.
 6. Publish it as a release of `fighters-legacy/fl-base-terrain`, tagged by the *data* version
    (the source grid year plus a revision — e.g. `gebco2024-r1`), not by an engine version. The
    bundle's lifecycle is the source grids', and tying it to an engine tag would imply it changes

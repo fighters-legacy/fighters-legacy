@@ -11,7 +11,10 @@
 # recognizable Earth (generateProceduralTile fills finer near-camera detail; user packs override).
 #
 # This produces an engine BUNDLE (staged next to the binary + shaders/), not a user content pack;
-# it is intentionally coarse (~15-50 MB at level 5) so it can ship with the release.
+# it is intentionally coarse so it can ship with the release -- though "coarse" still costs
+# ~165 MB at level 5 against a real global grid (measured, gebco2024-r1: 8,190 tiles, 164 MB
+# on disk, 150 MB zipped). The original ~15-50 MB estimate was optimistic by about 3x and
+# is not recoverable by compression -- ZLEVEL=9 against the driver default saves 0.0%.
 #
 # Sources (bring your own; all GDAL-readable, ideally global lat/lon EPSG:4326):
 #   --elevation   Global topo grid. Two recipes for oceans:

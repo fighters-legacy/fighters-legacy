@@ -13,11 +13,13 @@
     "silent one -- the fetcher says so on stdout and the release notes say so too."
   ],
   "repo": "fighters-legacy/fl-base-terrain",
-  "tag": "",
-  "asset": "",
-  "sha256": "",
-  "size_bytes": 0,
+  "tag": "gebco2024-r1",
+  "asset": "base-terrain-gebco2024-r1.zip",
+  "sha256": "b9fb52fe2b8826ad089064a8d740e77fae4c42e9303442e7a1df7a7bcbe87201",
+  "size_bytes": 156191044,
   "terrain_id": "world",
   "max_level": 5,
-  "sources": []
+  "sources": [
+    "GEBCO_2024 Grid, sub-ice topo (GEBCO Compilation Group, doi:10.5285/1c44ce99-0a0d-5f4f-e063-7086abc0ea0f) -- 15 arc-second global grid, 86400x43200, resampled to 1 arc-minute (21600x10800) with `gdal_translate -outsize 25% 25% -r average` before tiling"
+  ]
 }

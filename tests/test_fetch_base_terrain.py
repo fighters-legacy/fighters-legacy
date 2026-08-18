@@ -236,11 +236,33 @@ def test_a_payload_that_is_not_an_archive_fails(tmp_path, monkeypatch):
 # ---- the shipped pin ---------------------------------------------------------------------------
 
 
-def test_the_repo_pin_is_valid_json_and_currently_unpinned(monkeypatch, tmp_path, capsys):
-    """The pin committed to the repo must always parse, and today it declares no bundle."""
+def test_the_repo_pin_is_valid_json_and_internally_consistent():
+    """The pin committed to the repo must always parse, and must be complete or empty — never half.
+
+    This ASSERTS ON THE PIN, and deliberately does not run the fetcher against it. The earlier
+    version did, which was free while the pin was empty (the fetcher exits 0 and says so) and became
+    a **156 MB download on every CI run** the moment a real bundle was pinned — a unit test reaching
+    out to a release CDN to re-prove what the twenty tests above already prove against synthetic
+    bundles. What is worth checking here is the thing those tests cannot see: that the committed pin
+    is coherent.
+
+    A half-filled pin is the failure this guards. `tag` set with an empty `sha256` would download an
+    asset and verify nothing; `sha256` set with an empty `tag` would silently skip the fetch and ship
+    a release with no terrain while looking pinned.
+    """
     lock = REPO_ROOT / "tools" / "base_terrain.lock.json"
     data = json.loads(lock.read_text(encoding="utf-8"))
     assert data["repo"] == "fighters-legacy/fl-base-terrain"
     assert data["terrain_id"] == "world"
-    assert _run(monkeypatch, "--lock", str(lock), "--output-dir", str(tmp_path / "bt")) == 0
-    assert "no base-terrain bundle is pinned" in capsys.readouterr().out
+    assert isinstance(data["max_level"], int) and data["max_level"] >= 0
+
+    pinned = [bool(data[k]) for k in ("tag", "asset", "sha256", "size_bytes")]
+    assert all(pinned) or not any(pinned), (
+        f"the pin is half-filled: {dict((k, data[k]) for k in ('tag', 'asset', 'sha256', 'size_bytes'))}"
+    )
+
+    if all(pinned):
+        assert len(data["sha256"]) == 64 and all(c in "0123456789abcdef" for c in data["sha256"])
+        assert data["size_bytes"] > (1 << 20), "a terrain bundle is megabytes, not bytes"
+        assert data["asset"].endswith((".zip", ".tar", ".tar.gz", ".tgz"))
+        assert data["sources"], "a pinned bundle must record the source grids it was built from"
