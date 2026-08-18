@@ -169,6 +169,41 @@ TEST_CASE("LuaSandbox: a pack root with no filesystem refuses require (#1210)") 
     CHECK(sb->lastError().find("no content filesystem") != std::string::npos);
 }
 
+// A zero-byte module is an ordinary authoring slip (a file created and not yet written), and it must
+// behave like the empty chunk it is: it loads, it returns nothing, and it does not trip the bytecode
+// guard — which reads src[0] and would be reading past the end of an empty buffer if the guard were
+// written the other way round.
+TEST_CASE("LuaSandbox: an empty module file loads and returns nothing (#1210)") {
+    TempPack pack("fl_lua_test_emptymod");
+    pack.writeModule("blank", "");
+
+    auto sb = makeSandbox(pack.source());
+    CHECK(sb->loadScript("local m = require('blank')\n"
+                         "if m ~= nil then error('an empty module returned a value') end"));
+    CHECK(sb->lastError().empty());
+}
+
+// The loader returns every value the chunk produced, not just the first — the shape a module that
+// hands back several helpers relies on.
+TEST_CASE("LuaSandbox: a module's multiple return values all reach the caller (#1210)") {
+    TempPack pack("fl_lua_test_multiret");
+    pack.writeModule("pair", "return 7, 35");
+
+    auto sb = makeSandbox(pack.source());
+    CHECK(sb->loadScript("local a, b = require('pair')\n"
+                         "if a ~= 7 or b ~= 35 then error('wrong values') end"));
+    CHECK(sb->lastError().empty());
+}
+
+// A BACKSLASH is rejected as well as a forward slash. Windows is a first-class target, so the
+// separator a Windows path uses cannot be the one that slips through the traversal guard.
+TEST_CASE("LuaSandbox: a backslash in a module name is rejected (#1210)") {
+    TempPack pack("fl_lua_test_backslash");
+    auto sb = makeSandbox(pack.source());
+    CHECK_FALSE(sb->loadScript("require('sub\\\\mod')"));
+    CHECK(sb->lastError().find("disallowed") != std::string::npos);
+}
+
 // #1015: the require loader raises its "not found" error from a C++ frame that
 // owns a std::filesystem::path, a std::ifstream and a std::ostringstream. Built
 // as C, Lua raises by longjmp — which MSVC implements by *unwinding* the frames
