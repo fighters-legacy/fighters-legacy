@@ -1974,7 +1974,21 @@ void WorldBroadcaster::runWeaponsPass(double simDt, uint64_t tickIndex) {
             if (!st || st->dead)
                 continue;
             const bool hold = m_formations.weaponsHoldFor(ce.id); // #610's order, with teeth at last
+            const std::size_t firstReq = m_fireRequests.size();
             evaluateFire(ce.fire, *m_weaponRegistry, ce.lastInput, hold, tickIndex, idx, m_fireRequests);
+            // Stamp the launch direction a non-bore-sighted shooter asked for (#1204), the same way
+            // the crewed pass stamps a turret seat's bore. Absent (the aircraft case) the store
+            // leaves along the airframe nose exactly as before.
+            if (ce.lastInput.hasAimDir) {
+                const glm::vec3 aim{ce.lastInput.aimDir[0], ce.lastInput.aimDir[1], ce.lastInput.aimDir[2]};
+                if (glm::dot(aim, aim) > 1e-6f)
+                    for (std::size_t r = firstReq; r < m_fireRequests.size(); ++r) {
+                        m_fireRequests[r].hasAimDir = true;
+                        m_fireRequests[r].aimDir[0] = aim.x;
+                        m_fireRequests[r].aimDir[1] = aim.y;
+                        m_fireRequests[r].aimDir[2] = aim.z;
+                    }
+            }
             // The live loadout is the payload truth from here on (#625): releases shrink what the
             // integrator carries next tick.
             ce.payload.extra_mass_kg = ce.fire.loadout.payloadMassKg;

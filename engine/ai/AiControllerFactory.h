@@ -482,13 +482,15 @@ inline std::unique_ptr<fl::IEntityController> createController(std::string_view 
     }
 
     // -----------------------------------------------------------------------
-    // sam  [engageRangeM=30000] [coneHalfDeg=90] [fireIntervalS=4]   (#863 — static SAM launcher;
-    //      auto-engages hostiles it detects on radar, no target index)
+    // sam  [engageRangeM=30000] [coneHalfDeg=90] [fireIntervalS=4] [launchElevMinDeg=35]
+    //      (#863 — static SAM launcher; auto-engages hostiles it detects on radar, no target index.
+    //       launchElevMinDeg is the #1204 elevation floor on the launch vector: 0 fires flat, which
+    //       on an emplacement standing on the deck means the store is reaped by the ground.)
     // -----------------------------------------------------------------------
     if (behavior == "sam") {
         if (!entityManager)
             return nullptr;
-        float rangeM = 30000.f, coneHalfDeg = 90.f, fireIntervalS = 4.f;
+        float rangeM = 30000.f, coneHalfDeg = 90.f, fireIntervalS = 4.f, launchElevMinDeg = 35.f;
         double d = 0.0;
         if (args.size() >= 1) {
             if (!parseDouble(args[0], d) || d <= 0.0)
@@ -505,7 +507,14 @@ inline std::unique_ptr<fl::IEntityController> createController(std::string_view 
                 return nullptr;
             fireIntervalS = static_cast<float>(d);
         }
-        return std::make_unique<SamEngagementController>(*entityManager, rangeM, coneHalfDeg, fireIntervalS);
+        if (args.size() >= 4) {
+            // 0 is legal here (a launcher that genuinely fires flat), unlike the three above.
+            if (!parseDouble(args[3], d) || d < 0.0 || d > 89.0)
+                return nullptr;
+            launchElevMinDeg = static_cast<float>(d);
+        }
+        return std::make_unique<SamEngagementController>(*entityManager, rangeM, coneHalfDeg, fireIntervalS,
+                                                         launchElevMinDeg);
     }
 
     // -----------------------------------------------------------------------

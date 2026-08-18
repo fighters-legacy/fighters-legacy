@@ -203,6 +203,18 @@ A controller spec, using the same grammar as the `spawn --ai` admin command:
 - a C++ behavior name plus arguments — e.g. `pursuit <idx>`, `loiter <cx> <cy> <cz> [radius] [alt]`,
   `patrol_attack <idx>`, `escort <idx>`. See the AI controller factory for the full list.
 
+**Static air defence** has two behaviours, for emplacements placed with `start: ground`. Neither
+takes a target index — both engage whatever hostile they honestly detect, so a battery a jammer has
+blinded engages nothing:
+
+| Behaviour | Arguments (all optional, in order) | Notes |
+|---|---|---|
+| `sam` | `engageRangeM=30000`, `coneHalfDeg=90`, `fireIntervalS=4`, `launchElevMinDeg=35` | Acquires on radar and launches a SARH. `launchElevMinDeg` is the floor on how far above the local horizon the missile leaves: an emplacement's nose is horizontal, so a store launched flat starts at deck level and the ground check ends it before it can climb. Set `0` only for a launcher that genuinely fires flat. |
+| `aaa` | `engageRangeM=1200`, `coneHalfDeg=25`, `muzzleVelMps=1000`, `lethalRadiusM=15` | Leads the target with the ballistic solution and fires when the predicted miss is inside the lethal radius. Fires along its **fixed** nose — a gun emplacement has no elevation yet, so it engages what crosses its boresight. |
+
+    - { type: fl-base:sa10_battery, id: redsam, side: red, pos: [9500, 0, 0], heading: 90, start: ground, ai: "sam" }
+    - { type: fl-base:zsu23, id: redaaa, side: red, pos: [9200, 0, 500], heading: 90, start: ground, ai: "aaa 1800" }
+
 ### `route`
 
 A list of `[x, y, z]` waypoints the object flies via a waypoint-following controller. When both `route`
