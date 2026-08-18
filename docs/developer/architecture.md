@@ -560,6 +560,45 @@ question — who consumes this, built from what — and takes the row that falls
 version field "to be safe" (an unchecked version is how the pre-#932 release audit found tags whose
 notes described a different version's contents: ritual metadata rots).
 
+**2026-08-17 — generated AUDIO may ship in a pack, under four conditions (#1200; supersedes part of
+the 2026-07-27 policy below).** That policy's rule 1 put music and voice packs on the human-authored
+side of the line, and named `fl-base-pack music/` while doing it. Two of the nine gating M4.0 content
+issues live exactly there: `fl-base-pack#5` (a track under `audio/music/` plus `data/playlist.toml`)
+and `fl-base-pack#13` (the eight ATC lines whose voice keys `engine/atc/AtcTypes.cpp` already emits —
+with no OGGs behind them, every clearance the tower speaks is subtitle-only). So the choice in front
+of the project was not the policy versus nothing; it was generated audio versus a recording session
+and a hand-authored score that nobody is scheduled to produce.
+
+The line moves for **audio only**, and only with all four of:
+
+1. **Open-weight and self-hosted.** The model runs locally under a licence that permits the use — no
+   hosted service whose training-data provenance is contested or whose output terms can change under
+   us after the asset ships.
+2. **Regenerable and recorded.** Model, version, prompt (or spoken text), seed, sample rate and
+   generation date go in the pack's `SOURCES.md`, and a committed generator script reproduces the
+   file. This is the standard the pack already holds generated meshes to (`generated` vs `authored`)
+   and the one `tools/sfxgen` meets. Note the honest limit: a re-run reproduces the *asset*, not
+   necessarily the same bytes, since a diffusion sampler is only deterministic for a fixed model
+   version, precision and device.
+3. **Marked CC0 in REUSE metadata, never the pack's `CC-BY-4.0`.** A purely model-generated work
+   carries no copyright the project can assert, so a CC-BY claim over it would make the pack's
+   licence metadata false — a worse failure than the one it would be papering over.
+4. **Disclosed player-facing.** The pack README names which assets are generated and how. Rule 4
+   below (provenance declared in the PR) is repo-facing, and a player who keeps the asset never
+   reads a PR.
+
+Art — textures, meshes, liveries — plus story campaigns and mission prose stay human-authored;
+rules 2, 3 and 4 of the record below stand as ratified.
+
+**This is a reversal, not a clarification, and the record says so on purpose.** The 2026-07-27
+position was taken because player sentiment toward generative AI in games is strongly negative and
+because a position nobody stated cannot be reconstructed after the fact; part of what made it
+credible was that it named the concrete thing it was giving up. Superseding it three weeks later
+spends some of that credibility back. What limits the spend: the reversal is narrow (audio, not art
+or story), it is disclosed in the product rather than only in the repository, and it is auditable per
+file rather than as a blanket permission. Taken under the Project Lead's dated-decision-record
+authority for primary development (`GOVERNANCE.md` → Decision Records), not as a 14-day RFC.
+
 **2026-07-27 — player-facing AI content policy, RATIFIED (#932, RFC resolved).** Player sentiment
 toward generative AI in games is strongly negative (mid-2026 surveys ~85 % below neutral). A project
 that ships an agentic-AI initiative into that without a stated position invites every player to
@@ -586,6 +625,11 @@ artifact's lifetime rather than how it sounded.
 Ratifying costs the project a capability it might otherwise have wanted later: generated art or music
 in a shipped pack is now off the table without a new decision record superseding this one. That is
 the point of writing it down.
+
+**Superseded in part 2026-08-17 (#1200) — see the record above.** Rule 1 now permits generated
+**audio** (voice lines and music) in a shipped pack under four named conditions; art, story campaigns
+and mission prose are unchanged, and rules 2–4 stand. This paragraph is left as written: a record
+that gets edited to match the present is not a record.
 
 **2026-07-27 — a replay file is versioned for real, and the world it describes is fingerprinted by
 its quantized state, not its floats (#643/#644, plan #1036 D6/D8).** `.flrep` is the first artifact

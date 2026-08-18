@@ -112,6 +112,14 @@ generative-AI output.** Content the engine generates at runtime — briefings, d
 chatter, TTS speech — is a different thing: it is ephemeral, opt-in per server and per client, and
 is never baked back into a shipped pack.
 
+**Audio is the one exception, amended 2026-08-17 (#1200).** Shipped voice lines and music may be
+model-generated, and only then, and only if all four of these hold: the model is open-weight and
+self-hosted; the file is regenerable from a model, version, prompt/spoken text and seed recorded in
+the pack's `SOURCES.md`, plus a committed generator script; the file is marked **CC0** in REUSE
+metadata rather than the pack's `CC-BY-4.0`, because a generated work carries no copyright to
+assert; and the pack README discloses which assets are generated, player-facing. Art, story
+campaigns and mission prose are not covered by the exception.
+
 The distinction that decides any given case is the artifact's **lifetime**, not how it was made: a
 thing a player keeps is an asset, a thing that exists for one session is not. If you are unsure which
 side of that line something falls on, ask in the PR rather than guessing — an asset with unclear
