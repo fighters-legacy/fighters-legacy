@@ -13,6 +13,7 @@ concurrency:
 jobs:
   tsan:
     runs-on: ubuntu-latest
+    timeout-minutes: 45 # sized like asan; an apt-mirror hang must fail visibly in minutes, not squat for 6 h (#1216)
 
     steps:
       - uses: actions/checkout@v7
