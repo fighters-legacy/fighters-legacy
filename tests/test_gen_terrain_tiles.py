@@ -30,6 +30,10 @@ enumerate_tiles = _mod.enumerate_tiles
 bbox_tiles = _mod.bbox_tiles
 tile_latlon_bounds = _mod.tile_latlon_bounds
 _parse_faces = _mod._parse_faces
+_plan_read = _mod._plan_read
+_sample_raster = _mod._sample_raster
+_worst_read_bytes = _mod._worst_read_bytes
+_default_workers = _mod._default_workers
 TILE_PIXELS = _mod.TILE_PIXELS
 TERRAIN_ID_RE = _mod.TERRAIN_ID_RE
 
@@ -330,3 +334,143 @@ class TestMergeBathymetry:
         merged = merge_bathymetry(np.array([[nan]]), np.array([[-1000.0]]))
         enc = encode_heights(merged, 1.0, 32768.0)
         assert int(enc[0, 0]) == 31768
+
+
+# ---------------------------------------------------------------------------
+# Decimated reads + memory-bounded workers (#1217)
+# ---------------------------------------------------------------------------
+
+# GEBCO_2024-shaped raster: 86,400 x 43,200, 15 arc-second global grid.
+_GEBCO_GT = (-180.0, 1.0 / 240.0, 0.0, 90.0, 0.0, -1.0 / 240.0)
+_GEBCO_W = 86400
+_GEBCO_H = 43200
+
+
+class TestPlanRead:
+    """_plan_read keeps a read O(tile), not O(raster) — the #1217 outage was a level-0 tile
+    reading half the globe at native resolution (14.9 GB) to produce 129x129 samples, times
+    os.cpu_count() workers."""
+
+    def _plan_for(self, face, level, i, j):
+        lat, lon = tile_latlon_grid(face, level, i, j, TILE_PIXELS)
+        return _plan_read(_GEBCO_GT, _GEBCO_W, _GEBCO_H, lat, lon)
+
+    def test_level0_read_is_tile_sized_not_raster_sized(self):
+        # Before the fix this tile's strip was ~21,600 rows x 86,400 cols as float64 = 14.9 GB.
+        y0, y1, buf_x, buf_y = self._plan_for(4, 0, 0, 0)
+        native_bytes = (y1 - y0) * _GEBCO_W * 8
+        buf_bytes = buf_x * buf_y * 4
+        assert native_bytes > 10 * 2**30      # the read this replaces really was ~15 GB
+        assert buf_bytes < 32 * 2**20         # and what is read now is megabytes
+        # Still enough resolution: at least ~2 buffer px between adjacent output samples.
+        assert buf_x >= 2 * TILE_PIXELS
+        assert buf_y >= 2 * TILE_PIXELS // 2
+
+    def test_pole_tile_is_also_bounded(self):
+        # Face 2's tile spans every longitude; the full-width read must still decimate.
+        _y0, _y1, buf_x, buf_y = self._plan_for(2, 0, 0, 0)
+        assert buf_x * buf_y * 4 < 32 * 2**20
+
+    def test_every_level_is_bounded(self):
+        # The peak sits at the decimation boundary (level 6 against GEBCO: full native width,
+        # ~157 MiB as float32), NOT at level 0 — coarser tiles decimate harder. Nothing anywhere
+        # in the pyramid may approach the old level-0 gigabytes.
+        for level in range(9):
+            _y0, _y1, buf_x, buf_y = self._plan_for(4, level, 0, 0)
+            assert buf_x * buf_y * 4 < 256 * 2**20, f"level {level}"
+
+    def test_never_upsamples(self):
+        for level in (0, 3, 8, 12):
+            y0, y1, buf_x, buf_y = self._plan_for(4, level, 0, 0)
+            assert buf_x <= _GEBCO_W
+            assert buf_y <= (y1 - y0)
+
+    def test_fine_tile_reads_native_resolution(self):
+        # A level-12 tile's sample spacing is well under a source pixel: no decimation, exactly
+        # the pre-#1217 read window.
+        n = 1 << 12
+        y0, y1, buf_x, buf_y = self._plan_for(4, 12, n // 2, n // 2)
+        assert buf_x == _GEBCO_W
+        assert buf_y == y1 - y0
+
+
+class _FakeBand:
+    """A GDAL band double: ReadAsArray over a numpy array, with GDAL's default nearest-neighbour
+    decimation when buf_xsize/buf_ysize are passed. Lets the sampling path run without GDAL."""
+
+    def __init__(self, arr):
+        self.arr = arr
+
+    def ReadAsArray(self, x0, y0, w, h, buf_xsize=None, buf_ysize=None):
+        block = self.arr[y0:y0 + h, x0:x0 + w]
+        if buf_xsize is None:
+            return block
+        yi = np.clip(np.round((np.arange(buf_ysize) + 0.5) * h / buf_ysize - 0.5).astype(int), 0, h - 1)
+        xi = np.clip(np.round((np.arange(buf_xsize) + 0.5) * w / buf_xsize - 0.5).astype(int), 0, w - 1)
+        return block[np.ix_(yi, xi)]
+
+
+class TestSampleRasterDecimated:
+    """The decimated read must return the same terrain the full-resolution read returned."""
+
+    # 0.1 deg/px synthetic globe: small enough to hold, coarse enough that a level-1 tile
+    # decimates (its sample spacing is several source pixels).
+    _W, _H = 3600, 1800
+    _GT = (-180.0, 0.1, 0.0, 90.0, 0.0, -0.1)
+
+    def _lat_value_raster(self):
+        # value == latitude of the pixel centre, so the expected sample value is analytic.
+        rows = 90.0 - (np.arange(self._H) + 0.5) * 0.1
+        return np.repeat(rows[:, None], self._W, axis=1)
+
+    def test_coarse_tile_matches_the_analytic_field(self):
+        band = _FakeBand(self._lat_value_raster())
+        lat, lon = tile_latlon_grid(4, 0, 0, 0, TILE_PIXELS)
+        _y0, _y1, buf_x, _buf_y = _plan_read(self._GT, self._W, self._H, lat, lon)
+        assert buf_x < self._W  # the case actually decimates, or this test asserts nothing
+        out = _mod._sample_raster(band, self._GT, self._W, self._H, None, lat, lon, nearest=False)
+        # Bilinear over a nearest-decimated grid: error bounded by ~one decimated pixel (0.1 deg
+        # native, factor 2 -> ~0.3 deg worst case).
+        assert float(np.nanmax(np.abs(out - lat))) < 0.5
+
+    def test_fine_tile_is_bit_identical_to_the_native_read(self):
+        # A tile whose sample spacing is sub-pixel decimates by 1: the new path must reproduce
+        # the old read exactly (same window, same interpolation).
+        band = _FakeBand(self._lat_value_raster())
+        lat, lon = tile_latlon_grid(4, 6, 31, 31, TILE_PIXELS)
+        y0, y1, buf_x, buf_y = _plan_read(self._GT, self._W, self._H, lat, lon)
+        assert buf_x == self._W and buf_y == y1 - y0
+        out = _mod._sample_raster(band, self._GT, self._W, self._H, None, lat, lon, nearest=False)
+        assert float(np.nanmax(np.abs(out - lat))) < 0.1  # within one native pixel of analytic
+
+    def test_nearest_mode_returns_source_values(self):
+        # Land-cover classes must arrive as exact source values, never blended.
+        arr = np.full((self._H, self._W), 7.0)
+        arr[: self._H // 2] = 3.0
+        band = _FakeBand(arr)
+        lat, lon = tile_latlon_grid(4, 1, 0, 0, TILE_PIXELS)
+        out = _mod._sample_raster(band, self._GT, self._W, self._H, None, lat, lon, nearest=True)
+        assert set(np.unique(out)) <= {3.0, 7.0}
+
+
+class TestWorkerBound:
+    def test_worst_read_bytes_is_megabytes_after_the_fix(self):
+        tiles = list(enumerate_tiles(range(6), 0, 2))
+        worst = _worst_read_bytes([(_GEBCO_GT, _GEBCO_W, _GEBCO_H)], tiles, TILE_PIXELS)
+        assert 0 < worst < 32 * 2**20
+
+    def test_no_rasters_means_no_bound(self):
+        assert _worst_read_bytes([], [(4, 0, 0, 0)], TILE_PIXELS) == 0
+
+    def test_default_workers_unbounded_without_memory_info(self):
+        assert _default_workers(24, None, 10 * 2**30) == 24
+
+    def test_default_workers_clamps_to_what_fits(self):
+        # 8 GiB free, 1 GiB per read, 2x headroom -> 4 workers, not 24.
+        assert _default_workers(24, 8 * 2**30, 1 * 2**30) == 4
+
+    def test_default_workers_never_below_one(self):
+        assert _default_workers(24, 1 * 2**20, 10 * 2**30) == 1
+
+    def test_default_workers_caps_at_cpu(self):
+        assert _default_workers(4, 64 * 2**30, 1 * 2**20) == 4
