@@ -285,36 +285,126 @@ _g_bathy = None
 _g_common = None
 
 
+# Buffer resolution kept per output sample: the decimated read stays at least this many buffer
+# pixels between adjacent output samples, so bilinear interpolation still has real detail to work
+# with. 2.0 = classic 2x oversampling.
+_READ_OVERSAMPLE = 2.0
+
+
+def _plan_read(gt, width: int, height: int,
+               lat: "np.ndarray", lon: "np.ndarray") -> tuple:
+    """Plan the source read for sampling (lat, lon): (y0, y1, buf_x, buf_y).
+
+    The native rows [y0, y1) are read across the full width into a (buf_y, buf_x) buffer, letting
+    GDAL decimate on read. This is the #1217 fix: a coarse tile's latitude strip is O(raster) at
+    native resolution — a level-0 tile against GEBCO_2024 read half the globe at full resolution
+    (14.9 GB as float64, times os.cpu_count() workers) to produce 129x129 samples. The buffer is
+    sized from the FINEST spacing between adjacent output samples in source-pixel space (Euclidean,
+    so a warped lattice can't alias an axis to zero), keeping _READ_OVERSAMPLE buffer pixels per
+    sample step; memory becomes O(tile), not O(raster). Never upsamples: buf_x <= width,
+    buf_y <= rows, and a tile already at source resolution reads exactly what it read before.
+
+    Pure numpy — no GDAL, unit-tested.
+    """
+    fx = (lon - gt[0]) / gt[1]
+    fy = (lat - gt[3]) / gt[5]
+    y0 = int(max(0, math.floor(np.min(fy)) - 1))
+    y1 = int(min(height, math.ceil(np.max(fy)) + 2))
+    if y1 <= y0:
+        y0, y1 = 0, min(height, 1)
+    rows = y1 - y0
+
+    # Finest adjacent-sample displacement in source pixels, across both lattice axes. Longitude
+    # wraps, so column differences are modular.
+    min_step = math.inf
+    for axis in (0, 1):
+        dfx = np.abs((np.diff(fx, axis=axis) + width / 2.0) % width - width / 2.0)
+        dfy = np.abs(np.diff(fy, axis=axis))
+        step = np.sqrt(dfx * dfx + dfy * dfy)
+        if step.size:
+            min_step = min(min_step, float(step.min()))
+    if not math.isfinite(min_step):
+        min_step = 1.0
+
+    factor = max(1, int(min_step / _READ_OVERSAMPLE))
+    buf_x = max(1, width // factor)
+    buf_y = max(1, rows // factor)
+    return y0, y1, buf_x, buf_y
+
+
+def _worst_read_bytes(rasters, tiles, tile_px: int, sample_count: int = 24) -> int:
+    """Largest single read (bytes, float32) any of the first `sample_count` tiles will make against
+    any configured raster. The enumeration is coarse-first, so the head of the list holds the most
+    expensive reads of the whole run — the level-0 tiles that all started together are exactly what
+    took a 62 GB machine down (#1217). `rasters` is a list of (gt, width, height) triples.
+
+    Pure numpy — no GDAL, unit-tested.
+    """
+    worst = 0
+    for face, level, i, j in tiles[:sample_count]:
+        lat, lon = tile_latlon_grid(face, level, i, j, tile_px)
+        for gt, width, height in rasters:
+            _y0, _y1, buf_x, buf_y = _plan_read(gt, width, height, lat, lon)
+            worst = max(worst, buf_x * buf_y * 4)
+    return worst
+
+
+def _available_memory_bytes():
+    """Available physical memory in bytes, or None where the platform does not say (Windows has no
+    os.sysconf; the worker default then falls back to cpu_count alone)."""
+    try:
+        return os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
+    except (AttributeError, ValueError, OSError):
+        return None
+
+
+def _default_workers(cpu: int, avail_bytes, worst_read_bytes: int) -> int:
+    """The default worker count, bounded by memory as well as cores (#1217): each worker's peak is
+    roughly one strip read, so admit only as many as fit with 2x headroom. With the decimated read
+    the bound rarely binds — it is the backstop that turns a future variant of the O(raster) read
+    into a slow build instead of an outage.
+
+    Pure — unit-tested.
+    """
+    if not avail_bytes or worst_read_bytes <= 0:
+        return max(1, cpu)
+    fit = int(avail_bytes // (2 * worst_read_bytes))
+    return max(1, min(cpu, fit))
+
+
 def _sample_raster(band, gt, width: int, height: int, nodata,
                    lat: "np.ndarray", lon: "np.ndarray", nearest: bool) -> "np.ndarray":
     """Sample a north-up EPSG:4326 raster at (lat, lon) arrays.
 
     Reads only the covering latitude band across the full width (so pole tiles that span all
-    longitudes and antimeridian-crossing tiles are handled uniformly), then interpolates —
-    bilinear for height, nearest for land-cover class. Longitude wraps modulo width; latitude
-    clamps. NaN nodata is preserved for the caller to map to a sentinel.
+    longitudes and antimeridian-crossing tiles are handled uniformly), decimated on read to the
+    resolution the tile can actually use (_plan_read, #1217), then interpolates — bilinear for
+    height, nearest for land-cover class. Longitude wraps modulo the buffer width; latitude clamps.
+    NaN nodata is preserved for the caller to map to a sentinel. The decimating read uses GDAL's
+    default nearest resampling, so nodata values arrive exact, never averaged into real data.
     """
-    # Fractional source pixel coords. North-up 4326: gt[1] > 0 (deg/px lon), gt[5] < 0 (lat).
-    fx = (lon - gt[0]) / gt[1]                      # fractional column (may be <0 or >=width)
-    fy = (lat - gt[3]) / gt[5]                      # fractional row
-    y0 = int(max(0, math.floor(np.min(fy)) - 1))
-    y1 = int(min(height, math.ceil(np.max(fy)) + 2))
-    if y1 <= y0:
-        y0, y1 = 0, min(height, 1)
-    band_arr = band.ReadAsArray(0, y0, width, y1 - y0).astype(np.float64)
+    y0, y1, buf_x, buf_y = _plan_read(gt, width, height, lat, lon)
+    band_arr = band.ReadAsArray(0, y0, width, y1 - y0,
+                                buf_xsize=buf_x, buf_ysize=buf_y).astype(np.float32)
     if nodata is not None and not math.isnan(nodata):
         band_arr[band_arr == nodata] = np.nan
 
-    ry = fy - y0
+    # Fractional coords in the (possibly decimated) buffer. North-up 4326: gt[1] > 0 (deg/px lon),
+    # gt[5] < 0 (lat). Pixel-centre aligned: buffer pixel k covers native [k/s, (k+1)/s).
+    sx = buf_x / float(width)
+    sy = buf_y / float(y1 - y0)
+    fx = ((lon - gt[0]) / gt[1] + 0.5) * sx - 0.5   # fractional buffer column (may wrap)
+    ry = (((lat - gt[3]) / gt[5]) - y0 + 0.5) * sy - 0.5
+
     if nearest:
-        xi = np.mod(np.rint(fx).astype(np.int64), width)
+        xi = np.mod(np.rint(fx).astype(np.int64), buf_x)
         yi = np.clip(np.rint(ry).astype(np.int64), 0, band_arr.shape[0] - 1)
         return band_arr[yi, xi]
 
     x0 = np.floor(fx)
     wx = fx - x0
-    xi0 = np.mod(x0.astype(np.int64), width)
-    xi1 = np.mod(xi0 + 1, width)
+    xi0 = np.mod(x0.astype(np.int64), buf_x)
+    xi1 = np.mod(xi0 + 1, buf_x)
     ry_floor = np.floor(ry)
     wy = np.clip(ry - ry_floor, 0.0, 1.0)
     yi0 = np.clip(ry_floor.astype(np.int64), 0, band_arr.shape[0] - 1)
@@ -438,7 +528,8 @@ def _parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--tile-pixels", type=int, default=TILE_PIXELS, metavar="N",
                    help=f"Tile edge in pixels (default: {TILE_PIXELS} = kTileHeightmapSize)")
     p.add_argument("--workers", type=int, default=None, metavar="N",
-                   help="Parallel worker processes (default: os.cpu_count())")
+                   help="Parallel worker processes (default: os.cpu_count(), bounded by available "
+                        "memory so the coarse levels cannot exhaust the machine, #1217)")
     p.add_argument("--skip-existing", action="store_true",
                    help="Skip tiles whose height PNG already exists (resume interrupted run)")
     return p.parse_args(argv)
@@ -492,10 +583,26 @@ def main(argv=None) -> None:
     if total == 0:
         sys.exit("Error: no tiles selected — check --bbox against --faces "
                  "(a bbox outside the selected faces produces nothing)")
-    workers = args.workers if args.workers is not None else os.cpu_count()
     dem_path = str(Path(args.input).resolve())
     lc_path = str(Path(args.landcover_source).resolve()) if args.landcover_source else None
     bathy_path = str(Path(args.bathymetry_source).resolve()) if args.bathymetry_source else None
+
+    workers = args.workers
+    if workers is None:
+        cpu = os.cpu_count() or 1
+        rasters = []
+        for path in (dem_path, lc_path, bathy_path):
+            if path:
+                ds = gdal.Open(path, gdal.GA_ReadOnly)
+                rasters.append((ds.GetGeoTransform(), ds.RasterXSize, ds.RasterYSize))
+                ds = None
+        worst = _worst_read_bytes(rasters, tiles, args.tile_pixels)
+        avail = _available_memory_bytes()
+        workers = _default_workers(cpu, avail, worst)
+        if workers < cpu:
+            print(f"  workers bounded by memory: {workers} of {cpu} cores — worst read "
+                  f"~{worst / 2**30:.2f} GiB/worker against {avail / 2**30:.2f} GiB available "
+                  f"(--workers overrides)")
     common = (str(args.output_dir), args.terrain_id, args.tile_pixels,
               args.height_scale, args.height_offset, args.skip_existing)
 
