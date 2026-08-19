@@ -14,6 +14,8 @@
 #include "world/BuiltinAirport.h"
 #include "world/SandboxHome.h"
 
+#include "ai_flight_harness.h" // closed-loop flight for the builtin script (#1221)
+
 #include <stdfs/StdFilesystem.h>
 
 #include <catch2/catch_approx.hpp>
@@ -824,6 +826,34 @@ TEST_CASE("the builtin fighter senses via detected_contacts and fires the gun in
     const auto ctrl = c->sample(makeState(0.0, 3000.0, 0.0), 100, 1.0 / 60.0, ctx);
     CHECK(ctrl.trigger);       // guns hot on a boresight target in range
     CHECK(ctrl.station == 0u); // the cannon station (slot 0 of builtin:debug-entity)
+}
+
+TEST_CASE("builtin:fighter patrols closed-loop near the origin (#1221)", "[luacontroller][turnlaw]") {
+    // The pre-#1215 world: pos.y IS altitude here, so this pins that the geodesy-honest rewrite
+    // changed nothing where the old shorthand was accidentally right.
+    auto c = makeCtrl(std::string(fl::builtinAiScript("builtin:fighter")).c_str());
+    REQUIRE(c->isValid());
+    const fl::test::FlightTrace t = fl::test::flyController(*c, fl::test::levelStateAt(0.0, 3000.0, 0.0, 150.f), 120);
+    INFO("minAlt " << t.minAltM << " maxAlt " << t.maxAltM << " crashed at " << t.crashTimeS);
+    CHECK_FALSE(t.crashed());
+    CHECK(t.minAltM > 1500.0);
+    CHECK(t.maxAltM < 6000.0);
+}
+
+TEST_CASE("builtin:fighter patrols closed-loop at the anchored sandbox home (#1221)", "[luacontroller][turnlaw]") {
+    // The defect: every altitude in the script was state.pos.y, which at the sandbox home is about
+    // -2,604,000 m. The hard-deck branch was permanently true, its fixed pull with an un-closed roll
+    // is the #1141 split-S mechanism, and every builtin AI in the shipped builtin:sandbox flew into
+    // the Nevada terrain inside a minute with no shot fired. Proved red on the pre-fix script:
+    // monotonic descent, dead by t≈50 s.
+    auto c = makeCtrl(std::string(fl::builtinAiScript("builtin:fighter")).c_str());
+    REQUIRE(c->isValid());
+    const fl::test::FlightTrace t = fl::test::flyController(
+        *c, fl::test::levelStateAtGeo(fl::sandboxHome().lat_rad, fl::sandboxHome().lon_rad, 3000.0, 150.f), 120);
+    INFO("minAlt " << t.minAltM << " maxAlt " << t.maxAltM << " crashed at " << t.crashTimeS);
+    CHECK_FALSE(t.crashed());
+    CHECK(t.minAltM > 1500.0);
+    CHECK(t.maxAltM < 6000.0);
 }
 
 // ---------------------------------------------------------------------------
