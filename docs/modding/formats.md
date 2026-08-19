@@ -1070,6 +1070,26 @@ ordinary mission parser (#632). A generated mission is therefore a plain mission
 saved, replayed, hand-edited and validated like any other, which is what keeps the dynamic path
 debuggable. Changing the frontline does **not** retroactively alter an already-generated mission.
 
+**The `${...}` vocabulary the generator resolves:**
+
+| Placeholder | Value |
+|---|---|
+| `${target_area.pos}` / `.x` / `.y` / `.z` | An enemy/contested frontline cell centre as **world XYZ at sea level** |
+| `${target_area.lat}` / `.lon` | The same cell in **geodetic degrees** |
+| `${target_area.name}` | A display name for the sector |
+| `${ingress.pos}` / `.x` / `.y` / `.z`, `${ingress.lat}` / `.lon` | A friendly cell, same forms |
+| `${opfor.count}` | Enemy force count scaled from `ground_units` |
+| `${theater.id}` | The theater id (use it for `map:`) |
+| `${player_flight.size}` | Deterministic flight size in [2, 4] |
+
+⚠ **Place an airborne object with `lat:`/`lon:` + `alt:`, never with `${...pos}`.** The world
+triples are *sea-level* points, and without an `anchor:` a numeric Y is raw world Y — away from
+the origin neither can express "N metres above this cell", so an aircraft authored that way spawns
+under the terrain. The geodetic pair with an MSL `alt:` is correct anywhere on the planet (`pos`
+stays a required field — give it `[0, 0, 0]`, which lat/lon/alt then fully override). Ground
+objects may use `pos: ${target_area.pos}` freely — `start: ground` resolves their height from the
+terrain. (Templates take no `anchor:`: the generator's fills are already world/geodetic values.)
+
 ### `story[]` — authored missions
 
 | Field | Type | Default | Description |

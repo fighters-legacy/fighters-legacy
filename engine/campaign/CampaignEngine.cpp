@@ -254,7 +254,12 @@ void CampaignEngine::buildDynamicSortie(const CampaignTheater& th, NextMission& 
     // Fills from the live frontline: an enemy/contested cell for the objective, a friendly cell for
     // ingress. Skipped when the raster is not loaded (no loader / headless).
     if (ts.frontline.valid()) {
-        auto cellWorld = [&](int col, int row, double out3[3]) {
+        // World position AND geodetic degrees per chosen cell. The world triple alone is not enough
+        // for a template to author with: it is a sea-level point, `alt:` without an anchor is raw
+        // world Y, and away from the origin no numeric Y means "N metres above this cell" — so a
+        // template's only correct way to place an AIRBORNE object is the object-level `lat:`/`lon:`
+        // (+ `alt:` MSL), which needs the degrees exposed as fills (#1222).
+        auto cellWorld = [&](int col, int row, double out3[3], double& latDeg, double& lonDeg) {
             double lat = 0.0;
             double lon = 0.0;
             ts.frontline.cellCenterLatLon(col, row, lat, lon);
@@ -265,6 +270,9 @@ void CampaignEngine::buildDynamicSortie(const CampaignTheater& th, NextMission& 
             out3[0] = wx;
             out3[1] = wy;
             out3[2] = wz;
+            constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;
+            latDeg = lat * kRadToDeg;
+            lonDeg = lon * kRadToDeg;
         };
         bool haveTarget = false;
         bool haveIngress = false;
@@ -272,10 +280,10 @@ void CampaignEngine::buildDynamicSortie(const CampaignTheater& th, NextMission& 
             for (int col = 0; col < ts.frontline.cols() && !(haveTarget && haveIngress); ++col) {
                 const FrontlineControl fc = ts.frontline.at(col, row).control;
                 if (!haveTarget && (fc == enemyControl || fc == FrontlineControl::Contested)) {
-                    cellWorld(col, row, out.targetWorld);
+                    cellWorld(col, row, out.targetWorld, out.targetLatDeg, out.targetLonDeg);
                     haveTarget = true;
                 } else if (!haveIngress && fc == friendlyControl) {
-                    cellWorld(col, row, out.ingressWorld);
+                    cellWorld(col, row, out.ingressWorld, out.ingressLatDeg, out.ingressLonDeg);
                     haveIngress = true;
                 }
             }
@@ -300,17 +308,26 @@ void CampaignEngine::buildDynamicSortie(const CampaignTheater& th, NextMission& 
         std::snprintf(b, sizeof(b), "%.1f", v);
         return std::string(b);
     };
+    auto degStr = [](double v) {
+        char b[32];
+        std::snprintf(b, sizeof(b), "%.5f", v); // ~1 m of latitude; enough to place a spawn
+        return std::string(b);
+    };
     auto& target = out.fills["target_area"];
     target["x"] = numStr(out.targetWorld[0]);
     target["y"] = numStr(out.targetWorld[1]);
     target["z"] = numStr(out.targetWorld[2]);
     target["pos"] = posStr(out.targetWorld);
+    target["lat"] = degStr(out.targetLatDeg);
+    target["lon"] = degStr(out.targetLonDeg);
     target["name"] = th.id + " sector";
     auto& ingress = out.fills["ingress"];
     ingress["x"] = numStr(out.ingressWorld[0]);
     ingress["y"] = numStr(out.ingressWorld[1]);
     ingress["z"] = numStr(out.ingressWorld[2]);
     ingress["pos"] = posStr(out.ingressWorld);
+    ingress["lat"] = degStr(out.ingressLatDeg);
+    ingress["lon"] = degStr(out.ingressLonDeg);
     out.fills["opfor"]["count"] = std::to_string(out.opforCount);
     out.fills["theater"]["id"] = th.id;
     // Player flight size: default 2, or a deterministic pick in [1,4] from the sortie counter so a
