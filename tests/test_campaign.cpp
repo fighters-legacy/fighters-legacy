@@ -314,6 +314,50 @@ TEST_CASE("CampaignEngine: save/restore round-trips the runtime state (#635)", "
     CHECK(b.nextMission().kind == a.nextMission().kind);
 }
 
+TEST_CASE("CampaignEngine: restore continues the RNG and sortie counter instead of rewinding them (#1224)",
+          "[campaign][engine]") {
+    // The campaign flow flies ONE sortie per process (fl-server --campaign), restoring from the
+    // .flsave each run. Without rng/dynamic_counter in the save, every restart rewound the weighted
+    // draw to its seed state: the same role and the same "#1" sortie id, forever.
+    auto parsed = parseCampaign(kCampaignYaml);
+    REQUIRE(parsed.ok);
+
+    // Continuity reference: one engine flying three dynamic sorties in a single process.
+    CampaignEngine cont(parsed.campaign, 777, syntheticLoader());
+    cont.recordOutcome("u01_storm", true);
+    const NextMission c1 = cont.nextMission();
+    cont.recordOutcome(c1.missionId, true);
+    const NextMission c2 = cont.nextMission();
+    cont.recordOutcome(c2.missionId, true);
+    const NextMission c3 = cont.nextMission();
+
+    // The same war flown the intended way: serialize after each sortie, restore into a fresh engine.
+    CampaignEngine a(parsed.campaign, 777, syntheticLoader());
+    a.recordOutcome("u01_storm", true);
+    const NextMission r1 = a.nextMission();
+    a.recordOutcome(r1.missionId, true);
+
+    CampaignEngine b(parsed.campaign, 777, syntheticLoader());
+    REQUIRE(b.deserialize(a.serialize()));
+    const NextMission r2 = b.nextMission();
+    b.recordOutcome(r2.missionId, true);
+
+    CampaignEngine c(parsed.campaign, 777, syntheticLoader());
+    REQUIRE(c.deserialize(b.serialize()));
+    const NextMission r3 = c.nextMission();
+
+    // The restored war IS the continuous war: same templates, same ids, in order.
+    CHECK(r1.missionId == c1.missionId);
+    CHECK(r2.missionId == c2.missionId);
+    CHECK(r3.missionId == c3.missionId);
+    CHECK(r2.role == c2.role);
+    CHECK(r3.role == c3.role);
+
+    // And sortie ids stay unique across restarts (the "#1 forever" collision).
+    CHECK(r1.missionId != r2.missionId);
+    CHECK(r2.missionId != r3.missionId);
+}
+
 // ---------------------------------------------------------------------------
 // Dynamic-sortie template materialization (#635)
 // ---------------------------------------------------------------------------

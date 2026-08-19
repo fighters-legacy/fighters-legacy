@@ -25,6 +25,12 @@ int toInt(const std::string& s, int fallback = 0) {
     return v;
 }
 
+uint64_t toU64(const std::string& s, uint64_t fallback = 0) {
+    uint64_t v = fallback;
+    std::from_chars(s.data(), s.data() + s.size(), v);
+    return v;
+}
+
 std::vector<std::string> splitList(const std::string& s, char sep) {
     std::vector<std::string> out;
     std::string cur;
@@ -395,6 +401,11 @@ void CampaignEngine::recordOutcome(const std::string& missionId, bool success) {
 std::string CampaignEngine::serialize() const {
     std::ostringstream os;
     os << "sorties=" << m_sortiesFlown << "\n";
+    // RNG + dynamic sortie counter (#1224): without these every process restart rewinds the weighted
+    // template draw to its seed state, so a one-sortie-per-run war redraws the same role (and the same
+    // "#1" sortie id) forever. Additive keys — an old save missing them keeps the seed-derived values.
+    os << "rng=" << m_rng << "\n";
+    os << "dynamic_counter=" << m_dynamicCounter << "\n";
     os << "completed=";
     for (std::size_t i = 0; i < m_completedStory.size(); ++i)
         os << (i ? "," : "") << m_completedStory[i];
@@ -434,6 +445,10 @@ bool CampaignEngine::deserialize(const std::string& blob) {
         const std::string val = line.substr(eq + 1);
         if (key == "sorties") {
             m_sortiesFlown = toInt(val);
+        } else if (key == "rng") {
+            m_rng = toU64(val, m_rng);
+        } else if (key == "dynamic_counter") {
+            m_dynamicCounter = toU64(val, m_dynamicCounter);
         } else if (key == "completed") {
             m_completedStory = splitList(val, ',');
         } else if (key == "reached") {
