@@ -1420,7 +1420,8 @@ catch_discover_tests(test_lua_sandbox)
 
 add_executable(test_lua_controller test_lua_controller.cpp)
 target_link_libraries(test_lua_controller PRIVATE
-    Catch2::Catch2WithMain engine-script engine-spatial engine-sensor platform-stdfs)
+    Catch2::Catch2WithMain engine-script engine-spatial engine-sensor platform-stdfs
+    engine-flight engine-ai) # ai_flight_harness.h: the closed-loop runs for builtin:fighter (#1221)
 target_include_directories(test_lua_controller PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 # The doc-example tests LIFT their Lua out of ai.md at run time rather than holding a copy of it
 # (#1180). A hand-transcribed "verbatim" copy is only verbatim until the next edit, and it drifted

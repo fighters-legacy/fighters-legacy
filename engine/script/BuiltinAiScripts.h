@@ -13,7 +13,10 @@
 // The reference `builtin:fighter` is honest-sensing by construction: it targets ONLY through
 // detected_contacts(), never nearby_entities()/get_entity(), so it hunts with the sensors it has and
 // fires INTENTS the server re-validates exactly as it does a player's. Station numbers match
-// builtin:debug-entity's hardpoints (slot 0 = cannon, slot 1 = IR rail).
+// builtin:debug-entity's hardpoints (slot 0 = cannon, slot 1 = IR rail). It is geodesy-honest too:
+// altitude is guidance.altitude(pos), never pos.y, which is an altitude only near the world origin —
+// in an `anchor:` mission (the shipped builtin:sandbox included) pos.y is millions of metres
+// negative and the pos.y shorthand flew every builtin AI into the terrain (#1221).
 namespace fl {
 
 namespace detail {
@@ -39,7 +42,35 @@ local MSL_RANGE_M  = 9260
 local MSL_MIN_M     = 560
 local MSL_CONE_COS  = 0.9397   -- cos(20 deg)
 
+local ROLL_GAIN = 2.0          -- aileron per rad of bank error in the hard-deck recovery
+
 local function len2(x, z) return math.sqrt(x * x + z * z) end
+
+local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
+
+-- Local "up": the radial from the planet centre {0, -R, 0} (flight/Geodetic.h). It is +Y only near
+-- the world origin -- at the anchored sandbox home it points 36 degrees off the world Y axis, so
+-- NOTHING in this script may read pos.y as altitude (#1221): there it is about -2,604,000 m and
+-- every altitude comparison against it is nonsense.
+local function up_of(p)
+  local ux, uy, uz = p.x, p.y + 6371000.0, p.z
+  local un = math.sqrt(ux * ux + uy * uy + uz * uz)
+  return ux / un, uy / un, uz / un
+end
+
+-- Bank angle about the nose relative to the local horizon; positive = right wing down.
+-- quat is {x,y,z,w}; engine body axes are +X fwd, +Y up, +Z right.
+local function bank_of(state)
+  local q, p = state.quat, state.pos
+  local ux, uy, uz = up_of(p)
+  local byx = 2 * (q.x * q.y - q.w * q.z)          -- body-up in world
+  local byy = 1 - 2 * (q.x * q.x + q.z * q.z)
+  local byz = 2 * (q.y * q.z + q.w * q.x)
+  local bzx = 2 * (q.x * q.z + q.w * q.y)          -- body-right in world
+  local bzy = 2 * (q.y * q.z - q.w * q.x)
+  local bzz = 1 - 2 * (q.x * q.x + q.y * q.y)
+  return math.atan(-(ux * bzx + uy * bzy + uz * bzz), ux * byx + uy * byy + uz * byz)
+end
 
 -- Cosine off the nose to a world point, plus 3-D range. Body-forward so pitch counts, not just heading.
 local function boresight(state, p)
@@ -62,10 +93,13 @@ local function pick_target(state)
   return best, best_d
 end
 
+-- own_alt: MSL altitude of the ownship, computed once per tick in compute_control. talt is MSL too.
+local own_alt = 0
+
 local function steer(state, tx, tz, talt, throttle, ab)
   local herr = guidance.heading_error(state.quat, state.pos, { x = tx, y = state.pos.y, z = tz })
   local ail  = guidance.bank_to_turn_aileron(herr)
-  local perr = guidance.pitch_error_from_alt(state.quat, state.pos, talt - state.pos.y)
+  local perr = guidance.pitch_error_from_alt(state.quat, state.pos, talt - own_alt)
   return {
     aileron     = ail,
     rudder      = guidance.coordinated_rudder(ail),
@@ -77,11 +111,18 @@ end
 
 function compute_control(state, tick, dt)
   if not patrol_cx then patrol_cx, patrol_cz = state.pos.x, state.pos.z end
+  own_alt = guidance.altitude(state.pos)
 
-  -- Hard deck first: terrain does not negotiate.
-  if state.pos.y < FLOOR then
+  -- Hard deck first: terrain does not negotiate. MSL altitude, never pos.y -- read as pos.y this
+  -- test is permanently true in an anchored mission and the recovery branch never exits (#1221).
+  if own_alt < FLOOR then
     local out = steer(state, patrol_cx, patrol_cz, PATROL_ALT, 1.0, true)
-    out.elevator = 0.5
+    -- Recover in order: wings, THEN pull (#1141). A firm pull while rolled past vertical is a
+    -- split-S into the terrain, so level the lift vector first and gate the pull on it pointing up.
+    local bank = bank_of(state)
+    out.aileron  = clamp(-ROLL_GAIN * bank, -1, 1)
+    out.rudder   = guidance.coordinated_rudder(out.aileron)
+    out.elevator = math.cos(bank) > 0.5 and 0.5 or 0.0
     return out
   end
 
@@ -95,14 +136,14 @@ function compute_control(state, tick, dt)
       -- INTERCEPT: lead pursuit on the last-known state; trust less the older the contact.
       local lead = math.min(dist / math.max(vc, 100), 12) * (tgt.age_s < 1 and 1 or 0.4)
       local ax, az = tgt.pos.x + tgt.vel.x * lead, tgt.pos.z + tgt.vel.z * lead
-      return steer(state, ax, az, math.max(tgt.pos.y, FLOOR + 200), 1.0, vc < 120)
+      return steer(state, ax, az, math.max(guidance.altitude(tgt.pos), FLOOR + 200), 1.0, vc < 120)
     end
 
     -- ENGAGE: blend pure with lag pursuit so we slide behind rather than overshoot.
     local lag = math.min((ENGAGE_M - dist) / ENGAGE_M, 0.6)
     local ax  = tgt.pos.x - tgt.vel.x * lag * 2.0
     local az  = tgt.pos.z - tgt.vel.z * lag * 2.0
-    local out = steer(state, ax, az, math.max(tgt.pos.y, FLOOR + 200), 1.0, vc < 60)
+    local out = steer(state, ax, az, math.max(guidance.altitude(tgt.pos), FLOOR + 200), 1.0, vc < 60)
 
     -- EMPLOY: geometry decides the weapon; the server's fire control has the final say.
     local cosang, rng = boresight(state, tgt.pos)

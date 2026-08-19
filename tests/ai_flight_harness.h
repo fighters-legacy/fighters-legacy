@@ -69,6 +69,29 @@ inline FlightState levelStateAt(double x, double altM, double z, float speedMps,
     return s;
 }
 
+// Level flight at a real latitude/longitude, facing north. The anchored-mission counterpart of
+// levelStateAt: away from the origin world +Y is NOT up, so the orientation is built from the local
+// ENU basis (body +X = north, +Y = local up, +Z = east). The closed-loop tests historically ran only
+// near the origin, where pos.y happens to equal altitude — which is exactly how a controller reading
+// pos.y as altitude (#1221) stayed green while flying itself into the terrain at the sandbox home.
+inline FlightState levelStateAtGeo(double latRad, double lonRad, double altM, float speedMps) {
+    double x = 0.0, y = 0.0, z = 0.0;
+    fl::geodeticToWorld(fl::LatLonAlt{latRad, lonRad, altM}, x, y, z, kHarnessR);
+    const glm::mat3 enu = fl::enuBasis(glm::dvec3(x, y, z), kHarnessR);
+    const glm::quat q = glm::quat_cast(glm::mat3(enu[1], enu[2], enu[0])); // fwd=north, up=up, right=east
+    FlightState s;
+    s.pos_world[0] = x;
+    s.pos_world[1] = y;
+    s.pos_world[2] = z;
+    s.vel_body[0] = speedMps;
+    s.quat[0] = q.x;
+    s.quat[1] = q.y;
+    s.quat[2] = q.z;
+    s.quat[3] = q.w;
+    s.throttle_actual = 0.5f;
+    return s;
+}
+
 // Build the EntityState a controller sees from the integrator's flight state.
 inline fl::EntityState entityStateFrom(const FlightState& fs, fl::EntityId id = {1, 1}) {
     fl::EntityState es{};
