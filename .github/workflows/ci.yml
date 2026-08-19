@@ -14,6 +14,7 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # ~2x observed worst (2 min + clang-format repo adds); an apt-mirror hang must fail visibly in minutes, not squat for 6 h (#1216)
     steps:
       - uses: actions/checkout@v7
         with:
@@ -64,6 +65,7 @@ jobs:
     needs: [lint]
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90 # ~2x the slowest leg (windows ~37 min); an apt-mirror hang must fail visibly in minutes, not squat for 6 h (#1216)
     strategy:
       fail-fast: false
       matrix:
@@ -256,7 +258,10 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           set -e
-          sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
+          # Bounded like install-linux-deps: a dead mirror fails in seconds, not hours (#1216).
+          APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15"
+          sudo apt-get $APT_OPTS -o APT::Update::Error-Mode=any update
+          sudo apt-get $APT_OPTS install -y mesa-vulkan-drivers
           # Do NOT hardcode the lavapipe ICD path — the mesa package's manifest filename varies across
           # releases (lvp_icd.x86_64.json vs lvp_icd.json), and a wrong VK_ICD_FILENAMES makes the
           # loader report "Found no drivers" (#836 CI). Discover it; fall back to loader auto-discovery.
@@ -690,6 +695,7 @@ jobs:
     if: needs.fuzz-changes.outputs.harnesses != '[]'
     name: Fuzz (${{ matrix.harness }})
     runs-on: ubuntu-latest
+    timeout-minutes: 40 # ~2x the slowest harness (~16 min); an apt-mirror hang must fail visibly in minutes, not squat for 6 h (#1216)
     strategy:
       fail-fast: false
       matrix:

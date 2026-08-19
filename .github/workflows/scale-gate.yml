@@ -36,6 +36,7 @@ jobs:
     name: PR gate (Linux, profile=pr)
     if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 30 # ~2x observed worst (~8 min) with headroom; an apt-mirror hang must fail visibly in minutes, not squat for 6 h (#1216)
     steps:
       - uses: actions/checkout@v7
         with:

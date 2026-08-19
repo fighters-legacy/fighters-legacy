@@ -9,6 +9,7 @@ jobs:
   build:
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90 # sized like ci.yml build; an apt-mirror hang must fail visibly in minutes, not squat for 6 h (#1216)
     strategy:
       fail-fast: false
       matrix:

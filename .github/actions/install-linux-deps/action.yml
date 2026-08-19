@@ -31,7 +31,7 @@ runs:
       if: inputs.clang_format == 'true'
       shell: bash
       run: |
-        wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+        wget --timeout=15 --tries=3 -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
           | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
         echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" \
           | sudo tee /etc/apt/sources.list.d/llvm-22.list
@@ -78,5 +78,27 @@ runs:
           # is system-preferred (find_package); no abseil since GNS is built with ICE/WebRTC off.
           pkgs="$pkgs libssl-dev libprotobuf-dev protobuf-compiler pkg-config"
         fi
-        sudo apt-get update
-        sudo apt-get install -y $pkgs
+        # Bounded apt (#1216). On 2026-08-18 an unreachable Azure apt mirror parked EIGHT jobs
+        # across four PRs in this step's `apt-get update` — the longest for 95 minutes, reading
+        # `pending` the whole time, indistinguishable from a slow leg. Nothing in stock apt bounds
+        # a dead mirror, so: fail each fetch fast (15 s, 3 retries), and if update still fails,
+        # drop the runner's preconfigured Azure mirror from its mirror list (the runners resolve
+        # archive.ubuntu.com via mirror+file:/etc/apt/apt-mirrors.txt) and try once more against
+        # the canonical archive. Belt and braces with the per-job timeout-minutes the workflows
+        # carry for the same incident — do not remove either as noise.
+        #
+        # Error-Mode=any is load-bearing: WITHOUT it `apt-get update` exits 0 when every index
+        # fetch fails ("Some index files failed to download. They have been ignored"), so the
+        # fallback below would never trigger and the failure would surface later as missing
+        # packages. Measured in an ubuntu:24.04 container against a blackholed mirror: fails in
+        # 22 s with these options, recovers via the mirror drop in 4 s.
+        APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15"
+        UPDATE_OPTS="$APT_OPTS -o APT::Update::Error-Mode=any"
+        if ! sudo apt-get $UPDATE_OPTS update; then
+          echo "::warning::apt-get update failed; dropping the Azure mirror and retrying (#1216)"
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
+          fi
+          sudo apt-get $UPDATE_OPTS update
+        fi
+        sudo apt-get $APT_OPTS install -y $pkgs

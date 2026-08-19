@@ -15,6 +15,7 @@ concurrency:
 jobs:
   analyze:
     runs-on: ubuntu-latest
+    timeout-minutes: 90 # ~2x observed worst (~43 min); an apt-mirror hang must fail visibly in minutes, not squat for 6 h (#1216)
     permissions:
       security-events: write
       actions: read

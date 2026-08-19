@@ -39,6 +39,7 @@ permissions:
 jobs:
   record:
     runs-on: ubuntu-latest
+    timeout-minutes: 90 # build + record with headroom; an apt-mirror hang must fail visibly in minutes, not squat for 6 h (#1216)
     steps:
       - uses: actions/checkout@v7
         with:
@@ -55,7 +56,11 @@ jobs:
           gns: 'true'
 
       - name: Install lavapipe + ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers ffmpeg
+        # Bounded like install-linux-deps: a dead mirror fails in seconds, not hours (#1216).
+        run: |
+          APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15"
+          sudo apt-get $APT_OPTS -o APT::Update::Error-Mode=any update
+          sudo apt-get $APT_OPTS install -y mesa-vulkan-drivers ffmpeg
 
       - name: Configure (Release)
         run: cmake --preset release
