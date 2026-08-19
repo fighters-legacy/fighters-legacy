@@ -36,9 +36,13 @@ struct NextMission {
     // from the live frontline, and the enemy force count scaled from ground_units. A materializer
     // substitutes these into the template's ${...} holes; a story mission carries none.
     bool hasFill{false};
-    double targetWorld[3]{};  // an enemy/contested cell centre (the sortie's objective area)
-    double ingressWorld[3]{}; // a friendly cell centre (the ingress point)
-    int opforCount{0};        // scaled enemy force count
+    double targetWorld[3]{};   // an enemy/contested cell centre (the sortie's objective area)
+    double ingressWorld[3]{};  // a friendly cell centre (the ingress point)
+    double targetLatDeg{0.0};  // the same two cells in geodetic degrees — what a template needs to
+    double targetLonDeg{0.0};  //   place an AIRBORNE object (object-level lat:/lon: + alt: MSL);
+    double ingressLatDeg{0.0}; //  the world triples are sea-level points and raw Y is not altitude
+    double ingressLonDeg{0.0}; //  away from the origin
+    int opforCount{0};         // scaled enemy force count
     // Structured fills for template materialization (materializeMissionTemplate): fill name -> field ->
     // value string. Populated alongside the scalar fields above (target_area/ingress carry x/y/z + pos,
     // opfor carries count, player_flight carries size). Empty for a story mission.

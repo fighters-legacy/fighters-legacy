@@ -10,6 +10,7 @@
 #include "campaign/MissionTemplate.h"
 #include "campaign/TemplateHeader.h"
 #include "campaign/TheaterManifest.h"
+#include "flight/Geodetic.h"       // geodeticAltitude: the honest check on an airborne template spawn
 #include "mission/MissionParser.h" // a generated sortie must round-trip through the real mission parser
 
 #include <catch2/catch_approx.hpp>
@@ -406,6 +407,103 @@ TEST_CASE("CampaignEngine: a generated dynamic sortie materializes into a parsea
         UNSCOPED_INFO("parse error: " << e);
     REQUIRE(mission.ok);
     CHECK(mission.mission.map == "ukraine");
+}
+
+// A template that places its player AIRBORNE, the only correct way a template can: object-level
+// lat:/lon: from the new geodetic fills plus alt: MSL. The ${...pos} world triples are SEA-LEVEL
+// points, and without an anchor a numeric Y is raw world Y — away from the origin neither can put
+// an aircraft at altitude, which is why the degrees are exposed at all.
+const char* kAirborneTemplateYaml = R"yaml(
+template:
+  role: intercept
+  fills:
+    - target_area: { from: frontline, side: enemy }
+    - ingress:      { from: frontline, side: friendly }
+name: "Intercept over ${target_area.name}"
+map: ${theater.id}
+layer: world_clear
+time: { hour: 12, minute: 0 }
+wind: { heading: 0, speed: 0 }
+sides: [nato, russia]
+objects:
+  # `pos` stays required by the schema; lat/lon override its horizontal components and `alt` its
+  # vertical, so the zeros are inert placeholders.
+  - type: F22
+    id: player1
+    side: nato
+    pos: [0, 0, 0]
+    lat: ${ingress.lat}
+    lon: ${ingress.lon}
+    alt: 6000
+    heading: 90
+    player: true
+  - type: SU34
+    id: bandit1
+    side: russia
+    pos: [0, 0, 0]
+    lat: ${target_area.lat}
+    lon: ${target_area.lon}
+    alt: 7000
+    heading: 270
+triggers:
+  - on: destroy(bandit1)
+    do: mission_success
+)yaml";
+
+TEST_CASE("CampaignEngine: geodetic fills place an airborne template spawn at real altitude",
+          "[campaign][engine][template]") {
+    // The fixture's u01 win repaints the raster all-friendly, which leaves no enemy cell for the
+    // target fill to resolve against — drop the set_frontline so the split raster survives the
+    // unlock and BOTH fills resolve.
+    std::string yaml = kCampaignYaml;
+    const auto sf = yaml.find("      set_frontline: frontlines/ukraine_after_u01.png\n");
+    REQUIRE(sf != std::string::npos);
+    yaml.erase(sf, std::string("      set_frontline: frontlines/ukraine_after_u01.png\n").size());
+    auto parsed = parseCampaign(yaml);
+    REQUIRE(parsed.ok);
+    // Give the theater real mid-latitude bounds, as the host does from the manifest (#847). The
+    // point of the geodetic fills is exactly this case: far from the origin, where world Y is not
+    // altitude and a sea-level world triple is below the terrain.
+    constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
+    parsed.campaign.theaters[0].bounds =
+        GeoBounds{44.0 * kDegToRad, 22.0 * kDegToRad, 52.5 * kDegToRad, 40.0 * kDegToRad};
+    CampaignEngine eng(parsed.campaign, 7, syntheticLoader());
+    eng.recordOutcome("u01_storm", true);
+
+    NextMission nm = eng.nextMission();
+    REQUIRE(nm.kind == NextMission::Kind::Dynamic);
+    REQUIRE(nm.fills.count("target_area") == 1);
+    REQUIRE(nm.fills.count("ingress") == 1);
+
+    // The degree fills exist and land inside the theater box.
+    const double tLat = std::stod(nm.fills.at("target_area").at("lat"));
+    const double tLon = std::stod(nm.fills.at("target_area").at("lon"));
+    const double iLat = std::stod(nm.fills.at("ingress").at("lat"));
+    const double iLon = std::stod(nm.fills.at("ingress").at("lon"));
+    for (double v : {tLat, iLat}) {
+        CHECK(v >= 44.0);
+        CHECK(v <= 52.5);
+    }
+    for (double v : {tLon, iLon}) {
+        CHECK(v >= 22.0);
+        CHECK(v <= 40.0);
+    }
+
+    // Materialized, the airborne spawns sit at their commanded MSL altitude — measured geodetically
+    // from the resolved world position, not read back from any Y component.
+    const std::string out = fl::materializeMissionTemplate(kAirborneTemplateYaml, nm.fills);
+    CHECK(out.find("${") == std::string::npos);
+    auto mission = parseMission(out);
+    for (const auto& e : mission.errors)
+        UNSCOPED_INFO("parse error: " << e);
+    REQUIRE(mission.ok);
+    REQUIRE(mission.mission.objects.size() == 2);
+    const auto& p = mission.mission.objects[0];
+    const auto& b = mission.mission.objects[1];
+    CHECK(geodeticAltitude(p.pos[0], p.pos[1], p.pos[2]) == Catch::Approx(6000.0).margin(2.0));
+    CHECK(geodeticAltitude(b.pos[0], b.pos[1], b.pos[2]) == Catch::Approx(7000.0).margin(2.0));
+    // And the mid-latitude point is nowhere near the origin — the case the world triples get wrong.
+    CHECK(std::abs(p.pos[1]) > 1'000'000.0);
 }
 
 // ---------------------------------------------------------------------------
