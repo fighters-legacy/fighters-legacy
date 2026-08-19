@@ -84,8 +84,9 @@ class CampaignEngine {
     [[nodiscard]] float frontlineFraction(const std::string& theaterId, int side) const;
 
     // Save / restore (#635 part 3). serialize() emits a compact, human-readable snapshot of the
-    // mutable runtime state (sorties, completed/pending story, unlocked theaters, per-theater frontline
-    // path + ground_units). deserialize() restores it onto a CampaignEngine built from the same def,
+    // mutable runtime state (sorties, RNG + dynamic sortie counter (#1224), completed/pending story,
+    // unlocked theaters, per-theater frontline path + ground_units).
+    // deserialize() restores it onto a CampaignEngine built from the same def,
     // reloading each theater's current frontline via the loader. Returns false on a malformed blob.
     [[nodiscard]] std::string serialize() const;
     [[nodiscard]] bool deserialize(const std::string& blob);
