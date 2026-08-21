@@ -44,6 +44,9 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent / "common"))
+from gha import append_step_summary  # noqa: E402  (the one guarded step-summary writer, #1242)
+
 EXIT_PASS = 0
 EXIT_THRESHOLD = 1
 EXIT_UNMEASURED = 2
@@ -178,14 +181,7 @@ def worst_files(summary: dict, key: str, limit: int) -> list[tuple[str, float, i
 
 
 def write_step_summary(lines: list[str]) -> None:
-    path = os.environ.get("GITHUB_STEP_SUMMARY")
-    if not path:
-        return
-    try:
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write("\n".join(lines) + "\n")
-    except OSError as exc:  # a summary that cannot be written must not change the verdict
-        print(f"note: could not write GITHUB_STEP_SUMMARY: {exc}", file=sys.stderr)
+    append_step_summary("\n".join(lines))
 
 
 def annotate(title: str, message: str) -> None:

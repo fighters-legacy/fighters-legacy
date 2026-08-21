@@ -25,6 +25,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
+from gha import append_step_summary  # noqa: E402  (the one guarded step-summary writer, #1242)
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG = SCRIPT_DIR / "scale-gate.json"
 DEFAULT_BASELINE = SCRIPT_DIR / "scale-gate-baseline.json"
@@ -565,12 +568,12 @@ def run_pattern(build_dir, clients, duration_s, pattern, flags, runner, port, re
 
 
 def write_summary(text):
-    """Echo the Markdown summary to stdout, and append it to $GITHUB_STEP_SUMMARY when set."""
-    print(text)
-    dest = os.environ.get("GITHUB_STEP_SUMMARY")
-    if dest:
-        with open(dest, "a", encoding="utf-8") as f:
-            f.write(text + "\n")
+    """Echo the Markdown summary to stdout, and append it to $GITHUB_STEP_SUMMARY when set.
+
+    Guarded (#1242): an unwritable summary path used to raise out of here and flip the gate's
+    verdict over a reporting problem.
+    """
+    append_step_summary(text, echo=True)
 
 
 def main(argv=None):
