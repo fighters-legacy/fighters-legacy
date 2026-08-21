@@ -26,7 +26,7 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: github/codeql-action/init@v4.37.6
+      - uses: github/codeql-action/init@v4.37.7
         with:
           languages: c-cpp
 
@@ -49,4 +49,4 @@ jobs:
       - name: Build
         run: cmake --build --preset debug
 
-      - uses: github/codeql-action/analyze@v4.37.6
+      - uses: github/codeql-action/analyze@v4.37.7
