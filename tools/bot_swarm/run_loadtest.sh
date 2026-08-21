@@ -164,9 +164,36 @@ FL_CONFIG="$CONFIG" "$FLSERVER" "$PORT" "$MAX_PEERS" --bind 127.0.0.1 --transpor
     ${SIM_WORKER_ARGS[@]+"${SIM_WORKER_ARGS[@]}"} &
 SERVER_PID=$!
 
-# Give the server a moment to bind, then confirm it is still alive.
-sleep 2
-kill -0 "$SERVER_PID" 2>/dev/null || { echo "ERROR: fl-server exited during startup"; exit 1; }
+# Wait for the server to be READY, not merely alive (#1289).
+#
+# The old gate was `sleep 2` + `kill -0`, which proves only that the PROCESS EXISTS — never that the
+# socket is bound. A server still loading airports passed it trivially, bot_swarm then connected into
+# an unbound port, every client was refused, and the harness reported that as a SERVER verdict
+# ("clients: connected=0 refused=8") when the truth was that measurement started too early. Startup
+# is ~3.5 s on a warm 24-core dev box and ~10 s on a cold CI runner, so two seconds was never the
+# budget; the smoke passed on client retry rather than by design.
+#
+# The signal used instead is the server's own: fl-server writes [metrics] tick_json_path (configured
+# unconditionally above) only once the sim loop is running, which is strictly after it binds. So the
+# file appearing is fl-server stating that it is up AND ticking — which is more than a port probe
+# proves, and is exactly the precondition a load test needs.
+READY_TIMEOUT_S="${FL_LOADTEST_READY_TIMEOUT_S:-90}"
+READY_DEADLINE=$((SECONDS + READY_TIMEOUT_S))
+until [[ -s "$METRICS" ]]; do
+    # Died during startup and never became ready are DIFFERENT failures, and neither may be
+    # mistakable for a client refusal — that is the whole point of this block.
+    if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+        echo "ERROR: fl-server exited during startup, before it was ready"
+        exit 1
+    fi
+    if ((SECONDS >= READY_DEADLINE)); then
+        echo "ERROR: fl-server did not become ready within ${READY_TIMEOUT_S}s (no $METRICS)." \
+             "The server never came up — this is NOT a client refusal."
+        kill "$SERVER_PID" 2>/dev/null || true
+        exit 1
+    fi
+    sleep 0.2
+done
 
 # Debug-only RSS sample (KiB) right after startup. The AUTHORITATIVE soak leak signal is now the
 # server's self-reported server_tick.rss_kb / rss_startup_kb (#707), which scale_gate.py hard-gates
