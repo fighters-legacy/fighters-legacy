@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
-// Explicit little-endian byte serialization for the engine's ON-DISK formats (FLIT input traces,
-// `.flrep` replays).
+// Explicit little-endian byte serialization for everything that crosses builds or machines: the
+// engine's ON-DISK formats (FLIT input traces, `.flrep` replays, the airport index) and any wire
+// spoken by clients we do not build (the RCON TCP protocol, #1240).
 //
 // The wire structs in GameProtocol.h are naturally aligned and memcpy'd on purpose: producer and
-// consumer are the same build talking over a socket. A FILE is different. It crosses machines and
-// outlives the build that wrote it, so every field is written byte by byte at a fixed endianness and
-// never as a native word. These helpers are that discipline in one place -- they were FLIT's private
-// `fl::detail` block until `.flrep` needed the same rules and a second copy would have been a second
-// chance to disagree about what a u32 looks like.
+// consumer are the same build talking over a socket. A FILE — or a third-party wire — is different.
+// It crosses machines and outlives the build that wrote it, so every field is written byte by byte
+// at a fixed endianness and never as a native word. These helpers are that discipline in one place
+// -- they were FLIT's private `fl::detail` block until `.flrep` needed the same rules and a second
+// copy would have been a second chance to disagree about what a u32 looks like.
 //
 // Floats go through their IEEE-754 bit pattern via memcpy (never a reinterpret_cast, which is a
 // strict-aliasing violation the optimiser is allowed to act on).

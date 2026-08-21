@@ -30,14 +30,20 @@ TEST_CASE("encodePacket produces correct wire bytes for empty body", "[rcon][enc
     auto pkt = rcon::encodePacket(5, rcon::kTypeAuthResponse, "");
     REQUIRE(pkt.size() == 14);
 
-    int32_t size = 0, id = 0, type = 0;
-    std::memcpy(&size, pkt.data(), 4);
-    std::memcpy(&id, pkt.data() + 4, 4);
-    std::memcpy(&type, pkt.data() + 8, 4);
-
-    CHECK(size == 10);
-    CHECK(id == 5);
-    CHECK(type == rcon::kTypeAuthResponse);
+    // Byte literals, not a memcpy round-trip (#1240): a native-word round-trip is endianness-blind
+    // and passed even when the encoder emitted big-endian on a BE host. The wire contract is LE.
+    CHECK(pkt[0] == 0x0A); // size = 10, little-endian
+    CHECK(pkt[1] == 0x00);
+    CHECK(pkt[2] == 0x00);
+    CHECK(pkt[3] == 0x00);
+    CHECK(pkt[4] == 0x05); // id = 5, little-endian
+    CHECK(pkt[5] == 0x00);
+    CHECK(pkt[6] == 0x00);
+    CHECK(pkt[7] == 0x00);
+    CHECK(pkt[8] == static_cast<uint8_t>(rcon::kTypeAuthResponse)); // type, low byte first
+    CHECK(pkt[9] == 0x00);
+    CHECK(pkt[10] == 0x00);
+    CHECK(pkt[11] == 0x00);
     CHECK(pkt[12] == 0); // body NUL
     CHECK(pkt[13] == 0); // trailing NUL
 }

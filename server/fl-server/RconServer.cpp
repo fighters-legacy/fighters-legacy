@@ -51,6 +51,7 @@ static void rconSetNonBlocking(RconSocket s) {
 
 #include "RconServer.h"
 #include <net/AdminChannel.h>
+#include <net/ByteOrder.h> // putU32LE/getU32LE — the RCON wire is little-endian by contract (#1240)
 
 #include <algorithm>
 #include <atomic>
@@ -69,16 +70,20 @@ namespace fl::rcon {
 std::vector<uint8_t> encodePacket(int32_t id, int32_t type, std::string_view body) {
     // Packet layout: [size:4LE][id:4LE][type:4LE][body][NUL][NUL]
     // size = 8 (id+type) + body.size() + 2 (NUL pair)
+    //
+    // Little-endian BY CONSTRUCTION (#1240): this is the documented third-party RCON wire (mcrcon,
+    // rcon-cli), which crosses machines — the header words go through the explicit LE helpers,
+    // never a native-word memcpy that would silently flip on a big-endian build.
     auto bodyLen = static_cast<int32_t>(body.size());
-    int32_t size = 10 + bodyLen;
-    std::vector<uint8_t> pkt(static_cast<std::size_t>(4 + size));
-    std::memcpy(pkt.data(), &size, 4);
-    std::memcpy(pkt.data() + 4, &id, 4);
-    std::memcpy(pkt.data() + 8, &type, 4);
-    if (bodyLen > 0)
-        std::memcpy(pkt.data() + 12, body.data(), static_cast<std::size_t>(bodyLen));
-    pkt[12 + bodyLen] = 0; // body NUL terminator
-    pkt[13 + bodyLen] = 0; // trailing empty-string NUL
+    const int32_t size = 10 + bodyLen;
+    std::vector<uint8_t> pkt;
+    pkt.reserve(static_cast<std::size_t>(4 + size));
+    detail::putU32LE(pkt, static_cast<uint32_t>(size));
+    detail::putU32LE(pkt, static_cast<uint32_t>(id));
+    detail::putU32LE(pkt, static_cast<uint32_t>(type));
+    pkt.insert(pkt.end(), body.begin(), body.end());
+    pkt.push_back(0); // body NUL terminator
+    pkt.push_back(0); // trailing empty-string NUL
     return pkt;
 }
 
@@ -86,8 +91,7 @@ int decodePacket(const uint8_t* buf, int len, RconPacket& out) {
     if (len < 4)
         return 0; // need more data
 
-    int32_t size = 0;
-    std::memcpy(&size, buf, 4);
+    const auto size = static_cast<int32_t>(detail::getU32LE(buf));
 
     // Minimum packet: id(4) + type(4) + NUL(1) + NUL(1) = 10
     // Maximum allowed body: kMaxBodyPerPacket bytes → size ≤ 10 + kMaxBodyPerPacket
@@ -98,8 +102,8 @@ int decodePacket(const uint8_t* buf, int len, RconPacket& out) {
     if (len < total)
         return 0; // incomplete
 
-    std::memcpy(&out.id, buf + 4, 4);
-    std::memcpy(&out.type, buf + 8, 4);
+    out.id = static_cast<int32_t>(detail::getU32LE(buf + 4));
+    out.type = static_cast<int32_t>(detail::getU32LE(buf + 8));
 
     // Body is NUL-terminated, starting at offset 12.  The body region is
     // (size - 10) bytes plus the two NUL terminators = size - 8 bytes total.
