@@ -42,6 +42,7 @@
 
 #include "Version.h" // FL_VERSION_STRING — stamped into every recording (#643)
 
+#include "AiControllerBuild.h" // the one AI-controller construction ladder (#1236)
 #include <ILogger.h>
 #include <Platform.h>
 #include <ai/AiControllerFactory.h>
@@ -1717,25 +1718,32 @@ bool ServerRuntime::Impl::initMission() {
                                               name.c_str(), obj.id.c_str());
                                 log->log(LogLevel::Warn, __FILE__, __LINE__, m);
                             } else {
-                                auto lc = std::make_unique<fl::LuaController>(cacheIt->second.first,
-                                                                              packSourceFor(cacheIt->second.second),
-                                                                              &entityManager, &worldApi);
-                                if (lc->isValid()) {
-                                    ctrl = std::move(lc);
-                                } else {
+                                // The shared ladder (#1236). No ATC service here — see the
+                                // atcService note in AiControllerBuild.h for why the mission path
+                                // structurally cannot have one at spawn time.
+                                fl::AiControllerRequest req;
+                                req.luaSource = cacheIt->second.first;
+                                req.luaPack = packSourceFor(cacheIt->second.second);
+                                req.entityManager = &entityManager;
+                                req.worldApi = &worldApi;
+                                auto built = fl::buildAiController(req);
+                                ctrl = std::move(built.controller);
+                                if (built.error == fl::AiBuildError::LuaScriptError) {
                                     char m[224];
                                     std::snprintf(m, sizeof(m), "mission ai: lua script '%.56s' error: %.120s",
-                                                  name.c_str(), lc->lastError().c_str());
+                                                  name.c_str(), built.detail.c_str());
                                     log->log(LogLevel::Warn, __FILE__, __LINE__, m);
                                 }
                             }
                         } else if (!toks.empty()) {
-                            std::vector<std::string_view> argViews;
-                            for (std::size_t k = 1; k < toks.size(); ++k)
-                                argViews.push_back(toks[k]);
-                            ctrl = fl::ai::createController(toks[0], std::span<std::string_view>(argViews),
-                                                            &entityManager);
-                            if (!ctrl) {
+                            fl::AiControllerRequest req;
+                            req.behavior = toks[0];
+                            req.args.assign(toks.begin() + 1, toks.end());
+                            req.entityManager = &entityManager;
+                            req.worldApi = &worldApi;
+                            auto built = fl::buildAiController(req);
+                            ctrl = std::move(built.controller);
+                            if (built.error == fl::AiBuildError::UnknownBehavior) {
                                 char m[192];
                                 std::snprintf(m, sizeof(m),
                                               "mission ai: unknown behavior or bad args '%.100s' (object '%.30s')",
@@ -1751,15 +1759,17 @@ bool ServerRuntime::Impl::initMission() {
                         if (def && !def->aiScriptAsset.empty()) {
                             auto cacheIt = aiScriptCache.find(def->aiScriptAsset);
                             if (cacheIt != aiScriptCache.end()) {
-                                auto lc = std::make_unique<fl::LuaController>(cacheIt->second.first,
-                                                                              packSourceFor(cacheIt->second.second),
-                                                                              &entityManager, &worldApi);
-                                if (lc->isValid())
-                                    ctrl = std::move(lc);
-                                else {
+                                fl::AiControllerRequest req;
+                                req.luaSource = cacheIt->second.first;
+                                req.luaPack = packSourceFor(cacheIt->second.second);
+                                req.entityManager = &entityManager;
+                                req.worldApi = &worldApi;
+                                auto built = fl::buildAiController(req);
+                                ctrl = std::move(built.controller);
+                                if (built.error == fl::AiBuildError::LuaScriptError) {
                                     char m[224];
                                     std::snprintf(m, sizeof(m), "mission ai: default lua script '%.48s' error: %.120s",
-                                                  def->aiScriptAsset.c_str(), lc->lastError().c_str());
+                                                  def->aiScriptAsset.c_str(), built.detail.c_str());
                                     log->log(LogLevel::Warn, __FILE__, __LINE__, m);
                                 }
                             }

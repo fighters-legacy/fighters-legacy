@@ -584,6 +584,15 @@ if(TARGET platform-enet)
         "${CMAKE_CURRENT_SOURCE_DIR}")
     catch_discover_tests(test_server_query)
 
+    # The one AI-controller construction ladder, and the ATC-service parity it fixed (#1236).
+    add_executable(test_ai_controller_build test_ai_controller_build.cpp)
+    target_link_libraries(test_ai_controller_build PRIVATE
+        Catch2::Catch2WithMain
+        engine-ai engine-atc engine-entity engine-script engine-world fl-server-lib)
+    target_include_directories(test_ai_controller_build PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+    catch_discover_tests(test_ai_controller_build)
+
     add_executable(test_admin_console test_admin_console.cpp)
     target_link_libraries(test_admin_console PRIVATE
         Catch2::Catch2WithMain

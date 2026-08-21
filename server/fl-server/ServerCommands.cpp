@@ -3,6 +3,7 @@
 
 #include "ConfigReload.h"
 
+#include "AiControllerBuild.h" // the one AI-controller construction ladder (#1236)
 #include "ai/AiControllerFactory.h"
 #include "atc/AtcService.h" // atc_status/atc_scramble/atc_hold (#705)
 #include "entity/EntityTypeRegistry.h"
@@ -1208,39 +1209,32 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                         ctx->rcon.shell->print(m);
 
                     if (ctx->sim.broadcaster) {
-                        std::unique_ptr<fl::IEntityController> ctrl;
+                        // The shared construction ladder (#1236); this path has the ATC service, so
+                        // an admin-spawned script reaches atc.* (#705).
+                        fl::AiControllerRequest req;
+                        req.luaSource = luaScriptSrc;
+                        req.luaPack = luaScriptPack;
+                        req.behavior = behavior;
+                        req.args = behaviorArgStrings;
+                        req.entityManager = ctx->sim.entityManager;
+                        req.worldApi = ctx->sim.worldApi;
+                        req.atcService = ctx->sim.atc;
+                        auto built = fl::buildAiController(req);
+                        std::unique_ptr<fl::IEntityController> ctrl = std::move(built.controller);
 
-                        if (!luaScriptSrc.empty()) {
-                            // Lua AI controller — constructed on sim thread; the world.* seam (#413)
-                            // lets an admin-spawned script reach spawn/faction/mission/music too.
-                            auto luaCtrl = std::make_unique<LuaController>(
-                                luaScriptSrc, luaScriptPack, ctx->sim.entityManager, ctx->sim.worldApi, ctx->sim.atc);
-                            if (luaCtrl->isValid()) {
-                                ctrl = std::move(luaCtrl);
-                            } else {
-                                char em[192];
-                                std::snprintf(em, sizeof(em), "[admin] spawn: Lua script error: %s",
-                                              luaCtrl->lastError().c_str());
-                                std::printf("%s\n", em);
-                                if (ctx->rcon.shell)
-                                    ctx->rcon.shell->print(em);
-                            }
-                        } else if (!behavior.empty() && behavior != "lua") {
-                            // C++ AI controller via factory.
-                            std::vector<std::string_view> argViews;
-                            argViews.reserve(behaviorArgStrings.size());
-                            for (const auto& s : behaviorArgStrings)
-                                argViews.push_back(s);
-                            ctrl = fl::ai::createController(behavior, std::span<std::string_view>(argViews),
-                                                            ctx->sim.entityManager);
-                            if (!ctrl) {
-                                char wm[128];
-                                std::snprintf(wm, sizeof(wm), "[admin] spawn: unknown AI behavior '%s' or bad args",
-                                              behavior.c_str());
-                                std::printf("%s\n", wm);
-                                if (ctx->rcon.shell)
-                                    ctx->rcon.shell->print(wm);
-                            }
+                        if (built.error == fl::AiBuildError::LuaScriptError) {
+                            char em[192];
+                            std::snprintf(em, sizeof(em), "[admin] spawn: Lua script error: %s", built.detail.c_str());
+                            std::printf("%s\n", em);
+                            if (ctx->rcon.shell)
+                                ctx->rcon.shell->print(em);
+                        } else if (built.error == fl::AiBuildError::UnknownBehavior) {
+                            char wm[128];
+                            std::snprintf(wm, sizeof(wm), "[admin] spawn: unknown AI behavior '%s' or bad args",
+                                          behavior.c_str());
+                            std::printf("%s\n", wm);
+                            if (ctx->rcon.shell)
+                                ctx->rcon.shell->print(wm);
                         }
 
                         if (ctrl) {
