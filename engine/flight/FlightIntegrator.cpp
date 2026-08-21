@@ -3,6 +3,7 @@
 
 #include "flight/Atmosphere.h"
 #include "flight/EngineFailFlags.h" // kEngineFlameout / kEngineCompStall — the #308 transient bits
+#include "math/Quat.h"              // the one quatRotate/quatRotateD/quatToEuler/quatNorm (#1248)
 
 #include <algorithm>
 #include <cmath>
@@ -50,56 +51,6 @@ std::array<float, 4> quatMul(const float* a, const float* b) {
         a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
         a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
     };
-}
-
-// Normalise quaternion in-place.
-void quatNorm(float* q) {
-    float len = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
-    if (len > 1e-6f) {
-        q[0] /= len;
-        q[1] /= len;
-        q[2] /= len;
-        q[3] /= len;
-    }
-}
-
-// Rotate vector v by quaternion q.
-std::array<float, 3> quatRotate(const float* q, const float* v) {
-    // q * [v, 0] * q^{-1}
-    float qx = q[0], qy = q[1], qz = q[2], qw = q[3];
-    float vx = v[0], vy = v[1], vz = v[2];
-    float tx = 2.f * (qy * vz - qz * vy);
-    float ty = 2.f * (qz * vx - qx * vz);
-    float tz = 2.f * (qx * vy - qy * vx);
-    return {vx + qw * tx + qy * tz - qz * ty, vy + qw * ty + qz * tx - qx * tz, vz + qw * tz + qx * ty - qy * tx};
-}
-
-// Double-precision rotation: float quaternion q rotates double vector v.
-// Used for the vel_body → pos_world position update so double velocity precision is
-// not truncated to float before accumulation into the double pos_world fields.
-std::array<double, 3> quatRotateD(const float* q, const double* v) {
-    double qx = q[0], qy = q[1], qz = q[2], qw = q[3];
-    double vx = v[0], vy = v[1], vz = v[2];
-    double tx = 2.0 * (qy * vz - qz * vy);
-    double ty = 2.0 * (qz * vx - qx * vz);
-    double tz = 2.0 * (qx * vy - qy * vx);
-    return {vx + qw * tx + qy * tz - qz * ty, vy + qw * ty + qz * tx - qx * tz, vz + qw * tz + qx * ty - qy * tx};
-}
-
-// Euler angles (roll=x, pitch=y, yaw=z) from quaternion (ZYX convention).
-std::array<float, 3> quatToEuler(const float* q) {
-    float sinr_cosp = 2.f * (q[3] * q[0] + q[1] * q[2]);
-    float cosr_cosp = 1.f - 2.f * (q[0] * q[0] + q[1] * q[1]);
-    float roll = std::atan2(sinr_cosp, cosr_cosp);
-
-    float sinp = 2.f * (q[3] * q[1] - q[2] * q[0]);
-    float pitch = std::abs(sinp) >= 1.f ? std::copysign(std::numbers::pi_v<float> / 2.f, sinp) : std::asin(sinp);
-
-    float siny_cosp = 2.f * (q[3] * q[2] + q[0] * q[1]);
-    float cosy_cosp = 1.f - 2.f * (q[1] * q[1] + q[2] * q[2]);
-    float yaw = std::atan2(siny_cosp, cosy_cosp);
-
-    return {roll, pitch, yaw};
 }
 
 } // namespace

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "math/Quat.h"
+
 namespace fl {
 
 // Flight-deck geometry and carrier-ops parameters for an entity that accepts landings (#38) — the
@@ -45,17 +47,12 @@ struct DeckLocalPoint {
 [[nodiscard]] inline DeckLocalPoint deckLocalPoint(const double worldPos[3], const double shipPos[3],
                                                    const float shipQuat[4], const DeckDef& deck) noexcept {
     // Rotate (worldPos - shipPos) by the CONJUGATE of the ship quaternion (world -> body).
-    const double dx = worldPos[0] - shipPos[0];
-    const double dy = worldPos[1] - shipPos[1];
-    const double dz = worldPos[2] - shipPos[2];
-    const float qx = -shipQuat[0], qy = -shipQuat[1], qz = -shipQuat[2], qw = shipQuat[3];
-    const double tx = 2.0 * (double(qy) * dz - double(qz) * dy);
-    const double ty = 2.0 * (double(qz) * dx - double(qx) * dz);
-    const double tz = 2.0 * (double(qx) * dy - double(qy) * dx);
+    const double d[3] = {worldPos[0] - shipPos[0], worldPos[1] - shipPos[1], worldPos[2] - shipPos[2]};
+    const std::array<double, 3> local = quatRotateConjD(shipQuat, d);
     DeckLocalPoint p;
-    p.x = static_cast<float>(dx + qw * tx + double(qy) * tz - double(qz) * ty);
-    p.y = static_cast<float>(dy + qw * ty + double(qz) * tx - double(qx) * tz);
-    p.z = static_cast<float>(dz + qw * tz + double(qx) * ty - double(qy) * tx);
+    p.x = static_cast<float>(local[0]);
+    p.y = static_cast<float>(local[1]);
+    p.z = static_cast<float>(local[2]);
     p.inFootprint = (p.x >= -deck.lengthM * 0.5f && p.x <= deck.lengthM * 0.5f && p.z >= -deck.widthM * 0.5f &&
                      p.z <= deck.widthM * 0.5f);
     return p;
