@@ -1624,6 +1624,13 @@ target_include_directories(test_flight_model_load PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_flight_model_load)
 
+# The one GraphicsSettings -> RendererSettings mapping; pins the bloom-follows-preset rule (#1235).
+add_executable(test_renderer_settings_map test_renderer_settings_map.cpp)
+target_link_libraries(test_renderer_settings_map PRIVATE Catch2::Catch2WithMain engine-config)
+target_include_directories(test_renderer_settings_map PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy")
+catch_discover_tests(test_renderer_settings_map)
+
 # The client/server flight-model parity gate (#811): drives the real WorldBroadcaster connect path
 # and the real client-side resolver, and asserts the two integrate the same aeroplane.
 add_executable(test_prediction_parity test_prediction_parity.cpp)
