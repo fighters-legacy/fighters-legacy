@@ -17,6 +17,7 @@
 #include <loop/GameLoop.h>
 #include <loop/TimeRate.h>
 #include <net/DiscoveryBeacon.h>
+#include <net/NetworkUtils.h> // normalizeIp + extractIp — the SAME pair admission matches on (#1243)
 #include <net/WorldBroadcaster.h>
 #include <net/WorldStateJson.h> // worldstate/events JSON (#600)
 #include <weather/WeatherController.h>
@@ -53,39 +54,6 @@ static void printAdmin(const ServerCommandContext& ctx, const char* line) {
 static bool parseU32(std::string_view s, uint32_t& out) {
     const auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), out);
     return ec == std::errc{} && ptr == s.data() + s.size();
-}
-
-// ---------------------------------------------------------------------------
-// Local IP helpers (mirrors WorldBroadcaster.cpp — kept file-static)
-// ---------------------------------------------------------------------------
-
-static std::string normalizeIp(std::string_view raw) {
-    std::string_view v = raw;
-    if (!v.empty() && v.front() == '[') {
-        v.remove_prefix(1);
-        auto end = v.find(']');
-        if (end != std::string_view::npos)
-            v = v.substr(0, end);
-    }
-    std::string ip(v);
-    if (ip.size() > 7 && ip.compare(0, 7, "::ffff:") == 0)
-        ip.erase(0, 7);
-    return ip;
-}
-
-// Extract the normalized IP from a full "ip:port" or "[ip]:port" string.
-static std::string extractIp(std::string_view addrPort) {
-    std::string_view v = addrPort;
-    std::string_view ipv;
-    if (!v.empty() && v.front() == '[') {
-        v.remove_prefix(1);
-        auto end = v.find(']');
-        ipv = (end != std::string_view::npos) ? v.substr(0, end) : v;
-    } else {
-        auto colon = v.rfind(':');
-        ipv = (colon != std::string_view::npos) ? v.substr(0, colon) : v;
-    }
-    return normalizeIp(ipv);
 }
 
 // Parse a duration string into seconds.
