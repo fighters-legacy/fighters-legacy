@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "net/WorldBroadcaster.h"
+#include "math/Quat.h"
 
 #include "render/ArtChannel.h" // the articulation channel vocabulary (#840); stdlib-only, no link dep
 #include "render/RenderSnapshot.h"
@@ -132,21 +133,6 @@ class HoldController final : public fl::IEntityController {
     fl::ControlInput m_held;
 };
 } // namespace
-
-// ---------------------------------------------------------------------------
-// Quaternion helpers — pure float array math, no GLM dependency.
-// Convention: q = [x, y, z, w] matching EntityTransform::quat.
-// ---------------------------------------------------------------------------
-
-// Rotate vector v by quaternion q using the Rodrigues formula.
-static void quatRotate(const float q[4], const float v[3], float out[3]) {
-    float tx = q[1] * v[2] - q[2] * v[1];
-    float ty = q[2] * v[0] - q[0] * v[2];
-    float tz = q[0] * v[1] - q[1] * v[0];
-    out[0] = v[0] + 2.f * q[3] * tx + 2.f * (q[1] * tz - q[2] * ty);
-    out[1] = v[1] + 2.f * q[3] * ty + 2.f * (q[2] * tx - q[0] * tz);
-    out[2] = v[2] + 2.f * q[3] * tz + 2.f * (q[0] * ty - q[1] * tx);
-}
 
 // Returns true if `incoming` is strictly newer than `last` under uint32 wrap-around.
 // Uses the half-window comparison: a difference in [1, 2^31-1] (mod 2^32) is "newer".
@@ -3240,8 +3226,7 @@ void WorldBroadcaster::runDeckOperations(double simDt, uint64_t tickIndex) {
 
             // World-frame velocity of the aircraft (for speeds and the catapult delta-v).
             float velBodyF[3] = {float(ns.vel_body[0]), float(ns.vel_body[1]), float(ns.vel_body[2])};
-            float velWorld[3];
-            quatRotate(ns.quat, velBodyF, velWorld);
+            const std::array<float, 3> velWorld = quatRotate(ns.quat, velBodyF);
             // Ground speed RELATIVE TO THE DECK — a spot on a 15 m/s ship is stationary deck-wise.
             const float relVel[3] = {velWorld[0] - over->vel[0], velWorld[1] - over->vel[1],
                                      velWorld[2] - over->vel[2]};
@@ -3295,14 +3280,12 @@ void WorldBroadcaster::runDeckOperations(double simDt, uint64_t tickIndex) {
                 const float dv = accel * static_cast<float>(simDt);
                 // Shove along the SHIP's forward axis (the stroke direction), in the world frame.
                 float fwdBody[3] = {1.f, 0.f, 0.f};
-                float fwdWorld[3];
-                quatRotate(over->quat, fwdBody, fwdWorld);
+                const std::array<float, 3> fwdWorld = quatRotate(over->quat, fwdBody);
                 float nvWorld[3] = {velWorld[0] + fwdWorld[0] * dv, velWorld[1] + fwdWorld[1] * dv,
                                     velWorld[2] + fwdWorld[2] * dv};
                 // Back into the aircraft body frame.
                 const float qc[4] = {-ns.quat[0], -ns.quat[1], -ns.quat[2], ns.quat[3]};
-                float nvBody[3];
-                quatRotate(qc, nvWorld, nvBody);
+                const std::array<float, 3> nvBody = quatRotate(qc, nvWorld);
                 ns.vel_body[0] = nvBody[0];
                 ns.vel_body[1] = nvBody[1];
                 ns.vel_body[2] = nvBody[2];
@@ -3324,8 +3307,7 @@ void WorldBroadcaster::runDeckOperations(double simDt, uint64_t tickIndex) {
             it.state->transform.pos[1] = ns.pos_world[1];
             it.state->transform.pos[2] = ns.pos_world[2];
             float nvb[3] = {float(ns.vel_body[0]), float(ns.vel_body[1]), float(ns.vel_body[2])};
-            float nvw[3];
-            quatRotate(ns.quat, nvb, nvw);
+            const std::array<float, 3> nvw = quatRotate(ns.quat, nvb);
             it.state->transform.vel[0] = nvw[0];
             it.state->transform.vel[1] = nvw[1];
             it.state->transform.vel[2] = nvw[2];
@@ -3356,8 +3338,7 @@ void WorldBroadcaster::runDeckOperations(double simDt, uint64_t tickIndex) {
             // The wire-zone touchdown point in world space is the LSO's aim reference.
             const DeckDef& deck = *rec.deck;
             float wireLocal[3] = {deck.wireXM, deck.heightM, 0.f};
-            float wireOff[3];
-            quatRotate(rec.quat, wireLocal, wireOff);
+            const std::array<float, 3> wireOff = quatRotate(rec.quat, wireLocal);
             const double wire[3] = {rec.pos[0] + wireOff[0], rec.pos[1] + wireOff[1], rec.pos[2] + wireOff[2]};
             const double dx = wire[0] - fs.pos_world[0];
             const double dy = wire[1] - fs.pos_world[1];
@@ -4333,8 +4314,7 @@ void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, c
     // World velocity: rotate body velocity into world frame.
     // vel_body is double; cast to float here — wire protocol and render bridge stay float.
     float vel_body_f[3] = {float(fs.vel_body[0]), float(fs.vel_body[1]), float(fs.vel_body[2])};
-    float wv[3];
-    quatRotate(fs.quat, vel_body_f, wv);
+    const std::array<float, 3> wv = quatRotate(fs.quat, vel_body_f);
 
     // Coordinate conventions are identical (both Y-up) — copy directly.
     state.transform.pos[0] = fs.pos_world[0];

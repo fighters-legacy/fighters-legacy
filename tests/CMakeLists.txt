@@ -392,6 +392,13 @@ target_link_libraries(test_parse PRIVATE Catch2::Catch2WithMain)
 target_include_directories(test_parse PRIVATE "${CMAKE_SOURCE_DIR}/engine")
 catch_discover_tests(test_parse)
 
+# The one quaternion rotate family (#1248). Header-only; the deck-path case pins bit-identity with
+# the expression it replaced.
+add_executable(test_quat test_quat.cpp)
+target_link_libraries(test_quat PRIVATE Catch2::Catch2WithMain)
+target_include_directories(test_quat PRIVATE "${CMAKE_SOURCE_DIR}/engine")
+catch_discover_tests(test_quat)
+
 add_executable(test_toml_numeric test_toml_numeric.cpp)
 target_link_libraries(test_toml_numeric PRIVATE Catch2::Catch2WithMain tomlplusplus::tomlplusplus)
 target_include_directories(test_toml_numeric PRIVATE "${CMAKE_SOURCE_DIR}/engine")
