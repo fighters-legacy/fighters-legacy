@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "net/SnapshotPipeline.h"
+#include "math/Fnv.h"
 
 #include "ILogger.h"
 #include "INetwork.h"
@@ -130,15 +131,11 @@ void SnapshotPipeline::run(uint64_t tickIndex, uint32_t govSnapInterval, float g
         if (out.mask != 0) {
             // FNV-1a over mask + values: the send policy needs only "did this change", and a hash is
             // one word per peer per entity instead of a whole channel set.
-            uint32_t h = 2166136261u;
-            auto mix = [&h](uint8_t b) {
-                h ^= b;
-                h *= 16777619u;
-            };
-            mix(static_cast<uint8_t>(out.mask & 0xFFu));
-            mix(static_cast<uint8_t>(out.mask >> 8));
+            uint32_t h = kFnv1a32Basis;
+            fnv1a32Byte(h, static_cast<uint8_t>(out.mask & 0xFFu));
+            fnv1a32Byte(h, static_cast<uint8_t>(out.mask >> 8));
             for (uint8_t i = 0; i < n; ++i)
-                mix(out.values[i]);
+                fnv1a32Byte(h, out.values[i]);
             out.hash = h ? h : 1u; // 0 is the "never sent" sentinel in PeerEntityRec
             artSnap.emplace(entityIdx, out);
         }

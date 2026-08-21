@@ -80,6 +80,7 @@
 #include <job/JobSystem.h>
 #include <loop/GameLoop.h>
 #include <loop/GameState.h>
+#include <math/Fnv.h> // the one FNV-1a (#1247)
 #include <mission/BuiltinMissions.h>
 #include <mission/Mission.h>
 #include <mission/MissionParser.h>
@@ -1621,9 +1622,9 @@ bool ServerRuntime::Impl::initMission() {
                     }
                     return out.setPixels(std::move(pixels));
                 };
-                uint64_t seed = 1469598103934665603ull; // FNV-1a of the campaign name — stable, replayable
-                for (unsigned char ch : cp.campaign.name)
-                    seed = (seed ^ ch) * 1099511628211ull;
+                // FNV-1a of the campaign name — stable, replayable. On the standard basis since
+                // #1247, so a campaign of a given name draws a different frontline than it did before.
+                const uint64_t seed = fl::fnv1a64(cp.campaign.name);
                 std::string sanitized;
                 for (char ch : cp.campaign.name)
                     sanitized += (std::isalnum(static_cast<unsigned char>(ch)) ? ch : '_');
@@ -1686,10 +1687,9 @@ bool ServerRuntime::Impl::initMission() {
             } else {
                 // Mission seed (#976): a stable per-mission seed feeding the deterministic per-instance
                 // crew skill roll (#971), derived from the mission name so a replay is byte-identical and
-                // two missions differ. FNV-1a over the name (0 for an empty name is fine — still stable).
-                uint64_t missionSeed = 1469598103934665603ull;
-                for (unsigned char ch : parsed.mission.name)
-                    missionSeed = (missionSeed ^ ch) * 1099511628211ull;
+                // two missions differ. FNV-1a over the name; an empty name is still stable, just the
+                // bare basis. On the standard basis since #1247, so the rolls differ from before.
+                const uint64_t missionSeed = fl::fnv1a64(parsed.mission.name);
 
                 // Per-object controller + loadout attachment (#855). engine-mission spawns the object and
                 // calls this back with (id, object); here — where engine-ai / engine-script / the weapon
