@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "world/EscalationPolicyParser.h"
 
+#include "config/TomlRead.h"
 #include <toml++/toml.hpp>
 
 #include <stdexcept>
@@ -10,12 +11,7 @@ namespace fl {
 
 namespace {
 
-[[nodiscard]] std::string req_string(toml::node_view<toml::node> node, const char* field) {
-    auto v = node.value<std::string>();
-    if (!v)
-        throw std::runtime_error(std::string("zone policy: missing required field: ") + field);
-    return std::move(*v);
-}
+constexpr const char* kErr = "zone policy: ";
 
 // Dwell values are authored as seconds and may legitimately be written as integers (45) or floats
 // (4.5), so read through toml++'s numeric coercion rather than requiring one spelling.
@@ -70,8 +66,8 @@ EscalationPolicy parseEscalationPolicy(std::string_view toml) {
         throw std::runtime_error("zone policy: missing [policy] table");
 
     EscalationPolicy out;
-    out.id = req_string(policy["id"], "policy.id");
-    out.name = req_string(policy["name"], "policy.name");
+    out.id = req_string(policy["id"], "policy.id", kErr);
+    out.name = req_string(policy["name"], "policy.name", kErr);
 
     auto escalation = tbl["escalation"];
     if (escalation && !escalation.is_table())

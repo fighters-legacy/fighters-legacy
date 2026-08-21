@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "weapon/WeaponDefParser.h"
 
+#include "config/TomlRead.h"
 #include <toml++/toml.hpp>
 
 #include <stdexcept>
@@ -17,32 +18,6 @@ constexpr float kMetresPerNauticalMile = 1852.f;
 constexpr float kMetresPerFoot = 0.3048f;
 constexpr float kMpsPerKnot = 0.514444f;
 constexpr float kKgPerPound = 0.45359237f;
-
-// ── helpers ──────────────────────────────────────────────────────────────────
-
-[[nodiscard]] std::string req_string(toml::node_view<toml::node> node, const char* field) {
-    auto v = node.value<std::string>();
-    if (!v)
-        throw std::runtime_error(std::string("missing required field: ") + field);
-    return std::move(*v);
-}
-
-[[nodiscard]] float req_float(toml::node_view<toml::node> node, const char* field) {
-    auto v = node.value<double>();
-    if (!v)
-        throw std::runtime_error(std::string("missing required field: ") + field);
-    return static_cast<float>(*v);
-}
-
-[[nodiscard]] float opt_float(toml::node_view<toml::node> node, float fallback) {
-    auto v = node.value<double>();
-    return v ? static_cast<float>(*v) : fallback;
-}
-
-[[nodiscard]] bool opt_bool(toml::node_view<toml::node> node, bool fallback) {
-    auto v = node.value<bool>();
-    return v ? *v : fallback;
-}
 
 void require_non_negative(float value, const char* field) {
     if (value < 0.f)

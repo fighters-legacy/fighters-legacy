@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "world/AirportDefParser.h"
 
+#include "config/TomlRead.h"
 #include <toml++/toml.hpp>
 
 #include <numbers>
@@ -13,19 +14,8 @@ namespace {
 
 constexpr double kDegToRad = std::numbers::pi / 180.0;
 
-[[nodiscard]] std::string req_string(toml::node_view<toml::node> node, const char* field) {
-    auto v = node.value<std::string>();
-    if (!v)
-        throw std::runtime_error(std::string("airport: missing required field: ") + field);
-    return std::move(*v);
-}
-
-[[nodiscard]] double req_double(toml::node_view<toml::node> node, const char* field) {
-    auto v = node.value<double>();
-    if (!v)
-        throw std::runtime_error(std::string("airport: missing required field: ") + field);
-    return *v;
-}
+// Every message this parser raises carries the same context, so bind it once.
+constexpr const char* kErr = "airport: ";
 
 } // namespace
 
@@ -42,8 +32,8 @@ AirportDef parseAirportDef(std::string_view toml) {
         throw std::runtime_error("airport: missing [airport] table");
 
     AirportDef def;
-    def.id = req_string(airport["id"], "airport.id");
-    def.name = req_string(airport["name"], "airport.name");
+    def.id = req_string(airport["id"], "airport.id", kErr);
+    def.name = req_string(airport["name"], "airport.name", kErr);
 
     const bool hasLatLon = airport["lat"] && airport["lon"];
     const bool hasWorldXZ = airport["world_x"] && airport["world_z"];
@@ -54,11 +44,11 @@ AirportDef parseAirportDef(std::string_view toml) {
 
     if (hasWorldXZ) {
         def.useWorldXZ = true;
-        def.worldX = req_double(airport["world_x"], "airport.world_x");
-        def.worldZ = req_double(airport["world_z"], "airport.world_z");
+        def.worldX = req_double(airport["world_x"], "airport.world_x", kErr);
+        def.worldZ = req_double(airport["world_z"], "airport.world_z", kErr);
     } else {
-        def.latRad = req_double(airport["lat"], "airport.lat") * kDegToRad;
-        def.lonRad = req_double(airport["lon"], "airport.lon") * kDegToRad;
+        def.latRad = req_double(airport["lat"], "airport.lat", kErr) * kDegToRad;
+        def.lonRad = req_double(airport["lon"], "airport.lon", kErr) * kDegToRad;
     }
 
     if (auto elev = airport["elevation_m"].value<double>())
@@ -76,9 +66,9 @@ AirportDef parseAirportDef(std::string_view toml) {
             const toml::node_view<toml::node> rw{*rwTbl};
 
             RunwayDef runway;
-            runway.headingDeg = static_cast<float>(req_double(rw["heading_deg"], "runway.heading_deg"));
-            runway.lengthM = static_cast<float>(req_double(rw["length_m"], "runway.length_m"));
-            runway.widthM = static_cast<float>(req_double(rw["width_m"], "runway.width_m"));
+            runway.headingDeg = static_cast<float>(req_double(rw["heading_deg"], "runway.heading_deg", kErr));
+            runway.lengthM = static_cast<float>(req_double(rw["length_m"], "runway.length_m", kErr));
+            runway.widthM = static_cast<float>(req_double(rw["width_m"], "runway.width_m", kErr));
             if (runway.lengthM <= 0.f || runway.widthM <= 0.f)
                 throw std::runtime_error("airport: runway length_m/width_m must be positive");
 

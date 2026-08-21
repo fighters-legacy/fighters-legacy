@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "content/LiveryDef.h"
 
+#include "config/TomlRead.h"
 #include <toml++/toml.hpp>
 
 #include <stdexcept>
@@ -10,12 +11,7 @@ namespace fl {
 
 namespace {
 
-[[nodiscard]] std::string reqString(toml::node_view<toml::node> node, const char* field) {
-    auto v = node.value<std::string>();
-    if (!v)
-        throw std::runtime_error(std::string("livery def parse error: missing required field: ") + field);
-    return std::move(*v);
-}
+constexpr const char* kErr = "livery def parse error: ";
 
 } // namespace
 
@@ -33,8 +29,8 @@ LiveryDef parseLiveryDef(std::string_view tomlContent) {
     auto liv = tbl["livery"];
     if (!liv || !liv.as_table())
         throw std::runtime_error("livery def parse error: missing [livery] table");
-    def.name = reqString(liv["name"], "livery.name");
-    def.aircraft = reqString(liv["aircraft"], "livery.aircraft");
+    def.name = req_string(liv["name"], "livery.name", kErr);
+    def.aircraft = req_string(liv["aircraft"], "livery.aircraft", kErr);
 
     // ── [textures] (optional) ────────────────────────────────────────────────
     // Nested slot -> map -> asset name. A dotted key `f5e_skin.diffuse = "x"` under [textures] is a
