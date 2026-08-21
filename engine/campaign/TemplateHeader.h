@@ -26,6 +26,18 @@ struct TemplateHeaderResult {
     std::vector<std::string> warnings;
 };
 
+// The ONE `template:` header/body split (#1238). The header parser and materializeMissionTemplate
+// used to walk the block with two divergent line-walkers that disagreed on what ends the header —
+// a CRLF-authored blank line (a lone '\r') terminated one and continued the other, so validate and
+// materialize saw different documents. The boundary, defined once: a line is blank iff it holds
+// only spaces, tabs or '\r'; blank and indented lines belong to the header; the first column-0
+// non-blank line after `template:` ends it.
+struct TemplateSplit {
+    std::string header; // "template:\n" + its indented/blank body; empty when no header exists
+    std::string body;   // every other line, in order (lines before the header included)
+};
+[[nodiscard]] TemplateSplit splitTemplateHeader(std::string_view yaml);
+
 [[nodiscard]] TemplateHeaderResult parseTemplateHeader(std::string_view templateYaml);
 
 } // namespace fl

@@ -680,6 +680,35 @@ TEST_CASE("parseTemplateHeader: role + fills sources") {
     CHECK_FALSE(none.present);
 }
 
+TEST_CASE("splitTemplateHeader: CRLF-authored templates keep their whole header (#1238)") {
+    // A blank line inside a CRLF template block arrives as a lone '\r'. The old header extractor
+    // terminated on it (so validation saw a truncated header) while the materialize path continued
+    // through it — the two walkers disagreed on what document they were reading.
+    const char* crlf = "template:\r\n"
+                       "  role: intercept\r\n"
+                       "\r\n" // blank line INSIDE the header block
+                       "  fills:\r\n"
+                       "    - target_area: {from: frontline}\r\n"
+                       "name: X\r\n"
+                       "body: here\r\n";
+
+    auto r = fl::parseTemplateHeader(crlf);
+    REQUIRE(r.present);
+    CHECK(r.role == "intercept");
+    REQUIRE(r.fills.size() == 1); // 0 before #1238: the blank '\r' line cut the header early
+    CHECK(r.fills[0].name == "target_area");
+
+    // The body starts at the first column-0 non-blank line, and validate + materialize agree on it.
+    auto split = fl::splitTemplateHeader(crlf);
+    CHECK(split.body.find("name: X") != std::string::npos);
+    CHECK(split.body.find("role:") == std::string::npos);
+
+    // A CR-only "blank" and a plain LF document behave the same way.
+    auto lf = fl::splitTemplateHeader("template:\n  role: strike\n\n  fills: []\nname: Y\n");
+    CHECK(lf.header.find("fills") != std::string::npos);
+    CHECK(lf.body == "name: Y\n");
+}
+
 TEST_CASE("parseCampaign: dangling next.id and unreachable story") {
     auto r = fl::parseCampaign("name: C\nsides: [a, b]\npilot:\n  side: a\n"
                                "story:\n"
