@@ -2,6 +2,8 @@
 #include "weapon/WeaponDefParser.h"
 
 #include "config/TomlRead.h"
+#include "math/Units.h"
+
 #include <toml++/toml.hpp>
 
 #include <stdexcept>
@@ -11,13 +13,6 @@
 namespace fl {
 
 namespace {
-
-// ── unit conversions (authored aviation units → SI) ──────────────────────────
-
-constexpr float kMetresPerNauticalMile = 1852.f;
-constexpr float kMetresPerFoot = 0.3048f;
-constexpr float kMpsPerKnot = 0.514444f;
-constexpr float kKgPerPound = 0.45359237f;
 
 void require_non_negative(float value, const char* field) {
     if (value < 0.f)
@@ -126,7 +121,7 @@ WeaponDef parseWeaponDef(std::string_view toml_src) {
         s.fovDeg = opt_float(node["fov_deg"], 0.f);
         if (s.fovDeg < 0.f || s.fovDeg > 180.f)
             throw std::runtime_error(std::string(section) + ".fov_deg must be in [0, 180]");
-        s.acquisitionRangeM = opt_float(node["acquisition_nm"], 0.f) * kMetresPerNauticalMile;
+        s.acquisitionRangeM = opt_float(node["acquisition_nm"], 0.f) * kMetresPerNauticalMile<float>;
         require_non_negative(s.acquisitionRangeM, "seeker.acquisition_nm");
         if (!s.sensorId.empty() && (s.fovDeg > 0.f || s.acquisitionRangeM > 0.f))
             throw std::runtime_error(std::string(section) +
@@ -144,7 +139,7 @@ WeaponDef parseWeaponDef(std::string_view toml_src) {
             throw std::runtime_error(std::string(section) +
                                      ".pitbull_range_m does not exist — the field is `pitbull_nm`, "
                                      "in nautical miles (range-to-go, like every other weapon range)");
-        s.pitbullRangeM = opt_float(node["pitbull_nm"], 0.f) * kMetresPerNauticalMile;
+        s.pitbullRangeM = opt_float(node["pitbull_nm"], 0.f) * kMetresPerNauticalMile<float>;
         require_non_negative(s.pitbullRangeM, "seeker.pitbull_nm");
         if (s.pitbullRangeM > 0.f && s.type != SeekerType::ActiveRadar)
             throw std::runtime_error(std::string(section) + ".pitbull_nm only means something on an "
@@ -153,7 +148,7 @@ WeaponDef parseWeaponDef(std::string_view toml_src) {
         s.loftBiasDeg = opt_float(node["loft_bias_deg"], 0.f);
         if (s.loftBiasDeg < 0.f || s.loftBiasDeg > 45.f)
             throw std::runtime_error(std::string(section) + ".loft_bias_deg must be in [0, 45]");
-        s.loftRangeM = opt_float(node["loft_range_nm"], 0.f) * kMetresPerNauticalMile;
+        s.loftRangeM = opt_float(node["loft_range_nm"], 0.f) * kMetresPerNauticalMile<float>;
         require_non_negative(s.loftRangeM, "seeker.loft_range_nm");
         if ((s.loftBiasDeg > 0.f) != (s.loftRangeM > 0.f))
             throw std::runtime_error(std::string(section) +
@@ -186,16 +181,16 @@ WeaponDef parseWeaponDef(std::string_view toml_src) {
             throw std::runtime_error("performance: max_range_nm and standoff_range_ft are mutually exclusive");
 
         w.performance.maxRangeM =
-            hasMaxRange ? req_float(perf["max_range_nm"], "performance.max_range_nm") * kMetresPerNauticalMile
-                        : req_float(perf["standoff_range_ft"], "performance.standoff_range_ft") * kMetresPerFoot;
+            hasMaxRange ? req_float(perf["max_range_nm"], "performance.max_range_nm") * kMetresPerNauticalMile<float>
+                        : req_float(perf["standoff_range_ft"], "performance.standoff_range_ft") * kMetresPerFoot<float>;
         require_non_negative(w.performance.maxRangeM, "performance range");
 
-        w.performance.minRangeM = opt_float(perf["min_range_nm"], 0.f) * kMetresPerNauticalMile;
+        w.performance.minRangeM = opt_float(perf["min_range_nm"], 0.f) * kMetresPerNauticalMile<float>;
         require_non_negative(w.performance.minRangeM, "performance.min_range_nm");
         if (w.performance.minRangeM > w.performance.maxRangeM)
             throw std::runtime_error("performance.min_range_nm must not exceed the weapon's max range");
 
-        w.performance.maxSpeedMps = opt_float(perf["max_speed_kts"], 0.f) * kMpsPerKnot;
+        w.performance.maxSpeedMps = opt_float(perf["max_speed_kts"], 0.f) * kMpsPerKnot<float>;
         require_non_negative(w.performance.maxSpeedMps, "performance.max_speed_kts");
 
         w.performance.motorBurnTimeS = opt_float(perf["motor_burn_time_s"], 0.f);
@@ -204,7 +199,7 @@ WeaponDef parseWeaponDef(std::string_view toml_src) {
         w.performance.maxG = opt_float(perf["max_g"], 0.f);
         require_non_negative(w.performance.maxG, "performance.max_g");
 
-        w.performance.cepM = opt_float(perf["CEP_ft"], 0.f) * kMetresPerFoot;
+        w.performance.cepM = opt_float(perf["CEP_ft"], 0.f) * kMetresPerFoot<float>;
         require_non_negative(w.performance.cepM, "performance.CEP_ft");
 
         w.performance.rateOfFireRpm = opt_float(perf["rate_of_fire_rpm"], 0.f);
@@ -217,7 +212,7 @@ WeaponDef parseWeaponDef(std::string_view toml_src) {
         throw std::runtime_error("weapon def parse error: missing [warhead] table");
 
     if (wh && wh.as_table()) {
-        w.warhead.blastRadiusM = req_float(wh["blast_radius_ft"], "warhead.blast_radius_ft") * kMetresPerFoot;
+        w.warhead.blastRadiusM = req_float(wh["blast_radius_ft"], "warhead.blast_radius_ft") * kMetresPerFoot<float>;
         require_non_negative(w.warhead.blastRadiusM, "warhead.blast_radius_ft");
         w.warhead.damage = req_float(wh["damage"], "warhead.damage");
         require_non_negative(w.warhead.damage, "warhead.damage");
@@ -247,7 +242,7 @@ WeaponDef parseWeaponDef(std::string_view toml_src) {
     if (!load || !load.as_table())
         throw std::runtime_error("weapon def parse error: missing [load] table");
 
-    w.load.massKg = req_float(load["weight_lb"], "load.weight_lb") * kKgPerPound;
+    w.load.massKg = req_float(load["weight_lb"], "load.weight_lb") * kKgPerPound<float>;
     if (w.load.massKg <= 0.f)
         throw std::runtime_error("load.weight_lb must be > 0");
     w.load.dragFactor = req_float(load["drag_factor"], "load.drag_factor");

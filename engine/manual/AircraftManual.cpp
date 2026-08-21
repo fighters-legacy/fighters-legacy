@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "manual/AircraftManual.h"
 
+#include "math/Units.h"
+
 #include "entity/EntityDef.h"
 #include "flight/Atmosphere.h" // computeAtmosphere — the hover-ceiling scan (#349)
 #include "flight/FlightModelData.h"
@@ -24,13 +26,11 @@ std::string fmt(const char* spec, float v) {
 }
 
 // Aviation units, because that is what a pilot's reference card is written in and what the source
-// documents use. The sim is SI internally; the conversion lives here, at the display boundary.
-constexpr float kMpsToKt = 1.94384f;
-constexpr float kMToFt = 3.28084f;
-constexpr float kKgToLb = 2.20462f;
+// documents use. The sim is SI internally; the conversion lives here, at the display boundary —
+// and the numbers come from math/Units.h, so a value authored in a def reads back as itself.
 
 std::string speedStr(float mps) {
-    return fmt("%.0f kt", mps * kMpsToKt) + fmt(" (%.0f m/s)", mps);
+    return fmt("%.0f kt", mps * kKnotsPerMps<float>) + fmt(" (%.0f m/s)", mps);
 }
 
 const char* weaponTypeName(WeaponType t) {
@@ -101,8 +101,8 @@ constexpr NamedCondition kConditions[] = {
 
 void addPerformance(AircraftManual& out, const ManualSources& src, float mass, const char* weightLabel) {
     ManualSection sec;
-    sec.title =
-        std::string("Performance — ") + weightLabel + fmt(" (%.0f kg", mass) + fmt(" / %.0f lb)", mass * kKgToLb);
+    sec.title = std::string("Performance — ") + weightLabel + fmt(" (%.0f kg", mass) +
+                fmt(" / %.0f lb)", mass * kPoundsPerKg<float>);
 
     for (const auto& cond : kConditions) {
         TrimPoint pt;
@@ -151,7 +151,7 @@ void addHoverPerformance(AircraftManual& out, const ManualSources& src, float ma
     if (thrustSL <= 0.f)
         return;
 
-    const float weight = (mass + src.payload.extra_mass_kg) * 9.80665f;
+    const float weight = (mass + src.payload.extra_mass_kg) * kG0<float>;
     const float rho0 = computeAtmosphere(0.f).density_kg_m3;
 
     ManualSection sec;
@@ -167,7 +167,8 @@ void addHoverPerformance(AircraftManual& out, const ManualSources& src, float ma
                 break;
             ceiling = alt;
         }
-        sec.rows.push_back({"hover ceiling", fmt("%.0f m", ceiling) + fmt(" (%.0f ft)", ceiling * kMToFt)});
+        sec.rows.push_back(
+            {"hover ceiling", fmt("%.0f m", ceiling) + fmt(" (%.0f ft)", ceiling * kFeetPerMetre<float>)});
     } else {
         sec.rows.push_back({"hover", "CANNOT HOVER at this weight"});
     }
@@ -194,8 +195,8 @@ AircraftManual buildAircraftManual(const ManualSources& src) {
     {
         ManualSection sec;
         sec.title = "Airframe";
-        sec.rows.push_back(
-            {"empty mass", fmt("%.0f kg", fm.geometry.mass_kg) + fmt(" (%.0f lb)", fm.geometry.mass_kg * kKgToLb)});
+        sec.rows.push_back({"empty mass", fmt("%.0f kg", fm.geometry.mass_kg) +
+                                              fmt(" (%.0f lb)", fm.geometry.mass_kg * kPoundsPerKg<float>)});
         sec.rows.push_back({"internal fuel", fmt("%.0f kg", fm.geometry.fuel_kg)});
         // A rotorcraft's wing fields are benign placeholders (#349) — printing them would be
         // presenting invented numbers as data, the exact thing this manual exists to prevent.
@@ -220,8 +221,9 @@ AircraftManual buildAircraftManual(const ManualSources& src) {
         sec.rows.push_back({"stall AoA", fmt("%.1f deg", fm.limits.alpha_stall_deg)});
         sec.rows.push_back({"G-limiter", fm.meta.has_fbw ? "fly-by-wire — the aircraft will not exceed its limit"
                                                          : "NONE — the airframe can be overstressed, and will break"});
-        sec.rows.push_back({"service ceiling (cruise)",
-                            fmt("%.0f m", fm.meta.cruise_alt_m) + fmt(" (%.0f ft)", fm.meta.cruise_alt_m * kMToFt)});
+        sec.rows.push_back(
+            {"service ceiling (cruise)",
+             fmt("%.0f m", fm.meta.cruise_alt_m) + fmt(" (%.0f ft)", fm.meta.cruise_alt_m * kFeetPerMetre<float>)});
         out.sections.push_back(std::move(sec));
     }
 
@@ -321,9 +323,9 @@ AircraftManual buildAircraftManual(const ManualSources& src) {
             } else {
                 value << ", " << fmt("%.0f", s->search.azHalfAngleDeg) << " deg azimuth";
             }
-            value << ", " << fmt("%.0f nm", s->search.maxRangeM / 1852.f) << " search";
+            value << ", " << fmt("%.0f nm", s->search.maxRangeM / kMetresPerNauticalMile<float>) << " search";
             if (s->track)
-                value << ", " << fmt("%.0f nm", s->track->maxRangeM / 1852.f) << " track";
+                value << ", " << fmt("%.0f nm", s->track->maxRangeM / kMetresPerNauticalMile<float>) << " track";
             if (s->emitter)
                 value << " (emits — it can be detected)";
             sec.rows.push_back({s->name.empty() ? s->id : s->name, value.str()});

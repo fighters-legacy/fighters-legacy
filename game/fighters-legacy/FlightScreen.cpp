@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "FlightScreen.h"
 
+#include "math/Units.h"
+
 #include "CameraInput.h"
 #include "ChatOverlay.h"
 #include "ClientNetEventHandler.h"
@@ -743,7 +745,7 @@ std::span<const HudElement> FlightScreen::buildElements() {
             if (rngM > 1.0) {
                 const glm::vec3 relVel = m_designatedTarget->velocity - m_playerEntry->velocity;
                 const float rangeRate = glm::dot(relVel, glm::vec3(los / rngM)); // +opening
-                closureKt = -rangeRate * 1.94384f;
+                closureKt = -rangeRate * fl::kKnotsPerMps<float>;
             }
             const char* typeName = "TGT";
             if (m_deps.entityRegistry) {

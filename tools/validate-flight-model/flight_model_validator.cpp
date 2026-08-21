@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "flight_model_validator.h"
 
+#include "math/Units.h"
+
 #include <toml++/toml.hpp>
 
 #include <algorithm>
@@ -1122,7 +1124,7 @@ static void validateMultirotor(const toml::table& tbl, FlightModelValidationResu
     const auto fuel = tbl["flight_model"]["fuel_kg"].value<double>();
     if (thrust && mass && count.is_integer()) {
         const double totalThrust = static_cast<double>(count.as_integer()->get()) * *thrust;
-        const double weight = (*mass + fuel.value_or(0.0)) * 9.80665;
+        const double weight = (*mass + fuel.value_or(0.0)) * fl::kG0<double>;
         if (totalThrust <= weight) {
             r.errors.push_back("multirotor cannot hover: rotor_count * rotor_thrust_max_n (" +
                                std::to_string(totalThrust) + " N) does not exceed the all-up weight (" +
@@ -1178,7 +1180,7 @@ static void validateHelicopter(const toml::table& tbl, FlightModelValidationResu
     const auto mass = tbl["flight_model"]["mass_kg"].value<double>();
     const auto fuel = tbl["flight_model"]["fuel_kg"].value<double>();
     if (thrust && mass) {
-        const double weight = (*mass + fuel.value_or(0.0)) * 9.80665;
+        const double weight = (*mass + fuel.value_or(0.0)) * fl::kG0<double>;
         if (*thrust <= weight) {
             r.errors.push_back("helicopter cannot hover: main_rotor_max_thrust_n (" + std::to_string(*thrust) +
                                " N) does not exceed the all-up weight (" + std::to_string(weight) + " N)");

@@ -10,6 +10,8 @@
 
 #include "expect.h"
 
+#include "math/Units.h"
+
 #include "flight/Trim.h"
 
 #include "flight/FlightModelParser.h"
@@ -214,15 +216,15 @@ int main(int argc, char** argv) {
             continue;
         }
         std::printf("    stall speed (1 g)   %7.1f m/s  (%.0f kt)\n", r.stall_speed_1g_mps,
-                    r.stall_speed_1g_mps * 1.94384f);
+                    r.stall_speed_1g_mps * fl::kKnotsPerMps<float>);
         std::printf("    min level speed     %7.1f m/s  (%.0f kt)\n", r.min_level_speed_mps,
-                    r.min_level_speed_mps * 1.94384f);
+                    r.min_level_speed_mps * fl::kKnotsPerMps<float>);
         std::printf("    max level speed     %7.2f M\n", r.max_level_mach);
         std::printf("    rate of climb       %7.1f m/s MIL   %7.1f m/s AB\n", r.roc_mps_mil, r.roc_mps_ab);
         std::printf("    sustained turn      %7.1f deg/s  (%.1f g)\n", r.sustained_turn_deg_s, r.sustained_g);
         std::printf("    instantaneous turn  %7.1f deg/s  (%.1f g)\n", r.instant_turn_deg_s, r.instant_g);
         std::printf("    corner speed        %7.1f m/s  (%.0f kt)\n", r.corner_speed_mps,
-                    r.corner_speed_mps * 1.94384f);
+                    r.corner_speed_mps * fl::kKnotsPerMps<float>);
         std::printf("    fuel flow           %7.2f kg/s MIL  %7.2f kg/s AB\n", r.fuel_flow_mil_kg_s,
                     r.fuel_flow_ab_kg_s);
         std::printf("    specific range      %7.0f m/kg\n\n", r.specific_range_m_per_kg);

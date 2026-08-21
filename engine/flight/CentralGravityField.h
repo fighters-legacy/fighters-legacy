@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "flight/Geodetic.h"
+#include "math/Units.h"
+
 #include "flight/IGravityField.h"
 
 #include <array>
@@ -17,7 +20,8 @@ class CentralGravityField final : public IGravityField {
     float m_centerY; // planet centre world-Y = -R
 
   public:
-    explicit CentralGravityField(float R = 6'371'000.f, float g = 9.80665f) : m_GM(g * R * R), m_centerY(-R) {}
+    explicit CentralGravityField(float R = static_cast<float>(kEarthRadiusM), float g = kG0<float>)
+        : m_GM(g * R * R), m_centerY(-R) {}
 
     std::array<float, 3> accelWorld(const double p[3]) const override {
         const double dx = p[0];
@@ -51,7 +55,7 @@ class CentralGravityField final : public IGravityField {
 
     // Pre-built Earth instance (R = 6 371 000 m, g = 9.80665 m/s²).
     static const CentralGravityField& earthInstance() {
-        static const CentralGravityField e{6'371'000.f, 9.80665f};
+        static const CentralGravityField e{static_cast<float>(kEarthRadiusM), kG0<float>};
         return e;
     }
 };

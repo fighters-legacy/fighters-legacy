@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "campaign/Frontline.h"
 
+#include "math/Angles.h"
+
 #include <cmath>
-#include <numbers>
 
 namespace fl {
 
 namespace {
-constexpr double kTwoPi = 2.0 * std::numbers::pi;
 
 // Longitude span of a bounds, handling an antimeridian-spanning box (minLon > maxLon).
 double lonSpan(const GeoBounds& b) noexcept {
     double s = b.maxLon - b.minLon;
     if (s < 0.0)
-        s += kTwoPi; // wraps the antimeridian
+        s += kTwoPi<double>; // wraps the antimeridian
     return s;
 }
 } // namespace
@@ -50,8 +50,8 @@ CellControl Frontline::at(int col, int row) const noexcept {
 void Frontline::cellCenterLatLon(int col, int row, double& latRad, double& lonRad) const noexcept {
     const double span = lonSpan(m_bounds);
     lonRad = m_bounds.minLon + (col + 0.5) * span / (m_cols > 0 ? m_cols : 1);
-    if (lonRad > std::numbers::pi)
-        lonRad -= kTwoPi; // normalise back into (-pi, pi]
+    if (lonRad > kPi<double>)
+        lonRad -= kTwoPi<double>; // normalise back into (-pi, pi]
     latRad = m_bounds.maxLat - (row + 0.5) * (m_bounds.maxLat - m_bounds.minLat) / (m_rows > 0 ? m_rows : 1);
 }
 
@@ -63,11 +63,7 @@ bool Frontline::geoToCell(double latRad, double lonRad, int& col, int& row) cons
     if (latSpan <= 0.0 || lSpan <= 0.0)
         return false;
 
-    double dLon = lonRad - m_bounds.minLon;
-    while (dLon < 0.0)
-        dLon += kTwoPi;
-    while (dLon >= kTwoPi)
-        dLon -= kTwoPi;
+    const double dLon = wrapTwoPi(lonRad - m_bounds.minLon);
     if (dLon > lSpan)
         return false; // east of the eastern edge (outside)
 

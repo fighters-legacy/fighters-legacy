@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "flight/AeroForces.h"
 
+#include "math/Angles.h"
+
 #include <algorithm>
 #include <cmath>
-#include <numbers>
 
 namespace fl {
 
 namespace {
-
-constexpr float kDegToRad = static_cast<float>(std::numbers::pi) / 180.f;
 
 // Wing sweep correction: returns effective cl_scale, k_scale, cd0_delta
 // at the current sweep angle, interpolated between spread and swept configs.
@@ -50,7 +49,7 @@ std::array<float, 3> computeForces(float alpha_rad, float beta_rad, float mach, 
                                    const PayloadEffect& payload, const FlightModelData& data,
                                    const AtmosphereState& atmos, const ArticulationState& art) {
     (void)beta_rad; // lateral side force from sideslip omitted — handled via moments only
-    const float alpha_deg = alpha_rad / kDegToRad;
+    const float alpha_deg = alpha_rad / kDegToRad<float>;
     const float q_dyn = 0.5f * atmos.density_kg_m3 * speed_m_s * speed_m_s;
     const float S = data.geometry.wing_area_m2;
 
@@ -166,14 +165,14 @@ std::array<float, 3> computeMoments(float alpha_rad, float beta_rad, float p_rad
     // the model says otherwise, so a symmetric model is unaffected.
     const float elev_travel_deg =
         (ctrl.elevator >= 0.f) ? data.controls.max_elevator_deg : data.controls.max_elevator_neg_deg;
-    const float elev_rad = -ctrl.elevator * elev_travel_deg * kDegToRad;
-    const float ail_rad = ctrl.aileron * data.controls.max_aileron_deg * kDegToRad;
-    const float rudder_rad = -ctrl.rudder * data.controls.max_rudder_deg * kDegToRad;
+    const float elev_rad = -ctrl.elevator * elev_travel_deg * kDegToRad<float>;
+    const float ail_rad = ctrl.aileron * data.controls.max_aileron_deg * kDegToRad<float>;
+    const float rudder_rad = -ctrl.rudder * data.controls.max_rudder_deg * kDegToRad<float>;
 
     // Alpha-dependent dynamic dampers (#899): the table replaces the scalar when present, else the
     // scalar. A high-alpha airframe's pitch/roll/yaw damping changes across the alpha sweep, and a
     // deep-stall model needs the post-stall values a single scalar cannot carry.
-    const float alpha_deg = alpha_rad / kDegToRad;
+    const float alpha_deg = alpha_rad / kDegToRad<float>;
     const float cm_q_eff = data.moments.cm_q_table ? data.moments.cm_q_table->lookup(alpha_deg) : data.moments.cm_q;
     const float cl_p_eff = data.moments.cl_p_table ? data.moments.cl_p_table->lookup(alpha_deg) : data.moments.cl_p;
     const float cn_r_eff = data.moments.cn_r_table ? data.moments.cn_r_table->lookup(alpha_deg) : data.moments.cn_r;

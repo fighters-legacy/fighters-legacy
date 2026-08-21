@@ -2,6 +2,8 @@
 #include "sensor/SensorDefParser.h"
 
 #include "config/TomlRead.h"
+#include "math/Units.h"
+
 #include <toml++/toml.hpp>
 
 #include <stdexcept>
@@ -11,9 +13,6 @@
 namespace fl::sensor {
 
 namespace {
-
-// Authored aviation units → SI, same rule as the weapon parser.
-constexpr float kMetresPerNauticalMile = 1852.f;
 
 // An omnidirectional sensor has no cone to author; these are what "everywhere" means to the
 // detection math, so it needs no special case for the flag.
@@ -55,11 +54,11 @@ void require_half_angle(float value, const std::string& field) {
                               : req_float(node["el_half_angle_deg"], (prefix + "el_half_angle_deg").c_str());
     require_half_angle(lobe.elHalfAngleDeg, prefix + "el_half_angle_deg");
 
-    lobe.minRangeM = opt_float(node["min_range_nm"], 0.f) * kMetresPerNauticalMile;
+    lobe.minRangeM = opt_float(node["min_range_nm"], 0.f) * kMetresPerNauticalMile<float>;
     if (lobe.minRangeM < 0.f)
         throw std::runtime_error(prefix + "min_range_nm must be >= 0");
 
-    lobe.maxRangeM = req_float(node["max_range_nm"], (prefix + "max_range_nm").c_str()) * kMetresPerNauticalMile;
+    lobe.maxRangeM = req_float(node["max_range_nm"], (prefix + "max_range_nm").c_str()) * kMetresPerNauticalMile<float>;
     if (lobe.maxRangeM <= lobe.minRangeM)
         throw std::runtime_error(prefix + "max_range_nm must be greater than " + prefix + "min_range_nm");
 

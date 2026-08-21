@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "render/FlightHud.h"
 
+#include "math/Units.h"
+
 #include "flight/BallisticLead.h" // computeBallisticLead / computeCcip (#641)
 #include "flight/Geodetic.h"      // geodeticAltitude
 #include "flight/LocalFrame.h"    // radialUp
@@ -31,7 +33,7 @@ void FlightHud::drawCombat(Ctx& c) {
 
     const double R = c.in.planetRadiusM;
     const glm::vec3 up = radialUp(c.e.position, R);
-    const glm::vec3 gravity = -9.80665f * up;
+    const glm::vec3 gravity = -kG0<float> * up;
 
     // ── gun pipper (ballistic lead) ──────────────────────────────────────────
     if (c.in.cameraValid && c.in.masterArm && c.in.designatedTarget && sel && sel->kind == 1 /*gun*/ &&

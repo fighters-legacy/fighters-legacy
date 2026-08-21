@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "math/Angles.h"
+
 #include "config/HeadTrackingSettings.h"
 
 #include <cmath>
@@ -47,13 +49,12 @@ struct HeadPoseFilter {
         if (raw) {
             // Map to the game's cockpit-look convention. opentrack yaw+ = head turning left; the game's
             // cockpit yaw+ also looks left, so a straight sign works (invertYaw fixes nonconforming rigs).
-            const float toRad = 3.14159265f / 180.0f;
             const float sy = (cfg.invertYaw ? -1.0f : 1.0f) * cfg.yawScale;
             const float sp = (cfg.invertPitch ? -1.0f : 1.0f) * cfg.pitchScale;
             const float sr = (cfg.invertRoll ? -1.0f : 1.0f) * cfg.rollScale;
-            const HeadPose target{static_cast<float>(raw->yawDeg) * toRad * sy,
-                                  static_cast<float>(raw->pitchDeg) * toRad * sp,
-                                  static_cast<float>(raw->rollDeg) * toRad * sr,
+            const HeadPose target{static_cast<float>(raw->yawDeg) * fl::kDegToRad<float> * sy,
+                                  static_cast<float>(raw->pitchDeg) * fl::kDegToRad<float> * sp,
+                                  static_cast<float>(raw->rollDeg) * fl::kDegToRad<float> * sr,
                                   clampOffset(glm::vec3{-static_cast<float>(raw->zCm), static_cast<float>(raw->yCm),
                                                         static_cast<float>(raw->xCm)} *
                                               0.01f * cfg.positionalScale),

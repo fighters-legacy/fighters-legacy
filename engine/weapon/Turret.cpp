@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "weapon/Turret.h"
 
+#include "math/Angles.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -8,15 +10,15 @@ namespace fl {
 
 namespace {
 
-constexpr float kPi = 3.14159265358979323846f;
-constexpr float kTwoPi = 2.f * kPi;
-
-// Wrap an angle into (-pi, pi].
-[[nodiscard]] float wrapPi(float a) noexcept {
-    while (a > kPi)
-        a -= kTwoPi;
-    while (a <= -kPi)
-        a += kTwoPi;
+// Wrap an angle into (-pi, pi] — CLOSED at +pi, unlike fl::wrapPi in math/Angles.h, which is
+// closed at both ends. Deliberately kept local: a turret's commanded azimuth can sit at exactly
+// ±pi (dead astern), so converting it moves a number the determinism gate watches. Everything
+// else here reads the shared constants.
+[[nodiscard]] float wrapAz(float a) noexcept {
+    while (a > kPi<float>)
+        a -= kTwoPi<float>;
+    while (a <= -kPi<float>)
+        a += kTwoPi<float>;
     return a;
 }
 
@@ -56,11 +58,11 @@ void stepTurret(TurretState& t, const TurretLimits& lim, float dt) noexcept {
     // Azimuth: a full-circle ring takes the shortest arc (it can rotate through +/-pi); a limited
     // ring slews directly, because it cannot cross the dead arc behind the trunnion.
     t.cmdAzRad = std::clamp(t.cmdAzRad, lim.azMinRad, lim.azMaxRad);
-    const bool fullCircle = (lim.azMaxRad - lim.azMinRad) >= (kTwoPi - 1e-3f);
+    const bool fullCircle = (lim.azMaxRad - lim.azMinRad) >= (kTwoPi<float> - 1e-3f);
     if (fullCircle) {
-        const float delta = wrapPi(t.cmdAzRad - t.azRad);
+        const float delta = wrapAz(t.cmdAzRad - t.azRad);
         const float step = std::clamp(delta, -maxStep, maxStep);
-        t.azRad = wrapPi(t.azRad + step);
+        t.azRad = wrapAz(t.azRad + step);
     } else {
         t.azRad = std::clamp(slewToward(t.azRad, t.cmdAzRad, maxStep), lim.azMinRad, lim.azMaxRad);
     }

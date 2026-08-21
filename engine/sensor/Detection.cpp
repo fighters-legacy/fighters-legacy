@@ -1,18 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "sensor/Detection.h"
 
+#include "math/Angles.h"
+
 #include <algorithm>
 #include <cmath>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
-#include <numbers>
 
 namespace fl::sensor {
 
 namespace {
-
-constexpr float kPi = std::numbers::pi_v<float>;
-constexpr float kRadToDeg = 180.f / kPi;
 
 // The acquisition die compares against a 24-bit threshold. Integer, so the determinism guarantee
 // does not depend on float ordering across compilers.
@@ -106,9 +104,9 @@ bool inLobe(const double observerPos[3], const float observerQuat[4], const doub
     const float fz = glm::dot(dir, b.right);
 
     // Azimuth: angle off the nose in the body's horizontal plane. Elevation: angle above it.
-    const float azDeg = std::atan2(fz, fx) * kRadToDeg;
+    const float azDeg = std::atan2(fz, fx) * kRadToDeg<float>;
     const float horiz = std::sqrt(fx * fx + fz * fz);
-    const float elDeg = std::atan2(fy, horiz) * kRadToDeg;
+    const float elDeg = std::atan2(fy, horiz) * kRadToDeg<float>;
 
     // A small epsilon so a target exactly on the boundary is INSIDE. The alternative — a target at
     // precisely the stated half-angle being invisible — would make every authored cone quietly one

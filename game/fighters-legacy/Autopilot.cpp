@@ -5,6 +5,7 @@
 #include "flight/FlightIntegrator.h" // FlightState
 #include "flight/Geodetic.h"         // geodeticAltitude
 #include "flight/LocalFrame.h"       // headingOf / bankOf
+#include "math/Angles.h"
 
 #include <algorithm>
 #include <cmath>
@@ -21,15 +22,6 @@ constexpr float kPitchRateDamp = 0.8f;                          // s, on the pit
 constexpr float kRollRateDamp = 0.25f;                          // s, on the roll rate omega[0]
 constexpr float kWingLevelP = 2.0f / std::numbers::pi_v<float>; // bank angle -> aileron
 constexpr float kSpdP = 0.02f;                                  // throttle per m/s of speed error
-
-float wrapPi(float a) {
-    constexpr float kPi = std::numbers::pi_v<float>;
-    while (a > kPi)
-        a -= 2.0f * kPi;
-    while (a < -kPi)
-        a += 2.0f * kPi;
-    return a;
-}
 
 float ownAltitude(const FlightState& s, double R) {
     return static_cast<float>(geodeticAltitude(s.pos_world[0], s.pos_world[1], s.pos_world[2], R));

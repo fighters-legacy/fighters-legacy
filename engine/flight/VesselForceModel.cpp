@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "flight/VesselForceModel.h"
 
+#include "math/Angles.h"
+
 #include "flight/EngineFailFlags.h"  // kEngineFail* — a dead plant stops the screws
 #include "flight/FlightIntegrator.h" // FlightState full definition
 
 #include <algorithm>
 #include <cmath>
-#include <numbers>
 
 namespace fl {
 
 namespace {
-constexpr float kDegToRad = static_cast<float>(std::numbers::pi) / 180.f;
 // Rate-loop gains, in units of the axis inertia per second — the moment that closes a rate error
 // in roughly a second. Ships are heavily damped; precision here is not the point, stability is.
 constexpr float kYawRateGain = 0.8f;
@@ -56,7 +56,7 @@ ForceMoment VesselForceModel::compute(const FlightState& s, const ControlInput& 
     // not answer the helm. omega[1] is yaw about +Y (positive = nose LEFT); rudder +1 = starboard
     // turn, hence the sign flip. Roll and pitch are damped flat: no waves in this model. ────────
     const float speedFrac = (v.steerage_mps > 0.f) ? std::clamp(std::abs(vx) / v.steerage_mps, 0.f, 1.f) : 1.f;
-    const float targetYawRate = -ctrl.rudder * v.turn_rate_deg_s * kDegToRad * speedFrac;
+    const float targetYawRate = -ctrl.rudder * v.turn_rate_deg_s * kDegToRad<float> * speedFrac;
     fm.moment_body[2] += (targetYawRate - s.omega[1]) * kYawRateGain * data.geometry.izz_kg_m2;
     fm.moment_body[0] += -s.omega[0] * kLevelDampGain * data.geometry.ixx_kg_m2;
     fm.moment_body[1] += -s.omega[2] * kLevelDampGain * data.geometry.iyy_kg_m2;

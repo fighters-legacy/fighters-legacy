@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ai/BallisticGuidanceController.h"
 
+#include "math/Units.h"
+
 #include "ai/Guidance.h"
 #include "flight/LocalFrame.h"
 
@@ -19,14 +21,13 @@ namespace {
 // lands if the motor quit right now. Deliberately simple — drag and the 1/r² field perturb it by
 // a few percent, and the feedback law only needs the SIGN and rough size of the overshoot.
 double predictImpactDistM(const glm::dvec3& pos, const glm::vec3& velWorld, double planetRadiusM) {
-    constexpr double g = 9.80665;
     const glm::vec3 up = fl::radialUp(pos, planetRadiusM);
     const double vUp = static_cast<double>(glm::dot(velWorld, up));
     const glm::vec3 vHvec = velWorld - up * static_cast<float>(vUp);
     const double vH = static_cast<double>(glm::length(vHvec));
     const double h = std::max(0.0, fl::localAltitude(pos, planetRadiusM));
-    const double disc = vUp * vUp + 2.0 * g * h;
-    const double tFall = (vUp + std::sqrt(std::max(0.0, disc))) / g;
+    const double disc = vUp * vUp + 2.0 * fl::kG0<double> * h;
+    const double tFall = (vUp + std::sqrt(std::max(0.0, disc))) / fl::kG0<double>;
     return vH * tFall;
 }
 

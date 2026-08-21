@@ -20,6 +20,7 @@
 // Header-only, pure math, no new link deps.
 
 #include "flight/Geodetic.h"
+#include "math/Units.h"
 
 #include <glm/geometric.hpp> // normalize, cross, dot, length
 #include <glm/gtc/quaternion.hpp>
@@ -38,6 +39,14 @@ namespace fl {
 // Local "up": unit radial direction from the planet centre to `pos`.
 [[nodiscard]] inline glm::vec3 radialUp(glm::dvec3 pos, double R) noexcept {
     return glm::vec3(glm::normalize(pos - planetCentre(R)));
+}
+
+// Gravity at `pos`: standard gravity down the local radial. Three ballistic solvers — the turret
+// gunner, the guns-employment controller and the surface-threat controllers — each spelled this
+// expression out, and the combat HUD spelled it a fourth way round, which is a lot of chances to
+// disagree about which way is down.
+[[nodiscard]] inline glm::vec3 localGravity(glm::dvec3 pos, double R) noexcept {
+    return -radialUp(pos, R) * kG0<float>;
 }
 
 // East/North/Up orthonormal basis at `pos` as a mat3 with columns (East, North, Up).

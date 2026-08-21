@@ -31,10 +31,6 @@ constexpr double kFlyGroundMarginM = 0.0; // free-fly camera descends to ground 
 // this from the mesh bounds / a cockpit-anchor node.
 constexpr double kEntityCentreHeightM = 2.36;
 
-float toRad(float deg) {
-    return deg * (glm::pi<float>() / 180.f);
-}
-
 // Horizontal "behind" direction for an entity (opposite its nose), normalized; falls back to +Z
 // when the nose points straight up/down.
 glm::dvec3 behindHorizontal(const glm::vec3& forward) {
@@ -159,7 +155,7 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
             if (camDown(fl::InputAction::FreeCamSlower))
                 m_flySpeed = std::max(2.0f, m_flySpeed * 0.92f);
 
-            const float yr = toRad(m_flyYaw);
+            const float yr = glm::radians(m_flyYaw);
             const glm::dvec3 fwdH{-std::sin(yr), 0.0, -std::cos(yr)};
             const glm::dvec3 rgtH{std::cos(yr), 0.0, -std::sin(yr)};
             const double step = static_cast<double>(m_flySpeed) * dt; // m_flySpeed is m/s
@@ -189,8 +185,8 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
         if (eyeAlt < minAlt)
             m_flyEye += glm::dvec3(radialUp(m_flyEye, m_planetRadiusM)) * (minAlt - eyeAlt);
 
-        const float yr = toRad(m_flyYaw);
-        const float pr = toRad(m_flyPitch);
+        const float yr = glm::radians(m_flyYaw);
+        const float pr = glm::radians(m_flyPitch);
         const float cp = std::cos(pr);
         const glm::vec3 forward{-std::sin(yr) * cp, std::sin(pr), -std::cos(yr) * cp};
         // Up = radial direction from the planet centre so the horizon stays level far from origin.
@@ -205,7 +201,7 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
             const glm::dvec3 target =
                 player->position + glm::dvec3(player->velocity * (m_renderAlpha * m_serverTickRate.dtSeconds()));
             const glm::vec3 fwd = player->orientation * glm::vec3{1.f, 0.f, 0.f};
-            const float pr = toRad(m_chasePitch);
+            const float pr = glm::radians(m_chasePitch);
             const double horiz = static_cast<double>(m_chaseDistance) * std::cos(pr);
             const double vert = static_cast<double>(m_chaseDistance) * std::sin(pr);
             glm::dvec3 eye;

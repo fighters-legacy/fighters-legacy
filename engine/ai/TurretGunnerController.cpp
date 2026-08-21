@@ -83,7 +83,7 @@ SeatCommand TurretGunnerController::sample(const EntityState& airframe, const Se
     const glm::dvec3 tgtPos{tv.pos[0], tv.pos[1], tv.pos[2]};
     const glm::vec3 tgtVel{tv.vel[0], tv.vel[1], tv.vel[2]};
 
-    const glm::vec3 gravity = -fl::radialUp(ownPos, m_planetRadiusM) * 9.80665f;
+    const glm::vec3 gravity = fl::localGravity(ownPos, m_planetRadiusM);
     const BallisticLeadResult lead = computeBallisticLead(ownPos, ownVel, tgtPos, tgtVel, m_muzzleVelMps, gravity);
     const glm::dvec3 aimAt = lead.valid ? lead.aimPoint : tgtPos;
 
