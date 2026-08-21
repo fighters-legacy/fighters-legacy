@@ -19,4 +19,24 @@ std::string normalizeIp(std::string_view raw) {
     return ip;
 }
 
+std::string extractIp(std::string_view addrPort) {
+    std::string_view v = addrPort;
+    std::string_view ipv;
+    if (!v.empty() && v.front() == '[') {
+        v.remove_prefix(1);
+        auto end = v.find(']');
+        ipv = (end != std::string_view::npos) ? v.substr(0, end) : v;
+    } else {
+        auto colon = v.rfind(':');
+        ipv = (colon != std::string_view::npos) ? v.substr(0, colon) : v;
+    }
+    return normalizeIp(ipv);
+}
+
+std::string extractIp(const char* addrPort) {
+    if (!addrPort)
+        return {};
+    return extractIp(std::string_view(addrPort));
+}
+
 } // namespace fl

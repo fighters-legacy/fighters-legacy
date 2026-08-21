@@ -8,7 +8,7 @@
 #include "entity/EntityState.h"
 #include "entity/EntityTypeRegistry.h"
 #include "net/AdminChannel.h" // the shared admin frontend: the per-IP lockout the gauntlet consults
-#include "net/NetworkUtils.h" // normalizeIp
+#include "net/NetworkUtils.h" // normalizeIp + extractIp — the one IP-matching pair (#1243)
 #include "net/WireCodec.h"    // appendMsg / appendExtRaw / findExt / readRecordAt
 #include "net/WorldBroadcaster.h"
 
@@ -21,27 +21,7 @@
 
 namespace fl {
 
-// ---------------------------------------------------------------------------
-// IP address helpers
-// ---------------------------------------------------------------------------
-
 namespace {
-// Extract the normalized IP from an "ip:port" or "[ip]:port" string returned by getPeerAddress().
-static std::string extractIp(const char* addrPort) {
-    if (!addrPort)
-        return {};
-    std::string_view av(addrPort);
-    std::string_view ipv;
-    if (!av.empty() && av.front() == '[') {
-        av.remove_prefix(1);
-        auto end = av.find(']');
-        ipv = (end != std::string_view::npos) ? av.substr(0, end) : av;
-    } else {
-        auto colon = av.rfind(':');
-        ipv = (colon != std::string_view::npos) ? av.substr(0, colon) : av;
-    }
-    return fl::normalizeIp(ipv);
-}
 
 // ---------------------------------------------------------------------------
 // Connection-rejection reason table — one place mapping each ConnectRefusalCode

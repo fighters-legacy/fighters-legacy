@@ -32,3 +32,43 @@ TEST_CASE("normalizeIp passes plain IPv6 without brackets through", "[network_ut
 TEST_CASE("normalizeIp returns empty string for empty input", "[network_utils]") {
     REQUIRE(fl::normalizeIp("") == "");
 }
+
+// ---------------------------------------------------------------------------
+// extractIp (#1243) — promoted out of PeerAdmission so the admission path and the admin commands
+// match peers by IP the SAME way. Both had a private copy; ban/kick/unban/lockout all key on this,
+// so two implementations were two chances to disagree about which peer an operator just banned.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("extractIp takes the address off an ip:port pair", "[network_utils]") {
+    REQUIRE(fl::extractIp("1.2.3.4:5678") == "1.2.3.4");
+    REQUIRE(fl::extractIp("127.0.0.1:4793") == "127.0.0.1");
+}
+
+TEST_CASE("extractIp handles a bracketed IPv6 address with a port", "[network_utils]") {
+    REQUIRE(fl::extractIp("[2001:db8::1]:4793") == "2001:db8::1");
+    REQUIRE(fl::extractIp("[::1]:4793") == "::1");
+}
+
+TEST_CASE("extractIp normalizes an IPv6-mapped IPv4 peer", "[network_utils]") {
+    // What an enet6 socket actually reports for an IPv4 client — a ban entered as "1.2.3.4" must
+    // match it, which is only true because extractIp normalizes rather than just splitting.
+    REQUIRE(fl::extractIp("[::ffff:1.2.3.4]:4793") == "1.2.3.4");
+    REQUIRE(fl::extractIp("::ffff:1.2.3.4:4793") == "1.2.3.4");
+}
+
+TEST_CASE("extractIp accepts an address with no port", "[network_utils]") {
+    REQUIRE(fl::extractIp("1.2.3.4") == "1.2.3.4");
+    REQUIRE(fl::extractIp("[2001:db8::1]") == "2001:db8::1");
+}
+
+TEST_CASE("extractIp truncates an unbracketed port-less IPv6 literal, deliberately", "[network_utils]") {
+    // Documented limit, pinned so it is found rather than discovered: the string is genuinely
+    // ambiguous (is the last group a port?). getPeerAddress() always supplies "ip:port", so no
+    // production caller reaches this; a future caller that would should bracket the address.
+    REQUIRE(fl::extractIp("2001:db8::1") == "2001:db8:");
+}
+
+TEST_CASE("extractIp treats null and empty addresses as no IP", "[network_utils]") {
+    REQUIRE(fl::extractIp(static_cast<const char*>(nullptr)) == "");
+    REQUIRE(fl::extractIp("") == "");
+}
