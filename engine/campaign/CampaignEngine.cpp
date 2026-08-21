@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "campaign/CampaignEngine.h"
+#include "util/Parse.h"
 
 #include "flight/Geodetic.h" // geodeticToWorld
 
@@ -19,16 +20,15 @@ std::pair<std::string, std::string> splitTrigger(const std::string& t) {
     return {t.substr(0, colon), t.substr(colon + 1)};
 }
 
+// Fallback variants over the tolerant parser in util/Parse.h (#1244). Campaign state fields are
+// read back from saves that may predate a field, so an unreadable value takes the default rather
+// than failing the load — the contract these two have always had, now spelled out.
 int toInt(const std::string& s, int fallback = 0) {
-    int v = fallback;
-    std::from_chars(s.data(), s.data() + s.size(), v);
-    return v;
+    return parseLeadingInt<int>(s).value_or(fallback);
 }
 
 uint64_t toU64(const std::string& s, uint64_t fallback = 0) {
-    uint64_t v = fallback;
-    std::from_chars(s.data(), s.data() + s.size(), v);
-    return v;
+    return parseLeadingInt<uint64_t>(s).value_or(fallback);
 }
 
 std::vector<std::string> splitList(const std::string& s, char sep) {

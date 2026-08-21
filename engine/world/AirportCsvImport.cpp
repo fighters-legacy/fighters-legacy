@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "world/AirportCsvImport.h"
+#include "util/Parse.h"
+#include "util/Str.h"
 
 #include <algorithm>
 #include <cctype>
@@ -80,17 +82,10 @@ using ColumnMap = std::unordered_map<std::string, std::size_t>;
     return row[it->second];
 }
 
+// Deliberately the TOLERANT parser (#1244): OurAirports fields carry unit suffixes and stray
+// characters, and a row that reads "1500 ft" should import as 1500, not be dropped.
 [[nodiscard]] bool parseDouble(std::string_view s, double& out) {
-    // std::from_chars for double is unavailable on Apple Clang; use strtod on a NUL-terminated copy.
-    if (s.empty())
-        return false;
-    std::string tmp(s);
-    char* end = nullptr;
-    const double v = std::strtod(tmp.c_str(), &end);
-    if (end == tmp.c_str())
-        return false;
-    out = v;
-    return true;
+    return readInto(parseLeadingDouble(trim(s)), out);
 }
 
 constexpr double kFtToM = 0.3048;

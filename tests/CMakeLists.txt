@@ -385,6 +385,13 @@ target_link_libraries(test_folder_content_pack PRIVATE Catch2::Catch2WithMain en
 catch_discover_tests(test_folder_content_pack)
 
 # fl::tomlInt guards five parsers against a real UB bug in toml++ (#824).
+# The one strict/tolerant number parse family behind the console, admin, AI-factory, importer and
+# mission-runtime parsers (#1244). Header-only, so no engine library is needed.
+add_executable(test_parse test_parse.cpp)
+target_link_libraries(test_parse PRIVATE Catch2::Catch2WithMain)
+target_include_directories(test_parse PRIVATE "${CMAKE_SOURCE_DIR}/engine")
+catch_discover_tests(test_parse)
+
 add_executable(test_toml_numeric test_toml_numeric.cpp)
 target_link_libraries(test_toml_numeric PRIVATE Catch2::Catch2WithMain tomlplusplus::tomlplusplus)
 target_include_directories(test_toml_numeric PRIVATE "${CMAKE_SOURCE_DIR}/engine")
@@ -1578,7 +1585,8 @@ catch_discover_tests(test_screen_manager)
 add_executable(test_connect_args test_connect_args.cpp)
 target_link_libraries(test_connect_args PRIVATE Catch2::Catch2WithMain)
 target_include_directories(test_connect_args PRIVATE
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy")
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
+    "${CMAKE_SOURCE_DIR}/engine") # header-only: util/Parse.h for isAllDigits (#1244)
 catch_discover_tests(test_connect_args)
 
 # #1054: the embedded single-player server must not contend for the standard game port. Header-only

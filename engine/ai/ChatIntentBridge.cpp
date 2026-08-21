@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ai/ChatIntentBridge.h"
+#include "util/Str.h"
 
 #include <algorithm>
 #include <cctype>
@@ -25,20 +26,6 @@ std::string_view intentRejectionName(IntentRejection r) noexcept {
 }
 
 namespace {
-
-[[nodiscard]] bool isWs(char c) noexcept {
-    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
-}
-
-[[nodiscard]] std::string_view trim(std::string_view s) noexcept {
-    std::size_t b = 0;
-    std::size_t e = s.size();
-    while (b < e && isWs(s[b]))
-        ++b;
-    while (e > b && isWs(s[e - 1]))
-        --e;
-    return s.substr(b, e - b);
-}
 
 [[nodiscard]] char lower(char c) noexcept {
     return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));

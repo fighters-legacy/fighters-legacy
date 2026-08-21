@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "util/Parse.h"
+
 #include "ai/BallisticGuidanceController.h"
 #include "ai/BreakTurnController.h"
 #include "ai/DynamicLoiterController.h"
@@ -76,22 +78,10 @@ namespace fl::ai {
 inline std::unique_ptr<fl::IEntityController> createController(std::string_view behavior,
                                                                std::span<std::string_view> args,
                                                                const fl::EntityManager* entityManager = nullptr) {
-    // Parse a double from a string_view using strtod.
-    // from_chars for floating-point is not available on Apple Clang.
-    auto parseDouble = [](std::string_view sv, double& out) -> bool {
-        if (sv.empty())
-            return false;
-        std::string tmp(sv);
-        char* end = nullptr;
-        out = std::strtod(tmp.c_str(), &end);
-        return end != tmp.c_str() && end == tmp.c_str() + sv.size();
-    };
-
-    // Parse a uint32_t from a string_view using from_chars (integer support on all platforms).
-    auto parseUint32 = [](std::string_view sv, uint32_t& out) -> bool {
-        auto [ptr, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), out);
-        return ec == std::errc{} && ptr == sv.data() + sv.size();
-    };
+    // Call-shape adapters over the strict parsers in util/Parse.h (#1244) — the rule lives there,
+    // these keep the bool/out-param form the argument checks below are written in.
+    auto parseDouble = [](std::string_view sv, double& out) { return fl::readInto(fl::parseDouble(sv), out); };
+    auto parseUint32 = [](std::string_view sv, uint32_t& out) { return fl::readInto(fl::parseU32(sv), out); };
 
     // Find a live (non-dead) entity by pool index, returning its EntityId.
     // Must be called on the sim thread (entityManager->forEach is sim-thread only).

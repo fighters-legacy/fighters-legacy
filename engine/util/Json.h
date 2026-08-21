@@ -27,6 +27,7 @@
 //
 // Numbers go through `strtod`, NOT `std::from_chars`: Apple Clang has no floating-point `from_chars`.
 
+#include "util/Str.h"
 #include <cstdio>
 #include <cstdlib>
 #include <optional>
@@ -104,18 +105,10 @@ namespace fl::json {
 // name-keyed, so a reader must ignore what it does not recognise rather than fail on it. What it is
 // NOT tolerant of is structure: a malformed object yields nothing rather than a guess.
 
-[[nodiscard]] inline bool isWs(char c) noexcept {
-    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
-}
-
-[[nodiscard]] inline std::string_view trim(std::string_view s) noexcept {
-    std::size_t b = 0, e = s.size();
-    while (b < e && isWs(s[b]))
-        ++b;
-    while (e > b && isWs(s[e - 1]))
-        --e;
-    return s.substr(b, e - b);
-}
+// The one implementation lives in util/Str.h (#1244); these keep the `json::` spelling that reads
+// correctly at the call sites below.
+using fl::isWs;
+using fl::trim;
 
 // Index just past the string literal starting at `i` (which must be its opening quote), or npos.
 [[nodiscard]] inline std::size_t skipString(std::string_view s, std::size_t i) noexcept {

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "mission/MissionRuntime.h"
+#include "util/Parse.h"
+#include "util/Str.h"
 
 #include "entity/EntityManager.h"
 #include "entity/EntityState.h"
@@ -56,8 +58,11 @@ bool MissionRuntime::evaluatePredicate(const std::string& on) const {
         return true; // fires on the first evaluation
     // The shared grammar (#1239): a ref this rejects is the same ref validate-mission rejects.
     if (const auto secs = triggerArg(on, "timer")) {
-        const double t = std::strtod(secs->c_str(), nullptr);
-        return m_outcome.elapsedSeconds >= t;
+        // Strict (#1244). `std::strtod(s, nullptr)` returned 0.0 for a non-numeric argument, so
+        // `timer(soon)` fired the instant the mission started. It now never fires, and
+        // validate-mission rejects it, so an authored mission cannot reach this branch with one.
+        const auto t = parseDouble(trim(*secs));
+        return t && m_outcome.elapsedSeconds >= *t;
     }
     if (const auto obj = triggerArg(on, "destroy"))
         return isObjectDestroyed(*obj);

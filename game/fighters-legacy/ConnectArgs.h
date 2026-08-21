@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "util/Parse.h"
+
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
@@ -25,14 +27,7 @@ inline bool parseConnectArg(const char* arg, std::string& host, uint16_t& port) 
         const std::string suffix = s.substr(colon + 1);
 
         // Accept only all-digit, non-empty suffixes.
-        bool allDigits = !suffix.empty();
-        for (char c : suffix)
-            if (!std::isdigit(static_cast<unsigned char>(c))) {
-                allDigits = false;
-                break;
-            }
-
-        if (allDigits) {
+        if (isAllDigits(suffix)) {
             const long p = std::strtol(suffix.c_str(), nullptr, 10);
             if (p >= 1 && p <= 65535) {
                 port = static_cast<uint16_t>(p);
