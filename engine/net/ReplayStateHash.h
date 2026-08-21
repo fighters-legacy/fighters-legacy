@@ -33,6 +33,7 @@
 
 #include "Quantization.h"
 #include "SnapshotCodec.h"
+#include "math/Fnv.h"
 
 #include <cmath>
 #include <cstddef>
@@ -40,14 +41,10 @@
 
 namespace fl {
 
-inline constexpr uint64_t kFnv1a64Offset = 1469598103934665603ull;
-inline constexpr uint64_t kFnv1a64Prime = 1099511628211ull;
-
+// The hash itself is math/Fnv.h's (#1247). This file's copy carried a basis one digit short of
+// FNV-1a's, so the value below is NOT what it was before that fix -- see the commit.
 inline void hashFold(uint64_t& h, uint64_t v) noexcept {
-    for (int i = 0; i < 8; ++i) {
-        h ^= (v >> (8 * i)) & 0xFFull;
-        h *= kFnv1a64Prime;
-    }
+    fnv1a64Fold(h, v);
 }
 
 // Fold one entity's quantized state into `h`. Position is folded relative to the entity's own shared
@@ -94,7 +91,7 @@ inline void hashQuantEntity(uint64_t& h, const QuantEntity& e) noexcept {
 // Hash a whole tick. `ents` must be in ascending idx order; `count` is folded in so a truncated
 // record list cannot hash equal to a complete one that happens to share a prefix.
 [[nodiscard]] inline uint64_t hashTickState(uint64_t tick, const QuantEntity* ents, std::size_t count) noexcept {
-    uint64_t h = kFnv1a64Offset;
+    uint64_t h = kFnv1a64Basis;
     hashFold(h, tick);
     hashFold(h, static_cast<uint64_t>(count));
     for (std::size_t i = 0; i < count; ++i)

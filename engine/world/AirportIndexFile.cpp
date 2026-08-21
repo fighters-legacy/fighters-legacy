@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "world/AirportIndexFile.h"
+#include "math/Fnv.h"
 
 #include <bit>
 #include <cstring>
@@ -90,16 +91,9 @@ struct Reader {
 } // namespace
 
 uint64_t airportSourceHash(std::string_view airportsCsv, std::string_view runwaysCsv) noexcept {
-    uint64_t h = 14695981039346656037ull; // FNV-1a offset basis
-    auto mix = [&h](std::string_view s) {
-        for (char c : s) {
-            h ^= static_cast<uint8_t>(c);
-            h *= 1099511628211ull; // FNV-1a prime
-        }
-    };
-    mix(airportsCsv);
-    mix(runwaysCsv);
-    return h;
+    // One running hash over both files, not two hashes combined: either CSV changing has to change
+    // the result, and concatenating them into one fold is what makes that true.
+    return fnv1a64(runwaysCsv, fnv1a64(airportsCsv));
 }
 
 std::vector<uint8_t> writeAirportIndex(const std::vector<AirportDef>& defs, uint64_t sourceHash) {

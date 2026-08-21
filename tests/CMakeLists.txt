@@ -406,6 +406,13 @@ if(NOT MSVC)
 endif()
 catch_discover_tests(test_quat)
 
+# The one FNV-1a, checked against the PUBLISHED vectors (#1247) -- two copies had a basis one digit
+# short and agreed with themselves perfectly, so only an external reference catches that class of bug.
+add_executable(test_fnv test_fnv.cpp)
+target_link_libraries(test_fnv PRIVATE Catch2::Catch2WithMain)
+target_include_directories(test_fnv PRIVATE "${CMAKE_SOURCE_DIR}/engine")
+catch_discover_tests(test_fnv)
+
 add_executable(test_toml_numeric test_toml_numeric.cpp)
 target_link_libraries(test_toml_numeric PRIVATE Catch2::Catch2WithMain tomlplusplus::tomlplusplus)
 target_include_directories(test_toml_numeric PRIVATE "${CMAKE_SOURCE_DIR}/engine")

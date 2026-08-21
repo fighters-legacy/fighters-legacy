@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <catch2/catch_test_macros.hpp>
 
+#include "math/Fnv.h"
 #include "render/BuiltinBiomes.h"
 
 #include <cstdint>
@@ -10,12 +11,7 @@ using namespace fl;
 namespace {
 // FNV-1a over a texture's pixels — a byte-stability fingerprint.
 uint64_t hashPixels(const BuiltinRgbaTexture& t) {
-    uint64_t h = 14695981039346656037ull;
-    for (uint8_t b : t.pixels) {
-        h ^= b;
-        h *= 1099511628211ull;
-    }
-    return h;
+    return fnv1a64(t.pixels.data(), t.pixels.size());
 }
 } // namespace
 
