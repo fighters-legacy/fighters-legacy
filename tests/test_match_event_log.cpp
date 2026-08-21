@@ -378,8 +378,8 @@ TEST_CASE("MatchEventLog: the type vocabulary round-trips and gates untrusted or
 // ── JSON ────────────────────────────────────────────────────────────────────────────────────────
 
 TEST_CASE("jsonEscape closes the injection a raw chat line would open", "[match_event_log][json]") {
-    // MissionReport.h assumes safe input and says so; this document carries chat text and admin
-    // commands, which a player controls.
+    // This document carries chat text and admin commands, which a player controls. (MissionReport.h
+    // used to assume safe input instead; it routes through this same escaper since #1234.)
     CHECK(json::escape("plain") == "plain");
     CHECK(json::escape("say \"hi\"") == "say \\\"hi\\\"");
     CHECK(json::escape("back\\slash") == "back\\\\slash");

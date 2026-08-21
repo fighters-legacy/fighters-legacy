@@ -1226,6 +1226,11 @@ add_executable(test_match_event_log test_match_event_log.cpp)
 target_link_libraries(test_match_event_log PRIVATE Catch2::Catch2WithMain engine-net)
 catch_discover_tests(test_match_event_log)
 
+# MissionReport stays valid JSON whatever the mission is named (#1234).
+add_executable(test_mission_report test_mission_report.cpp)
+target_link_libraries(test_mission_report PRIVATE Catch2::Catch2WithMain engine-mission)
+catch_discover_tests(test_mission_report)
+
 # Engine-layer snapshot payload codec (#775; zstd wrapper in engine-compress).
 add_executable(test_snapshot_compression test_snapshot_compression.cpp)
 target_link_libraries(test_snapshot_compression PRIVATE Catch2::Catch2WithMain engine-compress)
