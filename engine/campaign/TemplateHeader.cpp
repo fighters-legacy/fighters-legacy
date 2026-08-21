@@ -6,40 +6,48 @@
 
 namespace fl {
 
-namespace {
-// Extract just the top-level `template:` block text (the `template:` line + its indented body), so we
-// parse only the header, not the whole mission YAML. Mirrors stripTemplateHeader's column-0 discipline.
-std::string extractHeaderBlock(std::string_view yaml) {
-    std::string block;
-    bool in = false;
-    size_t pos = 0;
-    while (pos <= yaml.size()) {
-        size_t nl = yaml.find('\n', pos);
-        std::string_view line = yaml.substr(pos, nl == std::string_view::npos ? std::string_view::npos : nl - pos);
-        if (!in) {
-            if (line.rfind("template:", 0) == 0) {
-                in = true;
-                block += "template:\n";
+TemplateSplit splitTemplateHeader(std::string_view yaml) {
+    TemplateSplit out;
+    bool inHeader = false;
+    bool headerDone = false;
+    std::size_t pos = 0;
+    while (pos < yaml.size()) {
+        const std::size_t nl = yaml.find('\n', pos);
+        const std::string_view line = (nl == std::string_view::npos) ? yaml.substr(pos) : yaml.substr(pos, nl - pos);
+
+        if (!inHeader && !headerDone && line.rfind("template:", 0) == 0) {
+            inHeader = true;
+            out.header += "template:\n"; // normalized: the parser reads the block, never this line's tail
+        } else if (inHeader) {
+            // The one boundary definition (#1238): blank = only spaces/tabs/'\r' (a CRLF-authored
+            // blank line arrives as a lone '\r' and is still blank); blank and indented lines
+            // belong to the header; the first column-0 non-blank line ends it.
+            const bool blank = line.find_first_not_of(" \t\r") == std::string_view::npos;
+            const bool indented = !line.empty() && (line[0] == ' ' || line[0] == '\t');
+            if (blank || indented) {
+                out.header += std::string(line);
+                out.header += '\n';
+            } else {
+                inHeader = false;
+                headerDone = true;
+                out.body += std::string(line);
+                out.body += '\n';
             }
         } else {
-            // Header body lines are indented (start with a space/tab); a column-0 non-blank ends it.
-            if (!line.empty() && line[0] != ' ' && line[0] != '\t') {
-                break;
-            }
-            block += std::string(line);
-            block += '\n';
+            out.body += std::string(line);
+            out.body += '\n';
         }
+
         if (nl == std::string_view::npos)
             break;
         pos = nl + 1;
     }
-    return block;
+    return out;
 }
-} // namespace
 
 TemplateHeaderResult parseTemplateHeader(std::string_view templateYaml) {
     TemplateHeaderResult r;
-    const std::string block = extractHeaderBlock(templateYaml);
+    const std::string block = splitTemplateHeader(templateYaml).header;
     if (block.empty())
         return r; // no header -> present stays false
 

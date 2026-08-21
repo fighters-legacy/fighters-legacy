@@ -1,45 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "campaign/MissionTemplate.h"
 
-#include <cctype>
-#include <sstream>
+#include "campaign/TemplateHeader.h"
 
 namespace fl {
 
 namespace {
-
-// Remove a leading top-level `template:` block: the `template:` line (at column 0) plus every following
-// indented (or blank) line, up to the next line that begins at column 0 with non-whitespace. Templates
-// put the header first, so this is a simple, robust strip that leaves the mission body untouched.
-std::string stripTemplateHeader(std::string_view yaml) {
-    std::istringstream is{std::string(yaml)};
-    std::ostringstream os;
-    std::string line;
-    bool inHeader = false;
-    bool done = false;
-    while (std::getline(is, line)) {
-        if (!done && !inHeader) {
-            // Detect the header start: a line beginning "template:" at column 0.
-            std::string_view sv{line};
-            if (sv.rfind("template:", 0) == 0) {
-                inHeader = true;
-                continue; // drop the `template:` line
-            }
-            os << line << '\n';
-            continue;
-        }
-        if (inHeader) {
-            const bool blank = line.find_first_not_of(" \t\r") == std::string::npos;
-            const bool indented = !line.empty() && (line[0] == ' ' || line[0] == '\t');
-            if (blank || indented)
-                continue; // still inside the header block
-            inHeader = false;
-            done = true; // the header is fully consumed; the rest is the mission body
-        }
-        os << line << '\n';
-    }
-    return os.str();
-}
 
 // Look up ${name.field} (or ${name} -> name."") in the fills; returns false if absent.
 bool resolvePlaceholder(const TemplateFills& fills, std::string_view token, std::string& out) {
@@ -60,7 +26,7 @@ bool resolvePlaceholder(const TemplateFills& fills, std::string_view token, std:
 
 std::string materializeMissionTemplate(std::string_view templateYaml, const TemplateFills& fills,
                                        std::vector<std::string>* warnings) {
-    const std::string body = stripTemplateHeader(templateYaml);
+    const std::string body = splitTemplateHeader(templateYaml).body;
 
     std::string out;
     out.reserve(body.size());
