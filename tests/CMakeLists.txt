@@ -1106,6 +1106,11 @@ add_executable(test_frontline_png test_frontline_png.cpp)
 target_link_libraries(test_frontline_png PRIVATE Catch2::Catch2WithMain engine-campaign-png)
 catch_discover_tests(test_frontline_png)
 
+# The one untrusted-PNG chunk guard behind terrain, frontline and the Vulkan texture loader (#1237).
+add_executable(test_png_sanity test_png_sanity.cpp)
+target_link_libraries(test_png_sanity PRIVATE Catch2::Catch2WithMain platform-hal)
+catch_discover_tests(test_png_sanity)
+
 add_executable(test_validate_campaign test_validate_campaign.cpp)
 target_link_libraries(test_validate_campaign PRIVATE Catch2::Catch2WithMain validate-campaign-lib engine-campaign-png)
 target_include_directories(test_validate_campaign PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

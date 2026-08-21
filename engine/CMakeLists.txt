@@ -411,6 +411,9 @@ add_library(engine-campaign-png STATIC
 target_include_directories(engine-campaign-png
     PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}
     PRIVATE "${stb_SOURCE_DIR}")
+target_link_libraries(engine-campaign-png
+    PUBLIC platform-hal   # PngSanity.h — the shared untrusted-PNG chunk guard (#1237)
+)
 # One vendored-header TU (STB_IMAGE_STATIC) — quiet the stb unused-function warnings under -Werror.
 set_source_files_properties(campaign/FrontlinePng.cpp PROPERTIES
     COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/W0,-w>")

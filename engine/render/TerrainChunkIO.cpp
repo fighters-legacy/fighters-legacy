@@ -11,31 +11,13 @@
 
 #include "render/TerrainChunkIO.h"
 
+#include "PngSanity.h"
+
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 
 namespace fl {
-
-// Reject a PNG whose chunk lengths overrun the buffer before handing it to stb_image. stb allocates
-// a chunk's DECLARED length up-front (its IDAT reader honors any length below its internal 1 GB cap),
-// so a tiny file claiming a huge IDAT triggers a huge allocation from an untrusted content-pack chunk
-// (a memory-exhaustion DoS). A well-formed PNG never declares a chunk longer than the data that
-// follows it. Walk the chunk list: 8-byte signature, then repeated [len:u32 BE][type:4][data:len][crc:4].
-static bool pngChunkLengthsSane(const uint8_t* d, size_t n) noexcept {
-    if (n < 8)
-        return false;
-    size_t off = 8; // skip the PNG signature
-    while (off + 8 <= n) {
-        const uint32_t len = (static_cast<uint32_t>(d[off]) << 24) | (static_cast<uint32_t>(d[off + 1]) << 16) |
-                             (static_cast<uint32_t>(d[off + 2]) << 8) | static_cast<uint32_t>(d[off + 3]);
-        // After the 4-byte length + 4-byte type at off, `len` data bytes must fit in what remains.
-        if (len > n - off - 8)
-            return false;
-        off += static_cast<size_t>(12) + len; // len(4) + type(4) + data(len) + crc(4); no overflow (len ≤ n)
-    }
-    return true;
-}
 
 std::vector<uint16_t> decodeTerrainChunkPng(const uint8_t* data, size_t size, int* outWidth, int* outHeight) noexcept {
     if (!data || size == 0)
@@ -43,9 +25,9 @@ std::vector<uint16_t> decodeTerrainChunkPng(const uint8_t* data, size_t size, in
 
     // Terrain chunks are always PNG. Require the 8-byte PNG signature up front so stb_image never
     // dispatches to its other, more fragile format decoders (PSD/PNM/HDR/...) on a mis-typed or
-    // malicious chunk — that keeps the untrusted-decode surface to stb's PNG path alone.
-    static constexpr uint8_t kPngSig[8] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
-    if (size < sizeof(kPngSig) || std::memcmp(data, kPngSig, sizeof(kPngSig)) != 0)
+    // malicious chunk — that keeps the untrusted-decode surface to stb's PNG path alone. The
+    // chunk-length guard is the shared platform/PngSanity.h (#1237).
+    if (!hasPngSignature(data, size))
         return {};
 
     if (!pngChunkLengthsSane(data, size))
