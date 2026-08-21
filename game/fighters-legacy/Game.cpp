@@ -31,6 +31,7 @@
 #include "Platform.h"
 #include "PrecipitationController.h"
 #include "RecordScheduler.h"
+#include "RendererSettingsMap.h"
 #include "ReplayPlayer.h"
 #include "ReplaySelectScreen.h"
 #include "SDL3AudioCaptureFactory.h" // Epic J microphone capture (#531)
@@ -197,44 +198,6 @@ static std::function<void(std::string_view)> makeNetworkAdminSender(INetwork& ne
         msg.command[clen] = '\0';
         net.send(0, &msg, sizeof(msg), /*reliable=*/true);
     };
-}
-
-static RendererSettings buildRendererSettings(const GraphicsSettings& g) {
-    RendererSettings s{};
-    switch (g.vsync) {
-    case VsyncMode::Off:
-        s.vsync = RendererVsyncMode::Off;
-        break;
-    case VsyncMode::Adaptive:
-        s.vsync = RendererVsyncMode::Adaptive;
-        break;
-    default:
-        s.vsync = RendererVsyncMode::On;
-        break;
-    }
-    // Ordinals must stay in sync with the enum definitions in both headers.
-    s.aaMode = static_cast<RendererAAMode>(g.aaMode);
-    s.shadowQuality = static_cast<RendererShadowQuality>(g.shadowQuality);
-    s.particleDensity = static_cast<RendererParticleDensity>(g.particleDensity);
-    s.aoMode = static_cast<RendererAOMode>(g.ambientOcclusion);
-    s.skyQuality = static_cast<RendererSkyQuality>(g.skyQuality);
-    s.autoExposure = true; // baseline HDR feature, always on
-    s.bloom = (g.qualityPreset >= QualityLevel::Medium);
-    switch (g.drawDistance) {
-    case DrawDistance::Low:
-        s.drawDistanceKm = 20.0f;
-        break;
-    case DrawDistance::Medium:
-        s.drawDistanceKm = 50.0f;
-        break;
-    case DrawDistance::Ultra:
-        s.drawDistanceKm = 200.0f;
-        break;
-    default:
-        s.drawDistanceKm = 100.0f;
-        break; // High
-    }
-    return s;
 }
 
 static const fl::EntityRenderEntry* findPlayerEntry(const fl::SimRenderBridge& bridge, uint32_t idx, uint32_t gen) {
@@ -1132,7 +1095,7 @@ bool Game::initWindowAndRenderer() {
             return false;
         }
         d.services.crashReporter.setGpuInfo(d.services.p.renderer->gpuInfo());
-        d.services.rendererSettings = buildRendererSettings(d.services.userConfig->graphics());
+        d.services.rendererSettings = rendererSettingsFrom(d.services.userConfig->graphics());
         d.services.p.renderer->applySettings(d.services.rendererSettings);
 
         auto asyncFsH = std::make_unique<StdAsyncFilesystem>(d.services.assetsRoot, d.services.userDataDir);
@@ -1194,7 +1157,7 @@ bool Game::initWindowAndRenderer() {
     d.services.p.window->setEventHandler(&d.services.resizeHandler);
     d.services.crashReporter.setGpuInfo(d.services.p.renderer->gpuInfo());
 
-    d.services.rendererSettings = buildRendererSettings(d.services.userConfig->graphics());
+    d.services.rendererSettings = rendererSettingsFrom(d.services.userConfig->graphics());
     d.services.p.renderer->applySettings(d.services.rendererSettings);
 
     // #156: bring up the IGui backend (Dear ImGui) now the window + renderer exist. A null result (init

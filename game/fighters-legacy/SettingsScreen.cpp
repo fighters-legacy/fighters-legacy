@@ -5,6 +5,7 @@
 #include "IInput.h"
 #include "IRenderer.h"
 #include "IWindow.h"
+#include "RendererSettingsMap.h"
 #include "config/UserConfig.h"
 
 #include <algorithm>
@@ -12,20 +13,6 @@
 #include <string>
 
 namespace fl {
-
-static float drawDistKm(DrawDistance d) {
-    switch (d) {
-    case DrawDistance::Low:
-        return 20.0f;
-    case DrawDistance::Medium:
-        return 50.0f;
-    case DrawDistance::High:
-        return 100.0f;
-    case DrawDistance::Ultra:
-        return 200.0f;
-    }
-    return 50.0f;
-}
 
 static const char* aaModeLabel(AntiAliasingMode m) {
     switch (m) {
@@ -187,28 +174,8 @@ void SettingsScreen::applyAndSave() {
     m_userConfig.setVoice(m_voice);
     m_userConfig.save();
 
-    RendererSettings rs;
-    switch (m_graphics.vsync) {
-    case VsyncMode::Off:
-        rs.vsync = RendererVsyncMode::Off;
-        break;
-    case VsyncMode::On:
-        rs.vsync = RendererVsyncMode::On;
-        break;
-    case VsyncMode::Adaptive:
-        rs.vsync = RendererVsyncMode::Adaptive;
-        break;
-    }
-    // Ordinals must stay in sync with the enum definitions in both headers.
-    rs.aaMode = static_cast<RendererAAMode>(m_graphics.aaMode);
-    rs.shadowQuality = static_cast<RendererShadowQuality>(m_graphics.shadowQuality);
-    rs.particleDensity = static_cast<RendererParticleDensity>(m_graphics.particleDensity);
-    rs.aoMode = static_cast<RendererAOMode>(m_graphics.ambientOcclusion);
-    rs.skyQuality = static_cast<RendererSkyQuality>(m_graphics.skyQuality);
-    rs.autoExposure = true; // baseline HDR feature, always on
-    rs.bloom = true;        // not surfaced in Phase 2 settings
-    rs.drawDistanceKm = drawDistKm(m_graphics.drawDistance);
-    m_renderer.applySettings(rs);
+    // The one mapping (#1235) — Apply and a fresh launch must render the same config identically.
+    m_renderer.applySettings(rendererSettingsFrom(m_graphics));
 }
 
 Screen SettingsScreen::update(IInput& input, IWindow& window) {
