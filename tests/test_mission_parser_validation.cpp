@@ -277,6 +277,20 @@ TEST_CASE("parseMission: triggers are required and reference real objects (#1145
     CHECK(parseMission(withTriggers("triggers:\n  - { on: timer(60), do: mission_failure }\n")).ok);
 }
 
+TEST_CASE("parseMission: a malformed destroy/timer ref is an error, not silently unchecked (#1239)",
+          "[mission][parser]") {
+    // The defect: `destroy(sam1))` matched neither the validator's old regex (so the unknown-id
+    // check never ran and validation PASSED) nor anything the runtime could fire. The shared
+    // grammar makes it a validation error.
+    rejects(withTriggers("triggers:\n  - { on: \"destroy(sam1))\", do: mission_success }\n"), "malformed trigger ref");
+    rejects(withTriggers("triggers:\n  - { on: \"timer(5))\", do: mission_success }\n"), "malformed trigger ref");
+    rejects(withTriggers("triggers:\n  - { on: \"destroy()\", do: mission_success }\n"), "malformed trigger ref");
+
+    // Unrelated predicates stay legal and unchecked — reach/zone extensions and Lua-only
+    // predicates never fire in the builtin evaluator by design (missions.md).
+    CHECK(parseMission(withTriggers("triggers:\n  - { on: zone_entered, do: mission_success }\n")).ok);
+}
+
 // ---------------------------------------------------------------------------
 // cinematic camera track
 // ---------------------------------------------------------------------------

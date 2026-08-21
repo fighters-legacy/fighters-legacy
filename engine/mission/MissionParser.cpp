@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "mission/MissionParser.h"
 
-#include "flight/Geodetic.h"    // the authoring-frame -> world resolution (#1211)
-#include "world/SandboxHome.h"  // `anchor: home` — where the sandbox lives
-#include "world/ZoneGeometry.h" // isConvexPolygonXZ — airspace_zones convexity check (#162)
+#include "flight/Geodetic.h"        // the authoring-frame -> world resolution (#1211)
+#include "mission/TriggerGrammar.h" // the ONE destroy()/timer() ref grammar, shared with the runtime (#1239)
+#include "world/SandboxHome.h"      // `anchor: home` — where the sandbox lives
+#include "world/ZoneGeometry.h"     // isConvexPolygonXZ — airspace_zones convexity check (#162)
 
 #include <yaml-cpp/yaml.h>
 
-#include <regex>
 #include <set>
 #include <string>
 #include <vector>
@@ -716,7 +716,6 @@ MissionParseResult parseMission(std::string_view yamlContent, double planetRadiu
         r.errors.push_back("triggers must be a sequence");
         r.ok = false;
     } else {
-        static const std::regex kDestroyRe(R"(^destroy\(([^)]+)\)$)");
         std::size_t idx = 0;
         for (const auto& trig : doc["triggers"]) {
             if (!trig.IsMap()) {
@@ -731,14 +730,22 @@ MissionParseResult parseMission(std::string_view yamlContent, double planetRadiu
                 r.ok = false;
             } else {
                 mt.on = trig["on"].as<std::string>("");
-                std::smatch mtch;
-                if (std::regex_match(mt.on, mtch, kDestroyRe)) {
-                    std::string refId = mtch[1].str();
-                    if (knownIds.find(refId) == knownIds.end()) {
+                // The shared grammar (#1239): whatever parses here is exactly what the runtime can
+                // fire. A ref that STARTS like destroy()/timer() but does not parse is an error —
+                // it used to slip past the old regex (so the unknown-id check silently never ran)
+                // while the runtime could never fire it. Anything else (reach/zone extensions,
+                // Lua-only predicates) stays legal and unchecked, as documented in missions.md.
+                if (const auto refId = triggerArg(mt.on, "destroy")) {
+                    if (knownIds.find(*refId) == knownIds.end()) {
                         r.errors.push_back("triggers[" + std::to_string(idx) + "].on references unknown object id \"" +
-                                           refId + "\"");
+                                           *refId + "\"");
                         r.ok = false;
                     }
+                } else if (!triggerArg(mt.on, "timer") &&
+                           (looksLikeTriggerRef(mt.on, "destroy") || looksLikeTriggerRef(mt.on, "timer"))) {
+                    r.errors.push_back("triggers[" + std::to_string(idx) + "].on is a malformed trigger ref \"" +
+                                       mt.on + "\" (expected name(arg), no stray parentheses)");
+                    r.ok = false;
                 }
             }
             if (!hasKey(trig, "do")) {
