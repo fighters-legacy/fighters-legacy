@@ -464,6 +464,17 @@ def test_write_summary_to_stdout(capsys, monkeypatch):
     assert "to-stdout" in capsys.readouterr().out
 
 
+def test_write_summary_unwritable_path_does_not_raise(capsys, monkeypatch, tmp_path):
+    # The #1242 defect: an unwritable GITHUB_STEP_SUMMARY (deleted dir, read-only file, full disk)
+    # raised out of write_summary and flipped the gate verdict over a reporting problem. The
+    # summary must still echo, the failure is a stderr note, and the caller's verdict is untouched.
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "no-such-dir" / "summary.md"))
+    sg.write_summary("still-reported")
+    captured = capsys.readouterr()
+    assert "still-reported" in captured.out
+    assert "could not write GITHUB_STEP_SUMMARY" in captured.err
+
+
 # ---- main(): exit-code aggregation (runner monkeypatched, no sockets) ----------------------------
 def _setup_main(tmp_path, monkeypatch, report, runner_code=0):
     cfg = _write_config(tmp_path)
