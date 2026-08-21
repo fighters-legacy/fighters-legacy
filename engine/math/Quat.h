@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "math/Angles.h"
+
 #include <array>
 #include <cmath>
-#include <numbers>
 
 namespace fl {
 
@@ -74,7 +75,7 @@ inline void quatNorm(float* q) {
     float roll = std::atan2(sinr_cosp, cosr_cosp);
 
     float sinp = 2.f * (q[3] * q[1] - q[2] * q[0]);
-    float pitch = std::abs(sinp) >= 1.f ? std::copysign(std::numbers::pi_v<float> / 2.f, sinp) : std::asin(sinp);
+    float pitch = std::abs(sinp) >= 1.f ? std::copysign(kPi<float> / 2.f, sinp) : std::asin(sinp);
 
     float siny_cosp = 2.f * (q[3] * q[2] + q[0] * q[1]);
     float cosy_cosp = 1.f - 2.f * (q[1] * q[1] + q[2] * q[2]);
