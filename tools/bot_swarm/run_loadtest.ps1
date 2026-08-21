@@ -135,8 +135,21 @@ $SrvProc = Start-Process -FilePath $FlServer `
     -PassThru -NoNewWindow
 
 try {
-    Start-Sleep -Seconds 2
-    if ($SrvProc.HasExited) { Write-Error "fl-server exited during startup" }
+    # Wait for READY, not merely alive (#1289) — the twin of the bash script's gate, same reasoning:
+    # `Start-Sleep 2` + HasExited proved only that the process existed, so a slow start made every
+    # client refused and the harness reported a server verdict for a measurement that began too
+    # early. fl-server writes [metrics] tick_json_path only once the sim loop runs, i.e. after it
+    # binds, so that file appearing is the server's own readiness statement.
+    $ReadyTimeoutS = if ($env:FL_LOADTEST_READY_TIMEOUT_S) { [int]$env:FL_LOADTEST_READY_TIMEOUT_S } else { 90 }
+    $ReadyDeadline = (Get-Date).AddSeconds($ReadyTimeoutS)
+    while (-not (Test-Path $Metrics) -or (Get-Item $Metrics).Length -eq 0) {
+        if ($SrvProc.HasExited) { Write-Error "fl-server exited during startup, before it was ready" }
+        if ((Get-Date) -gt $ReadyDeadline) {
+            Stop-Process -Id $SrvProc.Id -Force -ErrorAction SilentlyContinue
+            Write-Error "fl-server did not become ready within ${ReadyTimeoutS}s (no $Metrics). The server never came up — this is NOT a client refusal."
+        }
+        Start-Sleep -Milliseconds 200
+    }
 
     & $BotSwarm 127.0.0.1 $Port `
         --clients $Clients --duration $Duration --pattern $Pattern --transport $Transport `
