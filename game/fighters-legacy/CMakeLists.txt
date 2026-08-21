@@ -50,6 +50,7 @@ add_library(game-client STATIC
 # the engine link set travel with the library rather than being restated per target.
 target_link_libraries(game-client PUBLIC
     engine-crash
+    engine-crypto  # randomHexToken for the single-player admin token (#1233)
     engine-config
     engine-i18n
     engine-flight

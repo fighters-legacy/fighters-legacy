@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "McpEndpoint.h"
 
+#include <crypto/RandomToken.h>
 #include <mission/MissionValidator.h>
 #include <net/AdminChannel.h>
 #include <util/Json.h> // json::escape — the one escaper for every JSON this server emits
@@ -9,7 +10,6 @@
 
 #include <chrono>
 #include <cstdio>
-#include <random>
 
 namespace fl {
 
@@ -46,14 +46,9 @@ void McpEndpoint::setClock(const IClock& clock) {
 
 std::string McpEndpoint::newSessionId() {
     // Random, not sequential: a session id is a capability for the notification stream, so a client
-    // must not be able to guess the next one. Same reasoning as LocalServer's session token.
-    static thread_local std::mt19937_64 rng{std::random_device{}()};
-    const uint64_t hi = rng();
-    const uint64_t lo = rng();
-    char buf[33];
-    std::snprintf(buf, sizeof(buf), "%016llx%016llx", static_cast<unsigned long long>(hi),
-                  static_cast<unsigned long long>(lo));
-    return std::string(buf);
+    // must not be able to guess the next one. Full entropy per id (#1233) — a seeded PRNG here made
+    // every future id predictable from one observed id via its 32-bit seed.
+    return randomHexToken(32);
 }
 
 void McpEndpoint::evictIfNeeded() {

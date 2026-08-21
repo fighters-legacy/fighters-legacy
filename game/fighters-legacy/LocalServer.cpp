@@ -4,6 +4,7 @@
 #include "ILogger.h"
 #include "Subprocess.h"
 #include "console/ConsoleCommands.h"
+#include "crypto/RandomToken.h"
 #include "entity/EntityTypeRegistry.h"
 #include "render/SimRenderBridge.h"
 #include "weather/WeatherController.h"
@@ -11,7 +12,6 @@
 
 #include <SDL3/SDL.h>
 #include <cstdio>
-#include <random>
 #include <string>
 #include <thread>
 #include <vector>
@@ -78,17 +78,10 @@ LocalServer::StartResult LocalServer::start(const char* bindAddr, uint16_t port)
 
     std::string stem = findServerStem();
 
-    // Generate a per-session admin token (24 hex chars) and pass it to fl-server via
-    // --admin-token so MsgAdminCommand authentication uses the network path even in
+    // Generate a per-session admin token (24 hex chars, full entropy — #1233) and pass it to
+    // fl-server via --admin-token so MsgAdminCommand authentication uses the network path even in
     // single-player mode. This retires the stdin pipe path for debug commands.
-    {
-        std::mt19937 rng(std::random_device{}());
-        std::uniform_int_distribution<int> dist(0, 15);
-        static constexpr char kHex[] = "0123456789abcdef";
-        m_impl->sessionToken.reserve(24);
-        for (int i = 0; i < 24; ++i)
-            m_impl->sessionToken += kHex[dist(rng)];
-    }
+    m_impl->sessionToken = randomHexToken(24);
 
     char portStr[8], maxPeersStr[4];
     std::snprintf(portStr, sizeof(portStr), "%u", port);

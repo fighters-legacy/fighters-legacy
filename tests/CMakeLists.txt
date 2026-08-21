@@ -1669,6 +1669,11 @@ add_executable(test_sha256 test_sha256.cpp)
 target_link_libraries(test_sha256 PRIVATE Catch2::Catch2WithMain engine-crypto)
 catch_discover_tests(test_sha256)
 
+# The full-entropy token generator behind the admin token, MCP session ids and the pilot GUID (#1233).
+add_executable(test_random_token test_random_token.cpp)
+target_link_libraries(test_random_token PRIVATE Catch2::Catch2WithMain engine-crypto)
+catch_discover_tests(test_random_token)
+
 add_executable(test_content_downloader test_content_downloader.cpp)
 # engine-net for LobbyListClient: the #1083 regression drives TWO IHttpClient consumers at once,
 # which is the case the old single-slot handler could not serve.

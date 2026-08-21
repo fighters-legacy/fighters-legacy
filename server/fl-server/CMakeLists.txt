@@ -32,6 +32,7 @@ target_link_libraries(fl-server-lib PUBLIC
     engine-config engine-render engine-content engine-difficulty engine-flight engine-ai engine-script
     engine-replay engine-perf engine-weapon engine-bootstrap engine-sensor engine-mission engine-campaign
     engine-campaign-png engine-match engine-worldai
+    engine-crypto  # randomHexToken for MCP session ids (#1233)
     platform-stdfs platform-http
     # cpp-httplib: the embedded REST admin API + /health (#233), and the MCP endpoint (#601).
     # Confined to the server product library by cmake/layering.cmake -- no engine-* target may link it.

@@ -5,6 +5,7 @@
 #include "ILogger.h"
 
 #include "config/TomlNumeric.h"
+#include "crypto/RandomToken.h"
 #include <toml++/toml.hpp>
 
 #include <algorithm>
@@ -12,7 +13,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <random>
 #include <sstream>
 #include <string>
 
@@ -587,25 +587,13 @@ static SamRadarShutdown parseSamRadarShutdown(const char* s, ILogger& log) {
 // ---------------------------------------------------------------------------
 
 static std::string generateUuidV4() {
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    // uint32_t throughout: the standard only guarantees uniform_int_distribution
-    // for short/int/long/long long and unsigned variants; uint16_t is typically
-    // unsigned short but not guaranteed, so mask down from uint32_t instead.
-    std::uniform_int_distribution<uint32_t> d;
-
-    uint32_t a = d(gen);
-    uint32_t b = d(gen) & 0xFFFFU;
-    uint32_t c = (d(gen) & 0x0FFFU) | 0x4000U;  // version 4
-    uint32_t dv = (d(gen) & 0x3FFFU) | 0x8000U; // variant 1
-    uint32_t e1 = d(gen);
-    uint32_t e2 = d(gen) & 0xFFFFU;
-
-    char buf[37];
-    std::snprintf(buf, sizeof(buf), "%08x-%04x-%04x-%04x-%08x%04x", static_cast<unsigned>(a), static_cast<unsigned>(b),
-                  static_cast<unsigned>(c), static_cast<unsigned>(dv), static_cast<unsigned>(e1),
-                  static_cast<unsigned>(e2));
-    return buf;
+    // Full-entropy nibbles from the shared token generator (#1233), then the RFC 4122 version and
+    // variant nibbles stamped in. Same 8-4-4-4-12 lowercase format as before.
+    std::string h = randomHexToken(32);
+    auto hexVal = [](char c) { return c <= '9' ? c - '0' : c - 'a' + 10; };
+    h[12] = '4';                         // version 4
+    h[16] = "89ab"[hexVal(h[16]) & 0x3]; // variant 1
+    return h.substr(0, 8) + '-' + h.substr(8, 4) + '-' + h.substr(12, 4) + '-' + h.substr(16, 4) + '-' + h.substr(20);
 }
 
 // ---------------------------------------------------------------------------

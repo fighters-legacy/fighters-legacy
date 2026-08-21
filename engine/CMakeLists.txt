@@ -72,6 +72,7 @@ target_include_directories(engine-config PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-config
     PUBLIC  platform-hal
     PRIVATE tomlplusplus::tomlplusplus
+            engine-crypto      # full-entropy pilot GUID generation (#1233)
 )
 
 add_library(engine-firstrun STATIC
@@ -352,9 +353,11 @@ add_library(engine-nav STATIC
 target_include_directories(engine-nav PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # No external deps — pure ISO C++20 stdlib (coefficients are compiled in).
 
-# Clean-room SHA-256 (FIPS 180-4) for content/pack hashing (#490) — NOT OpenSSL (GNS-gated).
+# Clean-room SHA-256 (FIPS 180-4) for content/pack hashing (#490) — NOT OpenSSL (GNS-gated) —
+# plus the one full-entropy random-token generator (#1233).
 add_library(engine-crypto STATIC
     crypto/Sha256.cpp
+    crypto/RandomToken.cpp
 )
 target_include_directories(engine-crypto PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # No external deps — pure ISO C++20 stdlib.
