@@ -14,6 +14,8 @@
 
 #include "campaign/FrontlinePng.h"
 
+#include "PngSanity.h"
+
 #include <cstdint>
 #include <cstring>
 #include <vector>
@@ -21,24 +23,7 @@
 namespace fl {
 
 namespace {
-constexpr uint8_t kPngSig[8] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
 constexpr int kMaxDim = 8192;
-
-// Reject a PNG whose chunk lengths overrun the buffer before handing it to stb (memory-exhaustion DoS
-// on an untrusted content-pack file). Mirrors TerrainChunkIO::pngChunkLengthsSane.
-bool pngChunkLengthsSane(const uint8_t* d, size_t n) noexcept {
-    if (n < 8)
-        return false;
-    size_t off = 8;
-    while (off + 8 <= n) {
-        const uint32_t len = (static_cast<uint32_t>(d[off]) << 24) | (static_cast<uint32_t>(d[off + 1]) << 16) |
-                             (static_cast<uint32_t>(d[off + 2]) << 8) | static_cast<uint32_t>(d[off + 3]);
-        if (len > n - off - 8)
-            return false;
-        off += static_cast<size_t>(12) + len;
-    }
-    return true;
-}
 
 // Write-callback that appends to a std::vector (stb_image_write's memory path).
 void appendToVector(void* ctx, void* data, int size) {
@@ -50,7 +35,7 @@ void appendToVector(void* ctx, void* data, int size) {
 
 FrontlinePngInfo probeFrontlinePng(const uint8_t* data, size_t size) noexcept {
     FrontlinePngInfo info;
-    if (!data || size < sizeof(kPngSig) || std::memcmp(data, kPngSig, sizeof(kPngSig)) != 0) {
+    if (!hasPngSignature(data, size)) {
         info.error = "not a PNG (bad signature)";
         return info;
     }

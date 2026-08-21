@@ -33,6 +33,7 @@ extern "C" void stbi_image_free(void* retval_from_stbi_load);
 #include <ktx.h>
 
 #include "MeshOrient.h"
+#include "PngSanity.h"
 #include "RenderTypes.h"
 #include "VkResources.h"
 #include <algorithm>
@@ -871,7 +872,15 @@ TextureHandle VkResourceManager::createTexture(const TextureUploadDesc& desc) {
         ktxTexture_Destroy(reinterpret_cast<ktxTexture*>(ktx));
 
     } else {
-        // PNG / JPEG / BMP fallback via stb_image (bundled through tinygltf).
+        // PNG / JPEG / BMP fallback via stb_image (bundled through tinygltf). Pack textures are
+        // untrusted bytes: apply the same chunk-length guard the terrain and campaign decoders use
+        // (#1237) — a tiny PNG declaring a huge IDAT is a decode-time allocation DoS otherwise.
+        if (hasPngSignature(desc.bytes.data(), desc.bytes.size()) &&
+            !pngChunkLengthsSane(desc.bytes.data(), desc.bytes.size())) {
+            std::fprintf(stderr, "[VkResources] rejected PNG with overrunning chunk lengths (%.*s)\n",
+                         static_cast<int>(desc.name.size()), desc.name.data());
+            return m_defaultWhite;
+        }
         int w = 0, h = 0, ch = 0;
         uint8_t* pixels = stbi_load_from_memory(desc.bytes.data(), static_cast<int>(desc.bytes.size()), &w, &h, &ch, 4);
         if (!pixels) {
