@@ -397,6 +397,13 @@ catch_discover_tests(test_parse)
 add_executable(test_quat test_quat.cpp)
 target_link_libraries(test_quat PRIVATE Catch2::Catch2WithMain)
 target_include_directories(test_quat PRIVATE "${CMAKE_SOURCE_DIR}/engine")
+# The bit-identity case compares the shared helper against the expression it replaced. FMA
+# contraction can fuse a multiply-add on one side and not the other -- Apple Clang at -O2 does, and
+# the two land ~2 ulp apart -- which tests the code generator rather than the algebra. Contraction
+# is a rounding difference; REASSOCIATION is the defect this guards against, so switch it off.
+if(NOT MSVC)
+    target_compile_options(test_quat PRIVATE -ffp-contract=off)
+endif()
 catch_discover_tests(test_quat)
 
 add_executable(test_toml_numeric test_toml_numeric.cpp)

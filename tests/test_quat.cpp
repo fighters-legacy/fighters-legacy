@@ -70,6 +70,16 @@ TEST_CASE("quatRotateConjD is bit-identical to the expression it replaced", "[qu
     // below is DeckDef::deckLocalPoint's, exactly as it was before #1248: note it kept qw as a
     // FLOAT and cast the other components at each use. If a future edit to quatRotateConjD reorders
     // or reassociates anything, this fails rather than silently moving where the deck edge is.
+    //
+    // This target is built with -ffp-contract=off, and it has to be. With contraction ON, the
+    // compiler may fuse a multiply-add here and not there -- the reference below converts a FLOAT
+    // qw where the shared function has already widened it to double, which is enough to change
+    // which products get fused. Apple Clang at -O2 does exactly that and the two sides land ~2 ulp
+    // apart, which is how this test first failed on macOS while passing everywhere else.
+    //
+    // Contraction is a rounding difference, not a reassociation, and REASSOCIATION is what this
+    // test exists to catch -- that was the actual defect between FlightIntegrator and
+    // WorldBroadcaster. Turning contraction off measures the algebra instead of the code generator.
     const float shipQuat[4] = {0.183f, -0.365f, 0.548f, 0.730f};
     const double d[3] = {12.25, -3.5, 88.125};
 
