@@ -7,12 +7,10 @@
 #include <entity/EntityTypeRegistry.h>
 #include <flight/BuiltinFlightModel.h>
 #include <flight/FlightModelData.h>
-#include <flight/FlightModelParser.h>
+#include <flight/FlightModelLoad.h>
 
-#include <exception>
 #include <memory>
 #include <string>
-#include <string_view>
 #include <unordered_map>
 
 namespace fl {
@@ -58,21 +56,13 @@ ClientPrediction::FlightModelResolver makeFlightModelResolver(const EntityTypeRe
         }
 
         // flightModelAsset is an ASSET NAME, not a def id (#810) -- it names a file, so it goes
-        // straight to the AssetManager without an index lookup.
-        auto raw = assets.loadFlightModel(def->flightModelAsset.c_str());
-        if (!raw || raw->bytes.empty())
-            return fallback("entity type '" + def->id + "' names flight model '" + def->flightModelAsset +
-                            "' but no loaded content pack provides it");
-
-        try {
-            auto model = std::make_shared<const FlightModelData>(fl::parseFlightModel(
-                std::string_view(reinterpret_cast<const char*>(raw->bytes.data()), raw->bytes.size())));
-            (*cache)[typeIndex] = model;
-            return model;
-        } catch (const std::exception& e) {
-            return fallback("flight model '" + def->flightModelAsset + "' for entity type '" + def->id +
-                            "' failed to parse: " + e.what());
-        }
+        // straight to the AssetManager without an index lookup. The load-and-parse step is shared
+        // with the server spawn path (#1232) so both sides refuse malformed content the same way.
+        auto res = loadAndParseFlightModel(assets, def->flightModelAsset.c_str());
+        if (!res.model)
+            return fallback("entity type '" + def->id + "': " + res.error);
+        (*cache)[typeIndex] = res.model;
+        return res.model;
     };
 }
 

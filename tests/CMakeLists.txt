@@ -1605,6 +1605,15 @@ target_include_directories(test_turret_predictor PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy")
 catch_discover_tests(test_turret_predictor)
 
+# The one load-and-parse step behind both flight-model resolvers (#1232): malformed content is a
+# null model plus a reason, never an exception into a spawn path.
+add_executable(test_flight_model_load test_flight_model_load.cpp)
+target_link_libraries(test_flight_model_load PRIVATE
+    Catch2::Catch2WithMain engine-flight engine-content)
+target_include_directories(test_flight_model_load PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_flight_model_load)
+
 # The client/server flight-model parity gate (#811): drives the real WorldBroadcaster connect path
 # and the real client-side resolver, and asserts the two integrate the same aeroplane.
 add_executable(test_prediction_parity test_prediction_parity.cpp)

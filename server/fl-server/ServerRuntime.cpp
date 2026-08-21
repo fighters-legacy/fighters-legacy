@@ -74,7 +74,7 @@
 #include <entity/EntityTypeRegistry.h>
 #include <flight/BuiltinFlightModel.h> // BuiltinCarrierVesselModel — the builtin carrier's hull (#38)
 #include <flight/CentralGravityField.h>
-#include <flight/FlightModelParser.h>
+#include <flight/FlightModelLoad.h>
 #include <flight/LocalFrame.h> // enuBasis — orient an ATC scramble along the runway heading (#706)
 #include <job/JobSystem.h>
 #include <loop/GameLoop.h>
@@ -1017,24 +1017,24 @@ bool ServerRuntime::Impl::initWorld() {
         return airportRegistry.nearestTo(pos.x, pos.z, kBaseServiceRangeM) != nullptr;
     };
 
-    // Resolve EntityDef::flightModelAsset -> parsed FlightModelData on the spawn path. Loads the raw
-    // TOML asset via AssetManager, parses it with engine-flight's parseFlightModel, and caches the
-    // result by id (sim-thread-only access). Empty/unknown ids fall back to the builtin model in
+    // Resolve EntityDef::flightModelAsset -> parsed FlightModelData on the spawn path. The
+    // load-and-parse step is shared with the client resolver (#1232) so malformed content is a
+    // logged null — never an exception through the sim spawn path — and caches the result by id
+    // (sim-thread-only access). Empty/unknown/malformed ids fall back to the builtin model in
     // WorldBroadcaster. Captures the cache pointer by value — see m_fmCache's declaration (#1178).
-    queries.flightModel = [&assets, fmCache](const std::string& id) -> std::shared_ptr<const fl::FlightModelData> {
+    queries.flightModel = [&assets, fmCache, log](const std::string& id) -> std::shared_ptr<const fl::FlightModelData> {
         // The compiled-in carrier's vessel model (#38): a "builtin:" name never touches the
         // filesystem, same rule as every other builtin asset.
         if (id == "builtin:carrier-vessel")
             return fl::BuiltinCarrierVesselModel::get();
         if (auto it = fmCache->find(id); it != fmCache->end())
             return it->second;
-        std::shared_ptr<const fl::FlightModelData> model;
-        if (auto raw = assets.loadFlightModel(id.c_str()); raw && !raw->bytes.empty()) {
-            model = std::make_shared<const fl::FlightModelData>(fl::parseFlightModel(
-                std::string_view(reinterpret_cast<const char*>(raw->bytes.data()), raw->bytes.size())));
-        }
-        (*fmCache)[id] = model; // cache misses too, so a bad id isn't re-parsed every connect
-        return model;
+        auto res = fl::loadAndParseFlightModel(assets, id.c_str());
+        if (!res.model)
+            log->log(fl::LogLevel::Error, __FILE__, __LINE__,
+                     (res.error + " -- entities of this type will fly the builtin model").c_str());
+        (*fmCache)[id] = res.model; // cache misses too, so a bad id isn't re-parsed every connect
+        return res.model;
     };
 
     // What an entity's DEFAULT loadout costs it in mass and drag (#812). Same injection shape as the
