@@ -3,23 +3,11 @@
 
 #include "entity/EntityManager.h"
 #include "entity/EntityState.h"
+#include "mission/TriggerGrammar.h"
 
 #include <cstdlib>
 
 namespace fl {
-
-namespace {
-
-// Extract the single argument of a `name(<arg>)` predicate/action, e.g. destroy(sam1) -> "sam1".
-// Returns empty when the string is not of that shape.
-std::string parenArg(const std::string& s, const char* name) {
-    const std::string prefix = std::string(name) + "(";
-    if (s.size() < prefix.size() + 1 || s.compare(0, prefix.size(), prefix) != 0 || s.back() != ')')
-        return {};
-    return s.substr(prefix.size(), s.size() - prefix.size() - 1);
-}
-
-} // namespace
 
 MissionRuntime::MissionRuntime(const Mission& mission, std::vector<std::pair<std::string, EntityId>> objectEntities,
                                EntityManager& em, ActionDispatch dispatch)
@@ -66,12 +54,13 @@ void MissionRuntime::registerObjectEntity(const std::string& objectId, EntityId 
 bool MissionRuntime::evaluatePredicate(const std::string& on) const {
     if (on == "mission_start")
         return true; // fires on the first evaluation
-    if (const std::string secs = parenArg(on, "timer"); !secs.empty()) {
-        const double t = std::strtod(secs.c_str(), nullptr);
+    // The shared grammar (#1239): a ref this rejects is the same ref validate-mission rejects.
+    if (const auto secs = triggerArg(on, "timer")) {
+        const double t = std::strtod(secs->c_str(), nullptr);
         return m_outcome.elapsedSeconds >= t;
     }
-    if (const std::string obj = parenArg(on, "destroy"); !obj.empty())
-        return isObjectDestroyed(obj);
+    if (const auto obj = triggerArg(on, "destroy"))
+        return isObjectDestroyed(*obj);
     // Anything else (reach/zone extensions, or a Lua-only predicate per missions.md) never fires here.
     return false;
 }
