@@ -65,8 +65,11 @@ TEST_CASE("fnv1a64Fold uses its own byte order, not the host's", "[fnv]") {
     uint64_t h = fl::kFnv1a64Basis;
     fl::fnv1a64Fold(h, 0x0807060504030201ull);
 
+    // Typed explicitly: a braced list of bare integer literals is a std::initializer_list<int>, and
+    // narrowing it to uint8_t in the loop variable is a /W4 warning MSVC turns into an error.
+    constexpr uint8_t kLittleEndianBytes[] = {1, 2, 3, 4, 5, 6, 7, 8};
     uint64_t expected = fl::kFnv1a64Basis;
-    for (uint8_t b : {1, 2, 3, 4, 5, 6, 7, 8})
+    for (uint8_t b : kLittleEndianBytes)
         fl::fnv1a64Byte(expected, b);
     CHECK(h == expected);
 
