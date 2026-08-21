@@ -2,6 +2,7 @@
 #include "expect.h"
 
 #include <toml++/toml.hpp>
+#include <util/Json.h> // json::str — the one escaper; the aircraft name is authored content (#1234)
 
 #include <cmath>
 #include <sstream>
@@ -162,7 +163,7 @@ std::string toJson(const FlightModelData& d, const std::vector<TrimPoint>& point
     os.precision(3);
 
     os << "{\n";
-    os << "  \"aircraft\": \"" << d.meta.name << "\",\n";
+    os << "  \"aircraft\": " << json::str(d.meta.name) << ",\n";
     os << "  \"limits\": {\n";
     os << "    \"alpha_stall_deg\": " << d.limits.alpha_stall_deg << ",\n";
     os << "    \"max_g_structural\": " << d.limits.max_g_structural << ",\n";

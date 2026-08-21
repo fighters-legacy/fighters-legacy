@@ -4,11 +4,12 @@
 // The outcome report a headless mission run writes (#856). fl-server --mission-report <path> runs a
 // mission to completion with no clients and writes this as JSON (atomic, via writeConfigFile), and a
 // ctest/CI wrapper asserts on it — turning the mission format into the engine's integration-test
-// surface. The shape mirrors ServerTickReport (a flat, name-keyed POD + a hand-rolled toJson), so the
-// Python side reads it the same way.
+// surface. The shape mirrors ServerTickReport (a flat, name-keyed POD + a toJson over util/Json.h),
+// so the Python side reads it the same way.
+
+#include "util/Json.h"
 
 #include <cstdint>
-#include <cstdio>
 #include <string>
 
 namespace fl {
@@ -27,19 +28,14 @@ struct MissionReport {
     uint64_t entityCapRefusals{0};
 };
 
-// Minimal, deterministic JSON encoder. Numbers are printed plainly; strings are assumed to contain no
-// characters needing escaping (mission names / the fixed outcome vocabulary), matching how the tick
-// report treats its keys.
+// Minimal, deterministic JSON encoder. Strings route through the one escaper (#1234) — the mission
+// name is pack-authored content, and a quote in it used to produce invalid JSON that killed the CI
+// harness's json.load; json::num is the same %.6g this header carried privately.
 inline std::string toJson(const MissionReport& r) {
-    auto num = [](double v) {
-        char buf[64];
-        std::snprintf(buf, sizeof(buf), "%.6g", v);
-        return std::string(buf);
-    };
     std::string s = "{\n";
-    s += "  \"mission_name\": \"" + r.missionName + "\",\n";
-    s += "  \"outcome\": \"" + r.outcome + "\",\n";
-    s += "  \"elapsed_seconds\": " + num(r.elapsedSeconds) + ",\n";
+    s += "  \"mission_name\": " + json::str(r.missionName) + ",\n";
+    s += "  \"outcome\": " + json::str(r.outcome) + ",\n";
+    s += "  \"elapsed_seconds\": " + json::num(r.elapsedSeconds) + ",\n";
     s += "  \"ticks\": " + std::to_string(r.ticks) + ",\n";
     s += "  \"triggers_fired\": " + std::to_string(r.triggersFired) + ",\n";
     s += "  \"live_entities\": " + std::to_string(r.liveEntities) + ",\n";

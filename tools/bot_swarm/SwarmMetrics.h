@@ -21,6 +21,7 @@
 #include "NetStats.h"
 #include "SwarmConfig.h"
 #include "perf/ServerTickReport.h"
+#include "util/Json.h" // json::str — operator CLI strings must not break the report JSON (#1234)
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
@@ -436,19 +437,23 @@ inline std::string jStat(const char* name, const Stats& s) {
 } // namespace detail
 
 inline std::string reportToJson(const SwarmReport& r) {
+    // host and pattern are operator CLI input — escape them (#1234); json::str carries the quotes.
+    const std::string hostJ = json::str(r.host);
+    const std::string patternJ = json::str(r.pattern);
+    const std::string transportJ = json::str(r.transport);
     char head[640];
     std::snprintf(head, sizeof(head),
                   "{\n"
                   "  \"schema_version\": %d,\n"
-                  "  \"host\": \"%s\", \"port\": %u,\n"
+                  "  \"host\": %s, \"port\": %u,\n"
                   "  \"clients_requested\": %d, \"clients_connected\": %d,\n"
                   "  \"clients_refused\": %d, \"clients_disconnected\": %d,\n"
-                  "  \"duration_s\": %.3f, \"rate_hz\": %d, \"pattern\": \"%s\", \"threads\": %d,\n"
-                  "  \"transport\": \"%s\",\n"
+                  "  \"duration_s\": %.3f, \"rate_hz\": %d, \"pattern\": %s, \"threads\": %d,\n"
+                  "  \"transport\": %s,\n"
                   "  \"observed_server_tick_hz\": { \"min\": %.3f, \"mean\": %.3f },\n",
-                  kSwarmReportSchemaVersion, r.host.c_str(), r.port, r.clientsRequested, r.clientsConnected,
-                  r.clientsRefused, r.clientsDisconnected, r.durationS, r.rateHz, r.pattern.c_str(), r.threads,
-                  r.transport.c_str(), r.tickHz.min, r.tickHz.mean);
+                  kSwarmReportSchemaVersion, hostJ.c_str(), r.port, r.clientsRequested, r.clientsConnected,
+                  r.clientsRefused, r.clientsDisconnected, r.durationS, r.rateHz, patternJ.c_str(), r.threads,
+                  transportJ.c_str(), r.tickHz.min, r.tickHz.mean);
     std::string out = head;
     out += detail::jStat("downstream_kbs_per_client", r.downstreamKbs) + ",\n";
     out += detail::jStat("rtt_ms", r.rttMs) + ",\n";
