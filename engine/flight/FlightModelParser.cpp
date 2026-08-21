@@ -2,6 +2,7 @@
 #include "flight/FlightModelParser.h"
 
 #include "config/TomlNumeric.h"
+#include "config/TomlRead.h"
 #include <toml++/toml.hpp>
 
 #include <stdexcept>
@@ -11,30 +12,6 @@
 namespace fl {
 
 namespace {
-
-// ── helpers ──────────────────────────────────────────────────────────────────
-
-[[nodiscard]] float req_float(toml::node_view<toml::node> node, const char* field) {
-    auto v = node.value<double>();
-    if (!v)
-        throw std::runtime_error(std::string("missing required field: ") + field);
-    return static_cast<float>(*v);
-}
-
-[[nodiscard]] std::vector<float> req_float_array(toml::node_view<toml::node> node, const char* field) {
-    auto* arr = node.as_array();
-    if (!arr || arr->empty())
-        throw std::runtime_error(std::string("missing or empty required array: ") + field);
-    std::vector<float> out;
-    out.reserve(arr->size());
-    for (auto& el : *arr) {
-        auto v = el.value<double>();
-        if (!v)
-            throw std::runtime_error(std::string("non-numeric value in array: ") + field);
-        out.push_back(static_cast<float>(*v));
-    }
-    return out;
-}
 
 [[nodiscard]] Table2D parse_table2d(toml::table& tbl, const char* rows_key, const char* cols_key) {
     Table2D t;

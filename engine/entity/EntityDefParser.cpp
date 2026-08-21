@@ -2,6 +2,7 @@
 #include "entity/EntityDefParser.h"
 
 #include "config/TomlNumeric.h"
+#include "config/TomlRead.h"
 #include <toml++/toml.hpp>
 
 #include <algorithm>
@@ -13,37 +14,6 @@
 namespace fl {
 
 namespace {
-
-// ── helpers ──────────────────────────────────────────────────────────────────
-
-[[nodiscard]] std::string req_string(toml::node_view<toml::node> node, const char* field) {
-    auto v = node.value<std::string>();
-    if (!v)
-        throw std::runtime_error(std::string("missing required field: ") + field);
-    return std::move(*v);
-}
-
-[[nodiscard]] float req_float(toml::node_view<toml::node> node, const char* field) {
-    auto v = node.value<double>();
-    if (!v)
-        throw std::runtime_error(std::string("missing required field: ") + field);
-    return static_cast<float>(*v);
-}
-
-[[nodiscard]] float opt_float(toml::node_view<toml::node> node, float fallback) {
-    auto v = node.value<double>();
-    return v ? static_cast<float>(*v) : fallback;
-}
-
-[[nodiscard]] bool opt_bool(toml::node_view<toml::node> node, bool fallback) {
-    auto v = node.value<bool>();
-    return v ? *v : fallback;
-}
-
-[[nodiscard]] std::string opt_string(toml::node_view<toml::node> node) {
-    auto v = node.value<std::string>();
-    return v ? std::move(*v) : std::string{};
-}
 
 // Reject a key that is not in a section's CLOSED vocabulary (#1106). Only for the sections whose
 // field set really is closed — `[signatures]` and `[ai]`. TOML scopes a bare key written after a

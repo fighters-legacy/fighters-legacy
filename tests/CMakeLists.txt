@@ -390,6 +390,12 @@ target_link_libraries(test_toml_numeric PRIVATE Catch2::Catch2WithMain tomlplusp
 target_include_directories(test_toml_numeric PRIVATE "${CMAKE_SOURCE_DIR}/engine")
 catch_discover_tests(test_toml_numeric)
 
+# The shared required/optional TOML field reads behind the seven def parsers (#1245).
+add_executable(test_toml_read test_toml_read.cpp)
+target_link_libraries(test_toml_read PRIVATE Catch2::Catch2WithMain tomlplusplus::tomlplusplus)
+target_include_directories(test_toml_read PRIVATE "${CMAKE_SOURCE_DIR}/engine")
+catch_discover_tests(test_toml_read)
+
 add_executable(test_content_index test_content_index.cpp)
 target_link_libraries(test_content_index PRIVATE Catch2::Catch2WithMain engine-content)
 target_include_directories(test_content_index PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
