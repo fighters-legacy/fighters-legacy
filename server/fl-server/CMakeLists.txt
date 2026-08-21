@@ -25,7 +25,8 @@ add_library(fl-server-lib STATIC
     ReplayRecorder.cpp
     HttpAdminAuth.cpp
     McpProtocol.cpp
-    McpEndpoint.cpp)
+    McpEndpoint.cpp
+    AiControllerBuild.cpp)
 # PUBLIC so consumers (the thin main, tests, fuzz harnesses) inherit the headers and link set.
 target_link_libraries(fl-server-lib PUBLIC
     fl-server-config platform-net engine-net engine-entity engine-loop engine-weather engine-console
