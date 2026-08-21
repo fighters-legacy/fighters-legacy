@@ -20,6 +20,7 @@
 #include <net/NetworkUtils.h> // normalizeIp + extractIp — the SAME pair admission matches on (#1243)
 #include <net/WorldBroadcaster.h>
 #include <net/WorldStateJson.h> // worldstate/events JSON (#600)
+#include <util/Parse.h>         // the one strict number parse family (#1244)
 #include <weather/WeatherController.h>
 #include <weather/WeatherTypes.h>
 
@@ -51,9 +52,9 @@ static void printAdmin(const ServerCommandContext& ctx, const char* line) {
     std::fflush(stdout);
 }
 
+// Call-shape adapter over util/Parse.h (#1244); the rule lives there.
 static bool parseU32(std::string_view s, uint32_t& out) {
-    const auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), out);
-    return ec == std::errc{} && ptr == s.data() + s.size();
+    return fl::readInto(fl::parseU32(s), out);
 }
 
 // Parse a duration string into seconds.
@@ -105,16 +106,6 @@ static std::optional<uint32_t> parseDurationSecs(std::string_view s) {
     }
 
     return consumed ? std::optional<uint32_t>(total) : std::nullopt;
-}
-
-// Returns true when arg consists entirely of ASCII digits (treat as peerId).
-static bool isNumeric(std::string_view arg) {
-    if (arg.empty())
-        return false;
-    for (char c : arg)
-        if (c < '0' || c > '9')
-            return false;
-    return true;
 }
 
 static std::string formatSecs(long long secs) {
@@ -355,7 +346,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                                  if (!ctx->sim.broadcaster || !ctx->sim.gameLoop)
                                      return "kick: not available";
                                  std::string arg(args[0]);
-                                 if (isNumeric(arg)) {
+                                 if (fl::isAllDigits(arg)) {
                                      uint32_t peerId = 0;
                                      auto [ptr, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), peerId);
                                      if (ec != std::errc{})
@@ -406,7 +397,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                                      if (!ctx->sim.broadcaster || !ctx->sim.gameLoop)
                                          return std::string(name) + ": not available";
                                      std::string arg(args[0]);
-                                     if (!isNumeric(arg))
+                                     if (!fl::isAllDigits(arg))
                                          return std::string(name) + ": expected a peer ID";
                                      uint32_t peerId = 0;
                                      auto [ptr, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), peerId);
@@ -463,7 +454,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                                      if (!ctx->sim.broadcaster || !ctx->sim.gameLoop)
                                          return std::string(name) + ": not available";
                                      std::string arg(args[0]);
-                                     if (!isNumeric(arg))
+                                     if (!fl::isAllDigits(arg))
                                          return std::string(name) + ": expected a peer ID";
                                      uint32_t peerId = 0;
                                      auto [ptr, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), peerId);
@@ -531,7 +522,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
             if (!ctx->sim.broadcaster || !ctx->sim.gameLoop)
                 return "set_role: not available";
             std::string idArg(args[0]);
-            if (!isNumeric(idArg))
+            if (!fl::isAllDigits(idArg))
                 return "set_role: invalid peer ID";
             uint32_t peerId = 0;
             if (auto [ptr, ec] = std::from_chars(idArg.data(), idArg.data() + idArg.size(), peerId); ec != std::errc{})
@@ -581,7 +572,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
             if (!ctx->sim.broadcaster || !ctx->sim.gameLoop)
                 return "grant: not available";
             std::string idArg(args[0]);
-            if (!isNumeric(idArg))
+            if (!fl::isAllDigits(idArg))
                 return "grant: invalid peer ID";
             uint32_t peerId = 0;
             if (auto [p, ec] = std::from_chars(idArg.data(), idArg.data() + idArg.size(), peerId); ec != std::errc{})
@@ -626,7 +617,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
             if (!ctx->sim.broadcaster || !ctx->sim.gameLoop)
                 return "revoke: not available";
             std::string idArg(args[0]);
-            if (!isNumeric(idArg))
+            if (!fl::isAllDigits(idArg))
                 return "revoke: invalid peer ID";
             uint32_t peerId = 0;
             if (auto [p, ec] = std::from_chars(idArg.data(), idArg.data() + idArg.size(), peerId); ec != std::errc{})
@@ -658,7 +649,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                 return "team: not available";
             std::string idArg(args[0]);
             std::string facArg(args[1]);
-            if (!isNumeric(idArg) || !isNumeric(facArg))
+            if (!fl::isAllDigits(idArg) || !fl::isAllDigits(facArg))
                 return "team: peerId and factionIndex must be numeric";
             uint32_t peerId = 0;
             unsigned faction = 0;
@@ -690,7 +681,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                                  if (!ctx->sim.broadcaster || !ctx->sim.gameLoop)
                                      return "respawn: not available";
                                  std::string idArg(args[0]);
-                                 if (!isNumeric(idArg))
+                                 if (!fl::isAllDigits(idArg))
                                      return "respawn: invalid peer ID";
                                  uint32_t peerId = 0;
                                  if (auto [p, ec] = std::from_chars(idArg.data(), idArg.data() + idArg.size(), peerId);
@@ -719,7 +710,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
             if (!ctx->sim.broadcaster || !ctx->sim.gameLoop)
                 return "spectate: not available";
             std::string idArg(args[0]);
-            if (!isNumeric(idArg))
+            if (!fl::isAllDigits(idArg))
                 return "spectate: invalid peer ID";
             uint32_t peerId = 0;
             if (auto [p, ec] = std::from_chars(idArg.data(), idArg.data() + idArg.size(), peerId); ec != std::errc{})
@@ -727,7 +718,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
             uint32_t target = 0xFFFFFFFFu; // off
             if (args[1] != "off") {
                 std::string tArg(args[1]);
-                if (!isNumeric(tArg))
+                if (!fl::isAllDigits(tArg))
                     return "spectate: entity index must be a number or 'off'";
                 if (auto [p, ec] = std::from_chars(tArg.data(), tArg.data() + tArg.size(), target); ec != std::errc{})
                     return "spectate: invalid entity index";
@@ -758,7 +749,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                                  if (!ctx->sim.broadcaster)
                                      return "seats: not available";
                                  std::string idArg(args[0]);
-                                 if (!isNumeric(idArg))
+                                 if (!fl::isAllDigits(idArg))
                                      return "seats: invalid entity index";
                                  uint32_t idx = 0;
                                  if (auto [ptr, ec] = std::from_chars(idArg.data(), idArg.data() + idArg.size(), idx);
@@ -776,7 +767,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
             if (!ctx->sim.broadcaster || !ctx->sim.gameLoop)
                 return "set_seat: not available";
             std::string idArg(args[0]), seatArg(args[1]);
-            if (!isNumeric(idArg) || !isNumeric(seatArg))
+            if (!fl::isAllDigits(idArg) || !fl::isAllDigits(seatArg))
                 return "set_seat: entity index and seat must be integers";
             uint32_t entityIdx = 0, seat = 0;
             if (auto [p, ec] = std::from_chars(idArg.data(), idArg.data() + idArg.size(), entityIdx); ec != std::errc{})
@@ -794,7 +785,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                 occ = fl::SeatOccupancy::Empty;
             else {
                 std::string peerArg(args[2]);
-                if (!isNumeric(peerArg))
+                if (!fl::isAllDigits(peerArg))
                     return "set_seat: third arg must be a peerId, 'bot', or 'empty'";
                 if (auto [p, ec] = std::from_chars(peerArg.data(), peerArg.data() + peerArg.size(), peerId);
                     ec != std::errc{})
@@ -830,7 +821,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                                  if (!ctx->sim.broadcaster || !ctx->sim.gameLoop)
                                      return "ban: not available";
                                  std::string arg(args[0]);
-                                 if (isNumeric(arg)) {
+                                 if (fl::isAllDigits(arg)) {
                                      uint32_t peerId = 0;
                                      auto [ptr, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), peerId);
                                      if (ec != std::errc{})
@@ -991,14 +982,10 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                                  if (args.empty())
                                      return "usage: set_time <0-24>";
                                  // Validate argument before context check so parse/range errors are always reported.
-                                 // Use strtof rather than from_chars<float>: the float overload is deleted on
-                                 // Apple Clang before macOS 13.3 (Xcode 14.3).
-                                 std::string timeStr(args[0]);
-                                 char* timeEnd = nullptr;
-                                 errno = 0;
-                                 float hours = std::strtof(timeStr.c_str(), &timeEnd);
-                                 if (timeEnd == timeStr.c_str() || *timeEnd != '\0' || errno == ERANGE)
+                                 const auto parsedHours = fl::parseFloat(args[0]);
+                                 if (!parsedHours)
                                      return "set_time: invalid value";
+                                 const float hours = *parsedHours;
                                  if (hours < 0.f || hours > 24.f)
                                      return "set_time: value must be in [0, 24]";
                                  if (!ctx->sim.weatherController || !ctx->sim.gameLoop)
@@ -1077,16 +1064,9 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                 return "spawn: not available";
             std::string typeId(args[0]);
             double x = 0, y = 0, z = 0;
-            auto parseD = [](std::string_view s, double& out) {
-                std::string tmp(s);
-                char* end = nullptr;
-                errno = 0;
-                float f = std::strtof(tmp.c_str(), &end);
-                if (end == tmp.c_str() || *end != '\0' || errno == ERANGE)
-                    return false;
-                out = static_cast<double>(f);
-                return true;
-            };
+            // Double, matching tp: this used to round coordinates through a float, which at planet
+            // scale (~6.4e6 m) landed a spawn about half a metre from where tp would have put it.
+            auto parseD = [](std::string_view s, double& out) { return fl::readInto(fl::parseDouble(s), out); };
             if (!parseD(args[1], x) || !parseD(args[2], y) || !parseD(args[3], z))
                 return "spawn: invalid coordinates";
 
@@ -1285,12 +1265,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                 return "tp: invalid entity index";
             // Parse coordinates with strtod (from_chars for double not on Apple Clang).
             auto parseCoord = [](std::string_view sv, double& out) -> bool {
-                if (sv.empty())
-                    return false;
-                std::string s(sv); // null-terminated for strtod
-                char* end = nullptr;
-                out = std::strtod(s.c_str(), &end);
-                return end == s.c_str() + sv.size() && end != s.c_str();
+                return fl::readInto(fl::parseDouble(sv), out);
             };
             double x{}, y{}, z{};
             if (!parseCoord(args[1], x) || !parseCoord(args[2], y) || !parseCoord(args[3], z))
@@ -1328,14 +1303,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                 return "usage: detonate <x> <y> <z> <blast_radius_m> <damage> [--nuclear]";
             if (!ctx->sim.broadcaster || !ctx->sim.gameLoop)
                 return "detonate: not available";
-            auto parseNum = [](std::string_view sv, double& out) -> bool {
-                if (sv.empty())
-                    return false;
-                std::string s(sv); // null-terminated for strtod (no float from_chars on Apple Clang)
-                char* end = nullptr;
-                out = std::strtod(s.c_str(), &end);
-                return end == s.c_str() + sv.size() && end != s.c_str();
-            };
+            auto parseNum = [](std::string_view sv, double& out) { return fl::readInto(fl::parseDouble(sv), out); };
             double x{}, y{}, z{}, radius{}, damage{};
             if (!parseNum(args[0], x) || !parseNum(args[1], y) || !parseNum(args[2], z) || !parseNum(args[3], radius) ||
                 !parseNum(args[4], damage))

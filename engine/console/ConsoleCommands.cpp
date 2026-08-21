@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "console/ConsoleCommands.h"
+#include "util/Parse.h"
 
 #include "console/CommandRegistry.h"
 #include "entity/EntityDef.h"
@@ -21,40 +22,14 @@ namespace fl {
 // Parsing helpers
 // ---------------------------------------------------------------------------
 
+// Call-shape adapters over the strict parsers in util/Parse.h (#1244). The rule — whole string or
+// nothing, no infinities — lives there; these keep the bool/out-param form the command table uses.
 static bool parseDouble(std::string_view sv, double& out) {
-    // strtod requires a null-terminated string; copy into a fixed buffer.
-    // std::from_chars for double is not supported on Apple Clang.
-    if (sv.empty() || sv.size() >= 64)
-        return false;
-    char buf[64];
-    std::memcpy(buf, sv.data(), sv.size());
-    buf[sv.size()] = '\0';
-    char* end = nullptr;
-    double v = std::strtod(buf, &end);
-    if (end == buf + sv.size() && end != buf) {
-        out = v;
-        return true;
-    }
-    return false;
+    return readInto(fl::parseDouble(sv), out);
 }
 
 static bool parseUint(std::string_view sv, uint32_t& out) {
-    uint32_t v{};
-    auto [ptr, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), v);
-    if (ec == std::errc{} && ptr == sv.data() + sv.size()) {
-        out = v;
-        return true;
-    }
-    return false;
-}
-
-static bool isAllDigits(std::string_view sv) {
-    if (sv.empty())
-        return false;
-    for (char c : sv)
-        if (c < '0' || c > '9')
-            return false;
-    return true;
+    return readInto(fl::parseU32(sv), out);
 }
 
 // ---------------------------------------------------------------------------

@@ -3,6 +3,8 @@
 
 #include "flight/Geodetic.h"        // the authoring-frame -> world resolution (#1211)
 #include "mission/TriggerGrammar.h" // the ONE destroy()/timer() ref grammar, shared with the runtime (#1239)
+#include "util/Parse.h"             // the strict number parse the runtime reads timers with (#1244)
+#include "util/Str.h"               // trim, so `timer( 5 )` reads the way an author expects
 #include "world/SandboxHome.h"      // `anchor: home` — where the sandbox lives
 #include "world/ZoneGeometry.h"     // isConvexPolygonXZ — airspace_zones convexity check (#162)
 
@@ -741,8 +743,17 @@ MissionParseResult parseMission(std::string_view yamlContent, double planetRadiu
                                            *refId + "\"");
                         r.ok = false;
                     }
-                } else if (!triggerArg(mt.on, "timer") &&
-                           (looksLikeTriggerRef(mt.on, "destroy") || looksLikeTriggerRef(mt.on, "timer"))) {
+                } else if (const auto secs = triggerArg(mt.on, "timer")) {
+                    // A timer's argument has to be a number the runtime can compare elapsed time
+                    // against (#1244). It parses strictly there, so `timer(soon)` would validate
+                    // and then never fire — the same "validates but cannot happen" trigger #1239
+                    // set out to make impossible.
+                    if (!parseDouble(trim(*secs))) {
+                        r.errors.push_back("triggers[" + std::to_string(idx) + "].on has a non-numeric timer \"" +
+                                           mt.on + "\" (expected timer(<seconds>))");
+                        r.ok = false;
+                    }
+                } else if (looksLikeTriggerRef(mt.on, "destroy") || looksLikeTriggerRef(mt.on, "timer")) {
                     r.errors.push_back("triggers[" + std::to_string(idx) + "].on is a malformed trigger ref \"" +
                                        mt.on + "\" (expected name(arg), no stray parentheses)");
                     r.ok = false;

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "util/Str.h"
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -44,14 +46,6 @@ struct ClientPack {
 
 // Parse a config spec: "id" or "id@version" (split on the first '@'; surrounding whitespace trimmed).
 inline RequiredPack parseRequiredPackSpec(std::string_view spec) {
-    auto trim = [](std::string_view s) -> std::string_view {
-        const char* ws = " \t\r\n";
-        const std::size_t b = s.find_first_not_of(ws);
-        if (b == std::string_view::npos)
-            return {};
-        const std::size_t e = s.find_last_not_of(ws);
-        return s.substr(b, e - b + 1);
-    };
     spec = trim(spec);
     const std::size_t at = spec.find('@');
     if (at == std::string_view::npos)

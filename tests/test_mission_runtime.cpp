@@ -829,6 +829,25 @@ TEST_CASE("MissionRuntime: timer(n) fires after n seconds of elapsed sim time", 
     CHECK(rt.outcome().state == MissionState::Failed);
 }
 
+TEST_CASE("MissionRuntime: a non-numeric timer never fires, it does not fire at once (#1244)", "[mission-runtime]") {
+    // strtod(s, nullptr) returned 0.0 for "soon", so elapsed >= 0 was true on the first evaluation
+    // and the mission ended before it began. validate-mission now rejects this too, but the runtime
+    // also loads missions that never went through the validator.
+    NullLogger log;
+    EntityTypeRegistry reg;
+    EntityManager em(log, reg);
+    Mission m = missionWith({{"timer(soon)", "mission_failure"}});
+
+    MissionRuntime rt(m, {}, em);
+    rt.setEvalIntervalTicks(1);
+    rt.setSimDt(1.0 / 60.0);
+
+    for (uint64_t t = 0; t <= 600; ++t) // ten seconds of sim time
+        rt.onTick(kDt, t);
+    CHECK(rt.outcome().state == MissionState::Active);
+    CHECK(rt.outcome().triggersFired == 0u);
+}
+
 TEST_CASE("MissionRuntime: destroy(<id>) fires when the object's entity dies", "[mission-runtime]") {
     NullLogger log;
     EntityTypeRegistry reg;

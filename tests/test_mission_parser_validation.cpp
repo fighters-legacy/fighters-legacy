@@ -291,6 +291,18 @@ TEST_CASE("parseMission: a malformed destroy/timer ref is an error, not silently
     CHECK(parseMission(withTriggers("triggers:\n  - { on: zone_entered, do: mission_success }\n")).ok);
 }
 
+TEST_CASE("parseMission: a timer argument has to be a number (#1244)", "[mission][parser]") {
+    // The runtime parses this strictly, so a non-numeric timer would validate and then never fire.
+    // Same class of trigger #1239 set out to make impossible: accepted here, impossible there.
+    rejects(withTriggers("triggers:\n  - { on: \"timer(soon)\", do: mission_success }\n"), "non-numeric timer");
+    rejects(withTriggers("triggers:\n  - { on: \"timer(5s)\", do: mission_success }\n"), "non-numeric timer");
+    rejects(withTriggers("triggers:\n  - { on: \"timer(  )\", do: mission_success }\n"), "non-numeric timer");
+
+    CHECK(parseMission(withTriggers("triggers:\n  - { on: \"timer(0)\", do: mission_success }\n")).ok);
+    CHECK(parseMission(withTriggers("triggers:\n  - { on: \"timer(2.5)\", do: mission_success }\n")).ok);
+    CHECK(parseMission(withTriggers("triggers:\n  - { on: \"timer(1e3)\", do: mission_success }\n")).ok);
+}
+
 // ---------------------------------------------------------------------------
 // cinematic camera track
 // ---------------------------------------------------------------------------
