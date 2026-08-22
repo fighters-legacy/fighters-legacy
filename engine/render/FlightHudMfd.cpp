@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "render/FlightHud.h"
 
+#include "math/Angles.h"
+#include "math/Units.h"
+
 #include "flight/LocalFrame.h" // enuBasis / headingOf
 
 #include <cmath>
@@ -72,7 +75,7 @@ void FlightHud::drawMfd(Ctx& c) {
         pushLine(kCx + kR / aspect, kCy - kR, kCx + kR / aspect, kCy + kR, 1.0f, kHudR, kHudG * dim, kHudB);
         pushLine(kCx, kCy - kR, kCx, kCy - kR + 0.02f, 1.5f, kHudR, kHudG, kHudB);
         pushText(HudAlign::Left, kCx - kR / aspect, kCy + kR + 0.02f, kHudR, kHudG * dim, kHudB, "%s %.0fnm", modeStr,
-                 rangeM / 1852.0f);
+                 rangeM / kMetresPerNauticalMile<float>);
         int drawn = 0;
         for (const RadarTrack& t : radar.tracks) {
             if (drawn >= kScopeMaxTracks)
@@ -98,18 +101,15 @@ void FlightHud::drawMfd(Ctx& c) {
         pushLine(x0, y0, x0, y1, 1.0f, kHudR, kHudG * dim, kHudB);
         pushLine(x1, y0, x1, y1, 1.0f, kHudR, kHudG * dim, kHudB);
         pushLine(kCx, y0, kCx, y1, 1.0f, kHudR, kHudG * dim, kHudB); // boresight column
-        pushText(HudAlign::Left, x0, y1 + 0.02f, kHudR, kHudG * dim, kHudB, "%s %.0fnm B", modeStr, rangeM / 1852.0f);
+        pushText(HudAlign::Left, x0, y1 + 0.02f, kHudR, kHudG * dim, kHudB, "%s %.0fnm B", modeStr,
+                 rangeM / kMetresPerNauticalMile<float>);
         int drawn = 0;
         for (const RadarTrack& t : radar.tracks) {
             if (drawn >= kScopeMaxTracks)
                 break;
             float rel, rn;
             bearingRange(glm::dvec3(t.pos[0], t.pos[1], t.pos[2]), rel, rn);
-            // wrap rel into [-pi, pi]
-            while (rel > 3.14159265f)
-                rel -= 6.2831853f;
-            while (rel < -3.14159265f)
-                rel += 6.2831853f;
+            rel = wrapPi(rel);
             if (rn > 1.0f || std::abs(rel) > kAzLimit)
                 continue;
             const float px = kCx + (rel / kAzLimit) * (kR / aspect);

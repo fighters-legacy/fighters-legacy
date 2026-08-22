@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "flight/FlightIntegrator.h"
 
+#include "math/Angles.h"
+#include "math/Units.h"
+
 #include "flight/Atmosphere.h"
 #include "flight/EngineFailFlags.h" // kEngineFlameout / kEngineCompStall — the #308 transient bits
 #include "math/Quat.h"              // the one quatRotate/quatRotateD/quatToEuler/quatNorm (#1248)
@@ -12,9 +15,6 @@
 namespace fl {
 
 namespace {
-
-constexpr float kDegToRad = 0.0174532925f;
-constexpr float kG0 = 9.80665f; // standard gravity, for expressing load factor in g
 
 // [aero.limits] enforcement (#816). Exceeding the structural limit by more than kOverGMargin for
 // longer than kOverGSeconds damages the airframe. The margin exists because a momentary spike from
@@ -267,7 +267,7 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
     // the validator now checks that the table's peak agrees with this angle); clamping CL here on top
     // of an honest table would double-count the stall, and would reward an author who wrote a
     // dishonest one. The consequences — buffet, HUD, audio — are the caller's, not the integrator's.
-    const float alpha_deg_now = alpha_rad / kDegToRad;
+    const float alpha_deg_now = alpha_rad / kDegToRad<float>;
     const float q_dyn_now = 0.5f * atmos.density_kg_m3 * spd * spd;
     m_state.stalled = (alpha_deg_now > m_data->limits.alpha_stall_deg);
 
@@ -324,7 +324,7 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
         const std::array<float, 3> gw = m_gravity->accelWorld(m_state.pos_world);
         const auto gb = quatRotate(q_conj, gw.data());
         const float bankRad = std::atan2(gb[2], -gb[1]); // + = right wing down
-        const float maxBank = dl->max_bank_deg * kDegToRad;
+        const float maxBank = dl->max_bank_deg * kDegToRad<float>;
         constexpr float kBankKp = 2.0f; // aileron per rad of bank error
         constexpr float kBankKd = 0.8f; // aileron per rad/s of roll rate (damps the approach)
         if (ctrl.aileron > 0.f && bankRad > maxBank * kFbwGuardBand) {
@@ -400,7 +400,7 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
         if (ctrl.elevator > 0.f) {
             float posLimit = alphaStall;
             if (nMaxLim > 0.f) {
-                const float clLimit = (nMaxLim * eff_mass * kG0) / denom;
+                const float clLimit = (nMaxLim * eff_mass * kG0<float>) / denom;
                 if (m_data->cl_table.lookup(alphaStall, mach) > clLimit) { // else lift-limited, nothing to do
                     posLimit = invertCl(clLimit, 0.f, alphaStall);
                     haveLimit = true;
@@ -414,8 +414,8 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
         } else { // forward stick — negative-g / negative-AoA protection (#900)
             float negLimit = -alphaStall;
             if (nMinLim < 0.f) {
-                const float clLimit = (nMinLim * eff_mass * kG0) / denom;   // negative
-                if (m_data->cl_table.lookup(-alphaStall, mach) < clLimit) { // else lift-limited
+                const float clLimit = (nMinLim * eff_mass * kG0<float>) / denom; // negative
+                if (m_data->cl_table.lookup(-alphaStall, mach) < clLimit) {      // else lift-limited
                     negLimit = invertCl(clLimit, -alphaStall, 0.f);
                     haveLimit = true;
                 }
@@ -446,7 +446,7 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
     // Exceeding the limit by more than kOverGMargin for longer than kOverGSeconds raises a one-shot
     // damage flag. NOT a silent clamp: a limiter on an aeroplane that has none is a lie about the
     // aircraft. An F-5E pilot CAN overstress the jet. The sim should let them, and then bill them.
-    m_state.load_factor = forces[1] / (eff_mass * kG0);
+    m_state.load_factor = forces[1] / (eff_mass * kG0<float>);
 
     const float n = m_state.load_factor;
     const float nMax = m_data->limits.max_g_structural;
@@ -725,8 +725,9 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
         // is what a half-extended strut actually has.
         const float gearDown = std::clamp(m_state.articulation.gear, 0.f, 1.f);
         constexpr float kBellyScrapeG = 0.55f; // airframe on the surface: more drag than tyres, no control
-        const float decel = (kRollingResistG + kBrakeMaxG * std::clamp(ctrl.wheelBrake, 0.f, 1.f)) * gearDown * kG0 +
-                            kBellyScrapeG * (1.f - gearDown) * kG0;
+        const float decel =
+            (kRollingResistG + kBrakeMaxG * std::clamp(ctrl.wheelBrake, 0.f, 1.f)) * gearDown * kG0<float> +
+            kBellyScrapeG * (1.f - gearDown) * kG0<float>;
         const float horizSpd =
             float(std::sqrt(m_state.vel_body[0] * m_state.vel_body[0] + m_state.vel_body[2] * m_state.vel_body[2]));
         if (horizSpd > 1e-4f) {

@@ -32,7 +32,7 @@ fl::ControlInput GunsEmploymentController::sample(const fl::EntityState& state, 
 
     // Local gravity from the planet-radius the broadcaster wired — the drop is along LOCAL down,
     // which is what keeps the pipper honest far from the world origin.
-    const glm::vec3 gravity = -fl::radialUp(ownPos, m_planetRadiusM) * 9.80665f;
+    const glm::vec3 gravity = fl::localGravity(ownPos, m_planetRadiusM);
     const BallisticLeadResult lead = computeBallisticLead(ownPos, ownVel, tgtPos, tgtVel, m_muzzleVelMps, gravity);
 
     // Steer at the lead point (fall back to the target itself when no solution exists — closing

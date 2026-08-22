@@ -2,17 +2,16 @@
 #include "world/AirportDefParser.h"
 
 #include "config/TomlRead.h"
+#include "math/Angles.h"
+
 #include <toml++/toml.hpp>
 
-#include <numbers>
 #include <stdexcept>
 #include <string>
 
 namespace fl {
 
 namespace {
-
-constexpr double kDegToRad = std::numbers::pi / 180.0;
 
 // Every message this parser raises carries the same context, so bind it once.
 constexpr const char* kErr = "airport: ";
@@ -47,8 +46,8 @@ AirportDef parseAirportDef(std::string_view toml) {
         def.worldX = req_double(airport["world_x"], "airport.world_x", kErr);
         def.worldZ = req_double(airport["world_z"], "airport.world_z", kErr);
     } else {
-        def.latRad = req_double(airport["lat"], "airport.lat", kErr) * kDegToRad;
-        def.lonRad = req_double(airport["lon"], "airport.lon", kErr) * kDegToRad;
+        def.latRad = req_double(airport["lat"], "airport.lat", kErr) * kDegToRad<double>;
+        def.lonRad = req_double(airport["lon"], "airport.lon", kErr) * kDegToRad<double>;
     }
 
     if (auto elev = airport["elevation_m"].value<double>())

@@ -2,6 +2,8 @@
 #pragma once
 
 #include "flight/LocalFrame.h" // enuBasis / radialUp / pitchOf / localAltitude (+ kEarthRadiusM via Geodetic.h)
+#include "math/Angles.h"       // wrapPi
+#include "math/Units.h"        // kG0
 
 #include <algorithm>
 #include <cmath>
@@ -47,14 +49,8 @@ inline float horizontalHeadingError(const float quat[4], const double ownPos[3],
     const float fn = glm::dot(fwd, glm::vec3(north));
     const float fwdBearing = std::atan2(fe, fn);
 
-    // Signed wrap of (targetBearing - fwdBearing) into [-pi, pi]. Positive = right.
-    constexpr float kPi = std::numbers::pi_v<float>;
-    float err = targetBearing - fwdBearing;
-    while (err > kPi)
-        err -= 2.f * kPi;
-    while (err < -kPi)
-        err += 2.f * kPi;
-    return err;
+    // Signed error, wrapped into [-pi, pi]. Positive = right.
+    return wrapPi(targetBearing - fwdBearing);
 }
 
 // Signed pitch error [rad] needed to null a radial altitude error of altErrorM (target radial
@@ -171,8 +167,7 @@ inline float elevatorForAltitudeHold(const float quat[4], const double ownPos[3]
 // other half of the loiter's descent (#1141): a fixed throttle let it accelerate 150 -> 226 m/s,
 // past the speed its own 45 deg bank limit could turn.
 inline float turnSpeedForRadius(float radiusM, float bankRad) {
-    constexpr float kG = 9.80665f;
-    return std::sqrt(std::max(1.f, radiusM) * kG * std::tan(std::clamp(bankRad, 0.05f, 1.4f)));
+    return std::sqrt(std::max(1.f, radiusM) * kG0<float> * std::tan(std::clamp(bankRad, 0.05f, 1.4f)));
 }
 
 // Throttle to hold a target airspeed, trimmed around `trimThrottle`. Proportional and clamped —

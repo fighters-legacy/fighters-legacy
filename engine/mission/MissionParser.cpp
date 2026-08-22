@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "mission/MissionParser.h"
 
+#include "math/Angles.h"
+
 #include "flight/Geodetic.h"        // the authoring-frame -> world resolution (#1211)
 #include "mission/TriggerGrammar.h" // the ONE destroy()/timer() ref grammar, shared with the runtime (#1239)
 #include "util/Parse.h"             // the strict number parse the runtime reads timers with (#1244)
@@ -106,7 +108,6 @@ MissionParseResult parseMission(std::string_view yamlContent, double planetRadiu
     // north pole (#1211).
     if (hasKey(doc, "anchor")) {
         const YAML::Node& an = doc["anchor"];
-        constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
         if (an.IsScalar()) {
             const std::string a = an.as<std::string>("");
             if (a == "home") {
@@ -136,7 +137,7 @@ MissionParseResult parseMission(std::string_view yamlContent, double planetRadiu
                                        std::to_string(lat) + ")");
                     r.ok = false;
                 } else {
-                    m.anchor = MissionAnchor{lat * kDegToRad, lon * kDegToRad};
+                    m.anchor = MissionAnchor{lat * kDegToRad<double>, lon * kDegToRad<double>};
                 }
             }
         } else {
@@ -1045,9 +1046,8 @@ MissionParseResult parseMission(std::string_view yamlContent, double planetRadiu
             if (mo.alt)
                 mo.pos[1] = static_cast<double>(*mo.alt); // the override folds in before resolution
             if (mo.latDeg && mo.lonDeg) {
-                constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
-                geodeticToWorld(LatLonAlt{*mo.latDeg * kDegToRad, *mo.lonDeg * kDegToRad, mo.pos[1]}, mo.pos[0],
-                                mo.pos[1], mo.pos[2], R);
+                geodeticToWorld(LatLonAlt{*mo.latDeg * kDegToRad<double>, *mo.lonDeg * kDegToRad<double>, mo.pos[1]},
+                                mo.pos[0], mo.pos[1], mo.pos[2], R);
             } else {
                 resolve(mo.pos);
             }

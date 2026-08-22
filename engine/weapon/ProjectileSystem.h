@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "math/Units.h"
+
 #include "entity/EntityId.h"
 #include "weapon/Seeker.h"
 #include "weapon/WeaponDef.h"
@@ -150,9 +152,9 @@ class ProjectileSystem {
 
     static constexpr float kContactFuzeM = 8.f;
     static constexpr float kMaxFlightTimeS = 90.f;
-    static constexpr float kCoastDecayPerS = 0.035f;     // fraction of speed shed per second unpowered
-    static constexpr uint32_t kSeekerCheckTicks = 6;     // 10 Hz at the 60 Hz tick — the reference cadence
-    static constexpr float kGravityAccelMps2 = 9.80665f; // max_g → lateral-accel clamp
+    static constexpr float kCoastDecayPerS = 0.035f;       // fraction of speed shed per second unpowered
+    static constexpr uint32_t kSeekerCheckTicks = 6;       // 10 Hz at the 60 Hz tick — the reference cadence
+    static constexpr float kGravityAccelMps2 = kG0<float>; // max_g → lateral-accel clamp
 
   private:
     const WeaponRegistry* m_weapons{nullptr};

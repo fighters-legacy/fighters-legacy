@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "nav/MagneticModel.h"
 
+#include "math/Angles.h"
+
 #include <cmath>
-#include <numbers>
 #include <sstream>
 
 namespace fl {
 
 namespace {
 
-constexpr double kDtr = std::numbers::pi_v<double> / 180.0;
 // WGS84 ellipsoid squared axes (km²) and geomagnetic reference radius (km), per the WMM report.
 constexpr double kA2 = 40680631.59;
 constexpr double kB2 = 40408299.98;
@@ -187,7 +187,7 @@ GeoMagField MagneticModel::field(double latRad, double lonRad, double altM, doub
 
     constexpr int N = kMaxOrd;
     const double dt = decimalYear - m_epoch;
-    const double glat = latRad / kDtr; // the algorithm below works in degrees/km
+    const double glat = latRad / kDegToRad<double>; // the algorithm below works in degrees/km
     const double alt = altM / 1000.0;
 
     const double srlon = std::sin(lonRad), crlon = std::cos(lonRad);
@@ -290,8 +290,8 @@ GeoMagField MagneticModel::field(double latRad, double lonRad, double altM, doub
     out.downNt = bz;
     out.horizontalNt = std::sqrt(bx * bx + by * by);
     out.totalNt = std::sqrt(out.horizontalNt * out.horizontalNt + bz * bz);
-    out.declinationDeg = std::atan2(by, bx) / kDtr;
-    out.inclinationDeg = std::atan2(bz, out.horizontalNt) / kDtr;
+    out.declinationDeg = std::atan2(by, bx) / kDegToRad<double>;
+    out.inclinationDeg = std::atan2(bz, out.horizontalNt) / kDegToRad<double>;
     return out;
 }
 

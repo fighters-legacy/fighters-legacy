@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "flight/Atmosphere.h"
 
+#include "math/Units.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -17,7 +19,7 @@ constexpr float kTropopause = 11000.f;                   // tropopause altitude 
 constexpr float kTtrop = kT0 - kLapseRate * kTropopause; // temp at tropopause (K)
 constexpr float kGamma = 1.4f;                           // ratio of specific heats
 constexpr float kR = 287.05f;                            // specific gas constant for dry air (J/(kg·K))
-constexpr float kG = 9.80665f;                           // standard gravity (m/s²)
+constexpr float kG = kG0<float>;                         // standard gravity, named short for the ISA formulae
 
 constexpr float kExponent = kG / (kLapseRate * kR); // ISA troposphere pressure exponent
 

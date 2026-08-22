@@ -149,6 +149,10 @@ add_library(validate-flight-model-lib STATIC
 target_link_libraries(validate-flight-model-lib PUBLIC tomlplusplus::tomlplusplus)
 target_include_directories(validate-flight-model-lib PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/validate-flight-model")
+# Header-only reach into engine/ for math/Units.h (#1246): the weight this validator computes has to
+# use the same standard gravity the sim does. PRIVATE and include-only -- no link edge is added, so
+# the layering gate (which walks LINK_LIBRARIES) is untouched and the tool stays engine-free at link.
+target_include_directories(validate-flight-model-lib PRIVATE "${CMAKE_SOURCE_DIR}/engine")
 
 add_executable(validate-flight-model validate-flight-model/main.cpp)
 target_link_libraries(validate-flight-model PRIVATE validate-flight-model-lib)

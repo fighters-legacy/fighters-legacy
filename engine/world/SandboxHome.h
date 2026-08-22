@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
-#include "flight/Geodetic.h"
+#include "math/Angles.h"
 
-#include <numbers>
+#include "flight/Geodetic.h"
 
 namespace fl {
 
@@ -39,8 +39,8 @@ constexpr double kSandboxHomeElevationM = 569.6;
 // The home anchor as a geodetic position (radians, MSL metres). Mission coordinates and the
 // server's planar spawn coordinates are metres EAST and NORTH of this point.
 [[nodiscard]] inline constexpr LatLonAlt sandboxHome() noexcept {
-    constexpr double kDegToRad = std::numbers::pi_v<double> / 180.0;
-    return LatLonAlt{kSandboxHomeLatDeg * kDegToRad, kSandboxHomeLonDeg * kDegToRad, kSandboxHomeElevationM};
+    return LatLonAlt{kSandboxHomeLatDeg * kDegToRad<double>, kSandboxHomeLonDeg * kDegToRad<double>,
+                     kSandboxHomeElevationM};
 }
 
 } // namespace fl

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "math/Units.h"
+
 #include "RenderTypes.h"
 #include "flight/Geodetic.h"  // kEarthRadiusM (default planet radius)
 #include "render/RadarView.h" // RadarView (datalink scope + RWR, #528)
@@ -28,7 +30,7 @@ struct HudMfdState {
     }
     // Cycle the range scale 10 -> 20 -> 40 -> 80 nm -> 10 (nautical miles, stored SI).
     void cycleRange() noexcept {
-        constexpr float nm = 1852.0f;
+        constexpr float nm = kMetresPerNauticalMile<float>;
         constexpr float steps[] = {10.f * nm, 20.f * nm, 40.f * nm, 80.f * nm};
         int cur = 0;
         for (int i = 0; i < 4; ++i)

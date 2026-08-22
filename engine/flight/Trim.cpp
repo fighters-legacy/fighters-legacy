@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "flight/Trim.h"
 
+#include "math/Angles.h"
+#include "math/Units.h"
+
 #include "flight/Atmosphere.h"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <numbers>
 
 namespace fl {
 namespace {
-
-constexpr float kG0 = 9.80665f;
-constexpr float kDegToRad = std::numbers::pi_v<float> / 180.f;
 
 // Every number below comes out of computeForces, so the tool and the sim cannot disagree about what
 // the aircraft's aerodynamics ARE. If someone changes the drag model, these numbers move, and the
@@ -41,7 +40,7 @@ std::array<float, 3> forcesAt(const FlightModelData& d, const PayloadEffect& pay
                                      : 0.f;
     // Trim derives CLEAN performance: gear up, flaps up, brakes in (#842). Passing a default
     // ArticulationState is the statement of that, not an omission.
-    return computeForces(alpha_deg * kDegToRad, 0.f, mach, speed, c.altitude_m, sweep, ab, throttle, payload, d,
+    return computeForces(alpha_deg * kDegToRad<float>, 0.f, mach, speed, c.altitude_m, sweep, ab, throttle, payload, d,
                          c.atmos, ArticulationState{});
 }
 
@@ -60,7 +59,7 @@ std::array<float, 3> forcesAt(const FlightModelData& d, const PayloadEffect& pay
 //     normal force      =  fx·sin α + fy·cos α   =  L               (with thrust off)
 float liftAt(const FlightModelData& d, const PayloadEffect& payload, const Condition& c, float alpha_deg, float speed) {
     const auto f = forcesAt(d, payload, c, alpha_deg, speed, false, 0.f);
-    const float a = alpha_deg * kDegToRad;
+    const float a = alpha_deg * kDegToRad<float>;
     return f[0] * std::sin(a) + f[1] * std::cos(a);
 }
 
@@ -68,7 +67,7 @@ float liftAt(const FlightModelData& d, const PayloadEffect& payload, const Condi
 float excessThrustAtThrottle(const FlightModelData& d, const PayloadEffect& payload, const Condition& c,
                              float alpha_deg, float speed, float throttle) {
     const auto f = forcesAt(d, payload, c, alpha_deg, speed, false, throttle);
-    const float a = alpha_deg * kDegToRad;
+    const float a = alpha_deg * kDegToRad<float>;
     return f[0] * std::cos(a) - f[1] * std::sin(a);
 }
 
@@ -77,7 +76,7 @@ float excessThrustAtThrottle(const FlightModelData& d, const PayloadEffect& payl
 float excessThrustAt(const FlightModelData& d, const PayloadEffect& payload, const Condition& c, float alpha_deg,
                      float speed, bool ab) {
     const auto f = forcesAt(d, payload, c, alpha_deg, speed, ab, 1.f);
-    const float a = alpha_deg * kDegToRad;
+    const float a = alpha_deg * kDegToRad<float>;
     return f[0] * std::cos(a) - f[1] * std::sin(a);
 }
 
@@ -136,7 +135,7 @@ TrimResult trim(const FlightModelData& d, const TrimPoint& pt, const PayloadEffe
     c.atmos = computeAtmosphere(pt.altitude_m);
     c.altitude_m = pt.altitude_m;
     const float mass = (pt.mass_kg > 0.f) ? pt.mass_kg : (d.geometry.mass_kg + d.geometry.fuel_kg);
-    c.weight_n = (mass + payload.extra_mass_kg) * kG0;
+    c.weight_n = (mass + payload.extra_mass_kg) * kG0<float>;
     c.S = d.geometry.wing_area_m2;
 
     r.fuel_flow_mil_kg_s = d.engine.fuel_flow_mil_kg_s;
@@ -183,8 +182,7 @@ TrimResult trim(const FlightModelData& d, const TrimPoint& pt, const PayloadEffe
     //
     // EAS rises monotonically with TAS at a fixed altitude, so once it exceeds the placard every
     // faster speed does too: break, exactly like the cannot-hold case above.
-    constexpr float kKnotToMps = 0.514444f;
-    const float placardEas = d.limits.max_keas > 0.f ? d.limits.max_keas * kKnotToMps : 0.f;
+    const float placardEas = d.limits.max_keas > 0.f ? d.limits.max_keas * kMpsPerKnot<float> : 0.f;
 
     float maxLevel = 0.f;
     float minLevel = 0.f;
@@ -236,7 +234,7 @@ TrimResult trim(const FlightModelData& d, const TrimPoint& pt, const PayloadEffe
     auto turnRateDegS = [&](float n, float v) {
         if (n <= 1.f || v <= 0.f)
             return 0.f;
-        return (kG0 * std::sqrt(n * n - 1.f) / v) / kDegToRad;
+        return (kG0<float> * std::sqrt(n * n - 1.f) / v) / kDegToRad<float>;
     };
 
     for (float v = r.stall_speed_1g_mps; v <= kSpeedMax; v += kSpeedStep) {

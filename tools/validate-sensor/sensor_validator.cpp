@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "sensor_validator.h"
 
+#include "math/Units.h"
+
 #include "sensor/SensorDef.h"
 #include "sensor/SensorDefParser.h"
 
@@ -15,12 +17,10 @@ using sensor::SensorDef;
 using sensor::SensorRole;
 using sensor::SensorType;
 
-constexpr float kMetresPerNauticalMile = 1852.f;
-
 // Plausibility bounds. NOT schema limits — everything here parses and runs. They mark values so far
 // outside a real sensor that they are more likely a typo or a unit mix-up than an intent.
-constexpr float kImplausibleRangeM = 400.f * kMetresPerNauticalMile; // beyond any airborne sensor
-constexpr float kImplausibleVisualRangeM = 25.f * kMetresPerNauticalMile;
+constexpr float kImplausibleRangeM = 400.f * fl::kMetresPerNauticalMile<float>; // beyond any airborne sensor
+constexpr float kImplausibleVisualRangeM = 25.f * fl::kMetresPerNauticalMile<float>;
 constexpr float kGlacialPod = 0.001f; // @ 10 Hz: ~100 s to acquire, i.e. never in a merge
 
 [[nodiscard]] bool isPassive(SensorType t) {

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "render/FlightHud.h"
 
+#include "math/Units.h"
+
 #include "flight/Atmosphere.h"    // calibratedAirspeed / machNumber (IAS vs Mach, #480)
 #include "flight/LocalFrame.h"    // pitchOf / bankOf / headingOf / enuBasis / radialUp
 #include "render/HudProjection.h" // worldToHud / hudAspect (#692) for the flight-path marker
@@ -19,11 +21,6 @@ namespace fl {
 static constexpr float kHudR = 0.0f;
 static constexpr float kHudG = 1.0f;
 static constexpr float kHudB = 0.0f;
-
-// Conversions.
-static constexpr float kMps2Kt = 1.94384f;
-static constexpr float kM2Ft = 3.28084f;
-static constexpr float kG0 = 9.80665f;
 
 // ── appenders ────────────────────────────────────────────────────────────────
 bool FlightHud::pushText(HudAlign align, float x, float y, float r, float g, float b, const char* fmt, ...) {
@@ -117,15 +114,15 @@ void FlightHud::update(const HudFrameInput& in) {
     const glm::vec3 omega = e->omega;
     const glm::vec3 aCentripetal = glm::cross(omega, vBody);
     const glm::vec3 upWorld = radialUp(e->position, R);
-    const glm::vec3 gWorld = -kG0 * upWorld;
+    const glm::vec3 gWorld = -kG0<float> * upWorld;
     const glm::vec3 gBody = glm::conjugate(e->orientation) * gWorld;
-    const float loadG = glm::length(aCentripetal - gBody) / kG0;
+    const float loadG = glm::length(aCentripetal - gBody) / kG0<float>;
 
     Ctx c{in,
           *e,
           {q[0], q[1], q[2], q[3]},
           altMsl,
-          calibratedAirspeed(tas, atmos) * kMps2Kt,
+          calibratedAirspeed(tas, atmos) * kKnotsPerMps<float>,
           tas,
           machNumber(tas, atmos.speed_of_sound_m_s),
           pitchOf(q, e->position, R),
@@ -218,7 +215,7 @@ void FlightHud::drawSpeedLadder(Ctx& c) {
 void FlightHud::drawAltTape(Ctx& c) {
     constexpr float x = 0.82f;
     constexpr float halfSpan = 0.18f;
-    const float altFt = c.altMsl * kM2Ft;
+    const float altFt = c.altMsl * kFeetPerMetre<float>;
     constexpr float perFt = halfSpan / 2500.0f; // 2500 ft spans the half-height
 
     pushLine(x, 0.5f - halfSpan, x, 0.5f + halfSpan, 1.0f, kHudR, kHudG, kHudB);
@@ -228,7 +225,7 @@ void FlightHud::drawAltTape(Ctx& c) {
 
     // Radar altitude (AGL) below the box — the terrain-relative height a pilot flies low by. Falls
     // back to MSL when terrain is not loaded (terrainElevation == 0).
-    const float aglFt = (c.altMsl - c.in.terrainElevation) * kM2Ft;
+    const float aglFt = (c.altMsl - c.in.terrainElevation) * kFeetPerMetre<float>;
     pushText(HudAlign::Left, x + 0.006f, 0.53f, kHudR, kHudG, kHudB, "AGL %d", static_cast<int>(std::lround(aglFt)));
 
     const int base = static_cast<int>(std::floor(altFt / 500.0f)) * 500;
@@ -395,11 +392,11 @@ void FlightHud::drawDataBlocks(Ctx& c) {
             }
         };
         if (c.in.apModes & 0x1u)
-            append(" ALT%d", static_cast<int>(std::lround(c.in.apTargetAltM * kM2Ft)));
+            append(" ALT%d", static_cast<int>(std::lround(c.in.apTargetAltM * kFeetPerMetre<float>)));
         if (c.in.apModes & 0x2u)
             append(" HDG%03d", static_cast<int>(std::lround(c.in.apTargetHeadingDeg)) % 360);
         if (c.in.apModes & 0x4u)
-            append(" SPD%d", static_cast<int>(std::lround(c.in.apTargetSpeedMps * kMps2Kt)));
+            append(" SPD%d", static_cast<int>(std::lround(c.in.apTargetSpeedMps * kKnotsPerMps<float>)));
         pushText(HudAlign::Center, 0.5f, 0.20f, kHudR, kHudG, kHudB, "%s", buf);
     }
 }

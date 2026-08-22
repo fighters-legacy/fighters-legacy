@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "script/LuaController.h"
+
+#include "math/Angles.h"
 #include "script/LuaSandbox.h"
 #include "script/WorldApi.h"
 
@@ -18,7 +20,6 @@
 #include <array>
 #include <cstdint>
 #include <cstdio>
-#include <numbers>
 #include <string>
 #include <vector>
 
@@ -375,11 +376,10 @@ static int guidanceGeodetic(lua_State* L) {
     readVec3(L, 1, p);
     const double R = luaL_optnumber(L, 2, fl::kEarthRadiusM);
     const fl::LatLonAlt lla = fl::worldToGeodetic(p[0], p[1], p[2], R);
-    constexpr double kRadToDeg = 180.0 / std::numbers::pi_v<double>;
     lua_newtable(L);
-    lua_pushnumber(L, lla.lat_rad * kRadToDeg);
+    lua_pushnumber(L, lla.lat_rad * kRadToDeg<double>);
     lua_setfield(L, -2, "lat");
-    lua_pushnumber(L, lla.lon_rad * kRadToDeg);
+    lua_pushnumber(L, lla.lon_rad * kRadToDeg<double>);
     lua_setfield(L, -2, "lon");
     lua_pushnumber(L, lla.alt_m);
     lua_setfield(L, -2, "alt");

@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "flight/FixedWingForceModel.h"
 
+#include "math/Angles.h"
+
 #include "flight/EngineFailFlags.h"  // kEngineFail* (asymmetric thrust, #675)
 #include "flight/FlightIntegrator.h" // FlightState full definition
-
-#include <numbers>
 
 namespace fl {
 
 ForceMoment FixedWingForceModel::compute(const FlightState& s, const ControlInput& ctrl, const PayloadEffect& payload,
                                          const FlightModelData& data, const AtmosphereState& atmos,
                                          const AeroInputs& aero) const {
-    constexpr float kDegToRad = static_cast<float>(std::numbers::pi) / 180.f;
 
     auto forces =
         computeForces(aero.alpha_rad, aero.beta_rad, aero.mach, aero.speed_m_s, aero.altitude_m, s.current_sweep_deg,
@@ -30,7 +29,7 @@ ForceMoment FixedWingForceModel::compute(const FlightState& s, const ControlInpu
     // moment flip below — together they were #891's directional divergence: a sideslip fed the
     // weathercock moment back with the wrong sign and the aircraft departed on any perturbation.
     auto moments = computeMoments(aero.alpha_rad, aero.beta_rad, s.omega[0], s.omega[2], -s.omega[1], aero.speed_m_s,
-                                  thrust_n, s.tvc_angle_deg * kDegToRad, ctrl, data, atmos, s.articulation);
+                                  thrust_n, s.tvc_angle_deg * kDegToRad<float>, ctrl, data, atmos, s.articulation);
 
     // Engine-out asymmetry (#675, parameterized by engine count in #308). engineFailFlags is set by
     // per-subsystem damage; until #675 it was parsed and ignored. A total loss (both engines,

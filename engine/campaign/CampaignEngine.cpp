@@ -2,6 +2,8 @@
 #include "campaign/CampaignEngine.h"
 #include "util/Parse.h"
 
+#include "math/Angles.h"
+
 #include "flight/Geodetic.h" // geodeticToWorld
 
 #include <charconv>
@@ -276,9 +278,8 @@ void CampaignEngine::buildDynamicSortie(const CampaignTheater& th, NextMission& 
             out3[0] = wx;
             out3[1] = wy;
             out3[2] = wz;
-            constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;
-            latDeg = lat * kRadToDeg;
-            lonDeg = lon * kRadToDeg;
+            latDeg = lat * kRadToDeg<double>;
+            lonDeg = lon * kRadToDeg<double>;
         };
         bool haveTarget = false;
         bool haveIngress = false;

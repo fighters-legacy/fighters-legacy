@@ -413,6 +413,14 @@ target_link_libraries(test_fnv PRIVATE Catch2::Catch2WithMain)
 target_include_directories(test_fnv PRIVATE "${CMAKE_SOURCE_DIR}/engine")
 catch_discover_tests(test_fnv)
 
+# The shared angle/unit constants (#1246). Header-only, so this needs no engine library -- it pins
+# that every spelling the sweep replaced is bit-identical, which is the claim that let it land
+# without a determinism re-bless.
+add_executable(test_math_constants test_math_constants.cpp)
+target_link_libraries(test_math_constants PRIVATE Catch2::Catch2WithMain)
+target_include_directories(test_math_constants PRIVATE "${CMAKE_SOURCE_DIR}/engine")
+catch_discover_tests(test_math_constants)
+
 add_executable(test_toml_numeric test_toml_numeric.cpp)
 target_link_libraries(test_toml_numeric PRIVATE Catch2::Catch2WithMain tomlplusplus::tomlplusplus)
 target_include_directories(test_toml_numeric PRIVATE "${CMAKE_SOURCE_DIR}/engine")

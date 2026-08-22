@@ -3,11 +3,13 @@
 #include "util/Parse.h"
 #include "util/Str.h"
 
+#include "math/Angles.h"
+#include "math/Units.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
-#include <numbers>
 #include <string>
 #include <unordered_map>
 
@@ -88,9 +90,6 @@ using ColumnMap = std::unordered_map<std::string, std::size_t>;
     return readInto(parseLeadingDouble(trim(s)), out);
 }
 
-constexpr double kFtToM = 0.3048;
-constexpr double kDegToRad = std::numbers::pi / 180.0;
-
 [[nodiscard]] std::string upper(std::string_view s) {
     std::string r(s);
     std::transform(r.begin(), r.end(), r.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
@@ -105,7 +104,7 @@ constexpr double kDegToRad = std::numbers::pi / 180.0;
     const double dLon = lon1 - lon0;
     const double y = std::sin(dLon) * std::cos(lat1);
     const double x = std::cos(lat0) * std::sin(lat1) - std::sin(lat0) * std::cos(lat1) * std::cos(dLon);
-    double b = std::atan2(y, x) / kDegToRad;
+    double b = std::atan2(y, x) / kDegToRad<double>;
     b = std::fmod(b + 360.0, 360.0);
     return b;
 }
@@ -176,10 +175,10 @@ std::vector<AirportDef> importOurAirports(std::string_view airportsCsv, std::str
         def.name = std::string(cell(row, acols, "name"));
         if (def.name.empty())
             def.name = ident;
-        def.latRad = lat * kDegToRad;
-        def.lonRad = lon * kDegToRad;
+        def.latRad = lat * kDegToRad<double>;
+        def.lonRad = lon * kDegToRad<double>;
         double elevFt = 0.0;
-        def.elevationM = parseDouble(cell(row, acols, "elevation_ft"), elevFt) ? elevFt * kFtToM : -1.0;
+        def.elevationM = parseDouble(cell(row, acols, "elevation_ft"), elevFt) ? elevFt * kMetresPerFoot<double> : -1.0;
         byIdent[ident] = defs.size();
         defs.push_back(std::move(def));
     }
@@ -209,10 +208,10 @@ std::vector<AirportDef> importOurAirports(std::string_view airportsCsv, std::str
         }
         double widthFt = 0.0;
         const double widthM = parseDouble(cell(row, rcols, "width_ft"), widthFt) && widthFt > 0.0
-                                  ? widthFt * kFtToM
+                                  ? widthFt * kMetresPerFoot<double>
                                   : 30.0; // sane default
         RunwayDef rw;
-        rw.lengthM = static_cast<float>(lengthFt * kFtToM);
+        rw.lengthM = static_cast<float>(lengthFt * kMetresPerFoot<double>);
         rw.widthM = static_cast<float>(widthM);
         rw.surface = runwaySurfaceFromOurAirports(cell(row, rcols, "surface"));
 
@@ -224,7 +223,8 @@ std::vector<AirportDef> importOurAirports(std::string_view airportsCsv, std::str
                 parseDouble(cell(row, rcols, "le_longitude_deg"), lo0) &&
                 parseDouble(cell(row, rcols, "he_latitude_deg"), la1) &&
                 parseDouble(cell(row, rcols, "he_longitude_deg"), lo1)) {
-                hdg = initialBearingDeg(la0 * kDegToRad, lo0 * kDegToRad, la1 * kDegToRad, lo1 * kDegToRad);
+                hdg = initialBearingDeg(la0 * kDegToRad<double>, lo0 * kDegToRad<double>, la1 * kDegToRad<double>,
+                                        lo1 * kDegToRad<double>);
             } else if (!headingFromIdent(cell(row, rcols, "le_ident"), hdg)) {
                 hdg = 0.0;
             }

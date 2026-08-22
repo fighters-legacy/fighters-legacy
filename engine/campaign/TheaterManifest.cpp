@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "campaign/TheaterManifest.h"
 
+#include "math/Angles.h"
+
 #include <string>
 #include <toml++/toml.hpp>
 
 namespace fl {
 
-namespace {
-constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
-}
+namespace {}
 
 TheaterManifestParseResult parseTheaterManifest(std::string_view tomlContent) {
     TheaterManifestParseResult r;
@@ -84,10 +84,10 @@ TheaterManifestParseResult parseTheaterManifest(std::string_view tomlContent) {
 
 GeoBounds theaterGeoBounds(const TheaterManifest& m) {
     GeoBounds b;
-    b.minLat = m.minLatDeg * kDegToRad;
-    b.minLon = m.minLonDeg * kDegToRad;
-    b.maxLat = m.maxLatDeg * kDegToRad;
-    b.maxLon = m.maxLonDeg * kDegToRad;
+    b.minLat = m.minLatDeg * kDegToRad<double>;
+    b.minLon = m.minLonDeg * kDegToRad<double>;
+    b.maxLat = m.maxLatDeg * kDegToRad<double>;
+    b.maxLon = m.maxLonDeg * kDegToRad<double>;
     return b;
 }
 
