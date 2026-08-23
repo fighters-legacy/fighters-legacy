@@ -1,19 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-#if defined(_WIN32)
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#else
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <sys/time.h>
-#include <unistd.h>
-#endif
-
-#include "net/GameProtocol.h"
 #include "net/ServerQueryResponder.h"
+#include "net/GameProtocol.h"
 
 #include <ILogger.h>
 #include <chrono>
@@ -24,18 +11,6 @@
 
 namespace fl {
 
-#if defined(_WIN32)
-using SockLen = int;
-static bool sockValid(unsigned long long s) {
-    return s != ~0ull;
-}
-#else
-using SockLen = socklen_t;
-static bool sockValid(int s) {
-    return s >= 0;
-}
-#endif
-
 ServerQueryResponder::ServerQueryResponder(uint16_t queryPort, ILogger& log) : m_port(queryPort), m_log(&log) {}
 
 ServerQueryResponder::~ServerQueryResponder() {
@@ -43,11 +18,6 @@ ServerQueryResponder::~ServerQueryResponder() {
 }
 
 bool ServerQueryResponder::start() {
-#if defined(_WIN32)
-    WSADATA wsa;
-    if (WSAStartup(MAKEWORD(2, 2), &wsa) == 0)
-        m_wsaOwner = true;
-#endif
     m_sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (!sockValid(m_sock)) {
         m_log->log(LogLevel::Warn, __FILE__, __LINE__, "server query: socket() failed");
@@ -56,26 +26,14 @@ bool ServerQueryResponder::start() {
     int reuse = 1;
     setsockopt(m_sock, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
     // A short receive timeout so the thread can observe the stop flag without a wakeup pipe.
-#if defined(_WIN32)
-    DWORD tv = 200; // ms
-    setsockopt(m_sock, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&tv), sizeof(tv));
-#else
-    timeval tv{};
-    tv.tv_usec = 200000;
-    setsockopt(m_sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-#endif
+    setReceiveTimeoutMs(m_sock, 200);
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons(m_port);
     if (bind(m_sock, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) != 0) {
-#if defined(_WIN32)
-        closesocket(m_sock);
-        m_sock = ~0ull;
-#else
-        close(m_sock);
-        m_sock = -1;
-#endif
+        closeSocket(m_sock);
+        m_sock = kInvalidSocket;
         m_log->log(LogLevel::Warn, __FILE__, __LINE__, "server query: bind failed");
         return false;
     }
@@ -90,21 +48,11 @@ void ServerQueryResponder::stop() {
     if (m_thread.joinable())
         m_thread.join();
     if (sockValid(m_sock)) {
-#if defined(_WIN32)
-        closesocket(m_sock);
-        m_sock = ~0ull;
-#else
-        close(m_sock);
-        m_sock = -1;
-#endif
+        closeSocket(m_sock);
+        m_sock = kInvalidSocket;
     }
     m_open = false;
-#if defined(_WIN32)
-    if (m_wsaOwner) {
-        WSACleanup();
-        m_wsaOwner = false;
-    }
-#endif
+    // m_wsa releases the Winsock reference when the responder is destroyed; on POSIX it is nothing.
 }
 
 void ServerQueryResponder::setStaticInfo(StaticInfo info) {

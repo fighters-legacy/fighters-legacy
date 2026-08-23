@@ -1,17 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-#if defined(_WIN32)
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#else
-#include <arpa/inet.h>
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#endif
-
 #include "net/ServerQueryClient.h"
 
 #include <ILogger.h>
@@ -21,51 +8,19 @@
 
 namespace fl {
 
-#if defined(_WIN32)
-using SockLen = int;
-static constexpr unsigned long long kBadSock = ~0ull;
-static bool sockValid(unsigned long long s) {
-    return s != kBadSock;
-}
-#else
-using SockLen = socklen_t;
-static bool sockValid(int s) {
-    return s >= 0;
-}
-#endif
-
 ServerQueryClient::ServerQueryClient(ILogger& log, int timeoutMs) : m_log(&log), m_timeoutMs(timeoutMs) {
-#if defined(_WIN32)
-    WSADATA wsa;
-    if (WSAStartup(MAKEWORD(2, 2), &wsa) == 0)
-        m_wsaOwner = true;
     m_sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockValid(m_sock)) {
-        u_long mode = 1;
-        ioctlsocket(m_sock, FIONBIO, &mode);
-    }
-#else
-    m_sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (m_sock >= 0) {
-        int flags = fcntl(m_sock, F_GETFL, 0);
-        fcntl(m_sock, F_SETFL, flags | O_NONBLOCK);
-    }
-#endif
+    if (sockValid(m_sock))
+        setNonBlocking(m_sock);
     if (!sockValid(m_sock) && m_log)
         m_log->log(LogLevel::Warn, __FILE__, __LINE__,
                    "ServerQueryClient: failed to open UDP socket; server queries disabled");
 }
 
 ServerQueryClient::~ServerQueryClient() {
-#if defined(_WIN32)
     if (sockValid(m_sock))
-        closesocket(m_sock);
-    if (m_wsaOwner)
-        WSACleanup();
-#else
-    if (m_sock >= 0)
-        close(m_sock);
-#endif
+        closeSocket(m_sock);
+    // m_wsa releases the Winsock reference; on POSIX it is nothing.
 }
 
 bool ServerQueryClient::isOpen() const noexcept {

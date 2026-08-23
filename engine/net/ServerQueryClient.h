@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <SocketCompat.h> // socket_t / WsaGuard / the winsock include order (#1256)
+
 #include "net/GameProtocol.h"
 
 #include <chrono>
@@ -53,12 +55,8 @@ class ServerQueryClient {
         std::chrono::steady_clock::time_point sentAt{};
     };
 
-#if defined(_WIN32)
-    unsigned long long m_sock{~0ull};
-    bool m_wsaOwner{false};
-#else
-    int m_sock{-1};
-#endif
+    WsaGuard m_wsa; // #1256: OS-refcounted, so taking a reference is free
+    socket_t m_sock{kInvalidSocket};
     ILogger* m_log{nullptr};
     int m_timeoutMs{3000};
     uint32_t m_nextNonce{1};

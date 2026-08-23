@@ -1,53 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// ---------------------------------------------------------------------------
-// Platform socket includes — all #ifdefs confined to this translation unit.
-// ---------------------------------------------------------------------------
+// The socket compat layer is shared (#1256): platform/SocketCompat.h. What stays here is the
+// POLL layer, which is genuinely rcon-only -- nothing else in the tree polls a socket set, so
+// hoisting it would export a vocabulary with one consumer.
+//
+// ⚠ SocketCompat.h must come FIRST: it carries the winsock2-before-windows include order.
+#include <SocketCompat.h>
+
 #if defined(_WIN32)
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <winsock2.h>
-#include <ws2tcpip.h>
-using RconSocket = SOCKET;
-using SockLen = int;
 using PollFd = WSAPOLLFD;
-static constexpr RconSocket kInvalidSocket = INVALID_SOCKET;
-// WSAStartup is already called by ENet (enet_initialize) before RconServer::start().
 #define RCON_POLL WSAPoll
-static void rconClose(RconSocket s) {
-    closesocket(s);
-}
-static bool rconWouldBlock() {
-    return WSAGetLastError() == WSAEWOULDBLOCK;
-}
-static void rconSetNonBlocking(RconSocket s) {
-    u_long mode = 1;
-    ioctlsocket(s, FIONBIO, &mode);
-}
 #else
-#include <arpa/inet.h>
-#include <cerrno>
-#include <fcntl.h>
-#include <netinet/in.h>
 #include <poll.h>
-#include <sys/socket.h>
-#include <unistd.h>
-using RconSocket = int;
-using SockLen = socklen_t;
 using PollFd = struct pollfd;
-static constexpr RconSocket kInvalidSocket = -1;
 #define RCON_POLL ::poll
-static void rconClose(RconSocket s) {
-    close(s);
-}
-static bool rconWouldBlock() {
-    return errno == EAGAIN || errno == EWOULDBLOCK;
-}
-static void rconSetNonBlocking(RconSocket s) {
-    int flags = fcntl(s, F_GETFL, 0);
-    fcntl(s, F_SETFL, flags | O_NONBLOCK);
-}
 #endif
+
+using RconSocket = fl::socket_t;
 
 #include "RconServer.h"
 #include <net/AdminChannel.h>
@@ -169,7 +138,7 @@ struct ClientState {
     // The AdminChannel drain token for this client. Monotonic and never reused, so a drain armed for a
     // client that disconnects cannot be delivered to whoever takes its slot in the vector.
     uint64_t id = 0;
-    RconSocket fd = kInvalidSocket;
+    RconSocket fd = fl::kInvalidSocket;
     bool connected = false;
     std::string address;
     std::vector<uint8_t> recvBuf;
@@ -197,7 +166,12 @@ struct RconServer::Impl {
     ILogger& m_log;
     std::atomic<bool> m_running{false};
     std::thread m_thread;
-    RconSocket m_listenSock = kInvalidSocket;
+    // #1256: this file used to take NO Winsock reference, relying on ENet having called WSAStartup
+    // first. That held only because createNetwork() happens to run before rconServer->start(); the
+    // day that order changed, rcon would have failed with WSANOTINITIALISED. WSAStartup is
+    // OS-refcounted, so owning a reference costs nothing and removes the assumption.
+    fl::WsaGuard m_wsa;
+    RconSocket m_listenSock = fl::kInvalidSocket;
     uint64_t m_nextClientId = 1;
 
     const IClock* m_clock{&SystemClock::instance()};
@@ -262,7 +236,7 @@ void RconServer::Impl::ioLoop() {
         }
         int ready = RCON_POLL(fds.data(), static_cast<unsigned int>(fds.size()), pollTimeoutMs);
         if (ready < 0) {
-            if (rconWouldBlock())
+            if (fl::wouldBlock())
                 continue;
             break; // fatal poll error
         }
@@ -277,7 +251,7 @@ void RconServer::Impl::ioLoop() {
             sockaddr_storage addr{};
             SockLen addrLen = sizeof(addr);
             RconSocket clientFd = accept(m_listenSock, reinterpret_cast<sockaddr*>(&addr), &addrLen);
-            if (clientFd != kInvalidSocket) {
+            if (clientFd != fl::kInvalidSocket) {
                 // Extract peer IP. Server binds AF_INET; addr is always sockaddr_in.
                 char ipBuf[INET6_ADDRSTRLEN] = {};
                 const auto* sin = reinterpret_cast<const sockaddr_in*>(&addr);
@@ -288,15 +262,15 @@ void RconServer::Impl::ioLoop() {
                     // Reject before consuming a slot: AUTH_RESPONSE id=-1 then close.
                     auto pkt = rcon::encodePacket(-1, rcon::kTypeAuthResponse, "");
                     send(clientFd, reinterpret_cast<const char*>(pkt.data()), static_cast<int>(pkt.size()), 0);
-                    rconClose(clientFd);
+                    fl::closeSocket(clientFd);
                     m_log.log(LogLevel::Info, __FILE__, __LINE__, "RCON: rejected locked-out IP");
                 } else if (static_cast<int>(clients.size()) >= kMaxClients) {
                     // Too many connections: send a polite error and close.
                     auto pkt = rcon::encodePacket(0, rcon::kTypeResponseValue, "too many connections\n");
                     send(clientFd, reinterpret_cast<const char*>(pkt.data()), static_cast<int>(pkt.size()), 0);
-                    rconClose(clientFd);
+                    fl::closeSocket(clientFd);
                 } else {
-                    rconSetNonBlocking(clientFd);
+                    fl::setNonBlocking(clientFd);
 #if defined(SO_NOSIGPIPE)
                     // macOS: MSG_NOSIGNAL is not available; use socket option instead.
                     int noSigPipe = 1;
@@ -337,9 +311,9 @@ void RconServer::Impl::ioLoop() {
                                                  static_cast<int>(c.sendBuf.size()), flags));
                 if (sent > 0)
                     c.sendBuf.erase(c.sendBuf.begin(), c.sendBuf.begin() + sent);
-                else if (sent < 0 && !rconWouldBlock()) {
-                    rconClose(c.fd);
-                    c.fd = kInvalidSocket;
+                else if (sent < 0 && !fl::wouldBlock()) {
+                    fl::closeSocket(c.fd);
+                    c.fd = fl::kInvalidSocket;
                     c.connected = false;
                     needClean = true;
                     continue;
@@ -354,10 +328,10 @@ void RconServer::Impl::ioLoop() {
             int n = static_cast<int>(recv(c.fd, reinterpret_cast<char*>(tmp), static_cast<int>(sizeof(tmp)), 0));
             if (n <= 0) {
                 // n == 0: clean close; n < 0 + !wouldBlock: error
-                if (n < 0 && rconWouldBlock())
+                if (n < 0 && fl::wouldBlock())
                     continue;
-                rconClose(c.fd);
-                c.fd = kInvalidSocket;
+                fl::closeSocket(c.fd);
+                c.fd = fl::kInvalidSocket;
                 c.connected = false;
                 needClean = true;
                 m_log.log(LogLevel::Info, __FILE__, __LINE__, "RCON: client disconnected");
@@ -459,8 +433,8 @@ void RconServer::Impl::ioLoop() {
                         break;
                     c.sendBuf.erase(c.sendBuf.begin(), c.sendBuf.begin() + sent);
                 }
-                rconClose(c.fd);
-                c.fd = kInvalidSocket;
+                fl::closeSocket(c.fd);
+                c.fd = fl::kInvalidSocket;
                 c.connected = false;
                 needClean = true;
                 m_log.log(LogLevel::Info, __FILE__, __LINE__, "RCON: client disconnected");
@@ -471,18 +445,18 @@ void RconServer::Impl::ioLoop() {
             // Drop any drain armed for a client that just went away, rather than letting it sit until
             // its deadline and find nobody. Same intent as the old per-client `connected` guard.
             for (const auto& c : clients)
-                if (c.fd == kInvalidSocket)
+                if (c.fd == fl::kInvalidSocket)
                     m_channel.cancelDrainsWhere([id = c.id](uint64_t token) { return token == id; });
             clients.erase(std::remove_if(clients.begin(), clients.end(),
-                                         [](const ClientState& c) { return c.fd == kInvalidSocket; }),
+                                         [](const ClientState& c) { return c.fd == fl::kInvalidSocket; }),
                           clients.end());
         }
     }
 
     // Close all remaining client connections on exit.
     for (auto& c : clients)
-        if (c.fd != kInvalidSocket)
-            rconClose(c.fd);
+        if (c.fd != fl::kInvalidSocket)
+            fl::closeSocket(c.fd);
 }
 
 // ---------------------------------------------------------------------------
@@ -498,7 +472,7 @@ RconServer::~RconServer() {
 
 bool RconServer::start() {
     m_impl->m_listenSock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (m_impl->m_listenSock == kInvalidSocket) {
+    if (m_impl->m_listenSock == fl::kInvalidSocket) {
         m_impl->m_log.log(LogLevel::Error, __FILE__, __LINE__, "RCON: socket() failed");
         return false;
     }
@@ -506,7 +480,7 @@ bool RconServer::start() {
     int reuse = 1;
     setsockopt(m_impl->m_listenSock, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
 
-    rconSetNonBlocking(m_impl->m_listenSock);
+    fl::setNonBlocking(m_impl->m_listenSock);
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
@@ -517,15 +491,15 @@ bool RconServer::start() {
         char buf[128];
         std::snprintf(buf, sizeof(buf), "RCON: bind() failed on port %u", m_impl->m_cfg.port);
         m_impl->m_log.log(LogLevel::Error, __FILE__, __LINE__, buf);
-        rconClose(m_impl->m_listenSock);
-        m_impl->m_listenSock = kInvalidSocket;
+        fl::closeSocket(m_impl->m_listenSock);
+        m_impl->m_listenSock = fl::kInvalidSocket;
         return false;
     }
 
     if (listen(m_impl->m_listenSock, 8) != 0) {
         m_impl->m_log.log(LogLevel::Error, __FILE__, __LINE__, "RCON: listen() failed");
-        rconClose(m_impl->m_listenSock);
-        m_impl->m_listenSock = kInvalidSocket;
+        fl::closeSocket(m_impl->m_listenSock);
+        m_impl->m_listenSock = fl::kInvalidSocket;
         return false;
     }
 
@@ -543,9 +517,9 @@ void RconServer::stop() {
         return; // already stopped or never started
 
     // Close the listen socket to unblock poll() on the listen fd.
-    if (m_impl->m_listenSock != kInvalidSocket) {
-        rconClose(m_impl->m_listenSock);
-        m_impl->m_listenSock = kInvalidSocket;
+    if (m_impl->m_listenSock != fl::kInvalidSocket) {
+        fl::closeSocket(m_impl->m_listenSock);
+        m_impl->m_listenSock = fl::kInvalidSocket;
     }
 
     if (m_impl->m_thread.joinable())
