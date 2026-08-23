@@ -39,20 +39,10 @@ fl::ControlInput WaypointController::sample(const fl::EntityState& state, uint64
     const glm::dvec3& target = m_waypoints[m_currentIdx];
     double tgtPos[3] = {target.x, target.y, target.z};
 
-    const glm::dvec3 ownWorld(state.transform.pos[0], state.transform.pos[1], state.transform.pos[2]);
-    float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, tgtPos, m_planetRadiusM);
-    float altErr =
-        static_cast<float>(fl::localAltitude(target, m_planetRadiusM) - fl::localAltitude(ownWorld, m_planetRadiusM));
-    float pitchErr = pitchErrorFromAlt(state.transform.quat, state.transform.pos, altErr, m_planetRadiusM);
-
     ctrl.throttle = m_throttle;
-    // Bank-ANGLE command closed on the current bank, and a rudder that nulls the SIDESLIP (#1143).
     // 45 deg is plenty for navigating between waypoints.
-    // The rate-only aileron law wound this controller to 179.8 deg of bank and 89 deg of sideslip
-    // within 90 s of a heading error it could not null, and flew it into the ground.
-    ctrl.aileron = bankToTurnAileron(state.transform.quat, state.transform.pos, headErr, m_planetRadiusM, kNavBankRad);
-    ctrl.rudder = rudderToCoordinate(sideslipOf(state.transform.quat, state.transform.vel));
-    ctrl.elevator = elevatorFromPitchError(pitchErr);
+    steerTowardPoint(ctrl, state.transform.quat, state.transform.pos, state.transform.vel, tgtPos, m_planetRadiusM,
+                     kNavBankRad);
 
     return ctrl;
 }

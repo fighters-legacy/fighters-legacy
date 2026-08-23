@@ -39,20 +39,10 @@ fl::ControlInput GunsEmploymentController::sample(const fl::EntityState& state, 
     // back into parameters IS the maneuver).
     const glm::dvec3 steerAt = lead.valid ? lead.aimPoint : tgtPos;
     const double steerArr[3] = {steerAt.x, steerAt.y, steerAt.z};
-    const float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, steerArr, m_planetRadiusM);
-    const float altErr =
-        static_cast<float>(fl::localAltitude(steerAt, m_planetRadiusM) - fl::localAltitude(ownPos, m_planetRadiusM));
-    const float pitchErr = pitchErrorFromAlt(state.transform.quat, state.transform.pos, altErr, m_planetRadiusM);
-
     ctrl.throttle = m_throttle;
-    // Bank-ANGLE command closed on the current bank, and a rudder that nulls the SIDESLIP (#1143).
     // 80 deg: tracking for guns is the hardest turn a controller makes.
-    // The rate-only aileron law wound this controller to 179.8 deg of bank and 89 deg of sideslip
-    // within 90 s of a heading error it could not null, and flew it into the ground.
-    ctrl.aileron =
-        bankToTurnAileron(state.transform.quat, state.transform.pos, headErr, m_planetRadiusM, kCombatBankRad);
-    ctrl.rudder = rudderToCoordinate(sideslipOf(state.transform.quat, state.transform.vel));
-    ctrl.elevator = elevatorFromPitchError(pitchErr);
+    steerTowardPoint(ctrl, state.transform.quat, state.transform.pos, state.transform.vel, steerArr, m_planetRadiusM,
+                     kCombatBankRad);
 
     // Trigger discipline: predicted miss = the angle between the nose and the lead direction,
     // scaled by the round's travel to the target range. Fire only when that miss is inside the
