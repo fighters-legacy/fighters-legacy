@@ -58,6 +58,35 @@ TEST_CASE("LobbyRegistration: first tick POSTs a JSON heartbeat to /v1/servers (
     CHECK(req.body.find("\"visibility\":\"public\"") != std::string::npos);
 }
 
+TEST_CASE("LobbyRegistration: the posted body is escaped by the engine's one escaper (#1262)", "[lobby_reg]") {
+    // This file used to carry its own escaper, which substituted a SPACE for every C0 control and
+    // had no \b or \f. It produced valid JSON, so nothing broke -- but it was a second copy of the
+    // one primitive #1080 centralised, and it had already drifted. Nothing pinned the bytes, which
+    // is how the copy survived the #1161 sweep of the same directory.
+    NullLog log;
+    TrackingHttpClient http;
+    http.setResponse("https://lobby.example/v1/servers", "", 200);
+    ManualClock clock;
+    LobbyRegistration reg(http, log);
+    reg.setClock(clock);
+
+    LobbyRegistrationConfig c = makeCfg();
+    c.name = "quote\" back\\ slash";
+    c.mode = "tab\there";
+    c.mission = "bell\x07 and \x1f";
+    reg.configure(c);
+
+    reg.tick();
+    REQUIRE(http.requests.size() == 1u);
+    const std::string& body = http.requests.back().body;
+
+    CHECK(body.find("\"name\":\"quote\\\" back\\\\ slash\"") != std::string::npos);
+    CHECK(body.find("\"mode\":\"tab\\there\"") != std::string::npos);
+    // The drift, pinned: C0 controls become \uXXXX rather than a space that loses the byte.
+    CHECK(body.find("\"mission\":\"bell\\u0007 and \\u001f\"") != std::string::npos);
+    CHECK(body.find(' ') != std::string::npos); // the legitimate space in "quote\" back" survives
+}
+
 TEST_CASE("LobbyRegistration: heartbeats on the configured interval, not every tick (#143)", "[lobby_reg]") {
     NullLog log;
     TrackingHttpClient http;

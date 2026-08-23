@@ -2,45 +2,13 @@
 #include "net/LobbyRegistration.h"
 
 #include "ILogger.h"
+#include "util/Json.h" // the engine's one JSON escaper (#1080)
 
 #include <algorithm>
 #include <cstdio>
 #include <string_view>
 
 namespace fl {
-
-namespace {
-// Append a JSON-escaped copy of `s` (with surrounding quotes) to `out`.
-void appendJsonEscaped(std::string& out, std::string_view s) {
-    out.push_back('"');
-    for (char c : s) {
-        switch (c) {
-        case '"':
-            out += "\\\"";
-            break;
-        case '\\':
-            out += "\\\\";
-            break;
-        case '\n':
-            out += "\\n";
-            break;
-        case '\r':
-            out += "\\r";
-            break;
-        case '\t':
-            out += "\\t";
-            break;
-        default:
-            if (static_cast<unsigned char>(c) < 0x20)
-                out += ' '; // drop other control chars
-            else
-                out.push_back(c);
-            break;
-        }
-    }
-    out.push_back('"');
-}
-} // namespace
 
 LobbyRegistration::LobbyRegistration(IHttpClient& http, ILogger& log) : m_http(http), m_log(log) {}
 
@@ -69,15 +37,12 @@ std::string LobbyRegistration::endpoint() const {
 
 std::string LobbyRegistration::buildBody() const {
     std::string b = "{";
-    b += "\"name\":";
-    appendJsonEscaped(b, m_cfg.name);
+    b += "\"name\":" + json::str(m_cfg.name);
     b += ",\"port\":" + std::to_string(m_cfg.gamePort);
     b += ",\"players\":" + std::to_string(m_players);
     b += ",\"max_players\":" + std::to_string(m_cfg.maxPlayers);
-    b += ",\"mode\":";
-    appendJsonEscaped(b, m_cfg.mode);
-    b += ",\"mission\":";
-    appendJsonEscaped(b, m_cfg.mission);
+    b += ",\"mode\":" + json::str(m_cfg.mode);
+    b += ",\"mission\":" + json::str(m_cfg.mission);
     b += ",\"visibility\":\"public\"";
     b += "}";
     return b;
