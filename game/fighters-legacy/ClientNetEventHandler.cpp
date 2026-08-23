@@ -5,6 +5,8 @@
 #include "KillFeed.h"
 #include "ServerNotice.h"
 #include "Utf8Decode.h"
+#include <math/Angles.h>
+#include <net/Quantization.h> // the one articulation/turret wire quant pair (#1249)
 
 #include "ILogger.h"
 #include "INetwork.h"
@@ -1013,8 +1015,8 @@ void ClientNetEventHandler::handleCrewRoster(const void* data, std::size_t size)
 void ClientNetEventHandler::applyCrewTurretTlv(const uint8_t* payload, std::size_t len) {
     // Payload: uint8 entryCount, then entryCount x { uint32 entityIdx (LE), uint8 turretCount,
     // turretCount x { int16 azQ, int16 elQ } }. Bounds-checked; a truncated tail stops the scan. The
-    // wire quant is symmetric: az over [-pi,pi], el over [-pi/2,pi/2], both to int16.
-    constexpr float kPi = 3.14159265358979323846f;
+    // wire quant is symmetric: az over [-pi,pi], el over [-pi/2,pi/2], both to int16 -- through the
+    // same named pair the encoder uses (net/Quantization.h, #1249).
     if (len < 1)
         return;
     const uint8_t entryCount = payload[0];
@@ -1036,8 +1038,8 @@ void ClientNetEventHandler::applyCrewTurretTlv(const uint8_t* payload, std::size
             std::memcpy(&elQ, payload + off + 2, 2);
             off += 4;
             CrewTurretPose p;
-            p.azRad = static_cast<float>(azQ) / 32767.f * kPi;
-            p.elRad = static_cast<float>(elQ) / 32767.f * (kPi * 0.5f);
+            p.azRad = fl::dequantAngleI16(azQ, fl::kPi<float>);
+            p.elRad = fl::dequantAngleI16(elQ, fl::kPi<float> * 0.5f);
             poses.push_back(p);
         }
         m_crewTurretPoses[idx] = std::move(poses);
@@ -1070,8 +1072,8 @@ void ClientNetEventHandler::applyArticulationTlv(const uint8_t* payload, std::si
             if (cached != m_entityCache.end()) {
                 // Signed channels are offset binary around 128; unsigned are a plain 0..255 fraction.
                 cached->second.re.artChannels[c] = fl::artChannelIsSigned(static_cast<fl::ArtChannel>(c))
-                                                       ? (static_cast<float>(static_cast<int>(q) - 128) / 127.f)
-                                                       : (static_cast<float>(q) / 255.f);
+                                                       ? fl::dequantSignedU8(q)
+                                                       : fl::dequantUnitU8(q);
             }
         }
         off += count;
