@@ -1,47 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// ---------------------------------------------------------------------------
-// Platform socket includes — all #ifdefs confined to this translation unit
-// (the RconServer.cpp idiom: poll()/WSAPoll + a tiny shim layer).
-// ---------------------------------------------------------------------------
+// The socket compat layer is shared (#1256): platform/SocketCompat.h, which bot_swarm can reach
+// because it lives in platform/ ROOT -- this tool deliberately links only platform-net/platform-hal
+// and engine-protocol, so an engine/net home would have been unreachable from here.
+//
+// The POLL layer stays local, as it does in RconServer: only these two files poll a socket set.
+//
+// ⚠ SocketCompat.h must come FIRST: it carries the winsock2-before-windows include order.
+#include <SocketCompat.h>
+
 #if defined(_WIN32)
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <winsock2.h>
-#include <ws2tcpip.h>
-using ProxySocket = SOCKET;
-using SockLen = int;
 using PollFd = WSAPOLLFD;
-static constexpr ProxySocket kInvalidSocket = INVALID_SOCKET;
 #define PROXY_POLL WSAPoll
-static void proxyClose(ProxySocket s) {
-    closesocket(s);
-}
-static void proxySetNonBlocking(ProxySocket s) {
-    u_long mode = 1;
-    ioctlsocket(s, FIONBIO, &mode);
-}
 #else
-#include <arpa/inet.h>
-#include <cerrno>
-#include <fcntl.h>
-#include <netinet/in.h>
 #include <poll.h>
-#include <sys/socket.h>
-#include <unistd.h>
-using ProxySocket = int;
-using SockLen = socklen_t;
 using PollFd = struct pollfd;
-static constexpr ProxySocket kInvalidSocket = -1;
 #define PROXY_POLL ::poll
-static void proxyClose(ProxySocket s) {
-    close(s);
-}
-static void proxySetNonBlocking(ProxySocket s) {
-    int flags = fcntl(s, F_GETFL, 0);
-    fcntl(s, F_SETFL, flags | O_NONBLOCK);
-}
 #endif
+
+using ProxySocket = fl::socket_t;
 
 #include "LossyProxy.h"
 
@@ -79,13 +56,13 @@ inline uint64_t keyOf(const sockaddr_in& a) {
 } // namespace
 
 struct LossyProxy::Impl {
-    ProxySocket listenSock{kInvalidSocket};
+    ProxySocket listenSock{fl::kInvalidSocket};
     sockaddr_in serverAddr{};
     uint16_t port{0};
 
     // One connected upstream socket per distinct client source (so fl-server sees N peers).
     struct ClientLane {
-        ProxySocket up{kInvalidSocket};
+        ProxySocket up{fl::kInvalidSocket};
         sockaddr_in addr{}; // the client's source addr, for the return path
     };
     std::map<uint64_t, ClientLane> clients; // I/O-thread only after start()
@@ -190,13 +167,13 @@ struct LossyProxy::Impl {
                         ClientLane lane;
                         lane.addr = from;
                         lane.up = socket(AF_INET, SOCK_DGRAM, 0);
-                        if (lane.up == kInvalidSocket)
+                        if (lane.up == fl::kInvalidSocket)
                             continue;
                         if (connect(lane.up, reinterpret_cast<const sockaddr*>(&serverAddr), sizeof(serverAddr)) != 0) {
-                            proxyClose(lane.up);
+                            fl::closeSocket(lane.up);
                             continue;
                         }
-                        proxySetNonBlocking(lane.up);
+                        fl::setNonBlocking(lane.up);
                         it = clients.emplace(key, lane).first;
                     }
                     route(/*toServer=*/true, key, buf.data(), static_cast<std::size_t>(n));
@@ -226,10 +203,9 @@ LossyProxy::~LossyProxy() {
 }
 
 bool LossyProxy::start(const char* serverHost, uint16_t serverPort, const LossySchedule& sched, uint32_t seed) {
-#if defined(_WIN32)
-    WSADATA wsa{};
-    (void)WSAStartup(MAKEWORD(2, 2), &wsa); // refcounted; WSAEALREADY (ENet started it) is fine
-#endif
+    // OS-refcounted; WSAEALREADY (ENet started it) is fine. Held for the proxy's lifetime rather
+    // than started here and never released, which is what the hand-rolled call did.
+    static fl::WsaGuard s_wsa;
     Impl& im = *m_impl;
     im.link = LossyLink(sched, seed);
 
@@ -240,26 +216,26 @@ bool LossyProxy::start(const char* serverHost, uint16_t serverPort, const LossyS
         return false; // IPv4 loopback instrument only — hostnames/IPv6 not supported
 
     im.listenSock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (im.listenSock == kInvalidSocket)
+    if (im.listenSock == fl::kInvalidSocket)
         return false;
     sockaddr_in bindAddr{};
     bindAddr.sin_family = AF_INET;
     bindAddr.sin_port = 0; // ephemeral
     inet_pton(AF_INET, "127.0.0.1", &bindAddr.sin_addr);
     if (bind(im.listenSock, reinterpret_cast<const sockaddr*>(&bindAddr), sizeof(bindAddr)) != 0) {
-        proxyClose(im.listenSock);
-        im.listenSock = kInvalidSocket;
+        fl::closeSocket(im.listenSock);
+        im.listenSock = fl::kInvalidSocket;
         return false;
     }
     sockaddr_in bound{};
     SockLen boundLen = sizeof(bound);
     if (getsockname(im.listenSock, reinterpret_cast<sockaddr*>(&bound), &boundLen) != 0) {
-        proxyClose(im.listenSock);
-        im.listenSock = kInvalidSocket;
+        fl::closeSocket(im.listenSock);
+        im.listenSock = fl::kInvalidSocket;
         return false;
     }
     im.port = ntohs(bound.sin_port);
-    proxySetNonBlocking(im.listenSock);
+    fl::setNonBlocking(im.listenSock);
 
     im.t0 = Clock::now();
     im.running.store(true, std::memory_order_relaxed);
@@ -275,13 +251,13 @@ void LossyProxy::stop() {
     }
     for (auto& [key, lane] : im.clients) {
         (void)key;
-        if (lane.up != kInvalidSocket)
-            proxyClose(lane.up);
+        if (lane.up != fl::kInvalidSocket)
+            fl::closeSocket(lane.up);
     }
     im.clients.clear();
-    if (im.listenSock != kInvalidSocket) {
-        proxyClose(im.listenSock);
-        im.listenSock = kInvalidSocket;
+    if (im.listenSock != fl::kInvalidSocket) {
+        fl::closeSocket(im.listenSock);
+        im.listenSock = fl::kInvalidSocket;
     }
 }
 

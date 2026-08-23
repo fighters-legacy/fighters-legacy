@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <SocketCompat.h> // socket_t / WsaGuard / the winsock include order (#1256)
+
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -59,12 +61,8 @@ class ServerQueryResponder {
 
     uint16_t m_port{0};
     ILogger* m_log{nullptr};
-#if defined(_WIN32)
-    unsigned long long m_sock{~0ull};
-    bool m_wsaOwner{false};
-#else
-    int m_sock{-1};
-#endif
+    WsaGuard m_wsa; // #1256: OS-refcounted, so taking a reference is free
+    socket_t m_sock{kInvalidSocket};
     std::atomic<bool> m_open{false};
     std::atomic<bool> m_running{false};
     std::thread m_thread;

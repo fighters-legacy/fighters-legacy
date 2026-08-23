@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <SocketCompat.h> // socket_t / WsaGuard (#1256)
+
 #include "math/Angles.h"
 
 #include "config/HeadTrackingSettings.h"
@@ -110,12 +112,10 @@ class HeadTracker {
   private:
     HeadPoseFilter m_filter;
     bool m_running{false};
-#if defined(_WIN32)
-    unsigned long long m_sock{~0ull};
-    bool m_wsaOwner{false};
-#else
-    int m_sock{-1};
-#endif
+    // #1256: the shared compat types, and an OS-refcounted Winsock reference held for the
+    // tracker's lifetime rather than started and cleaned up around each start()/stop().
+    fl::WsaGuard m_wsa;
+    fl::socket_t m_sock{fl::kInvalidSocket};
 };
 
 } // namespace fl

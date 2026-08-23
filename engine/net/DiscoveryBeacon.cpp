@@ -1,16 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-#if defined(_WIN32)
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <winsock2.h>
-#include <ws2ipdef.h>
-#include <ws2tcpip.h>
-#else
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#endif
-
 #include "DiscoveryBeacon.h"
 #include "net/GameProtocol.h"
 
@@ -19,20 +7,10 @@
 #include <chrono>
 #include <cstring>
 
-#if !defined(_WIN32)
-#include <unistd.h>
-#endif
-
 namespace fl {
 
 DiscoveryBeacon::DiscoveryBeacon(const Config& cfg, ILogger& log) : m_cfg(cfg), m_log(&log) {
-#if defined(_WIN32)
-    WSADATA wsa{};
-    int err = WSAStartup(MAKEWORD(2, 2), &wsa);
-    if (err == 0)
-        m_wsaOwner = true;
-    // WSAEALREADY means another component (e.g. enet_initialize) already started Winsock — safe.
-#endif
+    // WsaGuard takes an OS-refcounted reference; WSAEALREADY (ENet got there first) is fine.
     if (!openSock4())
         m_log->log(LogLevel::Info, __FILE__, __LINE__, "DiscoveryBeacon: IPv4 socket unavailable");
     if (!openSock6())
@@ -40,35 +18,18 @@ DiscoveryBeacon::DiscoveryBeacon(const Config& cfg, ILogger& log) : m_cfg(cfg), 
 }
 
 DiscoveryBeacon::~DiscoveryBeacon() {
-#if defined(_WIN32)
-    if (m_sock4 != INVALID_SOCKET) {
-        closesocket(m_sock4);
-        m_sock4 = INVALID_SOCKET;
+    if (sockValid(m_sock4)) {
+        closeSocket(m_sock4);
+        m_sock4 = kInvalidSocket;
     }
-    if (m_sock6 != INVALID_SOCKET) {
-        closesocket(m_sock6);
-        m_sock6 = INVALID_SOCKET;
+    if (sockValid(m_sock6)) {
+        closeSocket(m_sock6);
+        m_sock6 = kInvalidSocket;
     }
-    if (m_wsaOwner)
-        WSACleanup();
-#else
-    if (m_sock4 >= 0) {
-        ::close(m_sock4);
-        m_sock4 = -1;
-    }
-    if (m_sock6 >= 0) {
-        ::close(m_sock6);
-        m_sock6 = -1;
-    }
-#endif
 }
 
 bool DiscoveryBeacon::isOpen() const noexcept {
-#if defined(_WIN32)
-    return m_sock4 != INVALID_SOCKET || m_sock6 != INVALID_SOCKET;
-#else
-    return m_sock4 >= 0 || m_sock6 >= 0;
-#endif
+    return sockValid(m_sock4) || sockValid(m_sock6);
 }
 
 void DiscoveryBeacon::tick(const TickState& state) {
@@ -97,58 +58,37 @@ void DiscoveryBeacon::tick(const TickState& state) {
 }
 
 bool DiscoveryBeacon::openSock4() {
-#if defined(_WIN32)
     m_sock4 = socket(AF_INET, SOCK_DGRAM, 0);
-    if (m_sock4 == INVALID_SOCKET)
+    if (!sockValid(m_sock4))
         return false;
     int opt = 1;
     if (setsockopt(m_sock4, SOL_SOCKET, SO_BROADCAST, reinterpret_cast<const char*>(&opt), sizeof(opt)) != 0) {
-        closesocket(m_sock4);
-        m_sock4 = INVALID_SOCKET;
+        closeSocket(m_sock4);
+        m_sock4 = kInvalidSocket;
         return false;
     }
-#else
-    m_sock4 = socket(AF_INET, SOCK_DGRAM, 0);
-    if (m_sock4 < 0)
-        return false;
-    int opt = 1;
-    if (setsockopt(m_sock4, SOL_SOCKET, SO_BROADCAST, reinterpret_cast<const char*>(&opt), sizeof(opt)) != 0) {
-        ::close(m_sock4);
-        m_sock4 = -1;
-        return false;
-    }
-#endif
     return true;
 }
 
 bool DiscoveryBeacon::openSock6() {
+    m_sock6 = socket(AF_INET6, SOCK_DGRAM, 0);
+    if (!sockValid(m_sock6))
+        return false;
+    int hops = 1;
+    if (setsockopt(m_sock6, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, reinterpret_cast<const char*>(&hops), sizeof(hops)) !=
+        0) {
+        closeSocket(m_sock6);
+        m_sock6 = kInvalidSocket;
+        return false;
+    }
+    // "Any interface": a DWORD on Windows, an unsigned int on POSIX. Same zero, same bytes, but the
+    // declared type has to match what setsockopt reads on each platform.
 #if defined(_WIN32)
-    m_sock6 = socket(AF_INET6, SOCK_DGRAM, 0);
-    if (m_sock6 == INVALID_SOCKET)
-        return false;
-    int hops = 1;
-    if (setsockopt(m_sock6, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, reinterpret_cast<const char*>(&hops), sizeof(hops)) !=
-        0) {
-        closesocket(m_sock6);
-        m_sock6 = INVALID_SOCKET;
-        return false;
-    }
     DWORD ifIdx = 0;
-    setsockopt(m_sock6, IPPROTO_IPV6, IPV6_MULTICAST_IF, reinterpret_cast<const char*>(&ifIdx), sizeof(ifIdx));
 #else
-    m_sock6 = socket(AF_INET6, SOCK_DGRAM, 0);
-    if (m_sock6 < 0)
-        return false;
-    int hops = 1;
-    if (setsockopt(m_sock6, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, reinterpret_cast<const char*>(&hops), sizeof(hops)) !=
-        0) {
-        ::close(m_sock6);
-        m_sock6 = -1;
-        return false;
-    }
     unsigned ifIdx = 0;
-    setsockopt(m_sock6, IPPROTO_IPV6, IPV6_MULTICAST_IF, reinterpret_cast<const char*>(&ifIdx), sizeof(ifIdx));
 #endif
+    setsockopt(m_sock6, IPPROTO_IPV6, IPV6_MULTICAST_IF, reinterpret_cast<const char*>(&ifIdx), sizeof(ifIdx));
     return true;
 }
 
@@ -171,11 +111,7 @@ void DiscoveryBeacon::send(const TickState& state) {
     std::memcpy(buf, &pkt, sizeof(pkt));
 
     // IPv4 broadcast
-#if defined(_WIN32)
-    if (m_sock4 != INVALID_SOCKET) {
-#else
-    if (m_sock4 >= 0) {
-#endif
+    if (sockValid(m_sock4)) {
         sockaddr_in d4{};
         d4.sin_family = AF_INET;
         d4.sin_port = htons(m_cfg.discoveryPort);
@@ -186,11 +122,7 @@ void DiscoveryBeacon::send(const TickState& state) {
     }
 
     // IPv6 link-local multicast — ff02::1 (all-nodes on link, no join needed for sender)
-#if defined(_WIN32)
-    if (m_sock6 != INVALID_SOCKET) {
-#else
-    if (m_sock6 >= 0) {
-#endif
+    if (sockValid(m_sock6)) {
         sockaddr_in6 d6{};
         d6.sin6_family = AF_INET6;
         d6.sin6_port = htons(m_cfg.discoveryPort);

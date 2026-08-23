@@ -1,17 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
-#if defined(_WIN32)
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <winsock2.h>
-#include <ws2ipdef.h>
-#include <ws2tcpip.h> // inet_pton / inet_ntop on Windows
-#else
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#endif
+#include <SocketCompat.h> // socket_t / WsaGuard / the winsock include order (#1256)
 
 #include "net/GameProtocol.h"
 
@@ -64,22 +54,13 @@ class DiscoveryListener {
     bool isOpen() const noexcept;
 
   private:
-#if defined(_WIN32)
-    void drainSock(SOCKET sock, bool isIPv6);
-#else
-    void drainSock(int sock, bool isIPv6);
-#endif
+    void drainSock(socket_t sock, bool isIPv6);
     bool openSock4(uint16_t port);
     bool openSock6(uint16_t port);
 
-#if defined(_WIN32)
-    SOCKET m_sock4{INVALID_SOCKET};
-    SOCKET m_sock6{INVALID_SOCKET};
-    bool m_wsaOwner{false};
-#else
-    int m_sock4{-1};
-    int m_sock6{-1};
-#endif
+    WsaGuard m_wsa; // #1256: OS-refcounted, so taking a reference is free
+    socket_t m_sock4{kInvalidSocket};
+    socket_t m_sock6{kInvalidSocket};
 
     int m_ttlMs;
     ILogger* m_log{nullptr};
