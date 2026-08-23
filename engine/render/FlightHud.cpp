@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "render/FlightHud.h"
+#include "flight/AirAngles.h"
 
 #include "math/Units.h"
 
@@ -104,10 +105,9 @@ void FlightHud::update(const HudFrameInput& in) {
     const float tas =
         std::sqrt(e->velocity.x * e->velocity.x + e->velocity.y * e->velocity.y + e->velocity.z * e->velocity.z);
 
-    // Angle of attack: velocity into the body frame (nose = +X, up = +Y). AoA is the pitch of the
-    // relative wind below the nose, so positive AoA = wind coming from below.
+    // Body-frame velocity (nose = +X, up = +Y), for the load factor below.
     const glm::vec3 vBody = glm::conjugate(e->orientation) * e->velocity;
-    const float aoa = (tas > 1.0f) ? std::atan2(-vBody.y, vBody.x) : 0.0f;
+    const float aoa = aoaRad(e->orientation, e->velocity);
 
     // Load factor from the specific force felt: a_body (centripetal, omega x v) minus gravity in the
     // body frame, over g0. Level flight with no rotation reads exactly 1 g.
