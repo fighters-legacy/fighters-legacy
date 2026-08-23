@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "McpEndpoint.h"
 
+#include <console/CommandRegistry.h> // the refusal-prefix contract (#1257)
 #include <crypto/RandomToken.h>
 #include <mission/MissionValidator.h>
 #include <net/AdminChannel.h>
@@ -14,15 +15,6 @@
 namespace fl {
 
 namespace {
-
-// A refusal the CommandRegistry answers as prose. Both the REST frontend and this one key on the
-// same two prefixes, because the registry's contract is the string, not an error code.
-[[nodiscard]] bool isPermissionDenied(const std::string& s) {
-    return s.rfind("permission denied", 0) == 0;
-}
-[[nodiscard]] bool isUnknownCommand(const std::string& s) {
-    return s.rfind("unknown command", 0) == 0;
-}
 
 // Cap what a single tool call may be asked to chew on. A mission document is YAML from an agent that
 // may itself be reading attacker-influenced text, so the size bound belongs here rather than in the
@@ -247,7 +239,7 @@ std::string McpEndpoint::handleToolCall(std::string_view params, const httpadmin
         // Through the SAME permission-checked dispatch every other frontend uses. The allowlist above
         // narrows what MCP may attempt; the capability mask inside still decides what it may do.
         const std::string result = m_channel.dispatch(*command, issuer);
-        const bool failed = isPermissionDenied(result) || isUnknownCommand(result);
+        const bool failed = CommandRegistry::isPermissionDenied(result) || CommandRegistry::isUnknownCommand(result);
         return mcp::resultResponse(id,
                                    mcp::toolResult(result, "{\"result\": \"" + json::escape(result) + "\"}", failed));
     }

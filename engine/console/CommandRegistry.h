@@ -41,6 +41,22 @@ class CommandRegistry {
     // when the issuer falls short.
     [[nodiscard]] std::string dispatch(std::string_view line, const CommandIssuer& issuer) const;
 
+    // ── the refusal contract ────────────────────────────────────────────────────────────────
+    //
+    // dispatch() answers a refusal as PROSE, not an error code, so every frontend that has to turn
+    // a refusal into a status has to recognise it from the string. Three did, by hand: the REST
+    // frontend twice and the MCP endpoint with its own pair of file-static predicates. The prefixes
+    // are minted below and matched here, so a reworded refusal cannot start returning 200.
+    static constexpr std::string_view kPermissionDeniedPrefix = "permission denied";
+    static constexpr std::string_view kUnknownCommandPrefix = "unknown command";
+
+    [[nodiscard]] static constexpr bool isPermissionDenied(std::string_view result) noexcept {
+        return result.starts_with(kPermissionDeniedPrefix);
+    }
+    [[nodiscard]] static constexpr bool isUnknownCommand(std::string_view result) noexcept {
+        return result.starts_with(kUnknownCommandPrefix);
+    }
+
     // The required-capability mask for a command (0 if unknown / public). For tests and tooling.
     [[nodiscard]] CapabilityMask requiredCaps(std::string_view name) const;
 

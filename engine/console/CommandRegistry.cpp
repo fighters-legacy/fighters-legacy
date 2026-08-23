@@ -30,12 +30,12 @@ std::string CommandRegistry::dispatch(std::string_view line, const CommandIssuer
             continue;
         if (!hasCaps(issuer.caps, e.required)) {
             const std::string_view missing = firstMissingCapabilityName(issuer.caps, e.required);
-            return "permission denied: " + std::string(cmd) + " requires " + std::string(missing);
+            return std::string(kPermissionDeniedPrefix) + ": " + std::string(cmd) + " requires " + std::string(missing);
         }
         return e.handler(args);
     }
 
-    return "unknown command: " + std::string(cmd) + "  (type 'help' for list)";
+    return std::string(kUnknownCommandPrefix) + ": " + std::string(cmd) + "  (type 'help' for list)";
 }
 
 CapabilityMask CommandRegistry::requiredCaps(std::string_view name) const {

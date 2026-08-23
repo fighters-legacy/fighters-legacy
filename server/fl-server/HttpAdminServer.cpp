@@ -3,6 +3,7 @@
 
 #include "McpEndpoint.h"
 
+#include <console/CommandRegistry.h> // the refusal-prefix contract (#1257)
 #include <net/AdminChannel.h>
 #include <util/Json.h> // json::escape — the one escaper for every JSON this server emits
 
@@ -85,12 +86,12 @@ struct HttpAdminServer::Impl {
     // body that says "permission denied" — an HTTP client should not have to read prose to find out.
     void dispatchAsResponse(const CommandIssuer& issuer, const std::string& command, httplib::Response& res) {
         const std::string result = channel.dispatch(command, issuer);
-        if (result.rfind("permission denied", 0) == 0) {
+        if (CommandRegistry::isPermissionDenied(result)) {
             res.status = 403;
             res.set_content(httpadmin::errorJson(result), "application/json");
             return;
         }
-        if (result.rfind("unknown command", 0) == 0) {
+        if (CommandRegistry::isUnknownCommand(result)) {
             res.status = 404;
             res.set_content(httpadmin::errorJson(result), "application/json");
             return;
@@ -107,7 +108,7 @@ struct HttpAdminServer::Impl {
         if (result.empty() || result.front() != '{') {
             // The command declined (no snapshot yet, or a refusal). Report it as an error object so
             // the response is always JSON.
-            res.status = result.rfind("permission denied", 0) == 0 ? 403 : 503;
+            res.status = CommandRegistry::isPermissionDenied(result) ? 403 : 503;
             res.set_content(httpadmin::errorJson(result), "application/json");
             return;
         }

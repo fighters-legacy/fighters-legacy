@@ -373,6 +373,13 @@ TEST_CASE("http_admin: a live server enforces auth and routes to the command reg
                         });
     reg.registerCommand("set_weather", "set_weather", capBit(Capability::ServerConfig),
                         [](std::span<std::string_view>) -> std::string { return "weather set"; });
+    // Registered but ServerConfig-gated, so a moderator token reaches the permission check and is
+    // refused -- which is what turns into a 403. /peers takes the string path, /worldstate the
+    // raw-JSON one, and those are separate mappings in HttpAdminServer.
+    reg.registerCommand("peers", "peers", capBit(Capability::ServerConfig),
+                        [](std::span<std::string_view>) -> std::string { return "peer list"; });
+    reg.registerCommand("worldstate", "worldstate", capBit(Capability::ServerConfig),
+                        [](std::span<std::string_view>) -> std::string { return "{\"entities\": []}"; });
 
     ServerConfig::HttpAdminConfig cfg = cfgWith({{"admin-tok", "admin", -1, ""}, {"mod-tok", "moderator", -1, ""}});
     cfg.bindAddress = "127.0.0.1";
@@ -454,6 +461,39 @@ TEST_CASE("http_admin: a live server enforces auth and routes to the command reg
         REQUIRE(res);
         CHECK(res->status == 400);
         CHECK(res->body.find("peer") != std::string::npos); // the error says what was expected
+    }
+
+    SECTION("a refusal maps onto its HTTP status, not a 200 with prose (#1257)") {
+        // The registry answers a refusal as PROSE. Every frontend has to recognise it from the
+        // string to pick a status, and until #1257 all of them did so by hand with no test at all --
+        // so a reworded refusal would have started returning 200 with "permission denied" in the
+        // body, which is the one thing an HTTP client should never have to read prose to discover.
+        httplib::Headers mod{{"Authorization", "Bearer mod-tok"}};
+        httplib::Headers adm{{"Authorization", "Bearer admin-tok"}};
+
+        // Permission denied -> 403, on the string path.
+        auto denied = cli.Get("/peers", mod);
+        REQUIRE(denied);
+        CHECK(denied->status == 403);
+        CHECK(denied->body.find("permission denied") != std::string::npos);
+
+        // ...and the same command succeeds for a token that holds the capability.
+        auto allowed = cli.Get("/peers", adm);
+        REQUIRE(allowed);
+        CHECK(allowed->status == 200);
+
+        // Permission denied -> 403 on the raw-JSON path too, which has its own mapping and would
+        // otherwise report 503 (a refusal is not "try again later").
+        auto deniedJson = cli.Get("/worldstate", mod);
+        REQUIRE(deniedJson);
+        CHECK(deniedJson->status == 403);
+
+        // Unknown command -> 404. `shutdown` is a real route but is not registered here, so the
+        // registry refuses it by name rather than by capability.
+        auto unknown = cli.Post("/shutdown", adm, "{}", "application/json");
+        REQUIRE(unknown);
+        CHECK(unknown->status == 404);
+        CHECK(unknown->body.find("unknown command") != std::string::npos);
     }
 
     SECTION("an unknown path is a 404") {
