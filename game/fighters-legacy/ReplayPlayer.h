@@ -3,6 +3,7 @@
 
 #include "IClock.h"
 #include "loop/TimeRate.h"
+#include "net/QuantEntityCache.h" // the one snapshot entity cache (#1252)
 #include "net/SnapshotCodec.h"
 #include "render/RenderSnapshot.h"
 #include "replay/ReplayReader.h"
@@ -150,13 +151,9 @@ class ReplayPlayer {
     bool m_havePresented{false};
 
     // The decoded world. A delta record carries no typeIndex/faction/gen, so playback keeps the same
-    // per-entity cache a live client keeps -- rebuilt from the keyframe after every seek.
-    struct Cached {
-        EntityRenderEntry re;
-        uint64_t lastSeenTick{0};
-    };
-    std::unordered_map<uint32_t, Cached> m_entities;
-    std::unordered_map<uint32_t, QuantEntity> m_known; // typeIndex/faction/gen cache for deltas
+    // per-entity cache a live client keeps -- rebuilt from the keyframe after every seek. Since
+    // #1252 that is literally the same cache, not a second one that agrees.
+    QuantEntityCache m_cache;
     std::vector<MatchEvent> m_lastEvents;
     std::unordered_map<uint32_t, std::string> m_roster;
 };
