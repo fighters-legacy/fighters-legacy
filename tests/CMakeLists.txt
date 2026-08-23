@@ -314,6 +314,12 @@ add_executable(test_flight_integrator test_flight_integrator.cpp)
 target_link_libraries(test_flight_integrator PRIVATE Catch2::Catch2WithMain engine-flight)
 catch_discover_tests(test_flight_integrator)
 
+# The one angle-of-attack formula the HUD and both haptic paths share (#1251). Header-only, but it
+# takes glm types, so it links engine-flight for the include surface.
+add_executable(test_air_angles test_air_angles.cpp)
+target_link_libraries(test_air_angles PRIVATE Catch2::Catch2WithMain engine-flight)
+catch_discover_tests(test_air_angles)
+
 # ArticulationChannels (#1195): the one FlightState -> ArtChannel mapping the wire codec and the
 # renderer share. engine-flight only — the mapping deliberately pulls in nothing but the
 # dependency-free channel vocabulary.

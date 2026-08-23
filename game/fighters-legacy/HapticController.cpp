@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "HapticController.h"
+#include "flight/AirAngles.h"
 
 #include "IJoystick.h"
 
@@ -37,9 +38,9 @@ void HapticController::update(const fl::EntityRenderEntry* player, bool weaponFi
         if (weaponFired)
             m_joystick->playFfbEffect(0, 2, {IJoystick::FfbEffectKind::ConstantForce, 180.0f, 0.6f * str, 0.0f, 60u});
         if (player) {
-            const glm::vec3 velBody = glm::inverse(player->orientation) * player->velocity;
-            const float speed = glm::length(velBody);
-            const float alpha = (speed > 1.0f) ? glm::degrees(std::atan2(-velBody.y, velBody.x)) : 0.0f;
+            // Ground-roll speed is its own quantity, not a by-product of the AoA formula.
+            const float speed = glm::length(player->velocity);
+            const float alpha = glm::degrees(fl::aoaRad(player->orientation, player->velocity));
             const bool stall = alpha > kStallAoaDeg;
             if (stall) {
                 const float amp = std::clamp(0.35f * str * ((alpha - kStallAoaDeg) / 8.0f + 0.3f), 0.0f, 1.0f);
@@ -77,9 +78,7 @@ void HapticController::update(const fl::EntityRenderEntry* player, bool weaponFi
 
         // --- Stall buffet ---
         {
-            glm::vec3 velBody = glm::inverse(player->orientation) * player->velocity;
-            const float speed = glm::length(velBody);
-            const float alpha = (speed > 1.0f) ? glm::degrees(std::atan2(-velBody.y, velBody.x)) : 0.0f;
+            const float alpha = glm::degrees(fl::aoaRad(player->orientation, player->velocity));
             const bool stall = (alpha > kStallAoaDeg);
             m_stallTimer -= dt;
             if (stall && canRumble) {
