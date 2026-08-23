@@ -40,19 +40,11 @@ ForceMoment FixedWingForceModel::compute(const FlightState& s, const ControlInpu
     // asymmetric-thrust behaviour #675 exists to deliver; #308 replaced the hardcoded twin-engine
     // "halve" with data.engine.engine_count so a four-holer sheds a quarter, not a half.
     const uint8_t fail = s.engineFailFlags;
-    const bool leftOut = (fail & kEngineFailLeft) != 0;
-    const bool rightOut = (fail & kEngineFailRight) != 0;
-    // A centreline single-engine kill (#901) is a TOTAL loss with NO yaw — grouped with the generic
-    // and flameout total-loss cases, not the L/R asymmetric ones. A compressor surge (#308) is also
-    // a total (if transient) thrust loss while it lasts — the integrator clears the bit on recovery.
-    const bool totalLoss =
-        (fail & (kEngineFailGeneric | kEngineFlameout | kEngineFailCenter | kEngineCompStall)) != 0 ||
-        (leftOut && rightOut);
-    if (totalLoss) {
+    const bool leftOut = engineLeftOut(fail);
+    if (engineTotalLoss(fail)) {
         forces[0] -= thrust_n; // computeForces already added the full thrust to body-x; remove it
-    } else if (leftOut || rightOut) {
-        const int engines = data.engine.engine_count > 0 ? data.engine.engine_count : 2;
-        const float lost = thrust_n / static_cast<float>(engines); // one of `engines` engines
+    } else if (leftOut || engineRightOut(fail)) {
+        const float lost = engineLostThrust(thrust_n, data.engine.engine_count);
         forces[0] -= lost;
         // Moment about body-Y (yaw) = lost thrust × arm; sign yaws toward the dead engine. The
         // integrator maps computeMoments' index [2] (yaw) onto omega[1].

@@ -310,6 +310,13 @@ add_executable(test_aero_forces test_aero_forces.cpp)
 target_link_libraries(test_aero_forces PRIVATE Catch2::Catch2WithMain engine-flight)
 catch_discover_tests(test_aero_forces)
 
+# The one engine-failure decode the four force models share (#1258). EngineFailFlags.h is
+# stdlib-only, so this needs no engine library.
+add_executable(test_engine_fail_flags test_engine_fail_flags.cpp)
+target_link_libraries(test_engine_fail_flags PRIVATE Catch2::Catch2WithMain)
+target_include_directories(test_engine_fail_flags PRIVATE "${CMAKE_SOURCE_DIR}/engine")
+catch_discover_tests(test_engine_fail_flags)
+
 add_executable(test_flight_integrator test_flight_integrator.cpp)
 target_link_libraries(test_flight_integrator PRIVATE Catch2::Catch2WithMain engine-flight)
 catch_discover_tests(test_flight_integrator)

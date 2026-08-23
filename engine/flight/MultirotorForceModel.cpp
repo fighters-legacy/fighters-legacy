@@ -27,16 +27,12 @@ ForceMoment MultirotorForceModel::compute(const FlightState& s, const ControlInp
     // asymmetric about the CG. (A real FC remixes around a dead motor; the residual moment models
     // the degraded authority that remix cannot hide.)
     const uint8_t fail = s.engineFailFlags;
-    const bool leftOut = (fail & kEngineFailLeft) != 0;
-    const bool rightOut = (fail & kEngineFailRight) != 0;
-    const bool totalLoss =
-        (fail & (kEngineFailGeneric | kEngineFlameout | kEngineFailCenter | kEngineCompStall)) != 0 ||
-        (leftOut && rightOut);
+    const bool leftOut = engineLeftOut(fail);
     float rollFromFailure = 0.f;
-    if (totalLoss) {
+    if (engineTotalLoss(fail)) {
         thrust = 0.f;
-    } else if (leftOut || rightOut) {
-        const float lost = thrust / static_cast<float>(rotors);
+    } else if (leftOut || engineRightOut(fail)) {
+        const float lost = engineLostThrust(thrust, rotors);
         thrust -= lost;
         // moment_body[0] is roll about +X, positive = right wing down; losing the LEFT rotor drops
         // the left side (negative roll).

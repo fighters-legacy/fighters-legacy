@@ -22,4 +22,38 @@ constexpr uint8_t kEngineFailCenter = 0x20;  // centreline single-engine kill (#
                                              // side to swing toward. Distinct from Left/Right (which
                                              // are the twin-engine asymmetric case).
 
+// ── decode ───────────────────────────────────────────────────────────────────
+//
+// The classification below was restated in all four force models (#1258) — fixed-wing,
+// multirotor, helicopter and vessel — so the #901 "centreline = total loss, no yaw" grouping had
+// to be got right four times, and the next flag bit would have to be classified four times.
+//
+// Only the DECODE is shared. What each model does afterwards genuinely differs: fixed-wing swings
+// a yaw moment toward the dead engine, multirotor rolls toward the dead rotor, the helicopter
+// deliberately does neither because its rotor is on the centreline, and the vessel just loses way.
+// Those stay where they are.
+
+[[nodiscard]] constexpr bool engineLeftOut(uint8_t fail) noexcept {
+    return (fail & kEngineFailLeft) != 0;
+}
+
+[[nodiscard]] constexpr bool engineRightOut(uint8_t fail) noexcept {
+    return (fail & kEngineFailRight) != 0;
+}
+
+// Every way of losing ALL thrust: the generic damage-tier bit, a flameout, a centreline kill
+// (#901 — a single-engine airframe has no dead side to swing toward), a compressor surge (#308 —
+// total while it lasts, and the integrator clears the bit on recovery), or both sides out at once.
+[[nodiscard]] constexpr bool engineTotalLoss(uint8_t fail) noexcept {
+    return (fail & (kEngineFailGeneric | kEngineFlameout | kEngineFailCenter | kEngineCompStall)) != 0 ||
+           (engineLeftOut(fail) && engineRightOut(fail));
+}
+
+// The thrust one failed engine of `count` accounts for. Spelled as a division rather than a
+// multiply by a precomputed fraction because that is what the four copies did, and the two are not
+// the same float. `count <= 0` means the def did not say, and a twin is the useful assumption.
+[[nodiscard]] constexpr float engineLostThrust(float thrust, int count) noexcept {
+    return thrust / static_cast<float>(count > 0 ? count : 2);
+}
+
 } // namespace fl
