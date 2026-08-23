@@ -399,10 +399,18 @@ TEST_CASE("airport index rejects mismatches and corruption", "[airport]") {
     const std::vector<uint8_t> bytes = writeAirportIndex(defs, hash);
 
     CHECK_FALSE(readAirportIndex(bytes, hash + 1).has_value());                       // source hash mismatch
-    CHECK_FALSE(readAirportIndex(std::span(bytes).subspan(0, 10), hash).has_value()); // truncated
+    CHECK_FALSE(readAirportIndex(std::span(bytes).subspan(0, 10), hash).has_value()); // truncated in the header
     std::vector<uint8_t> bad = bytes;
     bad[0] ^= 0xFF; // corrupt magic
     CHECK_FALSE(readAirportIndex(bad, hash).has_value());
+
+    // Truncated PART WAY THROUGH the records, not in the header (#1255). This is the case the
+    // shared ByteCursor handles differently from the local reader it replaced: that one left `pos`
+    // unmoved after a failed read, so a later read could still return real bytes while `ok` stayed
+    // false. The cursor fails closed and zeroes everything after the first failure. Either way the
+    // file must be REFUSED rather than yielding a half-populated airport, and now that is tested.
+    for (const std::size_t cut : {bytes.size() / 4, bytes.size() / 2, bytes.size() - 1})
+        CHECK_FALSE(readAirportIndex(std::span(bytes).subspan(0, cut), hash).has_value());
 }
 
 // ---------------------------------------------------------------------------
