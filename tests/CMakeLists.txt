@@ -72,6 +72,12 @@ if(TARGET fl-viewer-lib)
     catch_discover_tests(test_overlay_gizmos)
 endif()
 
+# The one HudElement assembler behind FlightHud, GameConsole and the screens (#1261).
+add_executable(test_hud_builder test_hud_builder.cpp)
+target_link_libraries(test_hud_builder PRIVATE Catch2::Catch2WithMain platform-hal)
+target_include_directories(test_hud_builder PRIVATE "${CMAKE_SOURCE_DIR}/engine")
+catch_discover_tests(test_hud_builder)
+
 add_executable(test_flight_hud test_flight_hud.cpp)
 target_link_libraries(test_flight_hud PRIVATE Catch2::Catch2WithMain engine-render)
 target_include_directories(test_flight_hud PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

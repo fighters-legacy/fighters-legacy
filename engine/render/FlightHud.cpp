@@ -24,76 +24,28 @@ static constexpr float kHudG = 1.0f;
 static constexpr float kHudB = 0.0f;
 
 // ── appenders ────────────────────────────────────────────────────────────────
+// The push trio now forwards onto the shared builder (#1261). The signatures stay so the ~60 draw
+// calls below are untouched; what moved is the arena, the capacity check and the field fill.
 bool FlightHud::pushText(HudAlign align, float x, float y, float r, float g, float b, const char* fmt, ...) {
-    if (m_elementCount >= kMaxElements || m_stringCount >= kMaxStrings) {
-        m_overflowed = true;
-        return false;
-    }
-    char buf[64];
+    char buf[kFormatBytes];
     va_list ap;
     va_start(ap, fmt);
     std::vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
-    m_strings[m_stringCount] = buf;
-    HudElement el;
-    el.type = HudElement::Type::Text;
-    el.x = x;
-    el.y = y;
-    el.align = align;
-    el.r = r;
-    el.g = g;
-    el.b = b;
-    el.a = 1.0f;
-    el.text = m_strings[m_stringCount];
-    m_elements[m_elementCount++] = el;
-    ++m_stringCount;
-    return true;
+    return m_hud.text(align, x, y, r, g, b, "%s", buf);
 }
 
 bool FlightHud::pushLine(float x0, float y0, float x1, float y1, float thick, float r, float g, float b, float a) {
-    if (m_elementCount >= kMaxElements) {
-        m_overflowed = true;
-        return false;
-    }
-    HudElement el;
-    el.type = HudElement::Type::Line;
-    el.x = x0;
-    el.y = y0;
-    el.x2 = x1;
-    el.y2 = y1;
-    el.strokeWidth = thick;
-    el.r = r;
-    el.g = g;
-    el.b = b;
-    el.a = a;
-    m_elements[m_elementCount++] = el;
-    return true;
+    return m_hud.line(x0, y0, x1, y1, thick, r, g, b, a);
 }
 
 bool FlightHud::pushRect(float x0, float y0, float x1, float y1, float r, float g, float b, float a) {
-    if (m_elementCount >= kMaxElements) {
-        m_overflowed = true;
-        return false;
-    }
-    HudElement el;
-    el.type = HudElement::Type::Rect;
-    el.x = x0;
-    el.y = y0;
-    el.x2 = x1;
-    el.y2 = y1;
-    el.r = r;
-    el.g = g;
-    el.b = b;
-    el.a = a;
-    m_elements[m_elementCount++] = el;
-    return true;
+    return m_hud.rect(x0, y0, x1, y1, r, g, b, a);
 }
 
 // ── dispatcher ───────────────────────────────────────────────────────────────
 void FlightHud::update(const HudFrameInput& in) {
-    m_elementCount = 0;
-    m_stringCount = 0;
-    m_overflowed = false;
+    m_hud.clear();
     const EntityRenderEntry* e = in.ownship;
     if (!e)
         return;
@@ -404,7 +356,7 @@ void FlightHud::drawDataBlocks(Ctx& c) {
 // drawCombat (#641) and drawMfd (#642) live in FlightHudCombat.cpp / FlightHudMfd.cpp.
 
 std::span<const HudElement> FlightHud::elements() const {
-    return {m_elements.data(), m_elementCount};
+    return m_hud.elements();
 }
 
 } // namespace fl

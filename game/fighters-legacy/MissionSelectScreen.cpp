@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "MissionSelectScreen.h"
 #include "MenuNav.h"
+#include "render/HudBuilder.h" // hudFullscreenBg (#1261)
 
 #include "IInput.h"
 #include "IWindow.h"
@@ -36,17 +37,7 @@ std::span<const HudElement> MissionSelectScreen::buildElements() {
 
     // Background
     {
-        auto& el = m_elements[static_cast<std::size_t>(m_elementCount++)];
-        el = HudElement{};
-        el.type = HudElement::Type::Rect;
-        el.x = 0.f;
-        el.y = 0.f;
-        el.x2 = 1.f;
-        el.y2 = 1.f;
-        el.r = 0.f;
-        el.g = 0.f;
-        el.b = 0.f;
-        el.a = 1.f;
+        m_elements[static_cast<std::size_t>(m_elementCount++)] = hudFullscreenBg();
     }
 
     // Title
