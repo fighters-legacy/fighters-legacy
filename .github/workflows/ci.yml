@@ -229,27 +229,26 @@ jobs:
       - name: Smoke test tools (Linux / macOS)
         if: matrix.os != 'windows-latest'
         run: |
-          ./build/debug/tools/validate-flight-model --version
-          ./build/debug/tools/validate-mission --version
-          ./build/debug/tools/validate-campaign --version
-          ./build/debug/tools/validate-mod --version
-          ./build/debug/tools/validate-mode --version
-          ./build/debug/tools/validate-weapon --version
-          ./build/debug/tools/validate-sensor --version
-          ./build/debug/tools/validate-entity --version
-          ./build/debug/tools/validate-livery --version
-          ./build/debug/tools/validate-mesh --version
-          ./build/debug/tools/fm-trim --version
+          # DERIVED from the install rules, not hand-maintained (#1263). Three hand-written copies of
+          # this list existed and had already drifted in BOTH directions: Windows was missing
+          # validate-mode and fm-trim, Linux was missing terrain-chunk-io. That is the same drift
+          # #814 deleted from release.yml, reintroduced one layer up -- so let CMake own the set here
+          # too, and a newly added tool is smoke-run the day it is installed.
+          rm -rf /tmp/toolsmoke
+          cmake --install build/debug --prefix /tmp/toolsmoke --component tools
+          for t in /tmp/toolsmoke/*; do
+            [ -f "$t" ] && [ -x "$t" ] || continue
+            echo "== $(basename "$t") --version"
+            "$t" --version
+          done
+          # terrain-chunk-io is built but deliberately NOT shipped, so the loop above cannot see it.
+          ./build/debug/tools/terrain-chunk-io --version
           # The builtin reference meshes (docs/modding/3d-models.md) must validate with zero
           # warnings or errors — clean validation prints nothing, so fail on any output.
           # Globbed so a newly added shape can never silently skip validation (#886).
           python3 tools/gen_builtin_glb.py --export-dir /tmp/builtin-meshes
           mesh_out=$(./build/debug/tools/validate-mesh /tmp/builtin-meshes/*.glb 2>&1)
           if [ -n "$mesh_out" ]; then echo "builtin reference meshes failed validation:"; echo "$mesh_out"; exit 1; fi
-          ./build/debug/tools/tex-compress --version
-          ./build/debug/tools/validate-licenses --version
-          ./build/debug/tools/validate-playlist --version
-          ./build/debug/tools/fl-viewer --version
 
       # The whole authoring-tools epic (#836) hangs off fl-viewer's headless render bootstrap (#666);
       # exercise it on lavapipe so a broken headless path fails here, not only in the opt-in
@@ -350,20 +349,18 @@ jobs:
       - name: Smoke test asset pipeline tools (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          .\build\debug-msvc\tools\validate-flight-model.exe --version
-          .\build\debug-msvc\tools\validate-mission.exe --version
-          .\build\debug-msvc\tools\validate-campaign.exe --version
-          .\build\debug-msvc\tools\validate-mod.exe --version
-          .\build\debug-msvc\tools\validate-weapon.exe --version
-          .\build\debug-msvc\tools\validate-sensor.exe --version
-          .\build\debug-msvc\tools\validate-entity.exe --version
-          .\build\debug-msvc\tools\validate-livery.exe --version
-          .\build\debug-msvc\tools\validate-mesh.exe --version
-          .\build\debug-msvc\tools\tex-compress.exe --version
-          .\build\debug-msvc\tools\validate-licenses.exe --version
-          .\build\debug-msvc\tools\validate-playlist.exe --version
+          # Same derived set as the Linux leg (#1263). The hand-written list this replaces was
+          # missing validate-mode and fm-trim, so those two tools' MSVC binaries were never run.
+          $prefix = Join-Path $env:RUNNER_TEMP 'toolsmoke'
+          if (Test-Path $prefix) { Remove-Item -Recurse -Force $prefix }
+          cmake --install build\debug-msvc --prefix $prefix --component tools
+          Get-ChildItem -Path $prefix -Filter *.exe | ForEach-Object {
+            Write-Host "== $($_.Name) --version"
+            & $_.FullName --version
+            if ($LASTEXITCODE -ne 0) { throw "$($_.Name) --version failed" }
+          }
+          # terrain-chunk-io is built but deliberately NOT shipped, so the loop cannot see it.
           .\build\debug-msvc\tools\terrain-chunk-io.exe --version
-          .\build\debug-msvc\tools\fl-viewer.exe --version
         shell: pwsh
 
       - name: Verify static linking (Linux)

@@ -38,8 +38,13 @@ jobs:
       - name: Cache CMake FetchContent dependencies
         uses: actions/cache@v6
         with:
-          path: build/debug/_deps
-          key: cmake-deps-ubuntu-latest-debug-${{ hashFiles('cmake/dependencies.cmake') }}
+          # Every preset pins FETCHCONTENT_BASE_DIR to ${sourceDir}/build/_deps (CMakePresets.json
+          # `base`), so deps never land under build/debug/. This used to cache a path that was never
+          # written: an empty save, an empty restore, and a full re-download every run. The key is
+          # codeql-specific because this job configures with FL_ENABLE_GNS=OFF, so its dep set
+          # differs from the other workflows' v2 caches.
+          path: build/_deps
+          key: cmake-deps-v2-codeql-ubuntu-latest-${{ hashFiles('cmake/dependencies.cmake') }}
 
       - name: Configure
         # GNS off: avoids the protobuf/GNS build in the CodeQL autobuild (build-time + no need to
