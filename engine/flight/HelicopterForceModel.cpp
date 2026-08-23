@@ -30,16 +30,10 @@ ForceMoment HelicopterForceModel::compute(const FlightState& s, const ControlInp
     // multi-engine ship out sheds 1/engine_count of available power; the rotor stays centreline,
     // so unlike a fixed-wing twin there is NO yaw from the loss.
     const uint8_t fail = s.engineFailFlags;
-    const bool leftOut = (fail & kEngineFailLeft) != 0;
-    const bool rightOut = (fail & kEngineFailRight) != 0;
-    const bool unpowered =
-        (fail & (kEngineFailGeneric | kEngineFlameout | kEngineFailCenter | kEngineCompStall)) != 0 ||
-        (leftOut && rightOut);
-    if (unpowered) {
+    if (engineTotalLoss(fail)) {
         thrust = 0.f;
-    } else if (leftOut || rightOut) {
-        const int engines = data.engine.engine_count > 0 ? data.engine.engine_count : 2;
-        thrust -= thrust / static_cast<float>(engines);
+    } else if (engineLeftOut(fail) || engineRightOut(fail)) {
+        thrust -= engineLostThrust(thrust, data.engine.engine_count);
     }
 
     // Ground effect: within ~one rotor diameter of the surface the disc rides its own outwash —

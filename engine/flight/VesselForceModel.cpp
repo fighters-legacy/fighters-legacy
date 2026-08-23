@@ -28,14 +28,10 @@ ForceMoment VesselForceModel::compute(const FlightState& s, const ControlInput& 
     // ── Propulsion: throttle × max thrust along the keel; engine failures stop the screws. ────
     float thrust = s.throttle_actual * v.max_thrust_n;
     const uint8_t fail = s.engineFailFlags;
-    const bool leftOut = (fail & kEngineFailLeft) != 0;
-    const bool rightOut = (fail & kEngineFailRight) != 0;
-    if ((fail & (kEngineFailGeneric | kEngineFlameout | kEngineFailCenter | kEngineCompStall)) != 0 ||
-        (leftOut && rightOut)) {
+    if (engineTotalLoss(fail)) {
         thrust = 0.f;
-    } else if (leftOut || rightOut) {
-        const int engines = data.engine.engine_count > 0 ? data.engine.engine_count : 2;
-        thrust -= thrust / static_cast<float>(engines);
+    } else if (engineLeftOut(fail) || engineRightOut(fail)) {
+        thrust -= engineLostThrust(thrust, data.engine.engine_count);
     }
     fm.force_body[0] += thrust;
 
