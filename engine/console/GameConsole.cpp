@@ -131,59 +131,25 @@ void GameConsole::submitLine() {
 // HUD helpers
 // ---------------------------------------------------------------------------
 
+// The push trio now forwards onto the shared builder (#1261): same signatures, so the draw code is
+// untouched; the arena, the capacity check and the field fill moved. The builder also constructs a
+// FRESH element each time, where this file filled a reused slot in place -- stale fields survived
+// across frames, harmless only because console elements never set align and Text ignores x2/y2.
 bool GameConsole::pushText(float x, float y, float r, float g, float b, const char* fmt, ...) {
-    if (m_elemCount >= kMaxHudElems || m_strCount >= kMaxStrings)
-        return false;
     char buf[128];
     va_list ap;
     va_start(ap, fmt);
     std::vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
-    m_strings[m_strCount] = buf;
-    HudElement& el = m_elems[m_elemCount++];
-    el.type = HudElement::Type::Text;
-    el.x = x;
-    el.y = y;
-    el.r = r;
-    el.g = g;
-    el.b = b;
-    el.a = 1.0f;
-    el.scale = 1.0f;
-    el.text = m_strings[m_strCount++];
-    return true;
+    return m_hud.text(HudAlign::Left, x, y, r, g, b, "%s", buf);
 }
 
 bool GameConsole::pushLine(float x0, float y0, float x1, float y1, float r, float g, float b) {
-    if (m_elemCount >= kMaxHudElems)
-        return false;
-    HudElement& el = m_elems[m_elemCount++];
-    el.type = HudElement::Type::Line;
-    el.x = x0;
-    el.y = y0;
-    el.x2 = x1;
-    el.y2 = y1;
-    el.strokeWidth = 1.0f;
-    el.r = r;
-    el.g = g;
-    el.b = b;
-    el.a = 1.0f;
-    return true;
+    return m_hud.line(x0, y0, x1, y1, 1.0f, r, g, b, 1.0f);
 }
 
 bool GameConsole::pushRect(float x0, float y0, float x1, float y1, float r, float g, float b, float a) {
-    if (m_elemCount >= kMaxHudElems)
-        return false;
-    HudElement& el = m_elems[m_elemCount++];
-    el.type = HudElement::Type::Rect;
-    el.x = x0;
-    el.y = y0;
-    el.x2 = x1;
-    el.y2 = y1;
-    el.r = r;
-    el.g = g;
-    el.b = b;
-    el.a = a;
-    return true;
+    return m_hud.rect(x0, y0, x1, y1, r, g, b, a);
 }
 
 // ---------------------------------------------------------------------------
@@ -191,8 +157,7 @@ bool GameConsole::pushRect(float x0, float y0, float x1, float y1, float r, floa
 // ---------------------------------------------------------------------------
 
 void GameConsole::buildHud(const glm::dvec3* playerPos) {
-    m_elemCount = 0;
-    m_strCount = 0;
+    m_hud.clear();
 
     // Entity position widget (toggle_pos). Camera/entity debug readouts now live in the F3
     // performance overlay (PerformanceOverlay::setSceneInfo), so this widget shows only the

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ReplaySelectScreen.h"
 #include "MenuNav.h"
+#include "render/HudBuilder.h" // hudFullscreenBg (#1261)
 
 #include "IInput.h"
 #include "IWindow.h"
@@ -127,14 +128,11 @@ Screen ReplaySelectScreen::update(IInput& input, IWindow& window) {
 std::span<const HudElement> ReplaySelectScreen::buildElements() {
     m_elementCount = 0;
 
-    auto& bg = m_elements[static_cast<std::size_t>(m_elementCount++)];
-    bg = HudElement{};
-    bg.type = HudElement::Type::Rect;
-    bg.x = 0.f;
-    bg.y = 0.f;
-    bg.x2 = 1.f;
-    bg.y2 = 1.f;
-    bg.a = 1.f;
+    // ⚠ WHITE, not black like the other seven screens' backgrounds. This block never set r/g/b, so
+    // they kept HudElement's 1.f defaults -- almost certainly unintentional, but it is what ships
+    // today, so #1261 preserves it exactly rather than changing what the screen looks like inside a
+    // consolidation PR. Flagged for a decision.
+    m_elements[static_cast<std::size_t>(m_elementCount++)] = hudFullscreenBg(1.f, 1.f, 1.f, 1.f);
 
     m_strings[0] = "REPLAYS";
     auto& title = m_elements[static_cast<std::size_t>(m_elementCount++)];

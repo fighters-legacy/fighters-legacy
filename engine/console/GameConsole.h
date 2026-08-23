@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "render/HudBuilder.h" // the one HudElement assembler (#1261)
+
 #include "IInput.h"
 #include "RenderTypes.h"
 #include "console/CommandShell.h"
@@ -59,7 +61,7 @@ class GameConsole : public CommandShell, public ITextInputHandler {
     void buildHud(const glm::dvec3* playerPos = nullptr);
 
     [[nodiscard]] std::span<const HudElement> elements() const {
-        return {m_elems.data(), static_cast<std::size_t>(m_elemCount)};
+        return m_hud.elements();
     }
 
     // -----------------------------------------------------------------------
@@ -84,8 +86,8 @@ class GameConsole : public CommandShell, public ITextInputHandler {
   private:
     static constexpr int kVisibleLines = 20;
     static constexpr int kHistoryCap = 32;
-    static constexpr int kMaxHudElems = 29; // rect + 2 lines + title + 20 output + prompt + pos
-    static constexpr int kMaxStrings = 26;  // title + 20 output + prompt + pos + slack
+    static constexpr std::size_t kMaxHudElems = 29; // rect + 2 lines + title + 20 output + prompt + pos
+    static constexpr std::size_t kMaxStrings = 26;  // title + 20 output + prompt + pos + slack
 
     bool m_open{false};
     std::string m_input;
@@ -99,10 +101,7 @@ class GameConsole : public CommandShell, public ITextInputHandler {
     bool m_showPos{false};
 
     // HUD storage (string_views reference these; valid until next buildHud())
-    std::array<HudElement, kMaxHudElems> m_elems;
-    std::array<std::string, kMaxStrings> m_strings;
-    int m_elemCount{0};
-    int m_strCount{0};
+    HudBuilder<kMaxHudElems, kMaxStrings> m_hud;
 
     void submitLine();
 

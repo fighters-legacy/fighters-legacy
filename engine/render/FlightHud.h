@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "render/HudBuilder.h" // the one HudElement assembler (#1261)
+
 #include "RenderTypes.h"
 #include "render/IHud.h"
 
@@ -70,7 +72,7 @@ class FlightHud : public IHud {
     void drawCombat(Ctx& c);        // #641 target box / pipper / CCIP (FlightHudCombat.cpp)
     void drawMfd(Ctx& c);           // #642 radar MFD + RWR pages (FlightHudMfd.cpp)
 
-    // Appenders shared by every draw method (return false on cap overflow — see m_overflowed).
+    // Appenders shared by every draw method (return false on cap overflow — see overflowed()).
     bool pushText(HudAlign align, float x, float y, float r, float g, float b, const char* fmt, ...);
     bool pushLine(float x0, float y0, float x1, float y1, float thick, float r, float g, float b, float a = 1.0f);
     bool pushRect(float x0, float y0, float x1, float y1, float r, float g, float b, float a);
@@ -78,21 +80,18 @@ class FlightHud : public IHud {
     // Element/string storage. Caps raised for the tape/ladder tick marks and their labels (#438): the
     // classic layout drew ~15 elements; a full tactical HUD with tapes + scope is far more.
     static constexpr int kScopeMaxTracks = 40;
-    static constexpr int kMaxElements = 320;
-    static constexpr int kMaxStrings = 48;
+    static constexpr std::size_t kMaxElements = 320;
+    static constexpr std::size_t kMaxStrings = 48;
+    static constexpr std::size_t kFormatBytes = 64; // the HUD's labels are short by design
 
-    std::array<HudElement, kMaxElements> m_elements;
-    std::array<std::string, kMaxStrings> m_strings;
-    std::size_t m_elementCount{0};
-    std::size_t m_stringCount{0};
-    bool m_overflowed{false}; // set if any append hit a cap — asserted against in tests
+    HudBuilder<kMaxElements, kMaxStrings, kFormatBytes> m_hud;
     std::vector<HudStationInfo> m_stations;
 
   public:
     // True if the last update() overflowed the element/string caps (a silent-truncation guard for
     // tests; the worst-case frame must stay under the caps).
     [[nodiscard]] bool overflowed() const noexcept {
-        return m_overflowed;
+        return m_hud.overflowed();
     }
 };
 
