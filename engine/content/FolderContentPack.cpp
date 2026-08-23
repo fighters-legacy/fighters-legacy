@@ -5,6 +5,7 @@
 
 #include "IFilesystem.h"
 #include "ILogger.h"
+#include "util/FsRead.h"
 
 namespace fl {
 
@@ -41,18 +42,15 @@ template <typename T> std::optional<T> FolderContentPack::loadBytes(const char* 
     if (path.empty())
         return std::nullopt;
 
-    int handle = m_fs.openFile(PathDomain::Assets, path.c_str(), false);
-    if (handle < 0) {
+    auto bytes = readFileBytes(m_fs, PathDomain::Assets, path.c_str());
+    if (!bytes) {
         m_logger.log(LogLevel::Error, __FILE__, __LINE__, ("failed to open: " + path).c_str());
         return std::nullopt;
     }
 
-    std::size_t size = m_fs.getFileSize(handle);
     T result;
     result.name = assetName;
-    result.bytes.resize(size);
-    m_fs.readFile(handle, result.bytes.data(), size);
-    m_fs.closeFile(handle);
+    result.bytes = std::move(*bytes);
     return result;
 }
 
@@ -127,31 +125,12 @@ std::optional<std::vector<uint8_t>> FolderContentPack::loadPackFile(const char* 
         i = slash + 1;
     }
     std::string path = m_modDir + "/" + std::string(p);
-    if (!m_fs.fileExists(PathDomain::Assets, path.c_str()))
-        return std::nullopt;
-    int handle = m_fs.openFile(PathDomain::Assets, path.c_str(), false);
-    if (handle < 0)
-        return std::nullopt;
-    std::size_t size = m_fs.getFileSize(handle);
-    std::vector<uint8_t> bytes(size);
-    if (size > 0)
-        m_fs.readFile(handle, bytes.data(), size);
-    m_fs.closeFile(handle);
-    return bytes;
+    return readFileBytes(m_fs, PathDomain::Assets, path.c_str());
 }
 
 std::optional<std::string> FolderContentPack::loadConfig(const char* name) const {
     std::string path = m_modDir + "/data/" + name;
-    if (!m_fs.fileExists(PathDomain::Assets, path.c_str()))
-        return std::nullopt;
-    int handle = m_fs.openFile(PathDomain::Assets, path.c_str(), false);
-    if (handle < 0)
-        return std::nullopt;
-    std::size_t size = m_fs.getFileSize(handle);
-    std::string content(size, '\0');
-    m_fs.readFile(handle, content.data(), size);
-    m_fs.closeFile(handle);
-    return content;
+    return readFileToString(m_fs, PathDomain::Assets, path.c_str());
 }
 
 std::optional<std::string> FolderContentPack::resolveTilePath(const char* terrainId, uint8_t face, uint8_t level,

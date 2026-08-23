@@ -4,6 +4,7 @@
 #include "IFilesystem.h"
 #include "IFilesystemWatcher.h"
 #include "ILogger.h"
+#include "util/FsRead.h"
 
 #include <toml++/toml.hpp>
 
@@ -62,25 +63,25 @@ std::vector<std::string> Localization::buildLocaleChain(const std::string& lang)
     return tags;
 }
 
-bool Localization::readMetaRTL(const char* tag, bool& outRTL) const {
-    std::string path = std::string("locale/") + tag + "/meta.toml";
-    int handle = m_fs.openFile(PathDomain::Assets, path.c_str(), false);
-    if (handle < 0)
-        return false;
-    std::size_t sz = m_fs.getFileSize(handle);
-    std::string content(sz, '\0');
-    if (sz > 0)
-        m_fs.readFile(handle, content.data(), sz);
-    m_fs.closeFile(handle);
+Localization::LocaleMeta Localization::readLocaleMeta(const std::string& tag) const {
+    LocaleMeta meta;
+    meta.displayName = tag;
+
+    const auto content = readFileToString(m_fs, PathDomain::Assets, ("locale/" + tag + "/meta.toml").c_str());
+    if (!content)
+        return meta;
     try {
-        toml::table tbl = toml::parse(content);
+        const toml::table tbl = toml::parse(*content);
+        if (auto n = tbl["name"].value<std::string>())
+            meta.displayName = std::move(*n);
         if (auto r = tbl["rtl"].value<bool>()) {
-            outRTL = *r;
-            return true;
+            meta.rtl = *r;
+            meta.hasRtl = true;
         }
     } catch (...) {
+        // A malformed meta.toml is not worth failing a locale load over; the defaults stand.
     }
-    return false;
+    return meta;
 }
 
 bool Localization::load(const char* lang, std::span<const std::string> rootDirs) {
@@ -104,8 +105,11 @@ bool Localization::load(const char* lang, std::span<const std::string> rootDirs)
 
     // Read RTL from the most-specific tag that has a meta.toml
     for (int i = static_cast<int>(chain.size()) - 1; i >= 0; --i) {
-        if (readMetaRTL(chain[i].c_str(), m_rtl))
+        const LocaleMeta meta = readLocaleMeta(chain[i]);
+        if (meta.hasRtl) {
+            m_rtl = meta.rtl;
             break;
+        }
     }
 
     if (m_active.empty())
@@ -234,28 +238,11 @@ std::vector<Localization::LocaleInfo> Localization::listLocales(std::span<const 
     std::vector<LocaleInfo> result;
     result.reserve(tags.size());
     for (auto& tag : tags) {
+        const LocaleMeta meta = readLocaleMeta(tag);
         LocaleInfo info;
         info.tag = tag;
-        info.displayName = tag;
-        info.rtl = false;
-
-        std::string metaPath = "locale/" + tag + "/meta.toml";
-        int handle = m_fs.openFile(PathDomain::Assets, metaPath.c_str(), false);
-        if (handle >= 0) {
-            std::size_t sz = m_fs.getFileSize(handle);
-            std::string content(sz, '\0');
-            if (sz > 0)
-                m_fs.readFile(handle, content.data(), sz);
-            m_fs.closeFile(handle);
-            try {
-                toml::table tbl = toml::parse(content);
-                if (auto n = tbl["name"].value<std::string>())
-                    info.displayName = std::move(*n);
-                if (auto r = tbl["rtl"].value<bool>())
-                    info.rtl = *r;
-            } catch (...) {
-            }
-        }
+        info.displayName = meta.displayName;
+        info.rtl = meta.rtl;
         result.push_back(std::move(info));
     }
     return result; // already sorted because std::set is ordered

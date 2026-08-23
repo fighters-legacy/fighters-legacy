@@ -2,6 +2,7 @@
 #include "script/LuaSandbox.h"
 
 #include "IFilesystem.h"
+#include "util/FsRead.h"
 
 // Lua is compiled as C++ (see cmake/dependencies.cmake), so its symbols have C++
 // linkage and these headers must NOT be wrapped in extern "C" — nor may lua.hpp
@@ -67,15 +68,12 @@ static int luaRequireLoader(lua_State* L) {
     // spells it. IFilesystem maps it onto the real assets root (which is NOT the working directory
     // under --assets / FL_ASSETS_ROOT / a Flatpak install).
     const std::string scriptPath = std::string(root) + "/ai/" + module + ".lua";
-    const int handle = fs->openFile(PathDomain::Assets, scriptPath.c_str(), /*write=*/false);
-    if (handle < 0)
+    // The shared read (#1254) is this loop, promoted: honouring readFile's count was LuaSandbox's
+    // behaviour before every other caller adopted it.
+    const auto read = readFileToString(*fs, PathDomain::Assets, scriptPath.c_str());
+    if (!read)
         return luaL_error(L, "require: module '%s' not found in pack ai/ directory", module);
-
-    std::string src;
-    src.resize(fs->getFileSize(handle));
-    if (!src.empty())
-        src.resize(fs->readFile(handle, src.data(), src.size()));
-    fs->closeFile(handle);
+    const std::string& src = *read;
 
     if (!src.empty() && src[0] == '\x1b')
         return luaL_error(L, "require: precompiled Lua bytecode is not permitted");

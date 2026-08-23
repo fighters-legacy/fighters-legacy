@@ -80,8 +80,16 @@ class Localization {
     void loadOneLocale(const char* tag, std::span<const std::string> rootDirs, StringTable& out) const;
     static std::vector<std::string> buildLocaleChain(const std::string& lang);
 
-    // Reads locale/<tag>/meta.toml and extracts the rtl field. Returns false if not found.
-    bool readMetaRTL(const char* tag, bool& outRTL) const;
+    // What locale/<tag>/meta.toml carries. `hasRtl` distinguishes "the file says ltr" from "the
+    // file said nothing", which is what lets the chain walk fall through to a less specific tag.
+    struct LocaleMeta {
+        std::string displayName;
+        bool rtl = false;
+        bool hasRtl = false;
+    };
+    // Reads locale/<tag>/meta.toml. A missing or unparseable file yields defaults, not a failure --
+    // a locale without metadata is legal and just displays under its own tag.
+    [[nodiscard]] LocaleMeta readLocaleMeta(const std::string& tag) const;
 
     IFilesystem& m_fs;
     ILogger& m_logger;
