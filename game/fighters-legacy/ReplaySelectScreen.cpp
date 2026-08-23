@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ReplaySelectScreen.h"
+#include "MenuNav.h"
 
 #include "IInput.h"
 #include "IWindow.h"
@@ -103,48 +104,12 @@ Screen ReplaySelectScreen::update(IInput& input, IWindow& window) {
     if (n == 0)
         return Screen::ReplaySelect;
 
-    auto moveUp = [&]() {
-        if (m_selectedIdx > 0) {
-            --m_selectedIdx;
-            if (m_selectedIdx < m_scrollOffset)
-                m_scrollOffset = m_selectedIdx;
-        }
-    };
-    auto moveDown = [&]() {
-        if (m_selectedIdx < n - 1) {
-            ++m_selectedIdx;
-            if (m_selectedIdx >= m_scrollOffset + kVisible)
-                m_scrollOffset = m_selectedIdx - kVisible + 1;
-        }
-    };
+    menuNavigateScrolled(input, n, kVisible, m_selectedIdx, m_scrollOffset);
+    menuHoverHitTest(
+        input, window, kVisible, m_scrollOffset, n, 0.055f,
+        [](int r) { return 0.25f + static_cast<float>(r) * 0.065f; }, m_selectedIdx);
 
-    if (input.isKeyJustPressed(Key::ArrowUp) || input.isKeyJustPressed(Key::W) ||
-        input.isGamepadButtonJustPressed(0, GamepadButton::DpadUp))
-        moveUp();
-    if (input.isKeyJustPressed(Key::ArrowDown) || input.isKeyJustPressed(Key::S) ||
-        input.isGamepadButtonJustPressed(0, GamepadButton::DpadDown))
-        moveDown();
-
-    // Mouse hover, in logical (pointer-event) coordinates -- physical pixels would mis-hit at 2x.
-    int mx = 0, my = 0;
-    input.getMousePosition(mx, my);
-    const float fh = static_cast<float>(window.logicalHeight());
-    if (fh > 0.f) {
-        const float ny = static_cast<float>(my) / fh;
-        for (int i = 0; i < kVisible; ++i) {
-            const int idx = m_scrollOffset + i;
-            if (idx >= n)
-                break;
-            const float iy = 0.25f + static_cast<float>(i) * 0.065f;
-            if (ny >= iy && ny < iy + 0.055f)
-                m_selectedIdx = idx;
-        }
-    }
-
-    const bool confirmed = input.isKeyJustPressed(Key::Enter) || input.isKeyJustPressed(Key::Space) ||
-                           input.isMouseButtonJustPressed(MouseButton::Left) ||
-                           input.isGamepadButtonJustPressed(0, GamepadButton::A);
-    if (confirmed && m_selectedIdx >= 0 && m_selectedIdx < n) {
+    if (menuConfirmPressed(input) && m_selectedIdx >= 0 && m_selectedIdx < n) {
         const Entry& e = m_entries[static_cast<std::size_t>(m_selectedIdx)];
         if (!e.playable) {
             // Refuse loudly and stay put, rather than entering a session that cannot start.

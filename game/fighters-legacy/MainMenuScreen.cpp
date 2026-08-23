@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "MainMenuScreen.h"
+#include "MenuNav.h"
 
 #include "IInput.h"
 #include "IWindow.h"
@@ -32,40 +33,17 @@ MainMenuScreen::MainMenuScreen(bool hasPacks, bool isMultiplayer) {
 Screen MainMenuScreen::update(IInput& input, IWindow& window) {
     const int n = static_cast<int>(m_items.size());
 
-    // Keyboard navigation
-    if (input.isKeyJustPressed(Key::ArrowUp) || input.isKeyJustPressed(Key::W))
-        m_selectedIdx = (m_selectedIdx - 1 + n) % n;
-    if (input.isKeyJustPressed(Key::ArrowDown) || input.isKeyJustPressed(Key::S))
-        m_selectedIdx = (m_selectedIdx + 1) % n;
-    if (input.isKeyJustPressed(Key::Escape))
+    menuNavigateWrap(input, n, m_selectedIdx);
+    // Escape here JUMPS THE SELECTION to Exit rather than leaving the screen -- there is nowhere
+    // above the main menu to go back to. That is why the helper offers a predicate, not a transition.
+    if (menuBackPressed(input))
         m_selectedIdx = n - 1;
 
-    // Gamepad navigation (D-pad)
-    if (input.isGamepadButtonJustPressed(0, GamepadButton::DpadUp))
-        m_selectedIdx = (m_selectedIdx - 1 + n) % n;
-    if (input.isGamepadButtonJustPressed(0, GamepadButton::DpadDown))
-        m_selectedIdx = (m_selectedIdx + 1) % n;
+    menuHoverHitTest(
+        input, window, n, 0, n, kItemH, [](int r) { return kStartY + static_cast<float>(r) * kSpacing; },
+        m_selectedIdx);
 
-    // Mouse hover
-    int mx = 0, my = 0;
-    input.getMousePosition(mx, my);
-    const float fh = static_cast<float>(window.logicalHeight());
-    if (fh > 0.f) {
-        const float ny = static_cast<float>(my) / fh;
-        for (int i = 0; i < n; ++i) {
-            float iy = kStartY + static_cast<float>(i) * kSpacing;
-            if (ny >= iy && ny < iy + kItemH) {
-                m_selectedIdx = i;
-                break;
-            }
-        }
-    }
-
-    // Confirm
-    bool confirmed = input.isKeyJustPressed(Key::Enter) || input.isKeyJustPressed(Key::Space) ||
-                     input.isMouseButtonJustPressed(MouseButton::Left) ||
-                     input.isGamepadButtonJustPressed(0, GamepadButton::A);
-    if (confirmed)
+    if (menuConfirmPressed(input))
         return confirm();
 
     return Screen::MainMenu;
