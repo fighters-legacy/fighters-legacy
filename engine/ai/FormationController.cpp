@@ -70,19 +70,9 @@ fl::ControlInput FormationController::sample(const fl::EntityState& state, uint6
 
     // Steer at the slot exactly as PursuitController steers at a target — the difference is not the
     // steering, it is the throttle (below) and the fact that the aim point moves with the lead.
-    const float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, slotArr, m_planetRadiusM);
-    const float altErr =
-        static_cast<float>(fl::localAltitude(slot, m_planetRadiusM) - fl::localAltitude(ownPos, m_planetRadiusM));
-    const float pitchErr = pitchErrorFromAlt(state.transform.quat, state.transform.pos, altErr, m_planetRadiusM);
-
-    // Bank-ANGLE command closed on the current bank, and a rudder that nulls the SIDESLIP (#1143).
     // 60 deg: a wingman must be able to follow a manoeuvring lead.
-    // The rate-only aileron law wound this controller to 179.8 deg of bank and 89 deg of sideslip
-    // within 90 s of a heading error it could not null, and flew it into the ground.
-    ctrl.aileron =
-        bankToTurnAileron(state.transform.quat, state.transform.pos, headErr, m_planetRadiusM, kFormationBankRad);
-    ctrl.rudder = rudderToCoordinate(sideslipOf(state.transform.quat, state.transform.vel));
-    ctrl.elevator = elevatorFromPitchError(pitchErr);
+    steerTowardPoint(ctrl, state.transform.quat, state.transform.pos, state.transform.vel, slotArr, m_planetRadiusM,
+                     kFormationBankRad);
 
     // --- Closed-loop throttle: hold station, don't just chase. ---
     // Along-track error: how far the slot lies AHEAD of us along our own forward axis. Positive = we

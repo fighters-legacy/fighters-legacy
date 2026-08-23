@@ -27,48 +27,14 @@ fl::ControlInput LagPursuitController::sample(const fl::EntityState& state, uint
     if (!tv.valid)
         return ctrl;
 
-    // Relative position (float arithmetic is sufficient for kinematics at ACM scales).
-    float dx = static_cast<float>(tv.pos[0] - state.transform.pos[0]);
-    float dy = static_cast<float>(tv.pos[1] - state.transform.pos[1]);
-    float dz = static_cast<float>(tv.pos[2] - state.transform.pos[2]);
-    float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-
-    // Start with target's current position; shift backward if lagFraction > 0.
-    double lagPosX = tv.pos[0];
-    double lagPosY = tv.pos[1];
-    double lagPosZ = tv.pos[2];
-
-    if (m_lagFraction > 0.f && dist > 0.1f) {
-        // Closing speed = -d/dt(|r|) = -dot(r_hat, relVel).
-        float rvx = tv.vel[0] - state.transform.vel[0];
-        float rvy = tv.vel[1] - state.transform.vel[1];
-        float rvz = tv.vel[2] - state.transform.vel[2];
-        float closingSpeed = -(dx * rvx + dy * rvy + dz * rvz) / dist;
-        // Floor closing speed to avoid infinite / negative TTC; cap TTC to 30 s.
-        float ttoIntercept = std::min(dist / std::max(closingSpeed, 10.f), 30.f);
-        lagPosX -= static_cast<double>(tv.vel[0]) * ttoIntercept * m_lagFraction;
-        lagPosY -= static_cast<double>(tv.vel[1]) * ttoIntercept * m_lagFraction;
-        lagPosZ -= static_cast<double>(tv.vel[2]) * ttoIntercept * m_lagFraction;
-    }
-
-    const double lagPos[3] = {lagPosX, lagPosY, lagPosZ};
-    const glm::dvec3 ownWorld(state.transform.pos[0], state.transform.pos[1], state.transform.pos[2]);
-    const glm::dvec3 lagWorld(lagPosX, lagPosY, lagPosZ);
-    float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, lagPos, m_planetRadiusM);
-    float altErr =
-        static_cast<float>(fl::localAltitude(lagWorld, m_planetRadiusM) - fl::localAltitude(ownWorld, m_planetRadiusM));
-    float pitchErr = pitchErrorFromAlt(state.transform.quat, state.transform.pos, altErr, m_planetRadiusM);
+    double aimPos[3];
+    pursuitOffsetPoint(aimPos, state.transform.pos, state.transform.vel, tv.pos, tv.vel, -std::max(m_lagFraction, 0.f));
 
     ctrl.throttle = m_throttle;
     ctrl.afterburner = m_useAfterburner;
-    // Bank-ANGLE command closed on the current bank, and a rudder that nulls the SIDESLIP (#1143).
     // 80 deg, as PursuitController.
-    // The rate-only aileron law wound this controller to 179.8 deg of bank and 89 deg of sideslip
-    // within 90 s of a heading error it could not null, and flew it into the ground.
-    ctrl.aileron =
-        bankToTurnAileron(state.transform.quat, state.transform.pos, headErr, m_planetRadiusM, kCombatBankRad);
-    ctrl.rudder = rudderToCoordinate(sideslipOf(state.transform.quat, state.transform.vel));
-    ctrl.elevator = elevatorFromPitchError(pitchErr);
+    steerTowardPoint(ctrl, state.transform.quat, state.transform.pos, state.transform.vel, aimPos, m_planetRadiusM,
+                     kCombatBankRad);
 
     return ctrl;
 }

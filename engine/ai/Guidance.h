@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "flight/AeroForces.h" // ControlInput, for the shared steering tail
 #include "flight/LocalFrame.h" // enuBasis / radialUp / pitchOf / localAltitude (+ kEarthRadiusM via Geodetic.h)
 #include "math/Angles.h"       // wrapPi
 #include "math/Units.h"        // kG0
@@ -249,6 +250,75 @@ inline float sideslipOf(const float quat[4], const float velWorld[3]) {
 // stability would have sorted itself out; the builtin arcade model has cn_beta = 0 and never does.
 inline float rudderToCoordinate(float sideslipRad, float gain = 2.f) {
     return std::clamp(sideslipRad * gain, -1.f, 1.f);
+}
+
+// Where to aim when pursuing a moving target: the target's position shifted along its OWN velocity
+// by the estimated time to intercept (#1259).
+//
+// The sign of `gain` is the whole difference between lead and lag pursuit, which is why
+// LeadPursuitController and LagPursuitController were the same file twice -- identical down to the
+// time-to-intercept clamp, differing in one operator and the member's name. Positive leads (aim
+// ahead, the guns-tracking geometry); negative lags (aim behind, to stay inside a turn without
+// overshooting). Zero aims straight at the target, which is what a nonsensical gain also does.
+//
+// Closing speed is floored at 10 m/s and the time to intercept capped at 30 s: an opening or
+// co-speed target otherwise divides toward infinity and throws the aim point off the planet.
+inline void pursuitOffsetPoint(double out[3], const double ownPos[3], const float ownVel[3], const double tgtPos[3],
+                               const float tgtVel[3], float gain) {
+    out[0] = tgtPos[0];
+    out[1] = tgtPos[1];
+    out[2] = tgtPos[2];
+
+    // Float arithmetic is sufficient for kinematics at ACM scales.
+    const float dx = static_cast<float>(tgtPos[0] - ownPos[0]);
+    const float dy = static_cast<float>(tgtPos[1] - ownPos[1]);
+    const float dz = static_cast<float>(tgtPos[2] - ownPos[2]);
+    const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (gain == 0.f || dist <= 0.1f)
+        return;
+
+    // Closing speed = -d/dt(|r|) = -dot(r_hat, relVel).
+    const float rvx = tgtVel[0] - ownVel[0];
+    const float rvy = tgtVel[1] - ownVel[1];
+    const float rvz = tgtVel[2] - ownVel[2];
+    const float closingSpeed = -(dx * rvx + dy * rvy + dz * rvz) / dist;
+    const float ttoIntercept = std::min(dist / std::max(closingSpeed, 10.f), 30.f);
+
+    out[0] += static_cast<double>(tgtVel[0]) * ttoIntercept * gain;
+    out[1] += static_cast<double>(tgtVel[1]) * ttoIntercept * gain;
+    out[2] += static_cast<double>(tgtVel[2]) * ttoIntercept * gain;
+}
+
+// The whole steering tail for "fly toward this world point", in one place (#1259).
+//
+// Seven controllers -- pursuit, lead and lag pursuit, guns employment, waypoint, swarm and
+// formation -- each spelled this block out, differing only in the bank limit and one role-specific
+// comment. Each also dragged its own copy of the four-line #1143 rationale, which is why that
+// rationale now lives here, once:
+//
+//   The aileron is a bank-ANGLE command closed on the current bank, not the old rate-only law.
+//   The rate-only law wound these controllers to 179.8 deg of bank and 89 deg of sideslip within
+//   90 s of a heading error they could not null, and flew them into the ground. The rudder nulls
+//   the measured SIDESLIP rather than mirroring the aileron, because in a steady turn the aileron
+//   is back at zero and nothing else points the nose along the flight path.
+//
+// `maxBankRad` stays a caller argument -- it is the one thing these seven genuinely disagree about,
+// and the role constants below say why each picked what it did.
+//
+// Throttle is deliberately NOT set here: some callers hold a fixed throttle and others close a
+// speed loop, and that is a real difference rather than a copy.
+inline void steerTowardPoint(ControlInput& ctrl, const float quat[4], const double ownPos[3], const float ownVel[3],
+                             const double tgtPos[3], double R, float maxBankRad) {
+    const glm::dvec3 own(ownPos[0], ownPos[1], ownPos[2]);
+    const glm::dvec3 tgt(tgtPos[0], tgtPos[1], tgtPos[2]);
+
+    const float headErr = horizontalHeadingError(quat, ownPos, tgtPos, R);
+    const float altErr = static_cast<float>(fl::localAltitude(tgt, R) - fl::localAltitude(own, R));
+    const float pitchErr = pitchErrorFromAlt(quat, ownPos, altErr, R);
+
+    ctrl.aileron = bankToTurnAileron(quat, ownPos, headErr, R, maxBankRad);
+    ctrl.rudder = rudderToCoordinate(sideslipOf(quat, ownVel));
+    ctrl.elevator = elevatorFromPitchError(pitchErr);
 }
 
 // Yaw coordination: rudder proportional to aileron.

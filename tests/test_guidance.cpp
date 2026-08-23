@@ -201,3 +201,84 @@ TEST_CASE("WaypointController far-from-origin: banks toward a waypoint on the lo
     CHECK(inp.throttle > 0.f);
     CHECK(inp.aileron > 0.f);
 }
+
+// ---------------------------------------------------------------------------
+// The shared steering tail and pursuit offset (#1259)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("pursuitOffsetPoint: the sign of the gain is lead versus lag") {
+    // The whole difference between LeadPursuitController and LagPursuitController, which were the
+    // same file twice. Target 2000 m ahead on +X, tracking +Z at 100 m/s; attacker at the origin.
+    const double ownPos[3] = {0.0, 0.0, 0.0};
+    const float ownVel[3] = {0.f, 0.f, 0.f};
+    const double tgtPos[3] = {2000.0, 0.0, 0.0};
+    const float tgtVel[3] = {0.f, 0.f, 100.f};
+
+    double lead[3], lag[3], pure[3];
+    fl::ai::pursuitOffsetPoint(lead, ownPos, ownVel, tgtPos, tgtVel, 1.f);
+    fl::ai::pursuitOffsetPoint(lag, ownPos, ownVel, tgtPos, tgtVel, -1.f);
+    fl::ai::pursuitOffsetPoint(pure, ownPos, ownVel, tgtPos, tgtVel, 0.f);
+
+    // Pure pursuit aims exactly at the target.
+    CHECK(pure[0] == 2000.0);
+    CHECK(pure[2] == 0.0);
+
+    // Lead aims where the target is going; lag aims where it has been, by the same distance.
+    CHECK(lead[2] > 0.0);
+    CHECK(lag[2] < 0.0);
+    CHECK(lead[2] == -lag[2]);
+}
+
+TEST_CASE("pursuitOffsetPoint: a non-closing target does not throw the aim point off the planet") {
+    // Closing speed is floored at 10 m/s and time-to-intercept capped at 30 s. Without both, an
+    // opening or co-speed target divides toward infinity: here the closing speed is NEGATIVE.
+    const double ownPos[3] = {0.0, 0.0, 0.0};
+    const float ownVel[3] = {0.f, 0.f, 0.f};
+    const double tgtPos[3] = {2000.0, 0.0, 0.0};
+    const float tgtVel[3] = {500.f, 0.f, 100.f}; // running away faster than we close
+
+    double aim[3];
+    fl::ai::pursuitOffsetPoint(aim, ownPos, ownVel, tgtPos, tgtVel, 1.f);
+
+    // TTC clamps to 30 s, so the offset is bounded by velocity * 30.
+    CHECK(aim[0] <= 2000.0 + 500.0 * 30.0 + 1.0);
+    CHECK(aim[2] <= 100.0 * 30.0 + 1.0);
+    CHECK(std::isfinite(aim[0]));
+    CHECK(std::isfinite(aim[2]));
+}
+
+TEST_CASE("pursuitOffsetPoint: a target on top of us is aimed at directly") {
+    // Below the 0.1 m range guard the direction is meaningless and the offset would divide by ~0.
+    const double ownPos[3] = {0.0, 0.0, 0.0};
+    const float ownVel[3] = {0.f, 0.f, 0.f};
+    const double tgtPos[3] = {0.01, 0.0, 0.0};
+    const float tgtVel[3] = {0.f, 0.f, 300.f};
+
+    double aim[3];
+    fl::ai::pursuitOffsetPoint(aim, ownPos, ownVel, tgtPos, tgtVel, 1.f);
+    CHECK(aim[0] == 0.01);
+    CHECK(aim[2] == 0.0);
+}
+
+TEST_CASE("steerTowardPoint: banks toward the target and respects the caller's bank limit") {
+    // Attacker at the origin facing +X; target off to the right (+Z) and above.
+    fl::EntityState s{};
+    s.id = {1, 1};
+    s.transform.quat[3] = 1.f; // identity
+    const double tgt[3] = {2000.0, 500.0, 2000.0};
+
+    fl::ControlInput tight{}, loose{};
+    fl::ai::steerTowardPoint(tight, s.transform.quat, s.transform.pos, s.transform.vel, tgt, fl::kEarthRadiusM,
+                             fl::ai::kApproachBankRad);
+    fl::ai::steerTowardPoint(loose, s.transform.quat, s.transform.pos, s.transform.vel, tgt, fl::kEarthRadiusM,
+                             fl::ai::kCombatBankRad);
+
+    CHECK(tight.aileron > 0.f); // roll right, toward the target
+    CHECK(loose.aileron > 0.f);
+    // A tighter bank limit asks for less roll from the same heading error -- the #1143 property
+    // that stopped these controllers winding themselves inverted.
+    CHECK(tight.aileron <= loose.aileron);
+
+    // Throttle is deliberately not the tail's business: callers own it.
+    CHECK(tight.throttle == 0.f);
+}
