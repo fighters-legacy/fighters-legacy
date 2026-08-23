@@ -3,6 +3,7 @@
 
 #include "IFilesystem.h"
 #include "ILogger.h"
+#include "util/FsRead.h"
 
 #include <toml++/toml.hpp>
 
@@ -10,18 +11,15 @@
 
 namespace fl {
 
-static std::string readFileToString(IFilesystem& fs, ILogger& logger, const char* path) {
-    int handle = fs.openFile(PathDomain::Assets, path, false);
-    if (handle < 0) {
+// The shared read (#1254) plus this caller's own warn-on-missing contract, which stays here
+// because the other ten callers each want something different from it.
+static std::string readOrWarn(IFilesystem& fs, ILogger& logger, const char* path) {
+    auto content = fl::readFileToString(fs, PathDomain::Assets, path);
+    if (!content) {
         logger.log(LogLevel::Warn, __FILE__, __LINE__, (std::string("i18n: cannot open file: ") + path).c_str());
         return {};
     }
-    std::size_t size = fs.getFileSize(handle);
-    std::string content(size, '\0');
-    if (size > 0)
-        fs.readFile(handle, content.data(), size);
-    fs.closeFile(handle);
-    return content;
+    return std::move(*content);
 }
 
 static void flatten(const toml::table& tbl, const std::string& prefix,
@@ -40,7 +38,7 @@ static void flatten(const toml::table& tbl, const std::string& prefix,
 
 bool StringTable::load(IFilesystem& fs, ILogger& logger, const char* path) {
     m_entries.clear();
-    std::string content = readFileToString(fs, logger, path);
+    std::string content = readOrWarn(fs, logger, path);
     if (content.empty())
         return false;
     try {

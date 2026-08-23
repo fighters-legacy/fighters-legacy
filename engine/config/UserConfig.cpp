@@ -3,6 +3,7 @@
 
 #include "IFilesystem.h"
 #include "ILogger.h"
+#include "util/FsRead.h"
 
 #include "config/TomlNumeric.h"
 #include "crypto/RandomToken.h"
@@ -601,14 +602,10 @@ static std::string generateUuidV4() {
 UserConfig::UserConfig(IFilesystem& fs, ILogger& logger) : m_fs(fs), m_logger(logger) {}
 
 bool UserConfig::load() {
-    int handle = m_fs.openFile(PathDomain::UserData, kPath, false);
-    if (handle < 0)
+    const auto read = readFileToString(m_fs, PathDomain::UserData, kPath);
+    if (!read)
         return false;
-
-    std::size_t size = m_fs.getFileSize(handle);
-    std::string content(size, '\0');
-    m_fs.readFile(handle, content.data(), size);
-    m_fs.closeFile(handle);
+    const std::string& content = *read;
 
     toml::table tbl;
     try {

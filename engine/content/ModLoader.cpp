@@ -8,6 +8,7 @@
 #include "content/FolderContentPack.h"
 #include "content/IContentPackEventHandler.h"
 #include "dynlib/DynLib.h" // the shared dlopen/LoadLibrary this file used to keep to itself (#163)
+#include "util/FsRead.h"
 
 #include <toml++/toml.hpp>
 
@@ -39,14 +40,10 @@ bool ModLoader::validateEngineApi(const std::string& engineApi, const std::strin
 }
 
 std::optional<ModLoader::Manifest> ModLoader::parseManifest(const char* path) {
-    int handle = m_fs.openFile(PathDomain::Assets, path, false);
-    if (handle < 0)
+    const auto read = readFileToString(m_fs, PathDomain::Assets, path);
+    if (!read)
         return std::nullopt; // missing manifest.toml — silently skip at Debug level
-
-    std::size_t size = m_fs.getFileSize(handle);
-    std::string content(size, '\0');
-    m_fs.readFile(handle, content.data(), size);
-    m_fs.closeFile(handle);
+    const std::string& content = *read;
 
     // Delegate the schema to the shared parser (#651), so ModLoader and validate-mod cannot drift on
     // the required-field / identifier rules. ModLoader keeps its log-and-skip contract by logging the

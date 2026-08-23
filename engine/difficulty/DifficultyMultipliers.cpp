@@ -4,6 +4,7 @@
 #include "IFilesystem.h"
 #include "ILogger.h"
 #include "content/AssetManager.h"
+#include "util/FsRead.h"
 
 #include <algorithm>
 #include <cassert>
@@ -274,16 +275,10 @@ DifficultyMultipliers DifficultyMultipliers::parseFrom(std::string_view text, IL
 }
 
 DifficultyMultipliers DifficultyMultipliers::load(IFilesystem& fs, ILogger& logger) {
-    int handle = fs.openFile(PathDomain::Assets, "data/difficulty.toml", false);
-    if (handle < 0)
+    const auto content = readFileToString(fs, PathDomain::Assets, "data/difficulty.toml");
+    if (!content)
         return defaults();
-
-    std::size_t size = fs.getFileSize(handle);
-    std::string content(size, '\0');
-    fs.readFile(handle, content.data(), size);
-    fs.closeFile(handle);
-
-    return parseFrom(content, logger);
+    return parseFrom(*content, logger);
 }
 
 DifficultyMultipliers DifficultyMultipliers::load(AssetManager& am, IFilesystem& fs, ILogger& logger) {

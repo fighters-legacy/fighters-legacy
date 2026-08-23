@@ -867,6 +867,13 @@ catch_discover_tests(test_admin_channel)
 
 # The engine's one JSON escaper, writer set and reader (#1080). Header-only and stdlib-only, so this
 # links nothing: engine-protocol's zero-dep rule is the reason the helper is shaped that way.
+# The one whole-file read over IFilesystem (#1254). Header-only over the HAL interface, so it needs
+# no engine library -- the short-read case uses a local fake, since the shared mock never short-reads.
+add_executable(test_fs_read test_fs_read.cpp)
+target_link_libraries(test_fs_read PRIVATE Catch2::Catch2WithMain)
+target_include_directories(test_fs_read PRIVATE "${CMAKE_SOURCE_DIR}/engine" "${CMAKE_SOURCE_DIR}/platform")
+catch_discover_tests(test_fs_read)
+
 add_executable(test_json test_json.cpp)
 target_link_libraries(test_json PRIVATE Catch2::Catch2WithMain)
 target_include_directories(test_json PRIVATE "${CMAKE_SOURCE_DIR}/engine")
