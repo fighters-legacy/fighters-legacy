@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "render/Extrapolate.h" // the one sub-tick extrapolation (#1250)
+
 #include "net/TickRate.h"            // server tick rate paired with the render alpha (#1075)
 #include "render/CameraController.h" // makeCameraView
 
@@ -19,7 +21,7 @@ namespace fl {
     // renderAlpha is "how far through a SERVER tick", so the period it multiplies must be that
     // server's period (#1075) — a hardcoded 1/60 here would disagree with the alpha on any server
     // not stepping at 60 Hz. Defaulted so the pure-math call sites in tests stay one-liners.
-    const glm::dvec3 extTgt = targetPos + glm::dvec3(targetVel * (renderAlpha * serverTickRate.dtSeconds()));
+    const glm::dvec3 extTgt = extrapolatePosition(targetPos, targetVel, renderAlpha, serverTickRate);
 
     // Eye behind the target along the target->ownship line. Degenerate (ownship on target): offset by
     // worldUp x an arbitrary axis so the look direction stays well-defined.
