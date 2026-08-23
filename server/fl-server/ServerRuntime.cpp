@@ -138,7 +138,9 @@ using namespace fl;
 
 // The fixed sim rate. Named because two places need to agree on it: the GameLoop that drives the
 // tick, and the end-of-tick hook that hands sim systems their timestep.
-static constexpr double kSimTickRateHz = 60.0;
+// Derived, not re-declared (#1253/#1075): TickRate.h is where "where is 60 decided" is
+// answered, and this used to be a second answer that could drift from it silently.
+static constexpr double kSimTickRateHz = static_cast<double>(fl::kServerTickRate.hz());
 
 // ---------------------------------------------------------------------------
 // Signal handling
@@ -1990,6 +1992,11 @@ bool ServerRuntime::Impl::initMission() {
                         log->log(LogLevel::Info, __FILE__, __LINE__, cm);
                     }
                 });
+                // Step at the rate the SERVER actually ticks (#1253). Both MissionRuntime and
+                // MatchController otherwise fall back to their own `1.0 / 60.0` default -- a second
+                // and third answer to "where is 60 decided", reached because nothing was passing the
+                // real value in.
+                missionRuntime->setSimDt(fl::kServerTickRate.dtSecondsDouble());
                 // The per-tick step is wired into the composite match/mission hook below (after the team
                 // setup), so the MatchController steps every tick alongside the mission runtime.
                 // Bind a pilot's aircraft to its player-slot id on connect (and unbind on disconnect), so
@@ -2070,7 +2077,7 @@ bool ServerRuntime::Impl::initMission() {
     // controller steps every tick from the composite hook below; scoring is fed from the combat path.
     {
         fl::MatchTeamSetup mts = fl::buildMatchTeams(gameMode, missionFactions, *log);
-        matchController.configure(gameMode, mts.teams);
+        matchController.configure(gameMode, mts.teams, fl::kServerTickRate.dtSecondsDouble());
         matchController.setEndingSeconds(static_cast<double>(cfg.match.endScreenS));
         broadcaster.setReconnectGraceTicks(static_cast<uint64_t>(std::max(0, cfg.match.reconnectGraceS)) * 60u); // #524
 
@@ -2361,7 +2368,7 @@ bool ServerRuntime::Impl::initAdmin() {
                 fl::MatchTeamSetup nmts = fl::buildMatchTeams(nextMode, missionFactions, *log);
                 broadcaster.setDamageRules(
                     fl::effectiveDamageRules(nextMode, cfg.gameplay.friendlyFire, cfg.gameplay.crashDamage));
-                matchController.configure(nextMode, nmts.teams);
+                matchController.configure(nextMode, nmts.teams, fl::kServerTickRate.dtSecondsDouble());
                 if (nmts.haveTeams) { // respawn only for a competitive team match — see the setup path above
                     fl::WorldBroadcaster::RespawnPolicy rp;
                     rp.delayTicks = static_cast<uint32_t>(std::max(0.0, nextMode.respawnDelayS) * 60.0);
@@ -2628,7 +2635,7 @@ bool ServerRuntime::Impl::initSystems() {
                 churnState.pending.pop_front();
             }
             // Spawn this tick's quota (fractional accumulator carries sub-tick rates).
-            const uint32_t n = fl::churnSpawnCount(churnState.spawnAccum, rate, 1.0 / 60.0);
+            const uint32_t n = fl::churnSpawnCount(churnState.spawnAccum, rate, fl::kServerTickRate.dtSecondsDouble());
             for (uint32_t i = 0; i < n; ++i) {
                 const auto pos = fl::testProjectilePosition(churnState.spawnCounter++, spreadM, aglM, churnSurface);
                 fl::EntityTransform t{};
@@ -2754,7 +2761,7 @@ bool ServerRuntime::Impl::initSystems() {
             return false;
         }
         broadcaster.setGovernorParams(fl::makeTickGovernorParams(false, 0.9f, 0.6f, 15.f, 4, 400));
-        constexpr double kSimDt = 1.0 / 60.0;
+        constexpr double kSimDt = fl::kServerTickRate.dtSecondsDouble();
         constexpr uint64_t kMaxReportTicks = 36000; // 10 sim-minutes at 60 Hz; a stuck mission stops here
         uint64_t ranTicks = 0;
         for (uint64_t tick = 1; tick <= kMaxReportTicks; ++tick) {

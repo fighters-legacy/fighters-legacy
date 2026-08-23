@@ -1316,6 +1316,13 @@ add_executable(test_congestion_controller test_congestion_controller.cpp)
 target_link_libraries(test_congestion_controller PRIVATE Catch2::Catch2WithMain engine-net)
 catch_discover_tests(test_congestion_controller)
 
+# The one tick-rate authority (#1075) and the conversions #1253 folded back into it. Header-only
+# and stdlib-only, so no engine library is needed.
+add_executable(test_tick_rate test_tick_rate.cpp)
+target_link_libraries(test_tick_rate PRIVATE Catch2::Catch2WithMain)
+target_include_directories(test_tick_rate PRIVATE "${CMAKE_SOURCE_DIR}/engine")
+catch_discover_tests(test_tick_rate)
+
 add_executable(test_tick_governor test_tick_governor.cpp)
 target_link_libraries(test_tick_governor PRIVATE Catch2::Catch2WithMain engine-net)
 catch_discover_tests(test_tick_governor)
