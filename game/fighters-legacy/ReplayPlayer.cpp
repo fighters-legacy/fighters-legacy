@@ -50,8 +50,7 @@ void ReplayPlayer::close() {
 }
 
 void ReplayPlayer::resetCaches() {
-    m_entities.clear();
-    m_known.clear();
+    m_cache.clear();
     m_lastEvents.clear();
 }
 
@@ -90,39 +89,15 @@ void ReplayPlayer::applyTick(const ReplayTick& tick) {
         if (!decodeStandaloneRecord(r, qe, tick.origins.data(), originCount, genPresent))
             break; // truncated/malformed: keep what decoded, exactly as the live client does
 
-        auto kit = m_known.find(qe.idx);
-        if (qe.isFull) {
-            m_known[qe.idx] = qe;
-        } else {
-            if (kit == m_known.end())
-                continue; // a delta with no baseline: only possible in a damaged file
-            if (!genPresent)
-                qe.gen = kit->second.gen;
-            qe.typeIndex = kit->second.typeIndex;
-            qe.factionIndex = kit->second.factionIndex;
-            kit->second = qe;
-        }
-
-        EntityRenderEntry re;
-        if (auto cached = m_entities.find(qe.idx); cached != m_entities.end())
-            std::memcpy(re.artChannels, cached->second.re.artChannels, sizeof(re.artChannels));
-        renderEntryFromQuant(qe, re);
-        m_entities[qe.idx] = {re, tick.tickIndex};
+        // requireGenMatch=false: a replay is a single ordered stream, so there is no recycled-slot
+        // race for a generation check to catch. A delta with no baseline means a damaged file.
+        (void)m_cache.applyRecord(qe, genPresent, tick.tickIndex, /*requireGenMatch=*/false);
     }
 
     // Age out anything the recording stopped mentioning. A replay records every entity every tick,
     // so an entity that goes missing is genuinely gone -- but the same retention window the live
     // client uses keeps a damaged file from flickering.
-    for (auto it = m_entities.begin(); it != m_entities.end();) {
-        const uint64_t age =
-            (tick.tickIndex >= it->second.lastSeenTick) ? (tick.tickIndex - it->second.lastSeenTick) : 0u;
-        if (age > kSnapshotRetentionTicks) {
-            m_known.erase(it->first);
-            it = m_entities.erase(it);
-        } else {
-            ++it;
-        }
-    }
+    m_cache.ageOut(tick.tickIndex);
 }
 
 bool ReplayPlayer::advanceOneTick() {
@@ -137,8 +112,8 @@ bool ReplayPlayer::advanceOneTick() {
 
 bool ReplayPlayer::decodeCurrentInto(RenderSnapshot& out) {
     out.entries.clear();
-    out.entries.reserve(m_entities.size());
-    for (const auto& [idx, c] : m_entities)
+    out.entries.reserve(m_cache.size());
+    for (const auto& [idx, c] : m_cache)
         out.entries.push_back(c.re);
     // Ascending entity index: SceneRenderer sorts for draw order anyway, but a stable order keeps
     // per-frame diffs (and any test comparing snapshots) meaningful.

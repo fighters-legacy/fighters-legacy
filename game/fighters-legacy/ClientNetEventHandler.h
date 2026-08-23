@@ -9,6 +9,7 @@
 #include "WingmanMenu.h"
 #include "net/Capability.h"        // CapabilityMask / Capability — granted-authority UI gating (#949)
 #include "net/GameProtocol.h"      // PeerRole, PackManifestEntry (connect handshake #853)
+#include "net/QuantEntityCache.h"  // the one snapshot entity cache, shared with replay (#1252)
 #include "net/TickRate.h"          // the server tick rate carried by MsgConnectAck (#1075)
 #include "render/RadarView.h"      // RadarView / RadarTrack / RwrStrobe (datalink picture #528)
 #include "render/RenderSnapshot.h" // EntityRenderEntry (stored by value in the retention cache)
@@ -168,9 +169,9 @@ struct ClientNetEventHandler : INetworkEventHandler {
     // and return 0 (neutral) until either is known. Faction 0 has no friends and no foes.
     [[nodiscard]] uint16_t ownFactionIndex() const noexcept {
         if (assignedEntityGen != 0) {
-            const auto it = m_knownEntities.find(assignedEntityIdx);
-            if (it != m_knownEntities.end() && it->second.gen == static_cast<uint16_t>(assignedEntityGen))
-                return it->second.factionIndex;
+            const auto* known = m_entityCache.baseline(assignedEntityIdx);
+            if (known != nullptr && known->gen == static_cast<uint16_t>(assignedEntityGen))
+                return known->factionIndex;
         }
         const auto rit = m_roster.find(m_selfPeerId);
         if (rit != m_roster.end())
@@ -577,17 +578,6 @@ struct ClientNetEventHandler : INetworkEventHandler {
     // #481: shared UTC clock (Julian Day) from MsgWeatherState; 0 until the first weather packet.
     double m_utcJulianDay{0.0};
 
-    // Delta-compression entity cache: entityIdx → {gen (uint16 truncated), typeIndex, factionIndex}.
-    // Populated from `full` quantized records; supplies typeIndex/factionIndex (and gen when omitted)
-    // for the compact delta records that follow. Cleared implicitly when the handler is re-created per
-    // session (reinitFlight).
-    struct KnownEntityInfo {
-        uint16_t gen;
-        uint32_t typeIndex;
-        uint16_t factionIndex;
-    };
-    std::unordered_map<uint32_t, KnownEntityInfo> m_knownEntities;
-
     // Faction index -> display name, from MsgFactionDef sent once after ConnectAck (#860). Used by the
     // observer entity picker to label an entity's faction.
     std::unordered_map<uint16_t, std::string> m_factionNames;
@@ -605,11 +595,10 @@ struct ClientNetEventHandler : INetworkEventHandler {
     // packet. Each entry holds the last-known render state and the tick it was last updated; entries
     // absent from a snapshot are retained until either an explicit SnapshotDespawn TLV removes them or
     // they age out past kSnapshotRetentionTicks (the backstop for interest-out / lost despawns).
-    struct CachedEntity {
-        fl::EntityRenderEntry re;
-        uint64_t lastSeenTick{0};
-    };
-    std::unordered_map<uint32_t, CachedEntity> m_entityCache;
+    // Since #1252 this is the same cache ReplayPlayer uses, not a second one that agrees with it:
+    // it holds both the delta baseline (gen/typeIndex/factionIndex from full records) and the
+    // retained render entries, and ages them out together.
+    fl::QuantEntityCache m_entityCache;
 
     // Datalink track picture + RWR (#528), rebuilt from each MsgDatalink. Positions are reconstructed
     // to ABSOLUTE world metres (header origin + relative payload) so the HUD needs no origin of its

@@ -327,8 +327,7 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             for (uint16_t off = 0; dp && off + 4u <= despawnLen; off += 4u) {
                 uint32_t idx{};
                 std::memcpy(&idx, dp + off, 4u); // payload is unaligned — read per element
-                m_entityCache.erase(idx);
-                m_knownEntities.erase(idx);
+                m_entityCache.despawn(idx);
             }
         }
 
@@ -346,7 +345,7 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
 
         // 2. Decode the stitched record stream (#725). Each record carries an origin index into the
         // table above; positions are relative to that shared origin. Full records carry typeIndex + gen,
-        // deltas reuse the per-entity cache (m_knownEntities).
+        // deltas reuse the per-entity baseline the cache keeps.
         const std::size_t recordAvail = (size > recordOffset) ? (size - recordOffset) : 0u;
         const std::size_t recordBytes = std::min<std::size_t>(hdr.bitstreamBytes, recordAvail);
         fl::BitReader reader(static_cast<const uint8_t*>(data) + recordOffset, recordBytes);
@@ -356,45 +355,15 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             if (!fl::decodeStandaloneRecord(reader, qe, originTable.data(), hdr.originCount, genPresent))
                 break; // truncated/malformed — stop, keep what decoded
 
-            auto kit = m_knownEntities.find(qe.idx);
-            if (qe.isFull) {
-                // Full record: typeIndex + factionIndex + gen on the wire; refresh the cache.
-                m_knownEntities[qe.idx] = {static_cast<uint16_t>(qe.gen), qe.typeIndex, qe.factionIndex};
-            } else {
-                if (kit == m_knownEntities.end())
-                    continue; // full record was dropped; entity reappears on the next baseline tick
-                if (genPresent && static_cast<uint16_t>(qe.gen) != kit->second.gen)
-                    continue; // stale generation
-                if (!genPresent)
-                    qe.gen = kit->second.gen; // cached generation
-                qe.typeIndex = kit->second.typeIndex;
-                qe.factionIndex = kit->second.factionIndex; // #860: cached like typeIndex
-            }
-
-            // The ONE QuantEntity -> EntityRenderEntry mapping, shared with replay playback (#41):
-            // D7's premise is that the renderer cannot tell a replay from a live session, which only
-            // holds if both paths build the same entry from the same bits.
-            fl::EntityRenderEntry re;
-            // Articulation is carried on its own TLV (#843) and updates on CHANGE, so a record decode
-            // must not wipe it: prime from the cache first, since renderEntryFromQuant leaves it alone.
-            if (auto cached = m_entityCache.find(qe.idx); cached != m_entityCache.end())
-                std::memcpy(re.artChannels, cached->second.re.artChannels, sizeof(re.artChannels));
-            fl::renderEntryFromQuant(qe, re);
-            m_entityCache[qe.idx] = {re, hdr.tickIndex};
+            // The ONE cache and the ONE QuantEntity -> EntityRenderEntry mapping, shared with replay
+            // playback (#41/#1252). requireGenMatch=true: live, a stale record can arrive for a
+            // recycled pool slot, and rendering it would resurrect a dead entity.
+            (void)m_entityCache.applyRecord(qe, genPresent, hdr.tickIndex, /*requireGenMatch=*/true);
         }
 
         // 3. Age out entities not refreshed within the retention window (the backstop for interest-out
-        // and dropped despawn packets). Evict from both caches together.
-        for (auto it = m_entityCache.begin(); it != m_entityCache.end();) {
-            const uint64_t age =
-                (hdr.tickIndex >= it->second.lastSeenTick) ? (hdr.tickIndex - it->second.lastSeenTick) : 0u;
-            if (age > fl::kSnapshotRetentionTicks) {
-                m_knownEntities.erase(it->first);
-                it = m_entityCache.erase(it);
-            } else {
-                ++it;
-            }
-        }
+        // and dropped despawn packets).
+        m_entityCache.ageOut(hdr.tickIndex);
 
         // 4. Remaining TLVs (order-independent). These run BEFORE the RenderSnapshot is assembled so
         // that state they carry — articulation, above all — is already in the cache when it is read.
@@ -762,8 +731,8 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             // category (via the cached typeIndex + type registry) when this peer scored the kill.
             if (youKilled) {
                 int cls = 0; // ObjectCategory::AirVehicle default when the victim type is unknown
-                if (auto kit = m_knownEntities.find(rec.subjectIdx); kit != m_knownEntities.end()) {
-                    if (const fl::EntityDef* vd = registry.byIndex(kit->second.typeIndex))
+                if (const auto* kit = m_entityCache.baseline(rec.subjectIdx); kit != nullptr) {
+                    if (const fl::EntityDef* vd = registry.byIndex(kit->typeIndex))
                         cls = static_cast<int>(vd->category);
                 }
                 if (cls >= 0 && cls < 8)
@@ -1063,17 +1032,17 @@ void ClientNetEventHandler::applyArticulationTlv(const uint8_t* payload, std::si
         const auto count = static_cast<std::size_t>(std::popcount(static_cast<unsigned>(mask)));
         if (off + count > len)
             return; // truncated
-        auto cached = m_entityCache.find(idx);
+        fl::QuantEntityCache::Cached* cached = m_entityCache.find(idx);
         std::size_t v = 0;
         for (std::size_t c = 0; c < fl::kArtChannelCount; ++c) {
             if ((mask & (1u << c)) == 0u)
                 continue;
             const uint8_t q = payload[off + v++];
-            if (cached != m_entityCache.end()) {
+            if (cached != nullptr) {
                 // Signed channels are offset binary around 128; unsigned are a plain 0..255 fraction.
-                cached->second.re.artChannels[c] = fl::artChannelIsSigned(static_cast<fl::ArtChannel>(c))
-                                                       ? fl::dequantSignedU8(q)
-                                                       : fl::dequantUnitU8(q);
+                cached->re.artChannels[c] = fl::artChannelIsSigned(static_cast<fl::ArtChannel>(c))
+                                                ? fl::dequantSignedU8(q)
+                                                : fl::dequantUnitU8(q);
             }
         }
         off += count;
