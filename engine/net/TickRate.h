@@ -48,6 +48,24 @@ class TickRate {
         return 1.0f / static_cast<float>(m_hz);
     }
 
+    // Seconds per tick in DOUBLE. The sim integrates and accumulates in double, and the float form
+    // above rounds: 1.0f/60 is not 1.0/60, so mixing the two makes a tick's worth of time depend on
+    // which accessor a caller happened to reach for.
+    [[nodiscard]] constexpr double dtSecondsDouble() const noexcept {
+        return 1.0 / static_cast<double>(m_hz);
+    }
+
+    // Milliseconds per tick as a float — a frame-budget readout, not a wall-clock measurement.
+    [[nodiscard]] constexpr float msPerTick() const noexcept {
+        return 1000.0f / static_cast<float>(m_hz);
+    }
+
+    // A tick index as elapsed seconds. The inverse of the sim's own clock, for the mission and
+    // replay readouts that report "how far into the run is this".
+    [[nodiscard]] constexpr double ticksToSeconds(uint64_t ticks) const noexcept {
+        return static_cast<double>(ticks) / static_cast<double>(m_hz);
+    }
+
     // Tick count as milliseconds. The "Ping: N ms" readout and the per-peer metrics both want this,
     // and both used to spell it `* 1000u / 60u` in place.
     [[nodiscard]] constexpr uint64_t ticksToMs(uint64_t ticks) const noexcept {

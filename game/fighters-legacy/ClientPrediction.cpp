@@ -23,8 +23,6 @@
 namespace fl {
 
 namespace {
-static constexpr float kPredTickDt = 1.f / 60.f;
-
 // Rotate a world-frame velocity vector into body frame (quaternion conjugate).
 // q: glm::quat with [x,y,z,w] internal layout.
 static glm::vec3 worldToBody(const glm::quat& q, glm::vec3 vWorld) {
@@ -106,7 +104,8 @@ static void stateToEntry(const FlightState& fs, const FlightModelData& model, En
 ClientPrediction::~ClientPrediction() = default;
 
 void ClientPrediction::init(PredictionSettings cfg, FlightModelResolver resolver, PayloadResolver payloadResolver,
-                            HeightQuery heightQuery, uint32_t playerIdx, uint32_t playerGen, float planetRadiusKm) {
+                            HeightQuery heightQuery, uint32_t playerIdx, uint32_t playerGen, float planetRadiusKm,
+                            TickRate serverTickRate) {
     reset();
     m_cfg = cfg;
     m_resolver = std::move(resolver);
@@ -115,6 +114,7 @@ void ClientPrediction::init(PredictionSettings cfg, FlightModelResolver resolver
     m_playerIdx = playerIdx;
     m_playerGen = playerGen;
     m_planetRadiusKm = planetRadiusKm;
+    m_serverTickRate = serverTickRate;
 }
 
 void ClientPrediction::invalidateModel() {
@@ -222,7 +222,7 @@ void ClientPrediction::stepIntegrator(const BufferedInput& bi, const Environment
     // the predicted rollout matches. Paved default when no surface query is wired.
     const fl::GroundFriction ground =
         m_surfaceQuery ? groundFrictionFor(m_surfaceQuery(groundPos)) : fl::GroundFriction{};
-    m_integrator->step(kPredTickDt, ctrl, m_payload, wind, groundElev, ground);
+    m_integrator->step(m_serverTickRate.dtSeconds(), ctrl, m_payload, wind, groundElev, ground);
 }
 
 void ClientPrediction::onInput(const MsgClientInput& msg, const EnvironmentState& env) {

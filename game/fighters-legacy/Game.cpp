@@ -221,7 +221,7 @@ static fl::ScoreboardData buildScoreboardData(const ClientNetEventHandler& h) {
     if (ms.phaseEndTick > 0) {
         const uint64_t now = h.currentTick();
         const uint64_t remTicks = ms.phaseEndTick > now ? ms.phaseEndTick - now : 0u;
-        sb.secondsRemaining = static_cast<std::int64_t>(remTicks / 60u); // 60 Hz sim tick
+        sb.secondsRemaining = static_cast<std::int64_t>(remTicks / fl::kServerTickRate.hz());
     }
     for (const auto& t : ms.teamScores) {
         fl::ScoreboardTeam team;
@@ -295,7 +295,7 @@ static void updatePerfOverlay(GameConsole& console, IRenderer& renderer, Perform
     }
 
     const uint32_t entityCount = bridge.hasSnapshot() ? static_cast<uint32_t>(bridge.current().entries.size()) : 0u;
-    overlay.update(renderer.getFrameStats(), entityCount, 1000.0f / 60.0f);
+    overlay.update(renderer.getFrameStats(), entityCount, fl::kServerTickRate.msPerTick());
 
     // Append live camera + entity readouts (so the underground/aim issues are visible in real time).
     if (overlay.mode() != OverlayMode::Off) {
@@ -696,7 +696,7 @@ void Game::driveRecorderCamera() {
     if (!rec.director || !d.services.renderBridge.hasSnapshot() || !d.session.clientHandler)
         return;
     const fl::RenderSnapshot& snap = d.services.renderBridge.current();
-    const double simTime = static_cast<double>(snap.tickIndex) / 60.0;
+    const double simTime = fl::kServerTickRate.ticksToSeconds(snap.tickIndex);
     auto* handler = d.session.clientHandler.get();
     // Resolve a mission object id -> its live world pose via the #914 roster + the render snapshot.
     auto poseOf = [&](std::string_view id, glm::dvec3& pos, glm::dquat& orient) -> bool {
@@ -744,7 +744,7 @@ void Game::recorderEmit(bool& running) {
 
     // Stop conditions: the shot list ran out, the mission objective ended (--exit-on-mission-end), or the
     // wall-clock safety cap tripped.
-    const double simTime = static_cast<double>(latestTick) / 60.0;
+    const double simTime = fl::kServerTickRate.ticksToSeconds(latestTick);
     const bool tracksDone =
         rec.director && rec.director->totalDurationSec() > 0.0 && simTime >= rec.director->totalDurationSec();
     const bool missionEnded = rec.exitOnMissionEnd && d.session.clientHandler &&
@@ -2561,11 +2561,11 @@ void Game::run() {
                             }
                             return floorElev;
                         };
-                        d.services.prediction.init(d.services.userConfig->prediction(), std::move(flightModelResolver),
-                                                   std::move(payloadResolver), std::move(heightQuery),
-                                                   d.session.clientHandler->assignedEntityIdx,
-                                                   d.session.clientHandler->assignedEntityGen,
-                                                   d.session.clientHandler->planetRadiusKm());
+                        d.services.prediction.init(
+                            d.services.userConfig->prediction(), std::move(flightModelResolver),
+                            std::move(payloadResolver), std::move(heightQuery),
+                            d.session.clientHandler->assignedEntityIdx, d.session.clientHandler->assignedEntityGen,
+                            d.session.clientHandler->planetRadiusKm(), d.session.clientHandler->serverTickRate());
                         // Per-surface rolling resistance in prediction (#487): the same
                         // TerrainStreamer surfaceTypeAt (with the runway override) the server reads,
                         // so a rollout on grass vs concrete predicts in parity.

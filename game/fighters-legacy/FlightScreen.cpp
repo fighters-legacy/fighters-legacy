@@ -716,7 +716,9 @@ std::span<const HudElement> FlightScreen::buildElements() {
     // at 60 Hz using its extrapolated position, and disappears when off-screen or the designation clears
     // (the combat HUD #641 enriches this with IFF colour + closure). Minimal cue here.
     if (m_designatedTarget && m_playerEntry) {
-        const glm::dvec3 tpos = m_designatedTarget->position + glm::dvec3(m_designatedTarget->velocity * (1.f / 60.f));
+        // One SERVER tick ahead, not one frame (#1253) -- this leads the target for the HUD.
+        const glm::dvec3 tpos =
+            m_designatedTarget->position + glm::dvec3(m_designatedTarget->velocity * fl::kServerTickRate.dtSeconds());
         if (auto p = fl::worldToHud(m_frameCam, tpos);
             p && p->x > 0.02f && p->x < 0.98f && p->y > 0.02f && p->y < 0.98f && m_elementCount + 5 <= kMaxElements) {
             // IFF colour (#641): friend green, foe red, unknown amber — via the #688 client helper.

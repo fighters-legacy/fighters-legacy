@@ -7,6 +7,7 @@
 #include "net/GameProtocol.h"           // MsgClientInput
 #include "net/JitterBuffer.h"           // BufferedInput
 #include "render/RenderSnapshot.h"
+#include <net/TickRate.h> // the one tick-rate authority (#1075)
 
 #include <functional>
 #include <memory>
@@ -59,8 +60,12 @@ class ClientPrediction {
     // Must be called before the first reconcile(). Resolver is invoked lazily on
     // first snapshot that contains the player's entry.
     // planetRadiusKm: from MsgConnectAck; used to match the server's gravity field.
+    // serverTickRate: from MsgConnectAck, like planetRadiusKm (#1075). Prediction must step at the
+    // rate the SERVER steps at, or every replayed input drifts a little further from the authority
+    // it is being reconciled against.
     void init(PredictionSettings cfg, FlightModelResolver resolver, PayloadResolver payloadResolver,
-              HeightQuery heightQuery, uint32_t playerIdx, uint32_t playerGen, float planetRadiusKm = 6371.f);
+              HeightQuery heightQuery, uint32_t playerIdx, uint32_t playerGen, float planetRadiusKm = 6371.f,
+              TickRate serverTickRate = kServerTickRate);
 
     // Called before each MsgClientInput is sent. Pushes input into the history
     // ring and steps the local integrator one tick (if initialized).
@@ -137,7 +142,8 @@ class ClientPrediction {
     FlightModelResolver m_resolver;
     PayloadResolver m_payloadResolver;
     HeightQuery m_heightQuery;
-    SurfaceQuery m_surfaceQuery; // #487 per-surface rolling resistance (paved default when unset)
+    SurfaceQuery m_surfaceQuery;
+    TickRate m_serverTickRate{kServerTickRate}; // #487 per-surface rolling resistance (paved default when unset)
     uint32_t m_playerIdx{0};
     uint32_t m_playerGen{0};
     float m_planetRadiusKm{6371.f};
