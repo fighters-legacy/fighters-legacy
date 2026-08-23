@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "SettingsScreen.h"
+#include "MenuNav.h"
 
 #include "IDisplay.h"
 #include "IInput.h"
@@ -182,27 +183,10 @@ Screen SettingsScreen::update(IInput& input, IWindow& window) {
     const float step = 0.05f;
     const float scrollStep = 0.01f;
 
-    // Row navigation
-    if (input.isKeyJustPressed(Key::ArrowUp) || input.isKeyJustPressed(Key::W) ||
-        input.isGamepadButtonJustPressed(0, GamepadButton::DpadUp))
-        m_focusedRow = (m_focusedRow - 1 + kRowCount) % kRowCount;
-
-    if (input.isKeyJustPressed(Key::ArrowDown) || input.isKeyJustPressed(Key::S) ||
-        input.isGamepadButtonJustPressed(0, GamepadButton::DpadDown))
-        m_focusedRow = (m_focusedRow + 1) % kRowCount;
-
-    // Mouse hover
-    int mx = 0, my = 0;
-    input.getMousePosition(mx, my);
-    const float fh = static_cast<float>(window.logicalHeight());
-    if (fh > 0.f) {
-        const float ny = static_cast<float>(my) / fh;
-        for (int r = 0; r < kRowCount; ++r) {
-            const float ry = rowY(r);
-            if (ny >= ry && ny < ry + kRowHitH)
-                m_focusedRow = r;
-        }
-    }
+    menuNavigateWrap(input, kRowCount, m_focusedRow);
+    // The callback form matters here: rowY() is this screen's own row-geometry authority and the
+    // renderer lays rows out with it too, so the hit test calls it rather than re-deriving.
+    menuHoverHitTest(input, window, kRowCount, 0, kRowCount, kRowHitH, [](int r) { return rowY(r); }, m_focusedRow);
 
     const bool left = input.isKeyJustPressed(Key::ArrowLeft) || input.isKeyJustPressed(Key::A) ||
                       input.isGamepadButtonJustPressed(0, GamepadButton::DpadLeft);

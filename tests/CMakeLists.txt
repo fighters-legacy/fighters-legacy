@@ -1611,6 +1611,12 @@ target_include_directories(test_settings_screen PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_settings_screen)
 
+# The one menu input contract behind the six screens (#1260).
+add_executable(test_menu_nav test_menu_nav.cpp)
+target_link_libraries(test_menu_nav PRIVATE Catch2::Catch2WithMain platform-hal game-client)
+target_include_directories(test_menu_nav PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_menu_nav)
+
 add_executable(test_pause_menu_screen test_pause_menu_screen.cpp)
 target_link_libraries(test_pause_menu_screen PRIVATE Catch2::Catch2WithMain platform-hal game-client)
 target_include_directories(test_pause_menu_screen PRIVATE

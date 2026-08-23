@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "PauseMenuScreen.h"
+#include "MenuNav.h"
 
 #include "IInput.h"
 #include "IWindow.h"
@@ -15,34 +16,15 @@ static constexpr std::pair<const char*, Screen> kItems[4] = {
 };
 
 Screen PauseMenuScreen::update(IInput& input, IWindow& window) {
-    if (input.isKeyJustPressed(Key::Escape) || input.isGamepadButtonJustPressed(0, GamepadButton::B))
+    if (menuBackPressed(input))
         return Screen::Flight; // Resume
 
-    if (input.isKeyJustPressed(Key::ArrowUp) || input.isKeyJustPressed(Key::W) ||
-        input.isGamepadButtonJustPressed(0, GamepadButton::DpadUp))
-        m_selectedIdx = (m_selectedIdx - 1 + kItemCount) % kItemCount;
+    menuNavigateWrap(input, kItemCount, m_selectedIdx);
+    menuHoverHitTest(
+        input, window, kItemCount, 0, kItemCount, 0.07f, [](int r) { return 0.35f + static_cast<float>(r) * 0.09f; },
+        m_selectedIdx);
 
-    if (input.isKeyJustPressed(Key::ArrowDown) || input.isKeyJustPressed(Key::S) ||
-        input.isGamepadButtonJustPressed(0, GamepadButton::DpadDown))
-        m_selectedIdx = (m_selectedIdx + 1) % kItemCount;
-
-    // Mouse hover
-    int mx = 0, my = 0;
-    input.getMousePosition(mx, my);
-    const float fh = static_cast<float>(window.logicalHeight());
-    if (fh > 0.f) {
-        const float ny = static_cast<float>(my) / fh;
-        for (int i = 0; i < kItemCount; ++i) {
-            float iy = 0.35f + static_cast<float>(i) * 0.09f;
-            if (ny >= iy && ny < iy + 0.07f)
-                m_selectedIdx = i;
-        }
-    }
-
-    const bool confirm = input.isKeyJustPressed(Key::Enter) || input.isKeyJustPressed(Key::Space) ||
-                         input.isMouseButtonJustPressed(MouseButton::Left) ||
-                         input.isGamepadButtonJustPressed(0, GamepadButton::A);
-    if (confirm)
+    if (menuConfirmPressed(input))
         return kItems[static_cast<std::size_t>(m_selectedIdx)].second;
 
     return Screen::Pause;

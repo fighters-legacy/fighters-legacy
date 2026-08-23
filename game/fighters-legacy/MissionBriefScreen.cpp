@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "MissionBriefScreen.h"
+#include "MenuNav.h"
 
 #include "IInput.h"
 #include "IWindow.h"
@@ -44,10 +45,9 @@ Screen MissionBriefScreen::update(IInput& input, IWindow& window) {
         }
     }
 
-    bool confirmed = input.isKeyJustPressed(Key::Enter) || input.isKeyJustPressed(Key::Space) ||
-                     input.isMouseButtonJustPressed(MouseButton::Left) ||
-                     input.isGamepadButtonJustPressed(0, GamepadButton::A);
-    if (confirmed)
+    // Only the predicates apply here: the two buttons are a horizontal x-band hit test, not a
+    // vertical row list, so the hover helper would be the wrong shape.
+    if (menuConfirmPressed(input))
         return (m_selectedIdx == 0) ? Screen::Loading : Screen::MissionSelect;
 
     return Screen::MissionBrief;

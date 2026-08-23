@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "MissionSelectScreen.h"
+#include "MenuNav.h"
 
 #include "IInput.h"
 #include "IWindow.h"
@@ -17,53 +18,12 @@ Screen MissionSelectScreen::update(IInput& input, IWindow& window) {
     if (n == 0)
         return Screen::MissionSelect;
 
-    if (input.isKeyJustPressed(Key::ArrowUp) || input.isKeyJustPressed(Key::W)) {
-        if (m_selectedIdx > 0) {
-            --m_selectedIdx;
-            if (m_selectedIdx < m_scrollOffset)
-                m_scrollOffset = m_selectedIdx;
-        }
-    }
-    if (input.isKeyJustPressed(Key::ArrowDown) || input.isKeyJustPressed(Key::S)) {
-        if (m_selectedIdx < n - 1) {
-            ++m_selectedIdx;
-            if (m_selectedIdx >= m_scrollOffset + kVisible)
-                m_scrollOffset = m_selectedIdx - kVisible + 1;
-        }
-    }
+    menuNavigateScrolled(input, n, kVisible, m_selectedIdx, m_scrollOffset);
+    menuHoverHitTest(
+        input, window, kVisible, m_scrollOffset, n, 0.055f,
+        [](int r) { return 0.25f + static_cast<float>(r) * 0.065f; }, m_selectedIdx);
 
-    // Gamepad
-    if (input.isGamepadButtonJustPressed(0, GamepadButton::DpadUp) && m_selectedIdx > 0) {
-        --m_selectedIdx;
-        if (m_selectedIdx < m_scrollOffset)
-            m_scrollOffset = m_selectedIdx;
-    }
-    if (input.isGamepadButtonJustPressed(0, GamepadButton::DpadDown) && m_selectedIdx < n - 1) {
-        ++m_selectedIdx;
-        if (m_selectedIdx >= m_scrollOffset + kVisible)
-            m_scrollOffset = m_selectedIdx - kVisible + 1;
-    }
-
-    // Mouse hover
-    int mx = 0, my = 0;
-    input.getMousePosition(mx, my);
-    const float fh = static_cast<float>(window.logicalHeight());
-    if (fh > 0.f) {
-        const float ny = static_cast<float>(my) / fh;
-        for (int i = 0; i < kVisible; ++i) {
-            int idx = m_scrollOffset + i;
-            if (idx >= n)
-                break;
-            float iy = 0.25f + static_cast<float>(i) * 0.065f;
-            if (ny >= iy && ny < iy + 0.055f)
-                m_selectedIdx = idx;
-        }
-    }
-
-    bool confirmed = input.isKeyJustPressed(Key::Enter) || input.isKeyJustPressed(Key::Space) ||
-                     input.isMouseButtonJustPressed(MouseButton::Left) ||
-                     input.isGamepadButtonJustPressed(0, GamepadButton::A);
-    if (confirmed && m_selectedIdx >= 0 && m_selectedIdx < n) {
+    if (menuConfirmPressed(input) && m_selectedIdx >= 0 && m_selectedIdx < n) {
         m_selected = m_missions[static_cast<std::size_t>(m_selectedIdx)];
         return Screen::MissionBrief;
     }
