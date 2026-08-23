@@ -8,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <cstdint>
+#include <numbers>
 #include <vector>
 
 using Catch::Approx;
@@ -485,4 +486,80 @@ TEST_CASE("SnapshotCodec: truncated record decode fails closed", "[snapshot_code
     fl::QuantEntity out;
     bool gp = false;
     CHECK_FALSE(fl::decodeStandaloneRecord(r, out, originTable, /*originCount=*/1u, gp));
+}
+
+// ---------------------------------------------------------------------------
+// The articulation / crew-turret wire pairs (#1249)
+//
+// These predate quantizeRange and are symmetric-scale codes, so their exact expressions ARE the
+// wire contract. What they lacked was being a pair: the encode side lived in engine/net and the
+// decode side in game/, a whole target away, kept in step by a comment on each side saying the
+// other existed -- and the encode side had no test at all. These pin the round trip as a unit.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("quantAngleI16: the wire bytes for the boundary values are pinned", "[quant][articulation]") {
+    const float pi = std::numbers::pi_v<float>;
+
+    // Full scale at the ends of the range, and exactly zero in the middle.
+    CHECK(fl::quantAngleI16(pi, pi) == 32767);
+    CHECK(fl::quantAngleI16(-pi, pi) == -32767);
+    CHECK(fl::quantAngleI16(0.f, pi) == 0);
+
+    // Elevation uses half the range, so the same angle codes to twice the value.
+    CHECK(fl::quantAngleI16(pi * 0.5f, pi * 0.5f) == 32767);
+    CHECK(fl::quantAngleI16(pi * 0.25f, pi * 0.5f) == fl::quantAngleI16(pi * 0.5f, pi));
+
+    // Out of range saturates rather than wrapping -- a turret past its stop must not read as
+    // pointing the other way.
+    CHECK(fl::quantAngleI16(4.f * pi, pi) == 32767);
+    CHECK(fl::quantAngleI16(-4.f * pi, pi) == -32767);
+}
+
+TEST_CASE("quantAngleI16 round-trips within half a step", "[quant][articulation]") {
+    const float pi = std::numbers::pi_v<float>;
+    const float step = pi / 32767.f;
+
+    for (const float a : {-pi, -2.f, -0.001f, 0.f, 0.001f, 1.f, 2.f, pi}) {
+        const float back = fl::dequantAngleI16(fl::quantAngleI16(a, pi), pi);
+        CHECK(std::abs(back - a) <= step * 0.5f + 1e-6f);
+    }
+
+    CHECK(fl::dequantAngleI16(0, pi) == 0.f);
+    CHECK(fl::dequantAngleI16(32767, pi) == pi);
+}
+
+TEST_CASE("quantSignedU8 is offset binary around 128", "[quant][articulation]") {
+    // 128 is the neutral code, which is what lets the encoder omit a channel at neutral and the
+    // decoder read an absent channel as zero.
+    CHECK(fl::quantSignedU8(0.f) == 128);
+    CHECK(fl::quantSignedU8(1.f) == 255);
+    CHECK(fl::quantSignedU8(-1.f) == 1);
+
+    CHECK(fl::dequantSignedU8(128) == 0.f);
+    CHECK(fl::dequantSignedU8(255) == 1.f);
+    CHECK(fl::dequantSignedU8(1) == -1.f);
+
+    // Out of range saturates: a control surface past its limit must not flip sign on the wire.
+    CHECK(fl::quantSignedU8(5.f) == 255);
+    CHECK(fl::quantSignedU8(-5.f) == 1);
+
+    for (const float v : {-1.f, -0.5f, 0.f, 0.25f, 1.f})
+        CHECK(std::abs(fl::dequantSignedU8(fl::quantSignedU8(v)) - v) <= 0.5f / 127.f + 1e-6f);
+}
+
+TEST_CASE("quantUnitU8 is a plain 0..255 fraction", "[quant][articulation]") {
+    CHECK(fl::quantUnitU8(0.f) == 0);
+    CHECK(fl::quantUnitU8(1.f) == 255);
+    CHECK(fl::quantUnitU8(0.5f) == 128); // 127.5 rounds away from zero
+
+    CHECK(fl::dequantUnitU8(0) == 0.f);
+    CHECK(fl::dequantUnitU8(255) == 1.f);
+
+    // A negative value on an unsigned channel clamps to zero rather than wrapping to 255 -- the
+    // difference between a retracted gear and a fully extended one.
+    CHECK(fl::quantUnitU8(-1.f) == 0);
+    CHECK(fl::quantUnitU8(2.f) == 255);
+
+    for (const float v : {0.f, 0.1f, 0.5f, 0.9f, 1.f})
+        CHECK(std::abs(fl::dequantUnitU8(fl::quantUnitU8(v)) - v) <= 0.5f / 255.f + 1e-6f);
 }

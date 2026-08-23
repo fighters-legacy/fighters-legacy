@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "net/SnapshotPipeline.h"
+#include "math/Angles.h"
 #include "math/Fnv.h"
 
 #include "ILogger.h"
@@ -123,9 +124,7 @@ void SnapshotPipeline::run(uint64_t tickIndex, uint32_t govSnapInterval, float g
             // decoder has always read both (ClientNetEventHandler), and testing `> 0.f` here instead
             // of "off neutral" would silently drop every negative value the moment a signed channel
             // acquires a writer.
-            out.values[n++] = artChannelIsSigned(channel)
-                                  ? static_cast<uint8_t>(std::lround(std::clamp(v, -1.f, 1.f) * 127.f) + 128)
-                                  : static_cast<uint8_t>(std::lround(std::clamp(v, 0.f, 1.f) * 255.f));
+            out.values[n++] = artChannelIsSigned(channel) ? quantSignedU8(v) : quantUnitU8(v);
         }
         out.count = n;
         if (out.mask != 0) {
@@ -334,10 +333,6 @@ void SnapshotPipeline::run(uint64_t tickIndex, uint32_t govSnapInterval, float g
     struct CrewSnap {
         std::vector<std::pair<int16_t, int16_t>> turrets; // (azQ, elQ) per turret, mount frame
     };
-    auto quantAngle = [](float a, float range) -> int16_t {
-        const float clamped = std::clamp(a, -range, range);
-        return static_cast<int16_t>(std::lround(clamped / range * 32767.f));
-    };
     std::unordered_map<uint32_t, CrewSnap> crewSnap;
     for (const auto& [cidx, ce] : m_wb.m_controlledEntities) {
         if (!ce.crew.crewed() || ce.crew.turrets.empty())
@@ -347,8 +342,8 @@ void SnapshotPipeline::run(uint64_t tickIndex, uint32_t govSnapInterval, float g
         CrewSnap cs;
         cs.turrets.reserve(ce.crew.turrets.size());
         for (const CrewTurret& tr : ce.crew.turrets)
-            cs.turrets.emplace_back(quantAngle(tr.state.azRad, std::numbers::pi_v<float>),
-                                    quantAngle(tr.state.elRad, std::numbers::pi_v<float> * 0.5f));
+            cs.turrets.emplace_back(quantAngleI16(tr.state.azRad, kPi<float>),
+                                    quantAngleI16(tr.state.elRad, kPi<float> * 0.5f));
         crewSnap.emplace(cidx, std::move(cs));
     }
 

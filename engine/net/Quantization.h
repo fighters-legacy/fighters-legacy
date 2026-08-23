@@ -9,6 +9,7 @@
 // unsigned values (no implementation-defined signed shift). NaN/Inf inputs are clamped to range
 // before any float->int cast (out-of-range float->int is UB).
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 
@@ -57,6 +58,45 @@ inline uint32_t quantizeRange(double value, double range, int bits) noexcept {
 inline double dequantizeRange(uint32_t u, double range, int bits) noexcept {
     const double step = range / static_cast<double>(int64_t{1} << (bits - 1));
     return dequantizeSigned(fromOffsetBinary(u, bits), step);
+}
+
+// ── the articulation and crew-turret wire pairs (#1249) ──────────────────────
+//
+// These do NOT go through quantizeRange: they are symmetric-scale codes that predate it and are on
+// the wire, so their exact expressions are the contract. What they were missing is being a PAIR.
+// The encode side lived in engine/net/SnapshotPipeline.cpp and the decode side in
+// game/fighters-legacy/ClientNetEventHandler.cpp, a whole target away, kept in step by a comment
+// on each side saying the other one existed. A third spelling of the same scale factors sat in the
+// decode test's hand-built wire bytes.
+//
+// Naming them together is the point: an edit to one now has the other in the same screen, and the
+// round-trip is testable as a unit instead of only through a live client.
+
+// Angle in [-range, +range] to int16, full-scale at 32767.
+[[nodiscard]] inline int16_t quantAngleI16(float a, float range) noexcept {
+    const float clamped = std::clamp(a, -range, range);
+    return static_cast<int16_t>(std::lround(clamped / range * 32767.f));
+}
+[[nodiscard]] inline float dequantAngleI16(int16_t q, float range) noexcept {
+    return static_cast<float>(q) / 32767.f * range;
+}
+
+// Signed articulation channel in [-1, 1] as offset binary around 128.
+[[nodiscard]] inline uint8_t quantSignedU8(float v) noexcept {
+    const float clamped = std::clamp(v, -1.f, 1.f);
+    return static_cast<uint8_t>(std::lround(clamped * 127.f) + 128);
+}
+[[nodiscard]] inline float dequantSignedU8(uint8_t q) noexcept {
+    return static_cast<float>(static_cast<int>(q) - 128) / 127.f;
+}
+
+// Unsigned articulation channel in [0, 1] as a plain 0..255 fraction.
+[[nodiscard]] inline uint8_t quantUnitU8(float v) noexcept {
+    const float clamped = std::clamp(v, 0.f, 1.f);
+    return static_cast<uint8_t>(std::lround(clamped * 255.f));
+}
+[[nodiscard]] inline float dequantUnitU8(uint8_t q) noexcept {
+    return static_cast<float>(q) / 255.f;
 }
 
 // ---- Smallest-three quaternion encoding ----
