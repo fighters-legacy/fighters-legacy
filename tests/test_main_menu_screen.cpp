@@ -7,6 +7,9 @@
 
 using namespace fl;
 
+// These suites drive the screen a fixed step at a time; nothing here is rate-dependent (#1241).
+constexpr float kTestFrameDtS = 1.f / 60.f;
+
 TEST_CASE("MainMenuScreen: no packs - no Select Mission item") {
     MainMenuScreen s(/*hasPacks=*/false);
     CHECK(s.itemCount() == 5); // Instant Action, Free Flight, Replays, Settings, Exit to Desktop
@@ -86,7 +89,7 @@ TEST_CASE("MainMenuScreen: keyboard input moves selection") {
     MockWindow win;
 
     inp.justPressed.insert(Key::ArrowDown);
-    Screen next = s.update(inp, win);
+    Screen next = s.update(inp, win, kTestFrameDtS);
     CHECK(next == Screen::MainMenu);
     CHECK(s.selectedIdx() == 1);
 }
@@ -96,7 +99,7 @@ TEST_CASE("MainMenuScreen: Enter confirms selection") {
     MockInput inp;
     MockWindow win;
     inp.justPressed.insert(Key::Enter);
-    Screen next = s.update(inp, win);
+    Screen next = s.update(inp, win, kTestFrameDtS);
     CHECK(next == Screen::Loading); // first item = Instant Action
 }
 
@@ -104,7 +107,7 @@ TEST_CASE("MainMenuScreen: buildElements not empty") {
     MainMenuScreen s(false);
     MockInput inp;
     MockWindow win;
-    s.update(inp, win);
+    s.update(inp, win, kTestFrameDtS);
     auto elems = s.buildElements();
     CHECK(!elems.empty());
 }
@@ -113,7 +116,7 @@ TEST_CASE("MainMenuScreen: multiplayer mode labels first item Join Server") {
     MainMenuScreen s(/*hasPacks=*/false, /*isMultiplayer=*/true);
     MockInput inp;
     MockWindow win;
-    s.update(inp, win);
+    s.update(inp, win, kTestFrameDtS);
     // First item still navigates to Screen::Loading.
     CHECK(s.selectedIdx() == 0);
     // "Join Server" now opens the direct-connect form (#322), not straight to Loading.
@@ -139,7 +142,7 @@ TEST_CASE("MainMenuScreen: title and items are center-aligned at x=0.5") {
     MainMenuScreen s(/*hasPacks=*/true);
     MockInput inp;
     MockWindow win;
-    s.update(inp, win);
+    s.update(inp, win, kTestFrameDtS);
     auto elems = s.buildElements();
     int textCount = 0;
     for (const auto& el : elems) {

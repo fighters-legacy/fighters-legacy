@@ -16,7 +16,7 @@ static constexpr std::pair<const char*, Screen> kItems[4] = {
     {"Exit to Desktop", Screen::Quit},
 };
 
-Screen PauseMenuScreen::update(IInput& input, IWindow& window) {
+Screen PauseMenuScreen::update(IInput& input, IWindow& window, float /*frameDtS*/) {
     if (menuBackPressed(input))
         return Screen::Flight; // Resume
 

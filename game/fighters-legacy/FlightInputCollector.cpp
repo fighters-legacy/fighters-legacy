@@ -18,17 +18,33 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
                                                              bool textEntry) {
     m_weaponFired = false;
 
+    // The client input SEND CADENCE — deliberately fixed, and the one 1/60 in this file that is not
+    // a frame-rate assumption (#1241). It is a rate against a real clock: the server steps at 60 Hz,
+    // so sending faster wastes bandwidth on inputs one tick will coalesce, and sending slower drops
+    // resolution the server could have used. It is capped, not assumed: below 60 fps the poll simply
+    // happens less often, and `elapsed` below reports the truth either way.
     const auto now = m_clock->now();
-    if (std::chrono::duration<float>(now - m_lastInputTime).count() < 1.0f / 60.0f)
+    // The FIRST poll of a session has no previous timestamp to subtract, so it bills nothing: no
+    // time has passed that a rate could act over. Without this it would subtract the clock's epoch
+    // and bill the whole clamp — pressing throttle-up on the opening frame would jump it 25%.
+    const float elapsed = m_haveLastInput ? std::chrono::duration<float>(now - m_lastInputTime).count() : 0.f;
+    if (m_haveLastInput && elapsed < kInputSendPeriodS)
         return std::nullopt;
     m_lastInputTime = now;
+    m_haveLastInput = true;
 
     fl::MsgClientInput inp;
     inp.seqNum = m_inputSeq++;
     // tickIndex + ackMask (the snapshot ack) are stamped by ClientNetEventHandler::stampAck() at the
     // send site (#566) — the net handler is the single ack authority. Left default (0) here.
 
-    constexpr float kThrottleStep = 1.0f / 60.0f;
+    // Throttle ramp rate, PER SECOND, multiplied by the time actually elapsed. It used to be a flat
+    // 1/60 per accepted poll (#1241), which is a full-travel ramp in one second only while polls
+    // land at 60 Hz. Below that they land at the frame rate, so on a 30 fps machine the throttle
+    // ramped at HALF speed — a control that responded differently depending on the GPU. The first
+    // poll of a session has no previous timestamp, so its elapsed is clamped to one period.
+    constexpr float kThrottleRatePerS = 1.0f;
+    const float throttleStep = kThrottleRatePerS * std::min(elapsed, kMaxInputElapsedS);
     if (!console.isOpen()) {
         // EVERY control below resolves through the binding table (#1050). There is no raw
         // `isKeyDown(Key::…)` left in this file: a control the table does not own is a control the
@@ -52,9 +68,9 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
 
         // ── Flight axes ──────────────────────────────────────────────────────
         if (down(fl::InputAction::ThrottleUp))
-            camInput.adjustThrottle(kThrottleStep);
+            camInput.adjustThrottle(throttleStep);
         if (down(fl::InputAction::ThrottleDown))
-            camInput.adjustThrottle(-kThrottleStep);
+            camInput.adjustThrottle(-throttleStep);
         inp.throttle = down(fl::InputAction::ThrottleMax) ? 1.f : camInput.throttle();
         inp.elevator = (down(fl::InputAction::PitchUp) ? 1.f : 0.f) + (down(fl::InputAction::PitchDown) ? -1.f : 0.f);
         inp.aileron = (down(fl::InputAction::RollRight) ? 1.f : 0.f) + (down(fl::InputAction::RollLeft) ? -1.f : 0.f);

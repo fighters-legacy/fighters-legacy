@@ -16,6 +16,9 @@
 
 using namespace fl;
 
+// These suites drive the screen a fixed step at a time; nothing here is rate-dependent (#1241).
+constexpr float kTestFrameDtS = 1.f / 60.f;
+
 namespace {
 struct Harness {
     NullGui gui;
@@ -41,7 +44,7 @@ TEST_CASE("JoinServerScreen prefills host + callsign and emits the form") {
     CHECK(std::string(screen.address()) == "192.168.1.10:4780");
     CHECK(std::string(screen.callsign()) == "Maverick");
 
-    const Screen next = screen.update(h.input, h.window);
+    const Screen next = screen.update(h.input, h.window, kTestFrameDtS);
     CHECK(next == Screen::JoinServer); // no action yet → stays on the form
     // The form window + its three fields' labels + both buttons were emitted.
     REQUIRE(h.gui.windows.size() == 1);
@@ -60,7 +63,7 @@ TEST_CASE("JoinServerScreen Connect button parses the address and hands back the
     h.gui.inputTextValues["##callsign"] = "Iceman";
     h.gui.buttonClicks["Connect"] = true;
 
-    const Screen next = screen.update(h.input, h.window);
+    const Screen next = screen.update(h.input, h.window, kTestFrameDtS);
 
     CHECK(next == Screen::Loading);
     REQUIRE(h.connected.has_value());
@@ -76,7 +79,7 @@ TEST_CASE("JoinServerScreen host without a port keeps the default port") {
     h.gui.inputTextValues["##address"] = "myserver.example";
     h.gui.buttonClicks["Connect"] = true;
 
-    const Screen next = screen.update(h.input, h.window);
+    const Screen next = screen.update(h.input, h.window, kTestFrameDtS);
     CHECK(next == Screen::Loading);
     REQUIRE(h.connected.has_value());
     CHECK(h.connected->host == "myserver.example");
@@ -89,7 +92,7 @@ TEST_CASE("JoinServerScreen Enter key confirms; empty address stays on the form"
     auto screen = h.make();
     // No address entered; Enter pressed.
     h.input.justPressed.insert(Key::Enter);
-    const Screen next = screen.update(h.input, h.window);
+    const Screen next = screen.update(h.input, h.window, kTestFrameDtS);
     CHECK(next == Screen::JoinServer); // empty host → not a valid connection, stay
     CHECK_FALSE(h.connected.has_value());
 }
@@ -98,7 +101,7 @@ TEST_CASE("JoinServerScreen Enter key confirms a valid prefilled address") {
     Harness h;
     auto screen = h.make("10.0.0.5", "");
     h.input.justPressed.insert(Key::Enter);
-    const Screen next = screen.update(h.input, h.window);
+    const Screen next = screen.update(h.input, h.window, kTestFrameDtS);
     CHECK(next == Screen::Loading);
     REQUIRE(h.connected.has_value());
     CHECK(h.connected->host == "10.0.0.5");
@@ -109,14 +112,14 @@ TEST_CASE("JoinServerScreen Cancel button and Escape return to the main menu") {
         Harness h;
         auto screen = h.make("1.2.3.4", "");
         h.gui.buttonClicks["Cancel"] = true;
-        CHECK(screen.update(h.input, h.window) == Screen::MainMenu);
+        CHECK(screen.update(h.input, h.window, kTestFrameDtS) == Screen::MainMenu);
         CHECK_FALSE(h.connected.has_value());
     }
     {
         Harness h;
         auto screen = h.make("1.2.3.4", "");
         h.input.justPressed.insert(Key::Escape);
-        CHECK(screen.update(h.input, h.window) == Screen::MainMenu);
+        CHECK(screen.update(h.input, h.window, kTestFrameDtS) == Screen::MainMenu);
         CHECK_FALSE(h.connected.has_value());
     }
 }
@@ -127,5 +130,5 @@ TEST_CASE("JoinServerScreen with no GUI backend still cancels via Escape (never 
     d.gui = nullptr; // ImGui backend unavailable
     JoinServerScreen screen(std::move(d));
     h.input.justPressed.insert(Key::Escape);
-    CHECK(screen.update(h.input, h.window) == Screen::MainMenu);
+    CHECK(screen.update(h.input, h.window, kTestFrameDtS) == Screen::MainMenu);
 }

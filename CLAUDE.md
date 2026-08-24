@@ -147,6 +147,11 @@ to work around. Policy write-up: architecture.md → "Module Boundary Policy".
   null contact table keeps ground-truth behaviour; an *empty* one means the sensors ran and saw
   nothing.
 - **`fl-server` runs with a null renderer.** Anything you add to the render path must tolerate it.
+- **A frame-driven client system takes `frameDtS`, never a literal `1/60`** (#1241). `Game`'s loop
+  computes it once via `FrameClock.h` (clamped, because `frameDtMs` is uncapped wall clock) and
+  passes it down through `IScreen::update`. A `1/60` on the client is either a sim-side tick
+  conversion — use `kServerTickRate` — or a deliberate fixed CADENCE against a real clock, like the
+  input send period, which says so where it is written.
 - **Lua is always built from source as C++** (`cmake/dependencies.cmake`). Compiled as C it raises
   errors by `longjmp`, which cannot cross a C++ frame safely. Consequence: a TU including `<lua.h>`
   must **not** wrap it in `extern "C"` and must not use `lua.hpp`. There is deliberately no

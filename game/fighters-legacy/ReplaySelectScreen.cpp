@@ -92,7 +92,7 @@ std::vector<ReplaySelectScreen::Entry> ReplaySelectScreen::scan(const std::files
 
 ReplaySelectScreen::ReplaySelectScreen(std::vector<Entry> entries) : m_entries(std::move(entries)) {}
 
-Screen ReplaySelectScreen::update(IInput& input, IWindow& window) {
+Screen ReplaySelectScreen::update(IInput& input, IWindow& window, float /*frameDtS*/) {
     const int n = static_cast<int>(m_entries.size());
 
     if (input.isKeyJustPressed(Key::Escape))

@@ -9,7 +9,7 @@
 
 namespace fl {
 
-Screen JoinServerScreen::update(IInput& input, IWindow& /*window*/) {
+Screen JoinServerScreen::update(IInput& input, IWindow& /*window*/, float /*frameDtS*/) {
     bool doConnect = false;
     bool doCancel = false;
 

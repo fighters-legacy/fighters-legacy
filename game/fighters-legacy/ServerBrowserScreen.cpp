@@ -34,7 +34,7 @@ std::string rowLabel(const BrowserRow& r) {
 }
 } // namespace
 
-Screen ServerBrowserScreen::update(IInput& input, IWindow& /*window*/) {
+Screen ServerBrowserScreen::update(IInput& input, IWindow& /*window*/, float /*frameDtS*/) {
     Screen next = Screen::ServerBrowser;
     bool goDirect = false;
 

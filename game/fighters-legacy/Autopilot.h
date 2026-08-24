@@ -46,8 +46,14 @@ class Autopilot {
     // disengages AltHold + HdgHold; a throttle touch disengages SpdHold only; rudder never disengages.
     void notePlayerInput(float elevator, float aileron, float rudder, bool throttleTouched) noexcept;
 
-    // Compute the control override for this tick. dt is the sim step (1/60 s).
-    [[nodiscard]] AutopilotCommand compute(const FlightState& s, float dt, double planetRadiusM) const;
+    // Compute the control override for this frame.
+    //
+    // There is no dt. These are pure P-controllers over the current state -- no integral term, no
+    // rate limit, nothing that accumulates -- so there is nothing for a timestep to scale. It USED
+    // to take one, ignored in the body as `float /*dt*/`, and the caller fed it a literal 1/60
+    // (#1241). A parameter every caller must invent a value for, and that the callee discards, is
+    // worse than none: the next person to add an integral term would have integrated a fiction.
+    [[nodiscard]] AutopilotCommand compute(const FlightState& s, double planetRadiusM) const;
 
     [[nodiscard]] uint8_t modes() const noexcept {
         return m_modes;

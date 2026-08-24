@@ -53,13 +53,16 @@ enum class Screen {
 }
 
 // Interface for a single game/menu screen.
-// update() is called once per frame to process input and return the next screen.
+// update() is called once per frame to process input and return the next screen. frameDtS is the
+// duration of the frame just ended, in seconds, already clamped (FrameClock.h) — a per-frame update
+// that does not know how long the frame took is how ten client systems ended up integrating a
+// literal 1/60 (#1241). Most screens have no rate-dependent state and ignore it.
 // buildElements() returns overlay HudElements to submit this frame.
 // Returned spans remain valid until the next call to buildElements().
 class IScreen {
   public:
     virtual ~IScreen() = default;
-    virtual Screen update(IInput& input, IWindow& window) = 0;
+    virtual Screen update(IInput& input, IWindow& window, float frameDtS) = 0;
     virtual std::span<const HudElement> buildElements() = 0;
 };
 

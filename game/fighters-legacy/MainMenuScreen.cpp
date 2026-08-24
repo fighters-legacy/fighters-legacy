@@ -31,7 +31,7 @@ MainMenuScreen::MainMenuScreen(bool hasPacks, bool isMultiplayer) {
     m_items.push_back({"Exit to Desktop", Screen::Quit, ""});
 }
 
-Screen MainMenuScreen::update(IInput& input, IWindow& window) {
+Screen MainMenuScreen::update(IInput& input, IWindow& window, float /*frameDtS*/) {
     const int n = static_cast<int>(m_items.size());
 
     menuNavigateWrap(input, n, m_selectedIdx);

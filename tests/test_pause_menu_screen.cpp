@@ -7,6 +7,9 @@
 
 using namespace fl;
 
+// These suites drive the screen a fixed step at a time; nothing here is rate-dependent (#1241).
+constexpr float kTestFrameDtS = 1.f / 60.f;
+
 static MockWindow g_win;
 
 TEST_CASE("PauseMenuScreen: has exactly 4 items") {
@@ -18,7 +21,7 @@ TEST_CASE("PauseMenuScreen: Escape returns Flight (Resume)") {
     PauseMenuScreen s;
     MockInput inp;
     inp.justPressed.insert(Key::Escape);
-    CHECK(s.update(inp, g_win) == Screen::Flight);
+    CHECK(s.update(inp, g_win, kTestFrameDtS) == Screen::Flight);
 }
 
 TEST_CASE("PauseMenuScreen: Enter on first item (Resume) returns Flight") {
@@ -26,7 +29,7 @@ TEST_CASE("PauseMenuScreen: Enter on first item (Resume) returns Flight") {
     CHECK(s.selectedIdx() == 0);
     MockInput inp;
     inp.justPressed.insert(Key::Enter);
-    CHECK(s.update(inp, g_win) == Screen::Flight);
+    CHECK(s.update(inp, g_win, kTestFrameDtS) == Screen::Flight);
 }
 
 TEST_CASE("PauseMenuScreen: Enter on Settings returns Settings") {
@@ -35,12 +38,12 @@ TEST_CASE("PauseMenuScreen: Enter on Settings returns Settings") {
     {
         MockInput inp;
         inp.justPressed.insert(Key::ArrowDown);
-        s.update(inp, g_win);
+        s.update(inp, g_win, kTestFrameDtS);
     }
     CHECK(s.selectedIdx() == 1);
     MockInput inp;
     inp.justPressed.insert(Key::Enter);
-    CHECK(s.update(inp, g_win) == Screen::Settings);
+    CHECK(s.update(inp, g_win, kTestFrameDtS) == Screen::Settings);
 }
 
 TEST_CASE("PauseMenuScreen: Enter on Quit to Menu returns MainMenu") {
@@ -49,12 +52,12 @@ TEST_CASE("PauseMenuScreen: Enter on Quit to Menu returns MainMenu") {
     for (int i = 0; i < 2; ++i) {
         MockInput inp;
         inp.justPressed.insert(Key::ArrowDown);
-        s.update(inp, g_win);
+        s.update(inp, g_win, kTestFrameDtS);
     }
     CHECK(s.selectedIdx() == 2);
     MockInput inp;
     inp.justPressed.insert(Key::Enter);
-    CHECK(s.update(inp, g_win) == Screen::MainMenu);
+    CHECK(s.update(inp, g_win, kTestFrameDtS) == Screen::MainMenu);
 }
 
 TEST_CASE("PauseMenuScreen: Enter on Exit to Desktop returns Quit") {
@@ -63,12 +66,12 @@ TEST_CASE("PauseMenuScreen: Enter on Exit to Desktop returns Quit") {
     for (int i = 0; i < 3; ++i) {
         MockInput inp;
         inp.justPressed.insert(Key::ArrowDown);
-        s.update(inp, g_win);
+        s.update(inp, g_win, kTestFrameDtS);
     }
     CHECK(s.selectedIdx() == 3);
     MockInput inp;
     inp.justPressed.insert(Key::Enter);
-    CHECK(s.update(inp, g_win) == Screen::Quit);
+    CHECK(s.update(inp, g_win, kTestFrameDtS) == Screen::Quit);
 }
 
 TEST_CASE("PauseMenuScreen: ArrowUp from index 0 wraps to last item") {
@@ -76,7 +79,7 @@ TEST_CASE("PauseMenuScreen: ArrowUp from index 0 wraps to last item") {
     CHECK(s.selectedIdx() == 0);
     MockInput inp;
     inp.justPressed.insert(Key::ArrowUp);
-    s.update(inp, g_win);
+    s.update(inp, g_win, kTestFrameDtS);
     CHECK(s.selectedIdx() == s.itemCount() - 1);
 }
 
@@ -85,7 +88,7 @@ TEST_CASE("PauseMenuScreen: ArrowDown wraps from last to first") {
     for (int i = 0; i < s.itemCount(); ++i) {
         MockInput inp;
         inp.justPressed.insert(Key::ArrowDown);
-        s.update(inp, g_win);
+        s.update(inp, g_win, kTestFrameDtS);
     }
     CHECK(s.selectedIdx() == 0);
 }
@@ -93,20 +96,20 @@ TEST_CASE("PauseMenuScreen: ArrowDown wraps from last to first") {
 TEST_CASE("PauseMenuScreen: no input stays on Pause") {
     PauseMenuScreen s;
     MockInput inp;
-    CHECK(s.update(inp, g_win) == Screen::Pause);
+    CHECK(s.update(inp, g_win, kTestFrameDtS) == Screen::Pause);
 }
 
 TEST_CASE("PauseMenuScreen: buildElements not empty") {
     PauseMenuScreen s;
     MockInput inp;
-    s.update(inp, g_win);
+    s.update(inp, g_win, kTestFrameDtS);
     CHECK(!s.buildElements().empty());
 }
 
 TEST_CASE("PauseMenuScreen: title and items are center-aligned at x=0.5") {
     PauseMenuScreen s;
     MockInput inp;
-    s.update(inp, g_win);
+    s.update(inp, g_win, kTestFrameDtS);
     auto elems = s.buildElements();
     int textCount = 0;
     for (const auto& el : elems) {

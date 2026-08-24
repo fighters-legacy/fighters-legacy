@@ -17,6 +17,9 @@
 
 using namespace fl;
 
+// These suites drive the screen a fixed step at a time; nothing here is rate-dependent (#1241).
+constexpr float kTestFrameDtS = 1.f / 60.f;
+
 // MockInput subclass that tracks setMouseCapture calls.
 struct TrackingInput : public MockInput {
     int captureCount{0};
@@ -156,7 +159,7 @@ TEST_CASE("ScreenManager: Settings from Pause sets return target to Pause") {
     // The return target is Pause; verify via settings screen
     MockInput inp;
     inp.justPressed.insert(Key::Escape);
-    Screen ret = f.mgr.settings().update(inp, f.window);
+    Screen ret = f.mgr.settings().update(inp, f.window, kTestFrameDtS);
     CHECK(ret == Screen::Pause);
 }
 
@@ -179,7 +182,7 @@ TEST_CASE("ScreenManager: reinitLoading isSinglePlayer=false shows remote text")
         /*isSinglePlayer=*/false);
     f.mgr.transition(Screen::Loading);
     MockInput inp;
-    f.mgr.loading().update(inp, f.window);
+    f.mgr.loading().update(inp, f.window, kTestFrameDtS);
     auto elems = f.mgr.loading().buildElements();
     bool found = false;
     for (const auto& el : elems)

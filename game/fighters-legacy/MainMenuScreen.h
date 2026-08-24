@@ -18,7 +18,7 @@ class MainMenuScreen : public IScreen {
     // isMultiplayer replaces the single-player Instant Action / Free Flight entries with "Join Server".
     explicit MainMenuScreen(bool hasPacks, bool isMultiplayer = false);
 
-    Screen update(IInput& input, IWindow& window) override;
+    Screen update(IInput& input, IWindow& window, float frameDtS) override;
     std::span<const HudElement> buildElements() override;
 
     // The mission to launch for the last confirmed item (#40): "builtin:sandbox" for Instant Action,

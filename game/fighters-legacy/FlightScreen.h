@@ -100,7 +100,7 @@ class FlightScreen : public IScreen {
     explicit FlightScreen(FlightScreenDeps deps);
     ~FlightScreen() override;
 
-    Screen update(IInput& input, IWindow& window) override;
+    Screen update(IInput& input, IWindow& window, float frameDtS) override;
     std::span<const HudElement> buildElements() override;
 
   private:

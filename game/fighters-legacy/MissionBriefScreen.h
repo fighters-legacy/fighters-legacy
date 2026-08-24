@@ -17,7 +17,7 @@ class MissionBriefScreen : public IScreen {
 
     void setMission(std::string_view missionId, std::string_view missionName);
 
-    Screen update(IInput& input, IWindow& window) override;
+    Screen update(IInput& input, IWindow& window, float frameDtS) override;
     std::span<const HudElement> buildElements() override;
 
   private:

@@ -15,6 +15,7 @@
 #include "FileLogger.h"
 #include "FlightInputCollector.h"
 #include "FlightScreen.h"
+#include "FrameClock.h"
 #include "GmMapOverlay.h"
 #include "HapticController.h"
 #include "HeadlessHal.h"
@@ -2300,6 +2301,12 @@ void Game::run() {
     while (running && !d.services.p.window->shouldClose()) {
         d.services.p.window->pollEvents();
 
+        // How long the frame just ended took, clamped (#1241). Read ONCE here and passed down,
+        // rather than each consumer reaching for the renderer: the systems below have to agree on
+        // what "this frame" means, and a value sampled at four different points in the frame is
+        // four slightly different frames.
+        const float frameDtS = fl::frameDeltaSeconds(d.services.p.renderer.get());
+
         // Reconcile the joystick device table (#1061) — GUID -> live index, and this frame's hat
         // positions. It runs BEFORE any binding is read, because pollEvents() may just have removed a
         // device and SDL3Joystick renumbers every index above it.
@@ -2368,9 +2375,8 @@ void Game::run() {
         // where the network service stands for a live one. It publishes through publishExternal --
         // the same call ClientNetEventHandler makes -- so nothing downstream knows the difference.
         if (inSession && d.session.replayPlayer && d.session.replayPlayer->isOpen()) {
-            const float frameMs = d.services.p.renderer ? d.services.p.renderer->getFrameStats().frameDtMs : 16.7f;
             fl::RenderSnapshot snap;
-            if (d.session.replayPlayer->update(static_cast<double>(frameMs) / 1000.0, snap)) {
+            if (d.session.replayPlayer->update(static_cast<double>(frameDtS), snap)) {
                 // Park the camera at the action on the FIRST published world, not at startGame time:
                 // playback publishes its first tick from inside this loop, so at session start there
                 // is nothing to aim at yet and the camera would open looking at an empty origin.
@@ -2645,7 +2651,7 @@ void Game::run() {
                 }
                 return false;
             };
-            d.services.voiceChat.update(1.0f / 60.0f, held(fl::InputAction::PushToTalkPrimary),
+            d.services.voiceChat.update(frameDtS, held(fl::InputAction::PushToTalkPrimary),
                                         held(fl::InputAction::PushToTalkSecondary), uiFocused, cam.worldOrigin,
                                         speakerPos);
 
@@ -2680,12 +2686,12 @@ void Game::run() {
         // Audio update (always — so music plays on main menu too).
         {
             const AudioSettings& aud = d.services.userConfig->audio();
-            d.services.subtitleQueue.update(1.0f / 60.0f);
+            d.services.subtitleQueue.update(frameDtS);
             // #925: duck the music while any radio net is live. Ducking the MUSIC and not the flight
             // audio is deliberate — the engine note and the RWR are information the pilot is flying
             // on, and burying them under a radio call would trade one kind of deafness for another.
             const float duck = d.services.voiceChat.mixer().duckGain();
-            d.services.musicManager.update(1.0f / 60.0f, aud.masterVolume, aud.musicVolume * duck);
+            d.services.musicManager.update(frameDtS, aud.masterVolume, aud.musicVolume * duck);
 
             // Warning tones (#957): drive stall/overspeed cues from the OWN aircraft's predicted
             // FlightState (the snapshot carries neither stalled nor Mach). predictedState() is null
@@ -2724,7 +2730,7 @@ void Game::run() {
                              : worst == fl::kThreatLock ? fl::RwrThreat::Lock
                                                         : fl::RwrThreat::Search;
             }
-            d.services.warningTones.update(wt, aud, 1.0f / 60.0f);
+            d.services.warningTones.update(wt, aud, frameDtS);
         }
 
         // Server browser (#143): while it is the active screen, poll the LAN/query sockets, run a sweep
@@ -2757,7 +2763,7 @@ void Game::run() {
         // Screen update — runs BEFORE camera computation so FlightScreen::update() →
         // CameraInput::update() sets the camera target from the current snapshot with
         // velocity extrapolation applied, making it coincident with the rendered entity.
-        const Screen next = d.services.screenMgr->active().update(*d.services.p.input, *d.services.p.window);
+        const Screen next = d.services.screenMgr->active().update(*d.services.p.input, *d.services.p.window, frameDtS);
         if (next == Screen::Quit) {
             if (inSession)
                 stopGame();
@@ -2908,7 +2914,7 @@ void Game::run() {
             emitters.clear();
             const auto precip = d.services.precipController.build(d.services.env, cam, d.services.particleSystem);
             emitters.insert(emitters.end(), precip.begin(), precip.end());
-            const auto fx = d.services.effectRouter.buildEmitters(d.services.particleSystem, 1.f / 60.f);
+            const auto fx = d.services.effectRouter.buildEmitters(d.services.particleSystem, frameDtS);
             emitters.insert(emitters.end(), fx.begin(), fx.end());
             if (d.services.p.renderer)
                 d.services.p.renderer->setNightVision(d.services.nvgIntensity); // #210

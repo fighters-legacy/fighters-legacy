@@ -36,7 +36,7 @@ class ReplaySelectScreen : public IScreen {
 
     explicit ReplaySelectScreen(std::vector<Entry> entries);
 
-    Screen update(IInput& input, IWindow& window) override;
+    Screen update(IInput& input, IWindow& window, float frameDtS) override;
     std::span<const HudElement> buildElements() override;
 
     // The file confirmed by the last successful selection; empty until then.
