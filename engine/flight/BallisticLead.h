@@ -4,6 +4,9 @@
 #include <glm/geometric.hpp>
 #include <glm/vec3.hpp>
 
+#include <algorithm>
+#include <cmath>
+
 namespace fl {
 
 // Where to POINT an unguided gun so the round and the target arrive at the same place (#462).
@@ -64,6 +67,27 @@ struct BallisticLeadResult {
     r.timeOfFlightS = tof;
     r.valid = true;
     return r;
+}
+
+// The trigger-discipline rule the three gun fire controllers share (#1265).
+//
+// "Predicted miss" is the angular offset between where the gun actually POINTS and where the lead
+// solution says it should, projected to an arc at the target's range: a 1 deg error at 500 m is an
+// 8.7 m miss, at 2 km a 35 m one. Fire when that arc is inside the round's lethal radius.
+//
+// GunsEmploymentController, the AAA controllers in SurfaceThreatControllers and TurretGunnerController
+// each wrote this out, differing only in what supplies the bore -- the nose for the two that point
+// the whole aircraft, seat.turret.boreWorld for the one that slews a turret. That is a parameter,
+// not three rules, and three copies is three chances for one weapon class to become quietly more
+// trigger-happy than the others.
+//
+// Both directions must already be unit vectors; the dot is clamped because a rounding excursion past
+// +-1 makes acos return NaN, and a NaN miss compares false and silently holds fire forever.
+[[nodiscard]] inline bool withinLethalMiss(const glm::vec3& boreDir, const glm::vec3& aimDir, float rangeM,
+                                           float lethalRadiusM) noexcept {
+    const float cosOff = std::clamp(glm::dot(boreDir, aimDir), -1.f, 1.f);
+    const float missM = std::acos(cosOff) * rangeM; // small-angle arc at the target's range
+    return missM <= lethalRadiusM;
 }
 
 // Where an unpowered store released RIGHT NOW would land (#629).

@@ -57,13 +57,8 @@ fl::ControlInput EvadeController::sample(const fl::EntityState& state, uint64_t 
     const float curPitch = fl::pitchOf(
         state.transform.quat, glm::dvec3(state.transform.pos[0], state.transform.pos[1], state.transform.pos[2]),
         m_planetRadiusM);
-    float pitchRate = 0.f;
-    if (m_havePrevPitch && dt > 1e-6)
-        pitchRate = static_cast<float>((curPitch - m_prevPitchRad) / dt);
-    m_prevPitchRad = curPitch;
-    m_havePrevPitch = true;
     ctrl.elevator = elevatorForAltitudeHold(state.transform.quat, state.transform.pos, state.transform.vel, m_holdAltM,
-                                            m_planetRadiusM, pitchRate);
+                                            m_planetRadiusM, m_pitchRate.step(curPitch, dt));
 
     return ctrl;
 }

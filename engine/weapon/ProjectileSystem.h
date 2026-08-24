@@ -157,6 +157,21 @@ class ProjectileSystem {
     static constexpr float kGravityAccelMps2 = kG0<float>; // max_g → lateral-accel clamp
 
   private:
+    // Resolve a weapon's seeker HEAD to the sensor def it evaluates through (#1265). Two paths, and
+    // both are the launch gate's business as much as the pre-launch check's: an authored `sensor_id`
+    // goes through the shared resolver, and the deprecated legacy fov/acquisition lobe is
+    // synthesized into an equivalent def. Null = this store flies dumb.
+    [[nodiscard]] std::shared_ptr<const sensor::SensorDef> resolveSeekerHead(const SeekerDef& seeker) const;
+
+    // Would this head, sitting at `pos` with orientation `quat`, see `target` right now?
+    //
+    // The vantage is the CALLER's, deliberately: the launch gate tests from the missile's spawn pose
+    // (a rail-mounted seeker looks where the missile points), while the pre-launch wouldAcquire tests
+    // from the shooter's. Same acquisition test, two viewpoints -- which is exactly why it was
+    // written twice and had to stop being.
+    [[nodiscard]] bool headSeesTarget(const sensor::SensorDef& head, const double pos[3], const float quat[4],
+                                      const EntityState& target) const;
+
     const WeaponRegistry* m_weapons{nullptr};
     const IGravityField* m_gravity{nullptr};
     const EntityTypeRegistry* m_registry{nullptr};

@@ -337,10 +337,7 @@ Condition AboveAltitude(float altM) {
 Condition GroundSpeedBelow(float speedMps) {
     return [speedMps](const fl::EntityState& self, const fl::EntityManager&, const fl::AiTickContext&) -> bool {
         const glm::dvec3 pos(self.transform.pos[0], self.transform.pos[1], self.transform.pos[2]);
-        const glm::vec3 up = fl::radialUp(pos, fl::kEarthRadiusM);
-        const glm::vec3 v(self.transform.vel[0], self.transform.vel[1], self.transform.vel[2]);
-        const glm::vec3 horiz = v - glm::dot(v, up) * up;
-        return glm::length(horiz) < speedMps;
+        return fl::horizontalGroundSpeed(self.transform.vel, pos, fl::kEarthRadiusM) < speedMps;
     };
 }
 

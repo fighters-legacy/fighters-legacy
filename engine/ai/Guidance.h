@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <numbers>
@@ -324,6 +325,121 @@ inline void steerTowardPoint(ControlInput& ctrl, const float quat[4], const doub
 // Yaw coordination: rudder proportional to aileron.
 inline float coordinatedRudder(float aileronCmd, float k = 0.3f) {
     return std::clamp(aileronCmd * k, -1.f, 1.f);
+}
+
+// Which way round the circle. Lives here rather than in LoiterController.h because the orbit body
+// below is shared by the fixed-centre and target-following loiters (#1265).
+enum class LoiterDir : uint8_t { Clockwise, CounterClockwise };
+
+// Bank limit for an ORBIT (#1141). Numerically equal to kNavBankRad and deliberately NOT merged
+// into it: this one also sets the airspeed the orbit is flyable at (turnSpeedForRadius), so it is
+// pinned by the geometry rather than by the "what does this role fly like" judgement the role
+// constants above encode. 45 deg turns briskly and stays clear of the attitudes where the pitch and
+// roll axes fight each other.
+inline constexpr float kOrbitBankRad = 0.785f;
+
+// Pitch rate by backward difference across sample intervals (#1141/#1265).
+//
+// EntityState carries no body angular rates, so every controller with a damped pitch loop has to
+// differentiate pitch itself -- and three of them (loiter, dynamic loiter, evade) wrote the same
+// five lines. The state that makes it correct is the `have` flag: the FIRST sample has no previous
+// pitch, and must damp on nothing rather than on a difference against a default-constructed zero,
+// which at a 30 deg initial pitch is a fictitious 30 rad/s kick into the elevator.
+struct PitchRateEstimator {
+    float prevRad{0.f};
+    bool have{false};
+
+    [[nodiscard]] float step(float pitchRad, double dt) noexcept {
+        float rate = 0.f;
+        if (have && dt > 1e-6)
+            rate = static_cast<float>((pitchRad - prevRad) / dt);
+        prevRad = pitchRad;
+        have = true;
+        return rate;
+    }
+};
+
+// Everything a circular orbit needs that does not depend on WHERE the centre came from.
+struct OrbitParams {
+    glm::dvec3 centre{};       // world position the orbit is flown around
+    float radiusM{3000.f};     // orbit radius
+    float targetAltM{600.f};   // local altitude to hold
+    float targetSpeedMps{0.f}; // airspeed the orbit is flyable at (see orbitSpeedForRadius)
+    float trimThrottle{0.65f}; // the speed hold trims around this
+    LoiterDir dir{LoiterDir::Clockwise};
+};
+
+// The airspeed an orbit of this radius is flyable at. Held a margin under the speed the bank limit
+// can turn the radius at, so the turn is not permanently saturated (#1141).
+[[nodiscard]] inline float orbitSpeedForRadius(float radiusM) {
+    return std::clamp(0.85f * turnSpeedForRadius(radiusM, kOrbitBankRad), 60.f, 300.f);
+}
+
+// Fly a circle around `p.centre`, in one place (#1265).
+//
+// LoiterController and DynamicLoiterController were this function twice. Their real difference is
+// where the centre and the hold altitude come from -- a fixed point and a fixed altitude, versus a
+// live target's position and the altitude of that target -- and that difference is now the caller's,
+// which is where it belongs. Everything below it is the same geometry and the same three loops, and
+// the #1141 rationale for each of those loops is recorded on the primitives they call.
+//
+// Returns false when the entity is within 1 m of the centre horizontally, where the tangent is
+// undefined: the throttle is still set, the surfaces are left neutral, and the caller returns.
+inline bool orbitSteer(ControlInput& ctrl, const float quat[4], const double ownPos[3], const float velWorld[3],
+                       const OrbitParams& p, double R, float pitchRate) {
+    // Speed hold around the trim throttle (#1141). A FIXED throttle let the aircraft accelerate
+    // 150 -> 226 m/s while descending, past the speed its own bank limit can turn a 3 km circle at
+    // (v = sqrt(r g tan(bank))) -- at which point the orbit can only be flown by trading altitude,
+    // and it does, all the way to the ground. Holding the flyable speed removes the energy half of
+    // the problem; the flight-path altitude loop below removes the other half.
+    const float speed = std::sqrt(velWorld[0] * velWorld[0] + velWorld[1] * velWorld[1] + velWorld[2] * velWorld[2]);
+    ctrl.throttle = throttleForSpeed(speed, p.targetSpeedMps, p.trimThrottle);
+
+    // Vector from the entity to the centre in the XZ plane.
+    const float tx = static_cast<float>(p.centre.x - ownPos[0]);
+    const float tz = static_cast<float>(p.centre.z - ownPos[2]);
+    const float tLen = std::sqrt(tx * tx + tz * tz);
+    if (tLen < 1.f)
+        return false; // at the centre: hold throttle, neutral surfaces
+
+    const float nx = tx / tLen;
+    const float nz = tz / tLen;
+
+    // Tangent direction for the orbit:
+    //   Clockwise (right turns from +Y view):   tangent = (nz, -nx) in XZ
+    //   CounterClockwise (left turns):          tangent = (-nz, nx) in XZ
+    float tanX, tanZ;
+    if (p.dir == LoiterDir::Clockwise) {
+        tanX = nz;
+        tanZ = -nx;
+    } else {
+        tanX = -nz;
+        tanZ = nx;
+    }
+
+    // Lookahead point along the tangent from the current position, scaled with the orbit radius so
+    // larger circles get a proportionally farther target. The Y component is irrelevant to
+    // horizontalHeadingError (projected into the local tangent plane).
+    const double lookahead[3] = {
+        ownPos[0] + static_cast<double>(p.radiusM) * static_cast<double>(tanX),
+        p.centre.y,
+        ownPos[2] + static_cast<double>(p.radiusM) * static_cast<double>(tanZ),
+    };
+
+    const float headErr = horizontalHeadingError(quat, ownPos, lookahead, R);
+    // Bank-ANGLE command closed on the current bank (#1141). An orbit never runs out of heading
+    // error -- the target bearing keeps moving around the circle -- so the rate-only form held the
+    // aileron deflected and rolled the aircraft steadily past vertical to inverted, after which
+    // "pull up" flies it into the ground.
+    ctrl.aileron = bankToTurnAileron(quat, ownPos, headErr, R, kOrbitBankRad);
+    // Rudder nulls the SIDESLIP, not the aileron (#1141): in a steady turn the aileron is near zero,
+    // so the aileron-proportional form commands nothing and the nose never follows the flight path.
+    ctrl.rudder = rudderToCoordinate(sideslipOf(quat, velWorld));
+    // Altitude hold closed on CLIMB RATE, not pitch attitude (#1141). The attitude form left the
+    // aircraft sitting nose-up 30 deg with a -2.8 deg flight path -- descending 11 m/s while the
+    // loop, satisfied the nose was where it asked for, commanded a neutral elevator into the ground.
+    ctrl.elevator = elevatorForAltitudeHold(quat, ownPos, velWorld, p.targetAltM, R, pitchRate);
+    return true;
 }
 
 } // namespace fl::ai

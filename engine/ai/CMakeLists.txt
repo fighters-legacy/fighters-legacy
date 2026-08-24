@@ -1,5 +1,6 @@
 # Server-side AI autopilot controllers.
 add_library(engine-ai STATIC
+    AiControllerFactory.cpp
     LoiterController.cpp
     DynamicLoiterController.cpp
     WaypointController.cpp

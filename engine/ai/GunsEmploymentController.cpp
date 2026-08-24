@@ -2,6 +2,7 @@
 #include "ai/GunsEmploymentController.h"
 
 #include "ai/Guidance.h"
+#include "ai/GunLead.h" // the shared gun lead preamble (#1265)
 #include "ai/TargetView.h"
 #include "flight/BallisticLead.h"
 #include "flight/LocalFrame.h"
@@ -25,19 +26,11 @@ fl::ControlInput GunsEmploymentController::sample(const fl::EntityState& state, 
     if (!tv.valid)
         return ctrl;
 
-    const glm::dvec3 ownPos{state.transform.pos[0], state.transform.pos[1], state.transform.pos[2]};
-    const glm::vec3 ownVel{state.transform.vel[0], state.transform.vel[1], state.transform.vel[2]};
-    const glm::dvec3 tgtPos{tv.pos[0], tv.pos[1], tv.pos[2]};
-    const glm::vec3 tgtVel{tv.vel[0], tv.vel[1], tv.vel[2]};
-
-    // Local gravity from the planet-radius the broadcaster wired — the drop is along LOCAL down,
-    // which is what keeps the pipper honest far from the world origin.
-    const glm::vec3 gravity = fl::localGravity(ownPos, m_planetRadiusM);
-    const BallisticLeadResult lead = computeBallisticLead(ownPos, ownVel, tgtPos, tgtVel, m_muzzleVelMps, gravity);
+    const GunLeadSolution sol = leadSolution(state, tv, m_muzzleVelMps, m_planetRadiusM);
 
     // Steer at the lead point (fall back to the target itself when no solution exists — closing
     // back into parameters IS the maneuver).
-    const glm::dvec3 steerAt = lead.valid ? lead.aimPoint : tgtPos;
+    const glm::dvec3 steerAt = sol.lead.valid ? sol.lead.aimPoint : sol.tgtPos;
     const double steerArr[3] = {steerAt.x, steerAt.y, steerAt.z};
     ctrl.throttle = m_throttle;
     // 80 deg: tracking for guns is the hardest turn a controller makes.
@@ -47,15 +40,12 @@ fl::ControlInput GunsEmploymentController::sample(const fl::EntityState& state, 
     // Trigger discipline: predicted miss = the angle between the nose and the lead direction,
     // scaled by the round's travel to the target range. Fire only when that miss is inside the
     // lethal radius and the target is inside the gun's reach.
-    if (lead.valid) {
-        const float rangeM = static_cast<float>(glm::length(tgtPos - ownPos));
+    if (sol.lead.valid) {
+        const float rangeM = sol.rangeM();
         if (rangeM > 1.f && rangeM <= m_maxRangeM) {
             const glm::vec3 nose = bodyForward(state.transform.quat);
-            const glm::vec3 want = glm::normalize(glm::vec3(lead.aimPoint - ownPos));
-            const float cosOff = glm::dot(nose, want);
-            const float offRad = std::acos(std::min(1.f, std::max(-1.f, cosOff)));
-            const float missM = offRad * rangeM; // small-angle arc at the target's range
-            ctrl.trigger = missM <= m_lethalRadiusM;
+            const glm::vec3 want = glm::normalize(glm::vec3(sol.lead.aimPoint - sol.ownPos));
+            ctrl.trigger = fl::withinLethalMiss(nose, want, rangeM, m_lethalRadiusM);
         }
     }
 

@@ -7,32 +7,8 @@
 
 #include <algorithm>
 #include <cmath>
-#include <numbers>
 
 namespace fl::ai {
-
-namespace {
-
-// World-frame unit direction the runway points, from a compass heading at `at` on a planet of
-// radius R. 0 deg = North, 90 deg = East, measured in the local ENU tangent plane.
-[[nodiscard]] glm::dvec3 runwayWorldDir(glm::dvec3 at, float headingDeg, double R) {
-    const glm::mat3 enu = fl::enuBasis(at, R);
-    const glm::dvec3 east(enu[0]);
-    const glm::dvec3 north(enu[1]);
-    const double hdg = static_cast<double>(headingDeg) * std::numbers::pi_v<double> / 180.0;
-    return glm::normalize(east * std::sin(hdg) + north * std::cos(hdg));
-}
-
-// Horizontal ground speed (m/s): the world velocity with its radial (vertical) component removed.
-[[nodiscard]] float groundSpeed(const fl::EntityState& s, double R) {
-    const glm::dvec3 pos(s.transform.pos[0], s.transform.pos[1], s.transform.pos[2]);
-    const glm::vec3 up = fl::radialUp(pos, R);
-    const glm::vec3 v(s.transform.vel[0], s.transform.vel[1], s.transform.vel[2]);
-    const glm::vec3 horiz = v - glm::dot(v, up) * up;
-    return glm::length(horiz);
-}
-
-} // namespace
 
 TakeoffController::TakeoffController(glm::dvec3 threshold, float headingDeg, float runwayElevM, float rotateSpeedMps,
                                      float climboutAglM)
@@ -42,12 +18,14 @@ TakeoffController::TakeoffController(glm::dvec3 threshold, float headingDeg, flo
 fl::ControlInput TakeoffController::sample(const fl::EntityState& state, uint64_t /*tick*/, double /*dt*/,
                                            const fl::AiTickContext& /*ctx*/) {
     const glm::dvec3 ownPos(state.transform.pos[0], state.transform.pos[1], state.transform.pos[2]);
-    const float gs = groundSpeed(state, m_planetRadiusM);
+    const float gs = fl::horizontalGroundSpeed(
+        state.transform.vel, glm::dvec3(state.transform.pos[0], state.transform.pos[1], state.transform.pos[2]),
+        m_planetRadiusM);
     const float agl = static_cast<float>(fl::localAltitude(ownPos, m_planetRadiusM)) - m_runwayElevM;
 
     // Steer to hold the runway centreline: aim at a point far down the runway from the threshold, so
     // lateral drift is corrected back onto the centreline (not merely held parallel to it).
-    const glm::dvec3 dir = runwayWorldDir(ownPos, m_headingDeg, m_planetRadiusM);
+    const glm::dvec3 dir = fl::worldDirFromHeading(ownPos, m_headingDeg, m_planetRadiusM);
     const glm::dvec3 aim = m_threshold + dir * 3000.0;
     const double aimArr[3] = {aim.x, aim.y, aim.z};
     const float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, aimArr, m_planetRadiusM);

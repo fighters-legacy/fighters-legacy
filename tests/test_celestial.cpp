@@ -6,18 +6,18 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "flight/Geodetic.h" // geodeticToWorld, kEarthRadiusM
+#include "math/Angles.h"     // fl::kPi<double> / kDegToRad -- the one pi (#1246)
 #include "weather/CelestialFrame.h"
 #include "weather/LunarPosition.h"
 #include "weather/SolarPosition.h" // julianDay
 
 #include <cmath>
-#include <numbers>
 
 using namespace fl;
 
 namespace {
-constexpr double kPi = std::numbers::pi;
-constexpr double kDeg = kPi / 180.0;
+// The shared constants (#1246), not a local re-declaration of them.
+constexpr double kDeg = fl::kDegToRad<double>;
 
 // World position of a geodetic (lat, lon) point at sea level.
 glm::dvec3 worldAt(double latRad, double lonRad, double R = kEarthRadiusM) {
@@ -30,7 +30,7 @@ glm::dvec3 worldAt(double latRad, double lonRad, double R = kEarthRadiusM) {
 TEST_CASE("GMST at J2000 matches the standard 18.697h", "[celestial]") {
     // 2000-01-01 12:00 UTC = JD 2451545.0; GMST ~= 18.697374558 hours (280.46 deg).
     const double gmst = greenwichMeanSiderealTimeRad(2451545.0);
-    const double hours = gmst * 12.0 / kPi;
+    const double hours = gmst * 12.0 / fl::kPi<double>;
     CHECK(hours == Catch::Approx(18.697374558).margin(1e-3));
 }
 
@@ -40,7 +40,7 @@ TEST_CASE("celestial pole sits at altitude = latitude", "[celestial]") {
     for (double latDeg : {0.0, 30.0, 45.0, 60.0}) {
         const double lat = latDeg * kDeg;
         for (double lst : {0.0, 1.7, 3.9, 5.5}) {
-            const glm::vec3 enu = equatorialToEnu(/*ra*/ 2.0, kPi / 2.0, lat, lst);
+            const glm::vec3 enu = equatorialToEnu(/*ra*/ 2.0, fl::kPi<double> / 2.0, lat, lst);
             // Up component = sin(altitude); altitude should equal the latitude.
             CHECK(std::asin(enu.z) == Catch::Approx(lat).margin(1e-4));
         }
@@ -73,7 +73,7 @@ TEST_CASE("Moon equatorial position is physically bounded", "[celestial][moon]")
     for (int day = 1; day <= 28; ++day) {
         const MoonEquatorial m = moonEquatorial(julianDay(2025, 3, day, 0.0));
         CHECK(m.raRad >= 0.0);
-        CHECK(m.raRad < 2.0 * kPi + 1e-9);
+        CHECK(m.raRad < 2.0 * fl::kPi<double> + 1e-9);
         CHECK(m.illuminatedFraction >= 0.0);
         CHECK(m.illuminatedFraction <= 1.0);
         CHECK(m.distanceKm > 350000.0);
@@ -85,7 +85,7 @@ TEST_CASE("Moon equatorial position is physically bounded", "[celestial][moon]")
     }
     CHECK(maxDec < 29.0 * kDeg);
     CHECK(minDec > -29.0 * kDeg);
-    CHECK((maxRa - minRa) > kPi); // sweeps a large arc over the month
+    CHECK((maxRa - minRa) > fl::kPi<double>); // sweeps a large arc over the month
 }
 
 TEST_CASE("Moon illuminated fraction tracks new and full phases", "[celestial][moon]") {
@@ -98,5 +98,5 @@ TEST_CASE("Moon illuminated fraction tracks new and full phases", "[celestial][m
 
 TEST_CASE("Moon angular radius is about half a degree", "[celestial][moon]") {
     const double r = moonAngularRadiusRad(385000.0);
-    CHECK(r * 180.0 / kPi == Catch::Approx(0.2585).margin(0.02)); // ~0.26 deg radius
+    CHECK(r * 180.0 / fl::kPi<double> == Catch::Approx(0.2585).margin(0.02)); // ~0.26 deg radius
 }

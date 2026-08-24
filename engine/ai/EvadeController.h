@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "ai/Guidance.h" // PitchRateEstimator -- the shared pitch-rate backward difference (#1265)
 #include "entity/EntityId.h"
 #include "entity/EntityManager.h"
 #include "entity/IEntityController.h"
@@ -31,8 +32,7 @@ class EvadeController : public fl::IEntityController {
     // an unloaded 80 deg bank spirals into the ground, which is not an escape.
     float m_holdAltM{0.f};
     bool m_haveHoldAlt{false};
-    float m_prevPitchRad{0.f};
-    bool m_havePrevPitch{false};
+    PitchRateEstimator m_pitchRate;
 };
 
 } // namespace fl::ai

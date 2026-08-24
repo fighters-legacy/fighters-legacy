@@ -1,19 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "ai/Guidance.h" // LoiterDir + OrbitParams + orbitSteer -- the shared orbit body (#1265)
 #include "entity/IEntityController.h"
 
 #include <cstdint>
 #include <glm/glm.hpp>
 
 namespace fl::ai {
-
-enum class LoiterDir : uint8_t { Clockwise, CounterClockwise };
-
-// Bank limit for an orbit (#1141). 45 deg turns briskly and stays clear of the attitudes where the
-// pitch and roll axes fight each other; it also sets the airspeed the orbit is flyable at
-// (turnSpeedForRadius). Shared with DynamicLoiterController, which flies the same geometry.
-inline constexpr float kMaxBankRad = 0.785f;
 
 // Orbits a fixed center point at a configurable radius and altitude.
 // Direction is caller-specified: Clockwise (default) or CounterClockwise.
@@ -40,8 +34,7 @@ class LoiterController : public fl::IEntityController {
     LoiterDir m_dir;
     // Pitch differentiated across sample intervals for the inner-loop damping (#1141): EntityState
     // exposes no body angular rates, and an undamped pitch loop mushes the aircraft into the ground.
-    float m_prevPitchRad{0.f};
-    bool m_havePrevPitch{false};
+    PitchRateEstimator m_pitchRate;
 };
 
 } // namespace fl::ai

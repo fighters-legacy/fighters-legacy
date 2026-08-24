@@ -2,6 +2,7 @@
 #include "ai/SurfaceThreatControllers.h"
 
 #include "ai/Guidance.h"
+#include "ai/GunLead.h" // the shared gun lead preamble (#1265)
 #include "ai/TargetView.h"
 #include "ai/Threat.h"
 #include "flight/BallisticLead.h"
@@ -127,24 +128,16 @@ fl::ControlInput AaaFireController::sample(const fl::EntityState& state, uint64_
     if (!tv.valid)
         return ctrl;
 
-    const glm::dvec3 ownPos{state.transform.pos[0], state.transform.pos[1], state.transform.pos[2]};
-    const glm::vec3 ownVel{state.transform.vel[0], state.transform.vel[1], state.transform.vel[2]};
-    const glm::dvec3 tgtPos{tv.pos[0], tv.pos[1], tv.pos[2]};
-    const glm::vec3 tgtVel{tv.vel[0], tv.vel[1], tv.vel[2]};
-
-    const glm::vec3 gravity = fl::localGravity(ownPos, m_planetRadiusM);
-    const BallisticLeadResult lead = computeBallisticLead(ownPos, ownVel, tgtPos, tgtVel, m_muzzleVelMps, gravity);
-    if (!lead.valid)
+    const GunLeadSolution sol = leadSolution(state, tv, m_muzzleVelMps, m_planetRadiusM);
+    if (!sol.lead.valid)
         return ctrl;
 
-    // Trigger discipline (same rule as GunsEmploymentController): fire only when the predicted miss at
+    // Trigger discipline (the shared withinLethalMiss rule): fire only when the predicted miss at
     // the target's range is inside the lethal radius and the target is within reach.
-    const float rangeM = static_cast<float>(glm::length(tgtPos - ownPos));
+    const float rangeM = sol.rangeM();
     if (rangeM > 1.f && rangeM <= m_engageRangeM) {
-        const glm::vec3 want = glm::normalize(glm::vec3(lead.aimPoint - ownPos));
-        const float cosOff = std::min(1.f, std::max(-1.f, glm::dot(nose, want)));
-        const float missM = std::acos(cosOff) * rangeM; // small-angle arc at the target's range
-        ctrl.trigger = missM <= m_lethalRadiusM;
+        const glm::vec3 want = glm::normalize(glm::vec3(sol.lead.aimPoint - sol.ownPos));
+        ctrl.trigger = fl::withinLethalMiss(nose, want, rangeM, m_lethalRadiusM);
     }
     return ctrl;
 }

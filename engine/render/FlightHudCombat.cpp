@@ -32,8 +32,9 @@ void FlightHud::drawCombat(Ctx& c) {
     const HudStationInfo* sel = haveSel ? &m_stations[c.e.selectedStation] : nullptr;
 
     const double R = c.in.planetRadiusM;
-    const glm::vec3 up = radialUp(c.e.position, R);
-    const glm::vec3 gravity = -kG0<float> * up;
+    // The one "which way is down" (#1246/#1265) -- this was the fourth spelling of it, and the
+    // pipper it feeds has to agree with the AI fire controllers that solve the same lead.
+    const glm::vec3 gravity = localGravity(c.e.position, R);
 
     // ── gun pipper (ballistic lead) ──────────────────────────────────────────
     if (c.in.cameraValid && c.in.masterArm && c.in.designatedTarget && sel && sel->kind == 1 /*gun*/ &&

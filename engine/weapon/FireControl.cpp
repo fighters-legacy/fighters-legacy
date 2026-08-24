@@ -39,6 +39,25 @@ void pickDefaultSelection(LoadoutState& ls, const WeaponRegistry& weapons) {
     }
 }
 
+// Hang one store on one station: the payload accounting, and the inert-store gate that decides
+// whether the station can also FIRE it (#1265).
+//
+// All three loadout builders — the default, the per-seat subset and the mission override — repeated
+// these five lines, and the #862 inert-store rationale was written out twice of the three. A store
+// that adds its mass but forgets its drag, or one that becomes fireable in one builder and not
+// another, is exactly the divergence one body removes.
+void mountStore(LoadoutState& ls, StationState& st, uint32_t idx, const WeaponDef& w) {
+    ls.payloadMassKg += w.load.massKg;
+    ls.payloadCd0 += w.load.dragFactor;
+    // An INERT store — a Fuel drop tank or a Pod (#862) — costs mass/drag but is never a firing
+    // station. Inert-ness is the WEAPON's kind, not the station's: the same wet pylon can offer a
+    // bomb or a tank, and only the mounted store decides.
+    if (!isInertStore(w.type)) {
+        st.weaponIndex = idx;
+        st.rounds = w.load.rounds;
+    }
+}
+
 } // namespace
 
 LoadoutState buildLoadout(const EntityDef& def, const WeaponRegistry& weapons) {
@@ -53,17 +72,8 @@ LoadoutState buildLoadout(const EntityDef& def, const WeaponRegistry& weapons) {
                 const WeaponDef* w = weapons.byIndex(idx);
                 // Same acceptance rule as fl::defaultPayload: a wrong-kind or unknown store is a
                 // skip, not a spawn failure — and it was already Error-logged at payload time.
-                if (w) {
-                    ls.payloadMassKg += w->load.massKg;
-                    ls.payloadCd0 += w->load.dragFactor;
-                    // An INERT store — a Fuel drop tank or a Pod (#862) — costs mass/drag but is never
-                    // a firing station. Inert-ness is the WEAPON's kind, not the station's: the same
-                    // wet pylon can offer a bomb or a tank, and only the mounted store decides.
-                    if (w->type != WeaponType::Fuel && w->type != WeaponType::Pod) {
-                        st.weaponIndex = idx;
-                        st.rounds = w->load.rounds;
-                    }
-                }
+                if (w)
+                    mountStore(ls, st, idx, *w);
             }
         }
         ls.stations.push_back(st);
@@ -83,14 +93,8 @@ LoadoutState buildSeatLoadout(const EntityDef& def, const WeaponRegistry& weapon
         if (!hp.defaultWeapon.empty()) {
             const uint32_t idx = weapons.indexById(hp.defaultWeapon.c_str());
             const WeaponDef* w = (idx != UINT32_MAX) ? weapons.byIndex(idx) : nullptr;
-            if (w) {
-                ls.payloadMassKg += w->load.massKg;
-                ls.payloadCd0 += w->load.dragFactor;
-                if (w->type != WeaponType::Fuel && w->type != WeaponType::Pod) {
-                    st.weaponIndex = idx;
-                    st.rounds = w->load.rounds;
-                }
-            }
+            if (w)
+                mountStore(ls, st, idx, *w);
         }
         ls.stations.push_back(st);
     }
@@ -134,14 +138,7 @@ LoadoutState buildLoadoutOverride(const EntityDef& def, const WeaponRegistry& we
             ls.stations.push_back(st);
             continue;
         }
-        ls.payloadMassKg += w->load.massKg;
-        ls.payloadCd0 += w->load.dragFactor;
-        // An inert store — a Fuel drop tank or a Pod (#862) — counts its mass/drag but is never a
-        // firing station.
-        if (w->type != WeaponType::Fuel && w->type != WeaponType::Pod) {
-            st.weaponIndex = idx;
-            st.rounds = w->load.rounds;
-        }
+        mountStore(ls, st, idx, *w);
         ls.stations.push_back(st);
     }
 
