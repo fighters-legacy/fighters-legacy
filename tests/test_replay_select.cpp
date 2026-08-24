@@ -14,6 +14,8 @@
 
 #include "mock_hal.h"
 
+#include "temp_path.h"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
@@ -25,19 +27,6 @@ using namespace fl;
 namespace {
 
 namespace fs = std::filesystem;
-
-struct TempDir {
-    fs::path path;
-    explicit TempDir(const std::string& tag) {
-        path = fs::temp_directory_path() / ("flrep_select_" + tag);
-        fs::remove_all(path);
-        fs::create_directories(path);
-    }
-    ~TempDir() {
-        std::error_code ec;
-        fs::remove_all(path, ec);
-    }
-};
 
 void writeReplay(const fs::path& dir, const std::string& name, const std::string& mission, uint64_t ticks = 10) {
     ReplayHeader h;
@@ -81,18 +70,18 @@ void writeReplay(const fs::path& dir, const std::string& name, const std::string
 } // namespace
 
 TEST_CASE("ReplaySelectScreen scan of a missing directory is empty, not an error", "[replay_select]") {
-    TempDir tmp("missing");
+    fl::test::TempDirGuard tmp{"flrep_select_missing"};
     // A player who has never recorded anything has no replays directory. That is not a failure.
-    const auto entries = ReplaySelectScreen::scan(tmp.path / "does-not-exist");
+    const auto entries = ReplaySelectScreen::scan(tmp.path() / "does-not-exist");
     CHECK(entries.empty());
 }
 
 TEST_CASE("ReplaySelectScreen lists readable replays with their header details", "[replay_select]") {
-    TempDir tmp("list");
-    writeReplay(tmp.path, "one", "ci_smoke", 121);
-    writeReplay(tmp.path, "two", "", 61);
+    fl::test::TempDirGuard tmp{"flrep_select_list"};
+    writeReplay(tmp.path(), "one", "ci_smoke", 121);
+    writeReplay(tmp.path(), "two", "", 61);
 
-    const auto entries = ReplaySelectScreen::scan(tmp.path);
+    const auto entries = ReplaySelectScreen::scan(tmp.path());
     REQUIRE(entries.size() == 2);
     for (const auto& e : entries) {
         CHECK(e.playable);
@@ -108,14 +97,14 @@ TEST_CASE("ReplaySelectScreen lists readable replays with their header details",
 }
 
 TEST_CASE("ReplaySelectScreen lists an unreadable replay rather than hiding it", "[replay_select]") {
-    TempDir tmp("broken");
-    writeReplay(tmp.path, "good", "ci_smoke");
+    fl::test::TempDirGuard tmp{"flrep_select_broken"};
+    writeReplay(tmp.path(), "good", "ci_smoke");
     {
-        std::ofstream out(tmp.path / "broken.flrep", std::ios::binary | std::ios::trunc);
+        std::ofstream out(tmp.path() / "broken.flrep", std::ios::binary | std::ios::trunc);
         out << "this is not a replay";
     }
 
-    const auto entries = ReplaySelectScreen::scan(tmp.path);
+    const auto entries = ReplaySelectScreen::scan(tmp.path());
     REQUIRE(entries.size() == 2);
 
     int playable = 0;
@@ -134,10 +123,10 @@ TEST_CASE("ReplaySelectScreen lists an unreadable replay rather than hiding it",
 }
 
 TEST_CASE("ReplaySelectScreen confirm enters a session for a readable file", "[replay_select]") {
-    TempDir tmp("confirm");
-    writeReplay(tmp.path, "one", "ci_smoke");
+    fl::test::TempDirGuard tmp{"flrep_select_confirm"};
+    writeReplay(tmp.path(), "one", "ci_smoke");
 
-    ReplaySelectScreen screen(ReplaySelectScreen::scan(tmp.path));
+    ReplaySelectScreen screen(ReplaySelectScreen::scan(tmp.path()));
     REQUIRE(screen.entryCount() == 1);
 
     MockInput input;
@@ -145,18 +134,18 @@ TEST_CASE("ReplaySelectScreen confirm enters a session for a readable file", "[r
     input.justPressed = {Key::Enter};
     const Screen next = screen.update(input, window);
     CHECK(next == Screen::Loading);
-    CHECK(screen.selectedReplay() == tmp.path / "one.flrep");
+    CHECK(screen.selectedReplay() == tmp.path() / "one.flrep");
     CHECK(screen.statusText().empty());
 }
 
 TEST_CASE("ReplaySelectScreen confirm on an unreadable file refuses and stays put", "[replay_select]") {
-    TempDir tmp("refuse");
+    fl::test::TempDirGuard tmp{"flrep_select_refuse"};
     {
-        std::ofstream out(tmp.path / "broken.flrep", std::ios::binary | std::ios::trunc);
+        std::ofstream out(tmp.path() / "broken.flrep", std::ios::binary | std::ios::trunc);
         out << "nope";
     }
 
-    ReplaySelectScreen screen(ReplaySelectScreen::scan(tmp.path));
+    ReplaySelectScreen screen(ReplaySelectScreen::scan(tmp.path()));
     REQUIRE(screen.entryCount() == 1);
 
     MockInput input;
@@ -170,8 +159,8 @@ TEST_CASE("ReplaySelectScreen confirm on an unreadable file refuses and stays pu
 }
 
 TEST_CASE("ReplaySelectScreen escape returns to the menu and an empty list is harmless", "[replay_select]") {
-    TempDir tmp("empty");
-    ReplaySelectScreen screen(ReplaySelectScreen::scan(tmp.path));
+    fl::test::TempDirGuard tmp{"flrep_select_empty"};
+    ReplaySelectScreen screen(ReplaySelectScreen::scan(tmp.path()));
     CHECK(screen.entryCount() == 0);
 
     MockInput input;
@@ -188,11 +177,11 @@ TEST_CASE("ReplaySelectScreen escape returns to the menu and an empty list is ha
 }
 
 TEST_CASE("ReplaySelectScreen navigation moves and clamps the selection", "[replay_select]") {
-    TempDir tmp("nav");
+    fl::test::TempDirGuard tmp{"flrep_select_nav"};
     for (int i = 0; i < 3; ++i)
-        writeReplay(tmp.path, "r" + std::to_string(i), "m" + std::to_string(i));
+        writeReplay(tmp.path(), "r" + std::to_string(i), "m" + std::to_string(i));
 
-    ReplaySelectScreen screen(ReplaySelectScreen::scan(tmp.path));
+    ReplaySelectScreen screen(ReplaySelectScreen::scan(tmp.path()));
     REQUIRE(screen.entryCount() == 3);
 
     MockInput input;

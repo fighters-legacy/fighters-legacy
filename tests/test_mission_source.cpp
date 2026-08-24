@@ -2,6 +2,7 @@
 #include "MissionSource.h"
 
 #include "ILogger.h"
+#include "temp_path.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
@@ -17,12 +18,13 @@ struct NullLog : fl::ILogger {
     void flush() override {}
 };
 
-// A unique temp .yaml path per test run; removed on destruction. ctest runs in parallel — never a
-// fixed path (Catch2 test names are unique within a binary, so the name-derived path is safe).
+// A unique temp .yaml path per test run; removed on destruction. ctest runs each TEST_CASE as its
+// own process, so the name must be unique across processes too -- a stem-derived path is not
+// (docs/developer/development.md, #787).
 struct TempYaml {
     std::filesystem::path path;
     explicit TempYaml(const std::string& stem, const std::string& contents) {
-        path = std::filesystem::temp_directory_path() / (stem + ".yaml");
+        path = fl::test::uniqueTempPath(stem, ".yaml");
         std::ofstream out(path, std::ios::binary);
         out << contents;
     }

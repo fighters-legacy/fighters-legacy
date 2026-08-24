@@ -25,6 +25,8 @@
 #include <StdoutLogger.h>
 #include <net/BitStream.h>
 
+#include "temp_path.h"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
@@ -46,19 +48,6 @@ namespace fs = std::filesystem;
 // run concurrently under `ctest -j`.
 constexpr const char* kTestPort = "47797";
 
-struct TempDir {
-    fs::path path;
-    TempDir() {
-        path = fs::temp_directory_path() / "flrep_roundtrip";
-        fs::remove_all(path);
-        fs::create_directories(path);
-    }
-    ~TempDir() {
-        std::error_code ec;
-        fs::remove_all(path, ec);
-    }
-};
-
 struct RecordedTick {
     uint64_t hash{0};
     uint32_t recordCount{0};
@@ -79,11 +68,11 @@ std::map<uint64_t, RecordedTick> readHashLog(const fs::path& p) {
 } // namespace
 
 TEST_CASE("a recorded session reads back with identical per-tick state hashes", "[replay][determinism]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"flrep_roundtrip"};
     StdoutLogger log;
 
-    const fs::path replayDir = tmp.path / "replays";
-    const fs::path hashLog = tmp.path / "hashes.txt";
+    const fs::path replayDir = tmp.path() / "replays";
+    const fs::path hashLog = tmp.path() / "hashes.txt";
 
     // A world with entities in it: recording an empty sim would pass this gate while proving nothing.
     // --test-spawn-ai-count is the existing load-test affordance; the AI keeps everything moving, so

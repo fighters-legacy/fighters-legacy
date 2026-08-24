@@ -3,6 +3,8 @@
 
 #include "mission/MissionParser.h" // parseMission — camera shots need the parsed Mission model (#910)
 
+#include "temp_path.h"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
@@ -339,8 +341,7 @@ TEST_CASE("crew: a seat with neither seat nor role fails", "[mission-validator][
 
 TEST_CASE("crew: --pack cross-check accepts a real seat/role and rejects a bad one", "[mission-validator][crew]") {
     namespace fs = std::filesystem;
-    const fs::path pack = fs::temp_directory_path() / "fl_crew_pack_test";
-    fs::remove_all(pack);
+    const fs::path pack = fl::test::uniqueTempPath("fl_crew_pack_test");
     fs::create_directories(pack / "entities");
     {
         std::ofstream f(pack / "entities" / "bomber.toml");

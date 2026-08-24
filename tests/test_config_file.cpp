@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ILogger.h"
 #include "config/ConfigFile.h"
+#include "temp_path.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
@@ -24,8 +25,7 @@ struct SilentLogger : ILogger {
 
 TEST_CASE("ensureAndReadConfig creates file with default content when absent", "[config_file]") {
     SilentLogger log;
-    fs::path tmp = fs::temp_directory_path() / "fl_test_ensure_absent.toml";
-    fs::remove(tmp);
+    fs::path tmp = fl::test::uniqueTempPath("fl_test_ensure_absent", ".toml");
 
     std::string result = fl::ensureAndReadConfig(tmp, "default content", log);
 
@@ -44,7 +44,7 @@ TEST_CASE("ensureAndReadConfig creates file with default content when absent", "
 
 TEST_CASE("ensureAndReadConfig reads existing file without overwriting", "[config_file]") {
     SilentLogger log;
-    fs::path tmp = fs::temp_directory_path() / "fl_test_ensure_existing.toml";
+    fs::path tmp = fl::test::uniqueTempPath("fl_test_ensure_existing", ".toml");
     {
         std::ofstream f(tmp);
         f << "existing content";
@@ -59,9 +59,9 @@ TEST_CASE("ensureAndReadConfig reads existing file without overwriting", "[confi
 
 TEST_CASE("ensureAndReadConfig returns empty string when directory does not exist", "[config_file]") {
     SilentLogger log;
-    fs::path nonExistentDir = fs::temp_directory_path() / "fl_no_such_dir_xyz";
+    // uniqueTempPath creates nothing, so this directory is guaranteed absent.
+    fs::path nonExistentDir = fl::test::uniqueTempPath("fl_no_such_dir_xyz");
     fs::path tmp = nonExistentDir / "file.toml";
-    fs::remove_all(nonExistentDir);
 
     std::string result = fl::ensureAndReadConfig(tmp, "default", log);
 
@@ -74,8 +74,7 @@ TEST_CASE("ensureAndReadConfig returns empty string when directory does not exis
 
 TEST_CASE("writeConfigFile writes content atomically and reads it back", "[config_file]") {
     SilentLogger log;
-    fs::path tmp = fs::temp_directory_path() / "fl_test_write_config.toml";
-    fs::remove(tmp);
+    fs::path tmp = fl::test::uniqueTempPath("fl_test_write_config", ".toml");
 
     bool ok = fl::writeConfigFile(tmp, "written content", log);
 
@@ -99,9 +98,9 @@ TEST_CASE("writeConfigFile writes content atomically and reads it back", "[confi
 
 TEST_CASE("writeConfigFile returns false when directory does not exist", "[config_file]") {
     SilentLogger log;
-    fs::path nonExistentDir = fs::temp_directory_path() / "fl_no_such_dir_write";
+    // uniqueTempPath creates nothing, so this directory is guaranteed absent.
+    fs::path nonExistentDir = fl::test::uniqueTempPath("fl_no_such_dir_write");
     fs::path tmp = nonExistentDir / "file.toml";
-    fs::remove_all(nonExistentDir);
 
     bool ok = fl::writeConfigFile(tmp, "content", log);
 

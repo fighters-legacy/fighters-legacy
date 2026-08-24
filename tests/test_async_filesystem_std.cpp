@@ -2,7 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "StdAsyncFilesystem.h"
-#include "test_helpers.h"
+#include "temp_path.h"
 
 using namespace fl;
 
@@ -31,9 +31,9 @@ struct Collector : IAsyncFilesystemHandler {
     }
 };
 
-// Writes content to path/name in a TempDir and returns the filename.
-static void writeFile(const TempDir& dir, const std::string& name, const std::string& content) {
-    std::ofstream f(dir.path / name, std::ios::binary);
+// Writes content to path/name in a fl::test::TempDirGuard and returns the filename.
+static void writeFile(const fl::test::TempDirGuard& dir, const std::string& name, const std::string& content) {
+    std::ofstream f(dir.path() / name, std::ios::binary);
     f.write(content.data(), static_cast<std::streamsize>(content.size()));
 }
 
@@ -46,10 +46,10 @@ static void drainUntil(StdAsyncFilesystem& fs, Collector& col, std::size_t expec
 }
 
 TEST_CASE("StdAsyncFilesystem reads existing file", "[async_fs_std]") {
-    TempDir dir;
+    fl::test::TempDirGuard dir{"fl_test"};
     writeFile(dir, "tile0.bin", "hello world");
 
-    StdAsyncFilesystem fs(dir.path, dir.path);
+    StdAsyncFilesystem fs(dir.path(), dir.path());
     Collector col;
     REQUIRE(fs.init());
 
@@ -68,8 +68,8 @@ TEST_CASE("StdAsyncFilesystem reads existing file", "[async_fs_std]") {
 }
 
 TEST_CASE("StdAsyncFilesystem fires Error for missing file", "[async_fs_std]") {
-    TempDir dir;
-    StdAsyncFilesystem fs(dir.path, dir.path);
+    fl::test::TempDirGuard dir{"fl_test"};
+    StdAsyncFilesystem fs(dir.path(), dir.path());
     Collector col;
     REQUIRE(fs.init());
 
@@ -87,12 +87,12 @@ TEST_CASE("StdAsyncFilesystem fires Error for missing file", "[async_fs_std]") {
 }
 
 TEST_CASE("StdAsyncFilesystem multiple concurrent reads all complete", "[async_fs_std]") {
-    TempDir dir;
+    fl::test::TempDirGuard dir{"fl_test"};
     const int N = 5;
     for (int i = 0; i < N; ++i)
         writeFile(dir, "tile" + std::to_string(i) + ".bin", std::string(64, static_cast<char>('a' + i)));
 
-    StdAsyncFilesystem fs(dir.path, dir.path);
+    StdAsyncFilesystem fs(dir.path(), dir.path());
     Collector col;
     REQUIRE(fs.init());
 
@@ -115,11 +115,11 @@ TEST_CASE("StdAsyncFilesystem multiple concurrent reads all complete", "[async_f
 }
 
 TEST_CASE("StdAsyncFilesystem shutdown drains pending before returning", "[async_fs_std]") {
-    TempDir dir;
+    fl::test::TempDirGuard dir{"fl_test"};
     writeFile(dir, "a.bin", "aaa");
     writeFile(dir, "b.bin", "bbb");
 
-    StdAsyncFilesystem fs(dir.path, dir.path);
+    StdAsyncFilesystem fs(dir.path(), dir.path());
     Collector col;
     REQUIRE(fs.init());
 
@@ -142,10 +142,10 @@ TEST_CASE("StdAsyncFilesystem shutdown drains pending before returning", "[async
 }
 
 TEST_CASE("StdAsyncFilesystem reads empty file as Success with zero bytes", "[async_fs_std]") {
-    TempDir dir;
+    fl::test::TempDirGuard dir{"fl_test"};
     writeFile(dir, "empty.bin", "");
 
-    StdAsyncFilesystem fs(dir.path, dir.path);
+    StdAsyncFilesystem fs(dir.path(), dir.path());
     Collector col;
     REQUIRE(fs.init());
 

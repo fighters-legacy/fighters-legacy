@@ -18,7 +18,9 @@
 
 #include <stdfs/StdFilesystem.h>
 
+#include "temp_path.h"
 #include <catch2/catch_approx.hpp>
+
 #include <catch2/catch_test_macros.hpp>
 #include <cstdio>
 #include <filesystem>
@@ -429,8 +431,7 @@ TEST_CASE("LuaController: script uses require from pack ai dir") {
     namespace fs = std::filesystem;
     // A temp ASSETS ROOT with the pack under it, read through a real filesystem — the pack root is an
     // assets-domain path, not a native one (#1210).
-    const auto assetsRoot = fs::temp_directory_path() / "fl_lua_ctrl_test";
-    fs::remove_all(assetsRoot);
+    const auto assetsRoot = fl::test::uniqueTempPath("fl_lua_ctrl_test");
     fs::create_directories(assetsRoot / "mods" / "testpack" / "ai");
 
     {

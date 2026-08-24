@@ -7,6 +7,8 @@
 #include <lauxlib.h>
 #include <lua.h>
 
+#include "temp_path.h"
+
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
 #include <fstream>
@@ -28,10 +30,10 @@ struct TempPack {
     std::string packDir; // assets-domain, e.g. "mods/testpack"
     StdFilesystem fs;
 
+    // assetsRoot is declared first, so it is initialised before fs reads it -- which also stops the
+    // temp path being recomputed three times.
     explicit TempPack(const char* name)
-        : assetsRoot(std::filesystem::temp_directory_path() / name), packDir("mods/testpack"),
-          fs(std::filesystem::temp_directory_path() / name, std::filesystem::temp_directory_path() / name) {
-        std::filesystem::remove_all(assetsRoot);
+        : assetsRoot(fl::test::uniqueTempPath(name)), packDir("mods/testpack"), fs(assetsRoot, assetsRoot) {
         std::filesystem::create_directories(assetsRoot / packDir / "ai");
     }
     ~TempPack() {

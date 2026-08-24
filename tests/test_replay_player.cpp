@@ -13,7 +13,9 @@
 #include "net/SnapshotCodec.h" // QuantEntity + the record encoders the writer stitches
 #include "replay/ReplayWriter.h"
 
+#include "temp_path.h"
 #include <catch2/catch_approx.hpp>
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
@@ -25,19 +27,6 @@ using namespace fl;
 namespace {
 
 namespace fs = std::filesystem;
-
-struct TempDir {
-    fs::path path;
-    explicit TempDir(const std::string& tag) {
-        path = fs::temp_directory_path() / ("flrep_player_" + tag);
-        fs::remove_all(path);
-        fs::create_directories(path);
-    }
-    ~TempDir() {
-        std::error_code ec;
-        fs::remove_all(path, ec);
-    }
-};
 
 // A recording where entity 0's X position IS the tick index, so any frame can be checked against
 // the tick it claims to be showing -- which is exactly what a wrong seek gets wrong.
@@ -106,8 +95,8 @@ double rampX(ReplayPlayer& p) {
 } // namespace
 
 TEST_CASE("ReplayPlayer opens a recording and shows its first tick", "[replay_player]") {
-    TempDir tmp("open");
-    const fs::path p = writeRamp(tmp.path, 60, 10);
+    fl::test::TempDirGuard tmp{"flrep_player_open"};
+    const fs::path p = writeRamp(tmp.path(), 60, 10);
 
     ReplayPlayer player;
     REQUIRE(player.open(p));
@@ -123,17 +112,17 @@ TEST_CASE("ReplayPlayer opens a recording and shows its first tick", "[replay_pl
 }
 
 TEST_CASE("ReplayPlayer refuses a file that is not a replay", "[replay_player]") {
-    TempDir tmp("refuse");
+    fl::test::TempDirGuard tmp{"flrep_player_refuse"};
     ReplayPlayer player;
-    CHECK_FALSE(player.open(tmp.path / "nothing.flrep"));
+    CHECK_FALSE(player.open(tmp.path() / "nothing.flrep"));
     CHECK_FALSE(player.lastError().empty());
     CHECK_FALSE(player.isOpen());
 }
 
 TEST_CASE("ReplayPlayer advances at the recording's own tick rate", "[replay_player]") {
-    TempDir tmp("rate");
+    fl::test::TempDirGuard tmp{"flrep_player_rate"};
     // 30 Hz: the point of storing tickRateHz is that playback does not assume 60.
-    const fs::path p = writeRamp(tmp.path, 120, 10, /*tickRateHz=*/30);
+    const fs::path p = writeRamp(tmp.path(), 120, 10, /*tickRateHz=*/30);
 
     ReplayPlayer player;
     REQUIRE(player.open(p));
@@ -147,8 +136,8 @@ TEST_CASE("ReplayPlayer advances at the recording's own tick rate", "[replay_pla
 }
 
 TEST_CASE("ReplayPlayer speed control scales advance, and pause freezes it", "[replay_player]") {
-    TempDir tmp("speed");
-    const fs::path p = writeRamp(tmp.path, 600, 30);
+    fl::test::TempDirGuard tmp{"flrep_player_speed"};
+    const fs::path p = writeRamp(tmp.path(), 600, 30);
 
     ReplayPlayer player;
     REQUIRE(player.open(p));
@@ -187,8 +176,8 @@ TEST_CASE("ReplayPlayer speed control scales advance, and pause freezes it", "[r
 }
 
 TEST_CASE("ReplayPlayer caps how far one frame may advance", "[replay_player]") {
-    TempDir tmp("catchup");
-    const fs::path p = writeRamp(tmp.path, 600, 30);
+    fl::test::TempDirGuard tmp{"flrep_player_catchup"};
+    const fs::path p = writeRamp(tmp.path(), 600, 30);
     ReplayPlayer player;
     REQUIRE(player.open(p));
     RenderSnapshot snap;
@@ -201,8 +190,8 @@ TEST_CASE("ReplayPlayer caps how far one frame may advance", "[replay_player]") 
 }
 
 TEST_CASE("ReplayPlayer sub-tick frames do not advance", "[replay_player]") {
-    TempDir tmp("subtick");
-    const fs::path p = writeRamp(tmp.path, 60, 10);
+    fl::test::TempDirGuard tmp{"flrep_player_subtick"};
+    const fs::path p = writeRamp(tmp.path(), 60, 10);
     ReplayPlayer player;
     REQUIRE(player.open(p));
     RenderSnapshot snap;
@@ -220,8 +209,8 @@ TEST_CASE("ReplayPlayer sub-tick frames do not advance", "[replay_player]") {
 }
 
 TEST_CASE("ReplayPlayer seeks land on a complete world, not a stale one", "[replay_player]") {
-    TempDir tmp("seek");
-    const fs::path p = writeRamp(tmp.path, 200, 20);
+    fl::test::TempDirGuard tmp{"flrep_player_seek"};
+    const fs::path p = writeRamp(tmp.path(), 200, 20);
 
     ReplayPlayer player;
     REQUIRE(player.open(p));
@@ -280,8 +269,8 @@ TEST_CASE("ReplayPlayer seeks land on a complete world, not a stale one", "[repl
 }
 
 TEST_CASE("ReplayPlayer progress and elapsed track the cursor", "[replay_player]") {
-    TempDir tmp("progress");
-    const fs::path p = writeRamp(tmp.path, 121, 30);
+    fl::test::TempDirGuard tmp{"flrep_player_progress"};
+    const fs::path p = writeRamp(tmp.path(), 121, 30);
     ReplayPlayer player;
     REQUIRE(player.open(p));
 
@@ -292,8 +281,8 @@ TEST_CASE("ReplayPlayer progress and elapsed track the cursor", "[replay_player]
 }
 
 TEST_CASE("ReplayPlayer stops at the end and stays there", "[replay_player]") {
-    TempDir tmp("end");
-    const fs::path p = writeRamp(tmp.path, 30, 10);
+    fl::test::TempDirGuard tmp{"flrep_player_end"};
+    const fs::path p = writeRamp(tmp.path(), 30, 10);
     ReplayPlayer player;
     REQUIRE(player.open(p));
     RenderSnapshot snap;
@@ -314,8 +303,8 @@ TEST_CASE("ReplayPlayer stops at the end and stays there", "[replay_player]") {
 }
 
 TEST_CASE("ReplayPlayer picks up a callsign from a mid-recording join", "[replay_player]") {
-    TempDir tmp("roster");
-    const fs::path p = writeRamp(tmp.path, 30, 10);
+    fl::test::TempDirGuard tmp{"flrep_player_roster"};
+    const fs::path p = writeRamp(tmp.path(), 30, 10);
     ReplayPlayer player;
     REQUIRE(player.open(p));
 
@@ -332,8 +321,8 @@ TEST_CASE("ReplayPlayer picks up a callsign from a mid-recording join", "[replay
 }
 
 TEST_CASE("ReplayPlayer close leaves a reusable object", "[replay_player]") {
-    TempDir tmp("close");
-    const fs::path p = writeRamp(tmp.path, 30, 10);
+    fl::test::TempDirGuard tmp{"flrep_player_close"};
+    const fs::path p = writeRamp(tmp.path(), 30, 10);
     ReplayPlayer player;
     REQUIRE(player.open(p));
     player.close();
@@ -349,8 +338,8 @@ TEST_CASE("ReplayPlayer close leaves a reusable object", "[replay_player]") {
 }
 
 TEST_CASE("ReplayPlayer keyframe ticks match the file's seek points", "[replay_player]") {
-    TempDir tmp("keys");
-    const fs::path p = writeRamp(tmp.path, 100, 25);
+    fl::test::TempDirGuard tmp{"flrep_player_keys"};
+    const fs::path p = writeRamp(tmp.path(), 100, 25);
     ReplayPlayer player;
     REQUIRE(player.open(p));
 

@@ -6,6 +6,7 @@
 #include "render/ProceduralTerrainChunk.h"
 #include "render/TerrainChunkIO.h"
 #include "render/TerrainManifest.h"
+#include "temp_path.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -48,7 +49,7 @@ TEST_CASE("writeTerrainChunkCache / readTerrainChunkCache round-trip") {
         1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 11000, 12000,
     };
 
-    const auto tmpPath = (std::filesystem::temp_directory_path() / "fl_test_chunk_io.u16").string();
+    const auto tmpPath = fl::test::uniqueTempPath("fl_test_chunk_io", ".u16").string();
 
     REQUIRE(writeTerrainChunkCache(tmpPath, src, W, H));
 
@@ -65,10 +66,9 @@ TEST_CASE("writeTerrainChunkCache / readTerrainChunkCache round-trip") {
 }
 
 TEST_CASE("writeTerrainChunkCache creates missing parent directories") {
-    const auto dir = std::filesystem::temp_directory_path() / "fl_test_chunk_io_subdir" / "lod0";
+    // uniqueTempPath creates nothing, so the parent really is missing -- which is the point here.
+    const auto dir = fl::test::uniqueTempPath("fl_test_chunk_io_subdir") / "lod0";
     const auto path = (dir / "chunk_000000_000000.u16").string();
-
-    std::filesystem::remove_all(dir.parent_path());
 
     const uint16_t val = 33318u; // elevation 550 m encoded
     REQUIRE(writeTerrainChunkCache(path, &val, 1, 1));
@@ -83,7 +83,7 @@ TEST_CASE("readTerrainChunkCache returns empty for missing file") {
 }
 
 TEST_CASE("readTerrainChunkCache returns empty for wrong magic") {
-    const auto path = (std::filesystem::temp_directory_path() / "fl_bad_magic.u16").string();
+    const auto path = fl::test::uniqueTempPath("fl_bad_magic", ".u16").string();
     // Write garbage that starts with the wrong magic.
     {
         std::ofstream f(path, std::ios::binary);

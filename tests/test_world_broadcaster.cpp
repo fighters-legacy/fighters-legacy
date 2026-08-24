@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "temp_path.h"
 #include "world_broadcaster_test_util.h"
 
 using namespace fl;
@@ -5671,9 +5672,7 @@ TEST_CASE("WorldBroadcaster: input tracing records accepted inputs only", "[worl
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
     namespace fs = std::filesystem;
-    const fs::path dir = fs::temp_directory_path() / "fl_wb_trace_test";
-    std::error_code ec;
-    fs::remove_all(dir, ec);
+    const fs::path dir = fl::test::uniqueTempPath("fl_wb_trace_test");
 
     broadcaster.setInputTraceDir(dir.string());
     connectPilotPeer(broadcaster, net, 0u);
@@ -5731,6 +5730,7 @@ TEST_CASE("WorldBroadcaster: input tracing records accepted inputs only", "[worl
     CHECK(tr.records[1].throttle == Catch::Approx(1.0f));
     CHECK(tr.records[1].buttons == 0x02u);
 
+    std::error_code ec;
     fs::remove_all(dir, ec);
 }
 
@@ -5743,9 +5743,7 @@ TEST_CASE("WorldBroadcaster: tracing disabled writes nothing", "[world_broadcast
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
     namespace fs = std::filesystem;
-    const fs::path dir = fs::temp_directory_path() / "fl_wb_trace_off_test";
-    std::error_code ec;
-    fs::remove_all(dir, ec);
+    const fs::path dir = fl::test::uniqueTempPath("fl_wb_trace_off_test");
 
     // Never call setInputTraceDir: tracing is off by default.
     connectPilotPeer(broadcaster, net, 0u);
