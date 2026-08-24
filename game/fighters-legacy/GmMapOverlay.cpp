@@ -322,25 +322,25 @@ void GmMapOverlay::renderPanel() {
     const bool isAi = (sel->flags & kWorldStatePlayerOwned) == 0;
     if (sel->formationId != 0) {
         gui->label("Order flight:");
-        if (gui->button("Engage bandits")) {
-            std::snprintf(buf, sizeof(buf), "flight order %u engage_bandits", sel->formationId);
-            sendOrder(buf);
-        }
-        if (gui->button("Rejoin")) {
-            std::snprintf(buf, sizeof(buf), "flight order %u rejoin", sel->formationId);
-            sendOrder(buf);
-        }
-        if (gui->button("Cover me")) {
-            std::snprintf(buf, sizeof(buf), "flight order %u cover_me", sel->formationId);
-            sendOrder(buf);
-        }
-        if (gui->button("Hold fire")) {
-            std::snprintf(buf, sizeof(buf), "flight order %u hold_fire", sel->formationId);
-            sendOrder(buf);
-        }
-        if (gui->button("Return to base")) {
-            std::snprintf(buf, sizeof(buf), "flight order %u return_to_base", sel->formationId);
-            sendOrder(buf);
+        // Label and verb are the only things these five buttons differ in, and the verbs are the
+        // server's own flight-order grammar -- so they are a table, not five copies of one block
+        // (#1265). A sixth order is now a row rather than another four lines to get right.
+        struct OrderButton {
+            const char* label;
+            const char* verb;
+        };
+        static constexpr OrderButton kOrders[] = {
+            {"Engage bandits", "engage_bandits"},
+            {"Rejoin", "rejoin"},
+            {"Cover me", "cover_me"},
+            {"Hold fire", "hold_fire"},
+            {"Return to base", "return_to_base"},
+        };
+        for (const OrderButton& o : kOrders) {
+            if (gui->button(o.label)) {
+                std::snprintf(buf, sizeof(buf), "flight order %u %s", sel->formationId, o.verb);
+                sendOrder(buf);
+            }
         }
     } else if (isAi) {
         if (gui->button("Form flight on this entity")) {

@@ -130,18 +130,13 @@ const char* wingmanVoiceKey(uint8_t command, WingmanResult result) {
     }
 }
 
-const fl::IClock& clockOf(const fl::IClock* c) {
-    return c ? *c : fl::SystemClock::instance();
-}
-
 } // namespace
 
 void WingmanMenu::toggle() noexcept {
     m_open = !m_open;
     if (m_open) {
         m_selected = 0;
-        m_openUntil =
-            clockOf(m_clock).now() + std::chrono::milliseconds(static_cast<long long>(kMenuTimeoutS * 1000.f));
+        m_openUntil.arm(m_clock->now(), kMenuTimeoutS);
     }
 }
 
@@ -152,7 +147,7 @@ void WingmanMenu::close() noexcept {
 void WingmanMenu::setBrevity(std::string_view line) {
     std::snprintf(m_brevity, sizeof(m_brevity), "%.*s", static_cast<int>(line.size()), line.data());
     m_brevityActive = true;
-    m_brevityUntil = clockOf(m_clock).now() + std::chrono::milliseconds(static_cast<long long>(kBrevityHoldS * 1000.f));
+    m_brevityUntil.arm(m_clock->now(), kBrevityHoldS);
 }
 
 std::optional<MsgWingmanCommand> WingmanMenu::update(IInput& input) {
@@ -160,7 +155,7 @@ std::optional<MsgWingmanCommand> WingmanMenu::update(IInput& input) {
         return std::nullopt;
 
     // An abandoned menu must not sit on the HUD forever while the player is busy flying.
-    if (clockOf(m_clock).now() >= m_openUntil) {
+    if (m_openUntil.expired(m_clock->now())) {
         m_open = false;
         return std::nullopt;
     }
@@ -170,24 +165,7 @@ std::optional<MsgWingmanCommand> WingmanMenu::update(IInput& input) {
         return std::nullopt;
     }
 
-    // Arrow/gamepad navigation, for players who would rather not hunt for a digit mid-turn.
-    if (input.isKeyJustPressed(Key::ArrowDown))
-        m_selected = (m_selected + 1) % static_cast<int>(fl::ai::kWingmanCommandCount);
-    if (input.isKeyJustPressed(Key::ArrowUp))
-        m_selected = (m_selected + static_cast<int>(fl::ai::kWingmanCommandCount) - 1) %
-                     static_cast<int>(fl::ai::kWingmanCommandCount);
-
-    int chosen = -1;
-    // Digits 1-6 select directly. The digit IS the ordinal + 1, so there is no mapping to get wrong.
-    constexpr Key kDigits[fl::ai::kWingmanCommandCount] = {Key::Num1, Key::Num2, Key::Num3,
-                                                           Key::Num4, Key::Num5, Key::Num6};
-    for (int i = 0; i < static_cast<int>(fl::ai::kWingmanCommandCount); ++i) {
-        if (input.isKeyJustPressed(kDigits[i]))
-            chosen = i;
-    }
-    if (input.isKeyJustPressed(Key::Enter))
-        chosen = m_selected;
-
+    const int chosen = pickMenuItem(input, static_cast<int>(fl::ai::kWingmanCommandCount), m_selected);
     if (chosen < 0)
         return std::nullopt;
 
@@ -242,9 +220,9 @@ void WingmanMenu::onAck(const MsgWingmanAck& ack) {
 
 std::span<const HudElement> WingmanMenu::buildElements() {
     std::size_t n = 0;
-    const auto now = clockOf(m_clock).now();
+    const auto now = m_clock->now();
 
-    if (m_brevityActive && now >= m_brevityUntil)
+    if (m_brevityActive && m_brevityUntil.expired(now))
         m_brevityActive = false;
 
     if (m_open) {

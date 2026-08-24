@@ -3,6 +3,7 @@
 
 #include "IClock.h"
 #include "IInput.h"
+#include "RadioMenuCommon.h" // MenuTimeout + pickMenuItem — the shared radio-menu skeleton (#1265)
 #include "RenderTypes.h"
 #include "net/GameProtocol.h"
 
@@ -68,9 +69,9 @@ class CommsMenu {
     int m_selected{0};
     uint16_t m_reqId{0};
     static constexpr float kMenuTimeoutS = 8.f; // auto-close an abandoned menu
-    std::chrono::steady_clock::time_point m_openUntil{};
+    MenuTimeout m_openUntil{};
     std::array<HudElement, 10> m_elements{}; // title + up to a few items
-    const IClock* m_clock{nullptr};
+    const IClock* m_clock{&SystemClock::instance()};
 };
 
 } // namespace fl

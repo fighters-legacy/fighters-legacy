@@ -3,6 +3,7 @@
 
 #include "IClock.h"
 #include "IInput.h"
+#include "RadioMenuCommon.h" // MenuTimeout + pickMenuItem — the shared radio-menu skeleton (#1265)
 #include "RenderTypes.h"
 #include "ai/WingmanCommand.h"
 #include "net/GameProtocol.h"
@@ -98,11 +99,11 @@ class WingmanMenu {
     // HudElement::text is a NON-OWNING string_view, so the backing store must outlive the frame.
     char m_brevity[64]{};
     bool m_brevityActive{false};
-    std::chrono::steady_clock::time_point m_brevityUntil{};
-    std::chrono::steady_clock::time_point m_openUntil{};
+    MenuTimeout m_brevityUntil{};
+    MenuTimeout m_openUntil{};
 
     std::array<HudElement, 10> m_elements{};
-    const fl::IClock* m_clock{nullptr};
+    const fl::IClock* m_clock{&fl::SystemClock::instance()};
 };
 
 } // namespace fl

@@ -211,6 +211,16 @@ static const fl::EntityRenderEntry* findPlayerEntry(const fl::SimRenderBridge& b
 
 // Assemble the per-frame scoreboard snapshot (#647) from the client handler's match state, scoreboard
 // rows and roster. Kept out of the overlay so ScoreboardOverlay renders a plain POD and stays testable.
+// A team's display name, with the fallback for a faction the server named no string for (#1265).
+// The scoreboard and the debrief both need it, and a scoreboard reading "Blue Squadron" beside a
+// debrief reading "Team 2" is the kind of split nobody notices until a screenshot shows both.
+static std::string teamDisplayName(const ClientNetEventHandler& h, uint16_t factionIndex) {
+    std::string name = h.factionName(factionIndex);
+    if (name.empty())
+        name = "Team " + std::to_string(factionIndex);
+    return name;
+}
+
 static fl::ScoreboardData buildScoreboardData(const ClientNetEventHandler& h) {
     fl::ScoreboardData sb;
     const auto& ms = h.matchState();
@@ -226,9 +236,7 @@ static fl::ScoreboardData buildScoreboardData(const ClientNetEventHandler& h) {
     for (const auto& t : ms.teamScores) {
         fl::ScoreboardTeam team;
         team.factionIndex = t.factionIndex;
-        team.name = h.factionName(t.factionIndex);
-        if (team.name.empty())
-            team.name = "Team " + std::to_string(t.factionIndex);
+        team.name = teamDisplayName(h, t.factionIndex);
         team.score = t.score;
         sb.teams.push_back(std::move(team));
     }
@@ -248,8 +256,8 @@ static fl::ScoreboardData buildScoreboardData(const ClientNetEventHandler& h) {
 }
 
 static void updateAudioListener(IAudio& audio, const CameraView& cam, const glm::vec3& vel) {
-    const glm::vec3 fwd = -glm::vec3(cam.view[2][0], cam.view[2][1], cam.view[2][2]);
-    const glm::vec3 up = glm::vec3(cam.view[1][0], cam.view[1][1], cam.view[1][2]);
+    const glm::vec3 fwd = cam.forward();
+    const glm::vec3 up = cam.up();
     const float pos[3] = {static_cast<float>(cam.worldOrigin.x), static_cast<float>(cam.worldOrigin.y),
                           static_cast<float>(cam.worldOrigin.z)};
     const float fwdA[3] = {fwd.x, fwd.y, fwd.z};
@@ -257,6 +265,18 @@ static void updateAudioListener(IAudio& audio, const CameraView& cam, const glm:
     const float velA[3] = {vel.x, vel.y, vel.z};
     audio.setListenerTransform(pos, fwdA, upA);
     audio.setListenerVelocity(velA);
+}
+
+// Where a captured frame goes: <userdata>/screenshots/<prefix>-<unix seconds>.png (#1265).
+//
+// The console `screenshot` command and the photo-mode shutter both write here, and both had their
+// own copy of the directory, the create_directories and the timestamp format. One body is what keeps
+// a player's two capture paths in the same folder with the same naming.
+static fs::path timestampedCapturePath(const fs::path& userDataDir, const char* prefix) {
+    const fs::path dir = userDataDir / "screenshots";
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    return dir / (std::string(prefix) + "-" + std::to_string(static_cast<long long>(std::time(nullptr))) + ".png");
 }
 
 // Wall-clock epoch milliseconds — the join key the frame-stats document (#782) shares with any
@@ -524,6 +544,28 @@ struct GameServices {
     // applies it via IRenderer::setNightVision each frame.
     float nvgIntensity{0.0f};
 };
+
+// Speak one radio line: the subtitle, the optional pack OGG at radio/<voiceKey>, and the ducking
+// (#1265).
+//
+// Both the wingman brevity path and the ATC/radio transmission path end here, and #925's rule is
+// that they must be INDISTINGUISHABLE in presentation -- the same band-limiting, the same key click
+// and squelch tail, the same net gain, the same duck on the music. Two copies of that tail is two
+// chances for a wingman ack to sound like it came from somewhere else.
+//
+// What the callers still own is which net the line rides (a fixed "flight" versus the message's own
+// netId) and how long it dwells. `net == nullptr` means the net table does not know this id: the
+// line is still spoken and subtitled, dry and unducked, rather than swallowed.
+static void playRadioLine(GameServices& sv, const std::string& line, const char* voiceKey, float dwellS,
+                          const fl::RadioNetDef* net) {
+    const std::string asset = (voiceKey && voiceKey[0] != '\0') ? std::string("radio/") + voiceKey : std::string();
+    const bool asRadio = net && net->radioEffect && sv.userConfig->voice().radioEffect;
+    const fl::RadioProfile profile{};
+    sv.voiceCallouts.playText(line, asset.empty() ? nullptr : asset.c_str(), dwellS, sv.audioSettings,
+                              asRadio ? &profile : nullptr, net ? net->gain : 1.f);
+    if (net)
+        sv.voiceChat.mixer().holdDuck(dwellS);
+}
 
 // Per-session objects — created in startGame(), torn down in stopGame(). Hold pointers/refs into
 // GameServices, so they are destroyed first (declared after services in GameImpl); stopGame() also
@@ -1763,17 +1805,8 @@ void Game::startGame(const std::string& mission) {
         // wingman ack gets the same band-limiting, squelch and ducking an ATC call does. A pack that
         // ships no radio/<key> OGG degrades to the subtitle, which is what happens today.
         d.services.wingmanMenu.brevityCallback = [&d](const std::string& line, const char* voiceKey) {
-            const std::string asset =
-                (voiceKey && voiceKey[0] != '\0') ? std::string("radio/") + voiceKey : std::string();
             const fl::RadioNetTable& nets = d.services.voiceChat.nets();
-            const fl::RadioNetDef* net = nets.byIndex(nets.indexOf("flight"));
-            const bool asRadio = net && net->radioEffect && d.services.userConfig->voice().radioEffect;
-            const fl::RadioProfile profile{};
-            d.services.voiceCallouts.playText(line, asset.empty() ? nullptr : asset.c_str(), 4.f,
-                                              d.services.audioSettings, asRadio ? &profile : nullptr,
-                                              net ? net->gain : 1.f);
-            if (net)
-                d.services.voiceChat.mixer().holdDuck(4.f);
+            playRadioLine(d.services, line, voiceKey, /*dwellS=*/4.f, nets.byIndex(nets.indexOf("flight")));
         };
 
         // Voice wingman commands (#935): a matched phrase becomes the SAME MsgWingmanCommand the
@@ -1800,23 +1833,12 @@ void Game::startGame(const std::string& mission) {
         // radio/<voiceKey> if one exists, else text-only). The console already logged the raw line.
         d.session.clientHandler->radioCallback = [&d](const char* speaker, const char* text, const char* voiceKey,
                                                       uint16_t seconds, uint8_t netId) {
-            std::string line =
+            const std::string line =
                 (speaker && speaker[0] != '\0') ? std::string(speaker) + ": " + (text ? text : "") : (text ? text : "");
-            std::string asset;
-            if (voiceKey && voiceKey[0] != '\0')
-                asset = std::string("radio/") + voiceKey;
             const float dwell = seconds > 0 ? static_cast<float>(seconds) : 4.f;
-            // #925: a synthetic transmission rides the SAME radio net as human voice, so it gets the
-            // same band-limiting, the same key click and squelch tail, the same net gain, and it ducks
-            // the music the same way. A human and an ATC call must be indistinguishable in presentation.
-            const fl::RadioNetDef* net = d.services.voiceChat.nets().byIndex(netId);
-            const bool asRadio = net && net->radioEffect && d.services.userConfig->voice().radioEffect;
-            const fl::RadioProfile profile{};
-            d.services.voiceCallouts.playText(line, asset.empty() ? nullptr : asset.c_str(), dwell,
-                                              d.services.audioSettings, asRadio ? &profile : nullptr,
-                                              net ? net->gain : 1.f);
-            if (net)
-                d.services.voiceChat.mixer().holdDuck(dwell);
+            // #925: a synthetic transmission rides the SAME radio net as human voice, which is what
+            // playRadioLine is for -- here the net is the message's own, not a fixed one.
+            playRadioLine(d.services, line, voiceKey, dwell, d.services.voiceChat.nets().byIndex(netId));
         };
         // Voice comms (Epic J, #532). The net table is server-authoritative and arrives once after
         // ConnectAck; frames arrive on the dedicated voice channel and go straight to the mixer.
@@ -1975,10 +1997,7 @@ void Game::startGame(const std::string& mission) {
                 if (!args.empty() && !args[0].empty()) {
                     out = fs::path(std::string(args[0]));
                 } else {
-                    const fs::path dir = userDir / "screenshots";
-                    std::error_code ec;
-                    fs::create_directories(dir, ec);
-                    out = dir / ("screenshot-" + std::to_string(static_cast<long long>(std::time(nullptr))) + ".png");
+                    out = timestampedCapturePath(userDir, "screenshot");
                 }
                 if (!renderer->captureScreenshot(out.string().c_str()))
                     return "screenshot: capture request refused";
@@ -2211,9 +2230,7 @@ void Game::handleTransition(Screen next) {
                     int leaders = 0;
                     std::string bestName;
                     for (const auto& t : ms.teamScores) {
-                        std::string name = d.session.clientHandler->factionName(t.factionIndex);
-                        if (name.empty())
-                            name = "Team " + std::to_string(t.factionIndex);
+                        const std::string name = teamDisplayName(*d.session.clientHandler, t.factionIndex);
                         teamScores.emplace_back(name, static_cast<int>(t.score));
                         if (static_cast<int>(t.score) == best) {
                             ++leaders;
@@ -2793,11 +2810,7 @@ void Game::run() {
                 if (d.services.photoCaptureRequest) {
                     d.services.photoCaptureRequest = false;
                     if (d.services.p.renderer) {
-                        const fs::path dir = d.services.userDataDir / "screenshots";
-                        std::error_code ec;
-                        fs::create_directories(dir, ec);
-                        const fs::path out =
-                            dir / ("photo-" + std::to_string(static_cast<long long>(std::time(nullptr))) + ".png");
+                        const fs::path out = timestampedCapturePath(d.services.userDataDir, "photo");
                         if (d.services.p.renderer->captureScreenshot(out.string().c_str()))
                             d.services.gameConsole->print("[photo] writing " + out.string());
                         else
@@ -2852,8 +2865,8 @@ void Game::run() {
             // spatialise effects and drive own-ship haptics. Set once per frame before the router
             // processes any effect.
             {
-                const glm::vec3 fwd = -glm::vec3(cam.view[2][0], cam.view[2][1], cam.view[2][2]);
-                const glm::vec3 up = glm::vec3(cam.view[1][0], cam.view[1][1], cam.view[1][2]);
+                const glm::vec3 fwd = cam.forward();
+                const glm::vec3 up = cam.up();
                 d.services.sfxManager.updateListener(fwd, up);
                 d.services.effectRouter.setCameraOrigin(cam.worldOrigin);
                 // No ownship in a replay: effects are all "someone else's".

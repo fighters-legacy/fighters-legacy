@@ -8,20 +8,17 @@
 #include "flight/LocalFrame.h"    // pitchOf / bankOf / headingOf / enuBasis / radialUp
 #include "render/HudProjection.h" // worldToHud / hudAspect (#692) for the flight-path marker
 
+#include "math/Angles.h" // kTwoPi -- the one pi (#1246)
 #include <algorithm>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
 namespace fl {
-
-// Default HUD phosphor color — bright military green.
-static constexpr float kHudR = 0.0f;
-static constexpr float kHudG = 1.0f;
-static constexpr float kHudB = 0.0f;
 
 // ── appenders ────────────────────────────────────────────────────────────────
 // The push trio now forwards onto the shared builder (#1261). The signatures stay so the ~60 draw
@@ -37,6 +34,18 @@ bool FlightHud::pushText(HudAlign align, float x, float y, float r, float g, flo
 
 bool FlightHud::pushLine(float x0, float y0, float x1, float y1, float thick, float r, float g, float b, float a) {
     return m_hud.line(x0, y0, x1, y1, thick, r, g, b, a);
+}
+
+void FlightHud::pushCircle(float cx, float cy, float rad, float thick, float aspect) {
+    // Walk the rim from 0 rad and close on the start point at i == 8. `rad / aspect` on the x axis is
+    // what keeps it circular in the HUD's normalised space rather than stretched by the viewport.
+    glm::vec2 prev{cx + rad / aspect, cy};
+    for (int i = 1; i <= 8; ++i) {
+        const float a = static_cast<float>(i) * (kTwoPi<float> / 8.0f);
+        const glm::vec2 cur{cx + std::cos(a) * rad / aspect, cy + std::sin(a) * rad};
+        pushLine(prev.x, prev.y, cur.x, cur.y, thick, kHudR, kHudG, kHudB);
+        prev = cur;
+    }
 }
 
 bool FlightHud::pushRect(float x0, float y0, float x1, float y1, float r, float g, float b, float a) {
@@ -273,13 +282,7 @@ void FlightHud::drawFpmAndHorizon(Ctx& c) {
 
     // Circle (8-segment) + three wings: left, right, and top stub.
     constexpr float rad = 0.012f;
-    glm::vec2 prev{fpm.x + rad / c.aspect, fpm.y};
-    for (int i = 1; i <= 8; ++i) {
-        const float a = static_cast<float>(i) * (2.0f * 3.14159265f / 8.0f);
-        const glm::vec2 cur{fpm.x + std::cos(a) * rad / c.aspect, fpm.y + std::sin(a) * rad};
-        pushLine(prev.x, prev.y, cur.x, cur.y, 1.0f, kHudR, kHudG, kHudB);
-        prev = cur;
-    }
+    pushCircle(fpm.x, fpm.y, rad, 1.0f, c.aspect);
     pushLine(fpm.x - rad / c.aspect, fpm.y, fpm.x - 0.03f / c.aspect, fpm.y, 1.0f, kHudR, kHudG, kHudB); // left wing
     pushLine(fpm.x + rad / c.aspect, fpm.y, fpm.x + 0.03f / c.aspect, fpm.y, 1.0f, kHudR, kHudG, kHudB); // right wing
     pushLine(fpm.x, fpm.y - rad, fpm.x, fpm.y - 0.02f, 1.0f, kHudR, kHudG, kHudB);                       // top stub
