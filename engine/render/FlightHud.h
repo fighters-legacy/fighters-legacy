@@ -14,6 +14,13 @@
 
 namespace fl {
 
+// The HUD phosphor colour — bright military green. One definition for all four of this class's TUs
+// (#1265): FlightHudCombat.cpp carried its own anonymous-namespace copy, and a HUD whose combat
+// symbology is a different green from its flight symbology is a bug nobody would think to look for.
+inline constexpr float kHudR = 0.0f;
+inline constexpr float kHudG = 1.0f;
+inline constexpr float kHudB = 0.0f;
+
 // Static per-station facts the HUD needs to name and aim weapons (#438/#641). Resolved once when the
 // client loads the aircraft's def (Game.cpp buildManualFor) and pushed via setStationInfo(); the
 // dynamic facts (selected station, rounds, seeker lock) ride the snapshot on EntityRenderEntry.
@@ -76,6 +83,12 @@ class FlightHud : public IHud {
     bool pushText(HudAlign align, float x, float y, float r, float g, float b, const char* fmt, ...);
     bool pushLine(float x0, float y0, float x1, float y1, float thick, float r, float g, float b, float a = 1.0f);
     bool pushRect(float x0, float y0, float x1, float y1, float r, float g, float b, float a);
+
+    // An 8-segment circle in HUD colour, radius corrected for aspect so it is round rather than oval
+    // (#1265). Two of this class's TUs drew one — the flight-path marker and the gun pipper — and
+    // each carried its own raw 3.14159265f. Eight segments is deliberate: the HUD is a stroked
+    // phosphor display, and a smoother circle would cost elements from a capped arena.
+    void pushCircle(float cx, float cy, float rad, float thick, float aspect);
 
     // Element/string storage. Caps raised for the tape/ladder tick marks and their labels (#438): the
     // classic layout drew ~15 elements; a full tactical HUD with tapes + scope is far more.

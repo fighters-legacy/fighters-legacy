@@ -2,6 +2,7 @@
 #include "ChatOverlay.h"
 
 #include "IGui.h"
+#include "render/HudBuilder.h" // fadeAlpha — the one timed-line fade curve (#1265)
 
 #include <algorithm>
 #include <cstdio>
@@ -55,7 +56,7 @@ std::span<const HudElement> ChatOverlay::buildElements() {
     for (std::size_t i = 0; i < n; ++i) {
         const Line& l = m_lines[i];
         const float age = std::chrono::duration<float>(now - l.spawn).count();
-        const float alpha = age <= kDwellSecs ? 1.f : std::clamp(1.f - (age - kDwellSecs) / kFadeSecs, 0.f, 1.f);
+        const float alpha = fadeAlpha(age, kDwellSecs, kFadeSecs);
         HudElement& e = m_elems[i];
         e = {};
         e.type = HudElement::Type::Text;

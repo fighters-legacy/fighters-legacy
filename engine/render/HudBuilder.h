@@ -23,6 +23,22 @@ namespace fl {
 // copies into the builder's own arena, which lives as long as the builder. `textView()` does NOT
 // copy -- use it only for storage that already outlives the frame (a member string, a literal).
 
+// Opacity of a timed HUD line: fully opaque for `dwellSecs`, then linear to nothing over
+// `fadeSecs` (#1265).
+//
+// The chat overlay and the kill feed are the two timed line-stacks, and both spelled this out. Their
+// dwell and fade DIFFER on purpose (10/2 versus 8/2) -- that is what makes them parameters rather
+// than constants -- but the curve is one rule, and two copies of it is two chances for one stack to
+// snap off while the other fades.
+[[nodiscard]] inline float fadeAlpha(float ageSecs, float dwellSecs, float fadeSecs) noexcept {
+    if (ageSecs <= dwellSecs)
+        return 1.f;
+    if (fadeSecs <= 0.f)
+        return 0.f; // no fade window: the line ends the instant its dwell does
+    const float t = 1.f - (ageSecs - dwellSecs) / fadeSecs;
+    return t < 0.f ? 0.f : (t > 1.f ? 1.f : t);
+}
+
 // A fullscreen opaque background. Eight screens spelled this out; there is nothing to parameterise
 // but the colour.
 [[nodiscard]] inline HudElement hudFullscreenBg(float r = 0.f, float g = 0.f, float b = 0.f, float a = 1.f) {

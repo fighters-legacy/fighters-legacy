@@ -18,9 +18,6 @@
 namespace fl {
 
 namespace {
-constexpr float kHudR = 0.0f;
-constexpr float kHudG = 1.0f;
-constexpr float kHudB = 0.0f;
 
 void iffColor(uint8_t ident, float& r, float& g, float& b) {
     r = 1.0f;

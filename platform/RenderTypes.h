@@ -208,6 +208,18 @@ struct CameraView {
     glm::mat4 view{1.0f};
     glm::mat4 proj{1.0f};
     glm::dvec3 worldOrigin{};
+
+    // The camera's world-space basis, read off the view matrix's rows (#1265). A view matrix is the
+    // INVERSE of the camera's transform, so its rows are the camera axes -- and the third row points
+    // BACKWARD, which is the sign every hand-written copy of this had to remember. Two audio-listener
+    // sites spelled it out; a third would eventually get the negation wrong and put the world behind
+    // the player.
+    [[nodiscard]] glm::vec3 forward() const noexcept {
+        return -glm::vec3(view[2][0], view[2][1], view[2][2]);
+    }
+    [[nodiscard]] glm::vec3 up() const noexcept {
+        return {view[1][0], view[1][1], view[1][2]};
+    }
     // World-space planet centre ({0,-R,0} for the spherical Earth), for the terrain shader's radial
     // "up" (#475). Set by SceneRenderer from the terrain streamer's baked radius; {0,0,0} default is
     // harmless when no terrain sphere is present (terrain shading is the only consumer).

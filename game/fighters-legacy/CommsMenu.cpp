@@ -4,13 +4,6 @@
 #include <cstring>
 
 namespace fl {
-namespace {
-
-const fl::IClock& clockOf(const fl::IClock* c) {
-    return c ? *c : fl::SystemClock::instance();
-}
-
-} // namespace
 
 std::span<const CommsMenu::Item> CommsMenu::items() const noexcept {
     // Root page: ATC now, a Flight slot reserved for the #610 wingman page. ATC page verb strings
@@ -50,7 +43,7 @@ void CommsMenu::openAt(Page p) noexcept {
     m_open = true;
     m_page = p;
     m_selected = 0;
-    m_openUntil = clockOf(m_clock).now() + std::chrono::milliseconds(static_cast<long long>(kMenuTimeoutS * 1000.f));
+    m_openUntil.arm(m_clock->now(), kMenuTimeoutS);
 }
 
 void CommsMenu::toggle() noexcept {
@@ -69,7 +62,7 @@ std::optional<MsgRadioCommand> CommsMenu::update(IInput& input) {
         return std::nullopt;
 
     // An abandoned menu must not sit on the HUD forever while the player is busy flying.
-    if (clockOf(m_clock).now() >= m_openUntil) {
+    if (m_openUntil.expired(m_clock->now())) {
         m_open = false;
         return std::nullopt;
     }
@@ -85,26 +78,8 @@ std::optional<MsgRadioCommand> CommsMenu::update(IInput& input) {
     }
 
     const auto its = items();
-    const int count = static_cast<int>(its.size());
-    if (count <= 0)
-        return std::nullopt;
-
-    if (input.isKeyJustPressed(Key::ArrowDown))
-        m_selected = (m_selected + 1) % count;
-    if (input.isKeyJustPressed(Key::ArrowUp))
-        m_selected = (m_selected + count - 1) % count;
-
-    int chosen = -1;
-    constexpr Key kDigits[9] = {Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5,
-                                Key::Num6, Key::Num7, Key::Num8, Key::Num9};
-    for (int i = 0; i < count && i < 9; ++i) {
-        if (input.isKeyJustPressed(kDigits[i]))
-            chosen = i;
-    }
-    if (input.isKeyJustPressed(Key::Enter))
-        chosen = m_selected;
-
-    if (chosen < 0 || chosen >= count)
+    const int chosen = pickMenuItem(input, static_cast<int>(its.size()), m_selected);
+    if (chosen < 0)
         return std::nullopt;
 
     const Item& item = its[static_cast<std::size_t>(chosen)];

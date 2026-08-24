@@ -19,12 +19,6 @@
 
 namespace fl {
 
-namespace {
-constexpr float kHudR = 0.0f;
-constexpr float kHudG = 1.0f;
-constexpr float kHudB = 0.0f;
-} // namespace
-
 void FlightHud::drawCombat(Ctx& c) {
     // Selected-station facts for the pipper / CCIP.
     const bool haveSel = c.e.hasLoadout && c.e.selectedStation != 255 &&
@@ -44,14 +38,7 @@ void FlightHud::drawCombat(Ctx& c) {
         if (lead.valid) {
             if (auto p = worldToHud(c.in.camera, lead.aimPoint);
                 p && p->x > 0.02f && p->x < 0.98f && p->y > 0.02f && p->y < 0.98f) {
-                constexpr float rad = 0.010f;
-                glm::vec2 prev{p->x + rad / c.aspect, p->y};
-                for (int i = 1; i <= 8; ++i) {
-                    const float a = static_cast<float>(i) * (2.0f * 3.14159265f / 8.0f);
-                    const glm::vec2 cur{p->x + std::cos(a) * rad / c.aspect, p->y + std::sin(a) * rad};
-                    pushLine(prev.x, prev.y, cur.x, cur.y, 1.5f, kHudR, kHudG, kHudB);
-                    prev = cur;
-                }
+                pushCircle(p->x, p->y, /*rad=*/0.010f, /*thick=*/1.5f, c.aspect);
                 pushLine(p->x, p->y, p->x, p->y, 2.0f, kHudR, kHudG, kHudB); // centre dot
             }
         }
