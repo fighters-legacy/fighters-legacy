@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "http/CurlHttpClient.h"
 
+#include "GlobalLibRef.h" // one ref-counted process-global library init (#1265)
+
 #include <curl/curl.h>
 
-#include <atomic>
 #include <condition_variable>
 #include <cstring>
 #include <deque>
@@ -17,8 +18,11 @@
 namespace fl {
 
 namespace {
-std::atomic<int> g_curlRefCount{0}; // curl_global_init/cleanup refcount, mirrors ENet's g_enetRefCount
-}
+// curl_global_init/cleanup are process-global and not ref-counted. This was an ATOMIC counter, which
+// does not order the init against the observers of the count; GlobalLibRef holds a mutex across the
+// init so nobody sees a reference to a library that is still coming up (#1265).
+GlobalLibRef g_curlRef;
+} // namespace
 
 struct CurlHttpClient::Impl {
     explicit Impl(ILogger* log) : logger(log) {}
@@ -221,12 +225,9 @@ CurlHttpClient::~CurlHttpClient() {
 bool CurlHttpClient::init() {
     if (m_impl->running)
         return true;
-    if (g_curlRefCount.fetch_add(1) == 0) {
-        if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
-            g_curlRefCount.fetch_sub(1);
-            m_impl->lastError = "curl_global_init failed";
-            return false;
-        }
+    if (!g_curlRef.acquire([] { return curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK; })) {
+        m_impl->lastError = "curl_global_init failed";
+        return false;
     }
     m_impl->running = true;
     m_impl->worker = std::thread([this] { m_impl->run(); });
@@ -262,8 +263,7 @@ void CurlHttpClient::shutdown() {
                 it->second->onHttpComplete(r.id, HttpStatus::Cancelled, 0, nullptr);
         }
     }
-    if (g_curlRefCount.fetch_sub(1) == 1)
-        curl_global_cleanup();
+    g_curlRef.release([] { curl_global_cleanup(); });
 }
 
 HttpRequestId CurlHttpClient::request(const HttpRequestOptions& options, IHttpClientHandler* handler) {

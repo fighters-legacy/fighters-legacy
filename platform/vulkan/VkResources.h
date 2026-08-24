@@ -143,6 +143,12 @@ class VkResourceManager {
         return m_supportsASTC4x4;
     }
 
+    // One-shot command buffer for transfers: allocate + begin, then end + submit + wait + free.
+    // Public because VkRenderer's screenshot readback and font-atlas upload run on the SAME pool and
+    // queue this manager was initialised with, and used to open-code the pair (#1265).
+    VkCommandBuffer beginOneShot();
+    void endOneShot(VkCommandBuffer cmd);
+
   private:
     // ── Upload helpers ────────────────────────────────────────────────────
     bool createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VmaMemoryUsage memUsage, VkBuffer& buf,
@@ -158,10 +164,6 @@ class VkResourceManager {
     // ktxHandle is a ktxTexture2* cast to void* to avoid exposing ktx.h in this header.
     bool createGpuImageCompressed(const uint8_t* data, VkDeviceSize dataSize, uint32_t width, uint32_t height,
                                   uint32_t numMips, VkFormat format, void* ktxHandle, GpuTexture& tex);
-
-    // One-shot command buffer for transfers.
-    VkCommandBuffer beginOneShot();
-    void endOneShot(VkCommandBuffer cmd);
 
     // ── Deferred deletion ─────────────────────────────────────────────────
     static constexpr uint32_t kDeferFrames = 2; // MAX_FRAMES_IN_FLIGHT

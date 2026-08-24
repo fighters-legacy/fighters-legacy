@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "GnsNetwork.h"
 
+#include "GlobalLibRef.h" // one ref-counted process-global library init (#1265)
+
+#include "NetBackendCommon.h" // classifyBindAddress — one meaning per bind address (#1265)
+
 #include <steam/isteamnetworkingutils.h>
 #include <steam/steamnetworkingsockets.h>
 
 #include <chrono>
 #include <cstdint>
 #include <cstring>
-#include <mutex>
 #include <thread>
 
 namespace fl {
@@ -18,8 +21,7 @@ namespace fl {
 // kill only on the last, guarded by a mutex. Lets N GnsNetwork instances coexist in one process.
 // -------------------------------------------------------------------------
 namespace {
-std::mutex g_gnsInitMutex;
-int g_gnsRefCount = 0;
+GlobalLibRef g_gnsRef;
 
 // The connection-status callback is a per-connection config value; accepted connections inherit it
 // (and the ConnectionUserData) from their listen socket. The trampoline recovers the owning
@@ -49,20 +51,17 @@ GnsNetwork::~GnsNetwork() {
 bool GnsNetwork::init() {
     if (m_initialized)
         return true;
-    std::lock_guard<std::mutex> lock(g_gnsInitMutex);
-    if (g_gnsRefCount == 0) {
-        SteamNetworkingErrMsg errMsg{};
-        if (!GameNetworkingSockets_Init(nullptr, errMsg)) {
-            m_lastError = std::string("GameNetworkingSockets_Init failed: ") + errMsg;
-            return false;
-        }
+    SteamNetworkingErrMsg errMsg{};
+    if (!g_gnsRef.acquire([&errMsg] { return GameNetworkingSockets_Init(nullptr, errMsg); })) {
+        m_lastError = std::string("GameNetworkingSockets_Init failed: ") + errMsg;
+        return false;
     }
-    ++g_gnsRefCount;
     m_sockets = SteamNetworkingSockets();
     if (!m_sockets) {
+        // Init succeeded but our own follow-up did not: hand the reference straight back, which
+        // tears GNS down iff nobody else holds one.
         m_lastError = "SteamNetworkingSockets() returned null";
-        if (--g_gnsRefCount == 0)
-            GameNetworkingSockets_Kill();
+        g_gnsRef.release([] { GameNetworkingSockets_Kill(); });
         return false;
     }
     m_initialized = true;
@@ -90,9 +89,7 @@ void GnsNetwork::shutdown() {
         m_sockets = nullptr;
     }
     if (m_initialized) {
-        std::lock_guard<std::mutex> lock(g_gnsInitMutex);
-        if (--g_gnsRefCount == 0)
-            GameNetworkingSockets_Kill();
+        g_gnsRef.release([] { GameNetworkingSockets_Kill(); });
         m_initialized = false;
     }
     m_isServer = false;
@@ -114,20 +111,26 @@ bool GnsNetwork::bind(const char* address, uint16_t port, int maxClients) {
     }
     SteamNetworkingIPAddr addr;
     addr.Clear();
-    if (!address || address[0] == '\0' || std::strcmp(address, "0.0.0.0") == 0) {
+    switch (classifyBindAddress(address)) {
+    case BindAddrKind::AnyV4:
         addr.SetIPv4(0, port); // INADDR_ANY (IPv4-mapped)
-    } else if (std::strcmp(address, "::") == 0) {
+        break;
+    case BindAddrKind::AnyV6:
         addr.Clear();
         addr.m_port = port; // all-zero IPv6 = in6addr_any
-    } else if (!addr.ParseString(address)) {
-        // ParseString accepts "ip" or "ip:port"; retry with the port appended for a bare IP.
-        std::string withPort = std::string(address) + ":" + std::to_string(port);
-        if (!addr.ParseString(withPort.c_str())) {
-            m_lastError = "invalid bind address";
-            return false;
+        break;
+    case BindAddrKind::Literal:
+        if (!addr.ParseString(address)) {
+            // ParseString accepts "ip" or "ip:port"; retry with the port appended for a bare IP.
+            const std::string withPort = std::string(address) + ":" + std::to_string(port);
+            if (!addr.ParseString(withPort.c_str())) {
+                m_lastError = "invalid bind address";
+                return false;
+            }
+        } else {
+            addr.m_port = port;
         }
-    } else {
-        addr.m_port = port;
+        break;
     }
 
     SteamNetworkingConfigValue_t opts[3];

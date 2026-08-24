@@ -15,6 +15,7 @@
 #include "NetStats.h"
 #include <ILogger.h>
 #include <Platform.h>
+#include <StdoutLogger.h> // the shared stdout logger — the local copy had drifted (#1265)
 #include <chrono>
 #include <csignal>
 #include <cstdio>
@@ -30,25 +31,6 @@ using namespace fl;
 // ---------------------------------------------------------------------------
 
 static constexpr const char* kVersion = "0.1.0";
-
-// ---------------------------------------------------------------------------
-// Minimal stdout logger (identical to fl-server)
-// ---------------------------------------------------------------------------
-
-struct StdoutLogger : ILogger {
-    void log(LogLevel level, const char* /*file*/, int /*line*/, const char* message) override {
-        const char* tag = level == LogLevel::Debug  ? "DEBUG"
-                          : level == LogLevel::Info ? "INFO "
-                          : level == LogLevel::Warn ? "WARN "
-                                                    : "ERROR";
-        std::printf("[%s] %s\n", tag, message);
-        std::fflush(stdout);
-    }
-    void setMinLevel(LogLevel) override {}
-    void flush() override {
-        std::fflush(stdout);
-    }
-};
 
 // ---------------------------------------------------------------------------
 // Event handler
@@ -176,7 +158,11 @@ int main(int argc, char** argv) {
 
     // ---- Set up platform ----
     Platform p;
-    p.logger = std::make_unique<StdoutLogger>();
+    // net_check is a diagnostic: it prints EVERYTHING, which is what the local copy did by ignoring
+    // setMinLevel. The shared logger defaults to Info, so ask for the floor explicitly (#1265).
+    auto logger = std::make_unique<StdoutLogger>();
+    logger->setMinLevel(LogLevel::Trace);
+    p.logger = std::move(logger);
     p.network = createENetNetwork();
 
     ILogger* log = p.logger.get();

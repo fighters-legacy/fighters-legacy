@@ -237,7 +237,6 @@ class VkRenderer : public IRenderer {
 
     bool createAttachmentImage(uint32_t width, uint32_t height, VkFormat format, VkImageUsageFlags usage,
                                VkImageAspectFlags aspect, VkImage& image, VkDeviceMemory& memory, VkImageView& view);
-    static uint32_t findMemoryType(VkPhysicalDevice physDevice, uint32_t typeFilter, VkMemoryPropertyFlags props);
 
     // ── Tonemap descriptor ─────────────────────────────────────────────────
     bool createTonemapDescriptors();
