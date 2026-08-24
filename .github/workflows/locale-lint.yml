@@ -24,6 +24,13 @@ jobs:
         with:
           gcc: 'true'
 
+      # This job configures the full debug preset, which downloads every FetchContent dependency,
+      # and had no cache at all (#1265) — a fresh download on every push and every PR.
+      - name: Cache CMake FetchContent dependencies
+        uses: ./.github/actions/cache-cmake-deps
+        with:
+          flavor: ubuntu-latest
+
       - name: Configure
         run: cmake --preset debug
 

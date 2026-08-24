@@ -44,11 +44,7 @@ if(Vulkan_FOUND AND imgui_SOURCE_DIR)
         ${imgui_SOURCE_DIR}/backends
     )
     target_link_libraries(imgui PUBLIC SDL3::SDL3 Vulkan::Vulkan)
-    set_target_properties(imgui PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
-    target_compile_options(imgui PRIVATE
-        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-w>
-        $<$<CXX_COMPILER_ID:MSVC>:/W0>
-    )
+    fl_quiet_target(imgui)
 endif()
 
 # HAL backends: std filesystem, SDL3 windowing/input, Vulkan renderer, OpenAL Soft audio, ENet networking

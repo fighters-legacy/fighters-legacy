@@ -48,10 +48,9 @@ jobs:
           gcc: 'true'
 
       - name: Cache CMake FetchContent dependencies
-        uses: actions/cache@v6
+        uses: ./.github/actions/cache-cmake-deps
         with:
-          path: build/_deps
-          key: cmake-deps-v2-ubuntu-latest-${{ hashFiles('cmake/dependencies.cmake') }}
+          flavor: ubuntu-latest
 
       # Vulkan disabled: fl-server + bot_swarm are headless and don't need the renderer/glslang.
       # Matches tools/bot_swarm/reference-env/run-benchmark.sh — a known-good Release config.
@@ -89,16 +88,12 @@ jobs:
           submodules: recursive
 
       - name: Install Vulkan SDK
-        uses: humbletim/install-vulkan-sdk@v1.2
-        with:
-          version: '1.3.290.0'
-          cache: true
+        uses: ./.github/actions/setup-vulkan-sdk
 
       - name: Cache CMake FetchContent dependencies
-        uses: actions/cache@v6
+        uses: ./.github/actions/cache-cmake-deps
         with:
-          path: build/_deps
-          key: cmake-deps-v2-windows-latest-${{ hashFiles('cmake/dependencies.cmake') }}
+          flavor: windows-latest
 
       - name: Set up MSVC developer environment
         uses: ilammy/msvc-dev-cmd@v1

@@ -54,13 +54,10 @@ jobs:
           gcc: 'true'
           python_tools: 'true'
           gns: 'true'
-
-      - name: Install lavapipe + ffmpeg
-        # Bounded like install-linux-deps: a dead mirror fails in seconds, not hours (#1216).
-        run: |
-          APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15"
-          sudo apt-get $APT_OPTS -o APT::Update::Error-Mode=any update
-          sudo apt-get $APT_OPTS install -y mesa-vulkan-drivers ffmpeg
+          # lavapipe (software Vulkan) + ffmpeg for the headless recording. Through the action's
+          # extra_packages rather than a second apt step, so they get the #1216 bounded update
+          # instead of a re-copy of it that nobody would remember to keep in sync (#1265).
+          extra_packages: 'mesa-vulkan-drivers ffmpeg'
 
       - name: Configure (Release)
         run: cmake --preset release
@@ -75,13 +72,23 @@ jobs:
       # gate and sat in release.yml's fallback-notes step; see #1032.
       - name: Record demo set (headless, lavapipe)
         env:
-          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
           RESOLUTION: ${{ inputs.resolution }}
           FPS: ${{ inputs.fps }}
           TIME_RATE: ${{ inputs.time_rate }}
           MISSION: ${{ inputs.mission }}
         run: |
           set -e
+          # Do NOT hardcode the lavapipe ICD path — the mesa package's manifest filename varies
+          # across releases (lvp_icd.x86_64.json vs lvp_icd.json), and a wrong VK_ICD_FILENAMES makes
+          # the loader report "Found no drivers" (#836 CI). ci.yml has said so since then; this step
+          # hardcoded it anyway (#1265). Discover it; fall back to loader auto-discovery.
+          LVP_ICD="$(ls /usr/share/vulkan/icd.d/lvp_icd*.json 2>/dev/null | head -n1 || true)"
+          if [ -n "$LVP_ICD" ]; then
+            echo "using lavapipe ICD: $LVP_ICD"
+            export VK_ICD_FILENAMES="$LVP_ICD"
+          else
+            echo "no lvp_icd*.json found — relying on Vulkan loader auto-discovery"
+          fi
           GAME=$(find build/release -type f -name fighters-legacy | head -1)
           SERVER=$(find build/release -type f -name fl-server | head -1)
           echo "game=$GAME server=$SERVER"
@@ -98,7 +105,7 @@ jobs:
 
       - name: Upload recordings as artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: demo-videos
           path: |

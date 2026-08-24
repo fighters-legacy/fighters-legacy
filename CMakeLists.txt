@@ -67,6 +67,7 @@ if(FL_BUILD_FUZZERS)
     add_compile_options(-fno-sanitize=unreachable -fno-sanitize=pointer-overflow -fno-sanitize=nonnull-attribute)
 endif()
 
+include(cmake/fl_helpers.cmake) # fl_add_test — shared build helpers (#1265)
 include(cmake/dependencies.cmake)
 include(cmake/layering.cmake)
 # Runs at the end of this directory scope — after every add_subdirectory() below, so all targets

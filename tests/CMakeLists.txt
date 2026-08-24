@@ -2,62 +2,44 @@
 include(CTest)
 include(Catch)
 
-# Tests are registered here as engine code lands:
-#   add_executable(test_foo foo_test.cpp)
-#   target_link_libraries(test_foo PRIVATE Catch2::Catch2WithMain engine-content)
-#   catch_discover_tests(test_foo)
+# Tests are registered here as engine code lands, one line each (#1265):
+#   fl_add_test(test_foo LIBS engine-content)
+#   fl_add_test(test_foo LIBS engine-content INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
+#   fl_add_test(test_foo LIBS engine-loop SERIAL)   # only for wall-clock-timing tests
+#
+# fl_add_test lives in cmake/fl_helpers.cmake: it builds <name> from <name>.cpp, always links
+# Catch2::Catch2WithMain, and calls catch_discover_tests. It replaced 188 hand-written four-line
+# copies of that shape, two of which had already drifted into registering their test from inside
+# the NEXT test's block. Add a new test next to TOPICALLY RELATED ones rather than at one common
+# anchor — a shared insertion point is what makes every concurrent PR conflict here.
+#
+# Anything genuinely different — the mission-harness add_test blocks, test_audio's Windows DLL copy,
+# targets taking FL_SERVER_BIN — stays written out longhand below.
 
-add_executable(test_renderer test_renderer.cpp)
-target_link_libraries(test_renderer PRIVATE Catch2::Catch2WithMain platform-hal)
-target_include_directories(test_renderer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_renderer)
+fl_add_test(test_renderer LIBS platform-hal INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
 # MeshNodePlan (#839/#882): the glTF scene-graph walk + variant node-set filter + articulation-pose
 # composition behind node-aware mesh loading. GPU-free by construction, so it runs in every CI leg.
-add_executable(test_mesh_node_plan test_mesh_node_plan.cpp)
-target_link_libraries(test_mesh_node_plan PRIVATE Catch2::Catch2WithMain platform-meshgraph)
-target_include_directories(test_mesh_node_plan PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_mesh_node_plan)
+fl_add_test(test_mesh_node_plan LIBS platform-meshgraph INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
 # MeshArticulation (#840): the channel registry, clip parser and scrub sampler. Engine-side and
 # GPU-free -- the rig is parsed from the same .glb bytes the renderer uploads.
-add_executable(test_mesh_articulation test_mesh_articulation.cpp)
-target_link_libraries(test_mesh_articulation PRIVATE Catch2::Catch2WithMain engine-render)
-target_include_directories(test_mesh_articulation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_mesh_articulation)
+fl_add_test(test_mesh_articulation LIBS engine-render INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_mesh_articulation_paths test_mesh_articulation_paths.cpp)
-target_link_libraries(test_mesh_articulation_paths PRIVATE Catch2::Catch2WithMain engine-render)
-target_include_directories(test_mesh_articulation_paths PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_mesh_articulation_paths)
+fl_add_test(test_mesh_articulation_paths LIBS engine-render INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_window test_window.cpp)
-target_link_libraries(test_window PRIVATE Catch2::Catch2WithMain platform-hal)
-target_include_directories(test_window PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_window)
+fl_add_test(test_window LIBS platform-hal INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_bridge test_bridge.cpp)
-target_link_libraries(test_bridge PRIVATE Catch2::Catch2WithMain engine-render)
-target_include_directories(test_bridge PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_bridge)
+fl_add_test(test_bridge LIBS engine-render INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_scene_renderer test_scene_renderer.cpp)
-target_link_libraries(test_scene_renderer PRIVATE Catch2::Catch2WithMain engine-render)
-target_include_directories(test_scene_renderer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_scene_renderer)
+fl_add_test(test_scene_renderer LIBS engine-render INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
 # StdFilesystemWatcher (#152): the polling hot-reload backend.
-add_executable(test_std_filesystem_watcher test_std_filesystem_watcher.cpp)
-target_link_libraries(test_std_filesystem_watcher PRIVATE Catch2::Catch2WithMain platform-stdfs)
-target_include_directories(test_std_filesystem_watcher PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_std_filesystem_watcher)
+fl_add_test(test_std_filesystem_watcher LIBS platform-stdfs INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
 # PreviewScene (#666): the authoring-tools single-model preview bootstrap. engine-content is a PRIVATE
 # dep of engine-render, so link it explicitly for AssetManager in the test.
-add_executable(test_preview_scene test_preview_scene.cpp)
-target_link_libraries(test_preview_scene PRIVATE Catch2::Catch2WithMain engine-render engine-content)
-target_include_directories(test_preview_scene PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_preview_scene)
+fl_add_test(test_preview_scene LIBS engine-render engine-content INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
 # fl-viewer option parsing (#666) + overlay gizmos (#838) — only when the tool's lib is built.
 if(TARGET fl-viewer-lib)
@@ -73,42 +55,21 @@ if(TARGET fl-viewer-lib)
 endif()
 
 # The one HudElement assembler behind FlightHud, GameConsole and the screens (#1261).
-add_executable(test_hud_builder test_hud_builder.cpp)
-target_link_libraries(test_hud_builder PRIVATE Catch2::Catch2WithMain platform-hal)
-target_include_directories(test_hud_builder PRIVATE "${CMAKE_SOURCE_DIR}/engine")
-catch_discover_tests(test_hud_builder)
+fl_add_test(test_hud_builder LIBS platform-hal INCLUDES "${CMAKE_SOURCE_DIR}/engine")
 
-add_executable(test_flight_hud test_flight_hud.cpp)
-target_link_libraries(test_flight_hud PRIVATE Catch2::Catch2WithMain engine-render)
-target_include_directories(test_flight_hud PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_flight_hud)
+fl_add_test(test_flight_hud LIBS engine-render INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_windshield_rain test_windshield_rain.cpp)
-target_link_libraries(test_windshield_rain PRIVATE Catch2::Catch2WithMain engine-render)
-target_include_directories(test_windshield_rain PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_windshield_rain)
+fl_add_test(test_windshield_rain LIBS engine-render INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_particle_system test_particle_system.cpp)
-target_link_libraries(test_particle_system PRIVATE Catch2::Catch2WithMain engine-render)
-target_include_directories(test_particle_system PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_particle_system)
+fl_add_test(test_particle_system LIBS engine-render INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_entity test_entity.cpp)
-target_link_libraries(test_entity PRIVATE Catch2::Catch2WithMain engine-entity engine-spatial)
-target_include_directories(test_entity PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_entity)
+fl_add_test(test_entity LIBS engine-entity engine-spatial INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Terrain line-of-sight segment query (#687): header-only, pure engine-spatial (no glm).
-add_executable(test_los test_los.cpp)
-target_link_libraries(test_los PRIVATE Catch2::Catch2WithMain engine-spatial)
-target_include_directories(test_los PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_los)
+fl_add_test(test_los LIBS engine-spatial INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
 # World-to-HUD projection helper (#692): pure math, checked against CameraController::view().
-add_executable(test_hud_projection test_hud_projection.cpp)
-target_link_libraries(test_hud_projection PRIVATE Catch2::Catch2WithMain engine-render)
-target_include_directories(test_hud_projection PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_hud_projection)
+fl_add_test(test_hud_projection LIBS engine-render INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Player autopilot (#640): pure hold-controller + closed-loop convergence through the integrator.
 add_executable(test_autopilot test_autopilot.cpp)
@@ -120,25 +81,18 @@ catch_discover_tests(test_autopilot)
 # Turn-law audit (#1143): every controller that commands a roll, flown through the real integrator
 # in a scenario that keeps its heading error alive. Station-keeping controllers must stay upright;
 # manoeuvre controllers must still be able to roll hard, pinned so nobody "consistency"-fixes them.
-add_executable(test_ai_turn_law test_ai_turn_law.cpp)
-target_link_libraries(test_ai_turn_law PRIVATE Catch2::Catch2WithMain engine-flight engine-ai engine-entity
-    engine-spatial engine-sensor)
-catch_discover_tests(test_ai_turn_law)
+fl_add_test(test_ai_turn_law LIBS engine-flight engine-ai engine-entity engine-spatial engine-sensor)
 
 # AI altitude hold (#1141): a LoiterController flown through the real integrator. Nothing asserted
 # that an AI aircraft asked to hold an altitude actually does, which is how a several-hundred-metre
 # oscillation went unnoticed until it started flying the load-spawn world into the ground.
 # LSO + crew-chief voice keys (#1108): a pack records OGGs against these names, so the strings are
 # pinned rather than incidental.
-add_executable(test_crew_phrases test_crew_phrases.cpp)
-target_link_libraries(test_crew_phrases PRIVATE Catch2::Catch2WithMain engine-atc)
-catch_discover_tests(test_crew_phrases)
+fl_add_test(test_crew_phrases LIBS engine-atc)
 
-add_executable(test_ai_altitude_hold test_ai_altitude_hold.cpp)
-target_link_libraries(test_ai_altitude_hold PRIVATE Catch2::Catch2WithMain engine-flight engine-ai engine-entity
-    engine-spatial engine-sensor)
-target_include_directories(test_ai_altitude_hold PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_ai_altitude_hold)
+fl_add_test(test_ai_altitude_hold
+    LIBS engine-flight engine-ai engine-entity engine-spatial engine-sensor
+    INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Client-side target designation (#696): pure snapshot cycling / filtering / best-in-cone.
 add_executable(test_target_designation test_target_designation.cpp)
@@ -150,10 +104,7 @@ catch_discover_tests(test_target_designation)
 # Padlock tracker (#697): pure aim + lock state machine, scripted trajectories.
 # Wingman brevity voice keys (#1108). Links game-client: the wingman's text and keys are CLIENT-side
 # by policy (the server sends a result code, never a string).
-add_executable(test_wingman_brevity test_wingman_brevity.cpp)
-target_link_libraries(test_wingman_brevity PRIVATE Catch2::Catch2WithMain engine-render engine-entity game-client)
-target_include_directories(test_wingman_brevity PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_wingman_brevity)
+fl_add_test(test_wingman_brevity LIBS engine-render engine-entity game-client INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_executable(test_padlock_tracker test_padlock_tracker.cpp)
 target_link_libraries(test_padlock_tracker PRIVATE Catch2::Catch2WithMain engine-spatial platform-hal game-client)
@@ -179,184 +130,108 @@ endif()
 catch_discover_tests(test_head_tracker)
 
 # Ejection / pilot survival model (#672): pure envelope + territory -> outcome logic (header-only).
-add_executable(test_ejection test_ejection.cpp)
-target_link_libraries(test_ejection PRIVATE Catch2::Catch2WithMain engine-entity)
-catch_discover_tests(test_ejection)
+fl_add_test(test_ejection LIBS engine-entity)
 
-add_executable(test_atmosphere test_atmosphere.cpp)
-target_link_libraries(test_atmosphere PRIVATE Catch2::Catch2WithMain engine-flight)
-catch_discover_tests(test_atmosphere)
+fl_add_test(test_atmosphere LIBS engine-flight)
 
-add_executable(test_table2d test_table2d.cpp)
-target_link_libraries(test_table2d PRIVATE Catch2::Catch2WithMain engine-flight)
-catch_discover_tests(test_table2d)
+fl_add_test(test_table2d LIBS engine-flight)
 
-add_executable(test_flight_model_parser test_flight_model_parser.cpp)
-target_link_libraries(test_flight_model_parser PRIVATE Catch2::Catch2WithMain engine-flight)
-catch_discover_tests(test_flight_model_parser)
+fl_add_test(test_flight_model_parser LIBS engine-flight)
 
-add_executable(test_weapon_def_parser test_weapon_def_parser.cpp)
-target_link_libraries(test_weapon_def_parser PRIVATE Catch2::Catch2WithMain engine-weapon)
-catch_discover_tests(test_weapon_def_parser)
+fl_add_test(test_weapon_def_parser LIBS engine-weapon)
 
 # TransformHistory (#425): the lag-compensation rewind ring (header-only, engine-net).
 # Entity-entity collision geometry + damage helpers (#630).
-add_executable(test_collision test_collision.cpp)
-target_link_libraries(test_collision PRIVATE Catch2::Catch2WithMain engine-entity)
-catch_discover_tests(test_collision)
+fl_add_test(test_collision LIBS engine-entity)
 
 # Per-subsystem damage routing (#675) — the pure pick/apply logic.
-add_executable(test_subsystem_damage test_subsystem_damage.cpp)
-target_link_libraries(test_subsystem_damage PRIVATE Catch2::Catch2WithMain engine-entity)
-catch_discover_tests(test_subsystem_damage)
+fl_add_test(test_subsystem_damage LIBS engine-entity)
 
-add_executable(test_transform_history test_transform_history.cpp)
-target_link_libraries(test_transform_history PRIVATE Catch2::Catch2WithMain engine-net)
-catch_discover_tests(test_transform_history)
+fl_add_test(test_transform_history LIBS engine-net)
 
 # Required-pack policy (#872): the pure spec/policy parsing + missing-pack comparison (header-only).
-add_executable(test_required_pack_policy test_required_pack_policy.cpp)
-target_link_libraries(test_required_pack_policy PRIVATE Catch2::Catch2WithMain engine-net)
-catch_discover_tests(test_required_pack_policy)
+fl_add_test(test_required_pack_policy LIBS engine-net)
 
 # FireControl + ProjectileSystem (#625): the pure fire-decision logic and the 3-DOF projectile pool.
 # engine-weapon's entity/spatial deps are PRIVATE, so the test links them explicitly.
-add_executable(test_fire_control test_fire_control.cpp)
-target_link_libraries(test_fire_control PRIVATE Catch2::Catch2WithMain engine-weapon engine-entity
-    engine-spatial)
-catch_discover_tests(test_fire_control)
+fl_add_test(test_fire_control LIBS engine-weapon engine-entity engine-spatial)
 
 # Turret mounts (#970): the pure slew-servo + pose math (stepTurret, turretWorldDir).
-add_executable(test_turret test_turret.cpp)
-target_link_libraries(test_turret PRIVATE Catch2::Catch2WithMain engine-weapon)
-catch_discover_tests(test_turret)
+fl_add_test(test_turret LIBS engine-weapon)
 
 # Crewed control frame (#969): per-seat sampling + turret slew + per-seat fire through a real WB tick.
-add_executable(test_crew_frame test_crew_frame.cpp)
-target_link_libraries(test_crew_frame PRIVATE Catch2::Catch2WithMain engine-net engine-entity engine-weapon
-    engine-spatial engine-weather engine-job)
-target_include_directories(test_crew_frame PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_crew_frame)
+fl_add_test(test_crew_frame
+    LIBS engine-net engine-entity engine-weapon engine-spatial engine-weather engine-job
+    INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Bot turret gunner + per-instance skill (#971): honest-sensing gunnery through a real WB tick.
-add_executable(test_turret_gunner test_turret_gunner.cpp)
-target_link_libraries(test_turret_gunner PRIVATE Catch2::Catch2WithMain engine-net engine-ai engine-sensor
-    engine-entity engine-weapon engine-spatial engine-weather engine-job)
-target_include_directories(test_turret_gunner PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_turret_gunner)
+fl_add_test(test_turret_gunner
+    LIBS engine-net engine-ai engine-sensor engine-entity engine-weapon engine-spatial engine-weather engine-job
+    INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
 # SeekerTrack + PN guidance (#627): the missile seeker over the shared Detection.h machine.
-add_executable(test_seeker test_seeker.cpp)
-target_link_libraries(test_seeker PRIVATE Catch2::Catch2WithMain engine-weapon engine-entity
-    engine-sensor engine-spatial)
-catch_discover_tests(test_seeker)
+fl_add_test(test_seeker LIBS engine-weapon engine-entity engine-sensor engine-spatial)
 
 # Chaff/flare countermeasure decoys + seeker seduction (#529).
-add_executable(test_countermeasure_system test_countermeasure_system.cpp)
-target_link_libraries(test_countermeasure_system PRIVATE Catch2::Catch2WithMain engine-weapon
-    engine-entity engine-sensor engine-spatial)
-catch_discover_tests(test_countermeasure_system)
+fl_add_test(test_countermeasure_system LIBS engine-weapon engine-entity engine-sensor engine-spatial)
 
 # Bombs/rockets release ballistics + CCIP (#629).
-add_executable(test_release_ballistics test_release_ballistics.cpp)
-target_link_libraries(test_release_ballistics PRIVATE Catch2::Catch2WithMain engine-weapon
-    engine-entity engine-spatial)
-catch_discover_tests(test_release_ballistics)
+fl_add_test(test_release_ballistics LIBS engine-weapon engine-entity engine-spatial)
 
 # Ballistic missile guidance + the MIRV controller-spawn seam (#355).
-add_executable(test_ballistic_guidance test_ballistic_guidance.cpp)
-target_link_libraries(test_ballistic_guidance PRIVATE Catch2::Catch2WithMain engine-ai engine-net
-    engine-entity engine-flight engine-bootstrap)
-target_include_directories(test_ballistic_guidance PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-catch_discover_tests(test_ballistic_guidance)
+fl_add_test(test_ballistic_guidance
+    LIBS engine-ai engine-net engine-entity engine-flight engine-bootstrap
+    INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # WeaponRegistry + defaultPayload (#812): a loadout that actually costs the airframe mass and drag.
 # fm-trim (#817): the tests LOCK the derived numbers, so they double as the engine's guard against
 # someone changing AeroForces.cpp and silently altering every aircraft's performance.
 # The generated aircraft manual (#821): retuning the flight model must move the manual.
-add_executable(test_aircraft_manual test_aircraft_manual.cpp)
-target_link_libraries(test_aircraft_manual PRIVATE Catch2::Catch2WithMain engine-manual engine-entity
-    engine-weapon engine-sensor)
-catch_discover_tests(test_aircraft_manual)
+fl_add_test(test_aircraft_manual LIBS engine-manual engine-entity engine-weapon engine-sensor)
 
-add_executable(test_fm_trim test_fm_trim.cpp)
-target_link_libraries(test_fm_trim PRIVATE Catch2::Catch2WithMain fm-trim-lib)
-catch_discover_tests(test_fm_trim)
+fl_add_test(test_fm_trim LIBS fm-trim-lib)
 
-add_executable(test_loadout test_loadout.cpp)
-target_link_libraries(test_loadout PRIVATE Catch2::Catch2WithMain engine-weapon engine-entity engine-flight)
-catch_discover_tests(test_loadout)
+fl_add_test(test_loadout LIBS engine-weapon engine-entity engine-flight)
 
-add_executable(test_sensor_def_parser test_sensor_def_parser.cpp)
-target_link_libraries(test_sensor_def_parser PRIVATE Catch2::Catch2WithMain engine-sensor)
-catch_discover_tests(test_sensor_def_parser)
+fl_add_test(test_sensor_def_parser LIBS engine-sensor)
 
-add_executable(test_sensor_detection test_sensor_detection.cpp)
-target_link_libraries(test_sensor_detection PRIVATE Catch2::Catch2WithMain engine-sensor)
-catch_discover_tests(test_sensor_detection)
+fl_add_test(test_sensor_detection LIBS engine-sensor)
 
 # #670 acceptance: honest sensing end-to-end through a real WorldBroadcaster tick.
-add_executable(test_honest_sensing test_honest_sensing.cpp)
-target_link_libraries(test_honest_sensing PRIVATE Catch2::Catch2WithMain engine-net engine-ai engine-sensor
-    engine-entity engine-spatial engine-weather engine-job)
-catch_discover_tests(test_honest_sensing)
+fl_add_test(test_honest_sensing
+    LIBS engine-net engine-ai engine-sensor engine-entity engine-spatial engine-weather engine-job)
 
 # Builtin surface entities + SAM/AAA engagement controllers (#863): a WB-level engagement test, so it
 # links engine-ai (the controllers) + engine-bootstrap (the builtin surface entity defs).
-add_executable(test_surface_threats test_surface_threats.cpp)
-target_link_libraries(test_surface_threats PRIVATE Catch2::Catch2WithMain engine-net engine-ai engine-sensor
-    engine-bootstrap engine-entity engine-spatial engine-weather engine-job)
-catch_discover_tests(test_surface_threats)
+fl_add_test(test_surface_threats
+    LIBS engine-net engine-ai engine-sensor engine-bootstrap engine-entity engine-spatial engine-weather engine-job)
 
-add_executable(test_sensor_system test_sensor_system.cpp)
-target_link_libraries(test_sensor_system PRIVATE Catch2::Catch2WithMain engine-sensor engine-entity engine-spatial)
-catch_discover_tests(test_sensor_system)
+fl_add_test(test_sensor_system LIBS engine-sensor engine-entity engine-spatial)
 
-add_executable(test_aero_forces test_aero_forces.cpp)
-target_link_libraries(test_aero_forces PRIVATE Catch2::Catch2WithMain engine-flight)
-catch_discover_tests(test_aero_forces)
+fl_add_test(test_aero_forces LIBS engine-flight)
 
 # The one engine-failure decode the four force models share (#1258). EngineFailFlags.h is
 # stdlib-only, so this needs no engine library.
-add_executable(test_engine_fail_flags test_engine_fail_flags.cpp)
-target_link_libraries(test_engine_fail_flags PRIVATE Catch2::Catch2WithMain)
-target_include_directories(test_engine_fail_flags PRIVATE "${CMAKE_SOURCE_DIR}/engine")
-catch_discover_tests(test_engine_fail_flags)
+fl_add_test(test_engine_fail_flags INCLUDES "${CMAKE_SOURCE_DIR}/engine")
 
-add_executable(test_flight_integrator test_flight_integrator.cpp)
-target_link_libraries(test_flight_integrator PRIVATE Catch2::Catch2WithMain engine-flight)
-catch_discover_tests(test_flight_integrator)
+fl_add_test(test_flight_integrator LIBS engine-flight)
 
 # The one angle-of-attack formula the HUD and both haptic paths share (#1251). Header-only, but it
 # takes glm types, so it links engine-flight for the include surface.
-add_executable(test_air_angles test_air_angles.cpp)
-target_link_libraries(test_air_angles PRIVATE Catch2::Catch2WithMain engine-flight)
-catch_discover_tests(test_air_angles)
+fl_add_test(test_air_angles LIBS engine-flight)
 
 # ArticulationChannels (#1195): the one FlightState -> ArtChannel mapping the wire codec and the
 # renderer share. engine-flight only — the mapping deliberately pulls in nothing but the
 # dependency-free channel vocabulary.
-add_executable(test_articulation_channels test_articulation_channels.cpp)
-target_link_libraries(test_articulation_channels PRIVATE Catch2::Catch2WithMain engine-flight)
-catch_discover_tests(test_articulation_channels)
+fl_add_test(test_articulation_channels LIBS engine-flight)
 
-add_executable(test_rotor_force_models test_rotor_force_models.cpp)
-target_link_libraries(test_rotor_force_models PRIVATE Catch2::Catch2WithMain engine-flight)
-catch_discover_tests(test_rotor_force_models)
+fl_add_test(test_rotor_force_models LIBS engine-flight)
 
-add_executable(test_carrier_deck test_carrier_deck.cpp)
-target_link_libraries(test_carrier_deck PRIVATE Catch2::Catch2WithMain engine-net engine-entity engine-flight
-                                                engine-bootstrap)
-catch_discover_tests(test_carrier_deck)
+fl_add_test(test_carrier_deck LIBS engine-net engine-entity engine-flight engine-bootstrap)
 
-add_executable(test_base_ops test_base_ops.cpp)
-target_link_libraries(test_base_ops PRIVATE Catch2::Catch2WithMain engine-net engine-entity engine-flight
-                                            engine-weapon engine-bootstrap)
-catch_discover_tests(test_base_ops)
+fl_add_test(test_base_ops LIBS engine-net engine-entity engine-flight engine-weapon engine-bootstrap)
 
-add_executable(test_central_gravity test_central_gravity.cpp)
-target_link_libraries(test_central_gravity PRIVATE Catch2::Catch2WithMain engine-flight)
-catch_discover_tests(test_central_gravity)
+fl_add_test(test_central_gravity LIBS engine-flight)
 
 add_executable(test_geodetic test_geodetic.cpp)
 # engine-world for SandboxHome.h — the anchor cases assert against the shipped home (#1211).
@@ -364,52 +239,31 @@ target_link_libraries(test_geodetic PRIVATE Catch2::Catch2WithMain engine-flight
 catch_discover_tests(test_geodetic)
 
 # Local-level (ENU tangent-plane) frame utilities (#470); header-only, glm via engine-flight.
-add_executable(test_local_frame test_local_frame.cpp)
-target_link_libraries(test_local_frame PRIVATE Catch2::Catch2WithMain engine-flight)
-catch_discover_tests(test_local_frame)
+fl_add_test(test_local_frame LIBS engine-flight)
 
 # Cube-sphere tile addressing + geometry core (#469); header-only, needs glm (engine-render) +
 # Geodetic.h (engine/flight, header-only).
-add_executable(test_cube_sphere test_cube_sphere.cpp)
-target_link_libraries(test_cube_sphere PRIVATE Catch2::Catch2WithMain engine-render)
-target_include_directories(test_cube_sphere PRIVATE "${CMAKE_SOURCE_DIR}/engine")
-catch_discover_tests(test_cube_sphere)
+fl_add_test(test_cube_sphere LIBS engine-render INCLUDES "${CMAKE_SOURCE_DIR}/engine")
 
-add_executable(test_force_model test_force_model.cpp)
-target_link_libraries(test_force_model PRIVATE Catch2::Catch2WithMain engine-flight)
-catch_discover_tests(test_force_model)
+fl_add_test(test_force_model LIBS engine-flight)
 
-add_executable(test_loop test_loop.cpp)
-target_link_libraries(test_loop PRIVATE Catch2::Catch2WithMain engine-loop)
-target_include_directories(test_loop PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-# RUN_SERIAL: test_loop contains WALL-CLOCK RATE assertions (it sleeps 1 s and asserts the loop fired
+# SERIAL: test_loop contains WALL-CLOCK RATE assertions (it sleeps 1 s and asserts the loop fired
 # ~60 times). Since #787 made the suite parallel by default, those ran while ~20 other test binaries
 # saturated the CPU — so they were no longer measuring the game loop, they were measuring how busy the
 # runner was, and they flaked on shared macOS runners. Serialising them restores what the assertion is
 # actually for. It costs a few seconds of wall time; a rate test that competes for the CPU is worthless.
-catch_discover_tests(test_loop PROPERTIES RUN_SERIAL TRUE)
+fl_add_test(test_loop LIBS engine-loop INCLUDES ${CMAKE_CURRENT_SOURCE_DIR} SERIAL)
 
-add_executable(test_sandbox test_sandbox.cpp)
-target_link_libraries(test_sandbox PRIVATE Catch2::Catch2WithMain engine-sandbox)
-target_include_directories(test_sandbox PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_sandbox)
+fl_add_test(test_sandbox LIBS engine-sandbox INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_content_system test_content_system.cpp)
-target_link_libraries(test_content_system PRIVATE Catch2::Catch2WithMain engine-content engine-difficulty
-    engine-sensor)
-catch_discover_tests(test_content_system)
+fl_add_test(test_content_system LIBS engine-content engine-difficulty engine-sensor)
 
-add_executable(test_folder_content_pack test_folder_content_pack.cpp)
-target_link_libraries(test_folder_content_pack PRIVATE Catch2::Catch2WithMain engine-content)
-catch_discover_tests(test_folder_content_pack)
+fl_add_test(test_folder_content_pack LIBS engine-content)
 
 # fl::tomlInt guards five parsers against a real UB bug in toml++ (#824).
 # The one strict/tolerant number parse family behind the console, admin, AI-factory, importer and
 # mission-runtime parsers (#1244). Header-only, so no engine library is needed.
-add_executable(test_parse test_parse.cpp)
-target_link_libraries(test_parse PRIVATE Catch2::Catch2WithMain)
-target_include_directories(test_parse PRIVATE "${CMAKE_SOURCE_DIR}/engine")
-catch_discover_tests(test_parse)
+fl_add_test(test_parse INCLUDES "${CMAKE_SOURCE_DIR}/engine")
 
 # The one quaternion rotate family (#1248). Header-only; the deck-path case pins bit-identity with
 # the expression it replaced.
@@ -427,93 +281,49 @@ catch_discover_tests(test_quat)
 
 # The one FNV-1a, checked against the PUBLISHED vectors (#1247) -- two copies had a basis one digit
 # short and agreed with themselves perfectly, so only an external reference catches that class of bug.
-add_executable(test_fnv test_fnv.cpp)
-target_link_libraries(test_fnv PRIVATE Catch2::Catch2WithMain)
-target_include_directories(test_fnv PRIVATE "${CMAKE_SOURCE_DIR}/engine")
-catch_discover_tests(test_fnv)
+fl_add_test(test_fnv INCLUDES "${CMAKE_SOURCE_DIR}/engine")
 
 # The shared angle/unit constants (#1246). Header-only, so this needs no engine library -- it pins
 # that every spelling the sweep replaced is bit-identical, which is the claim that let it land
 # without a determinism re-bless.
-add_executable(test_math_constants test_math_constants.cpp)
-target_link_libraries(test_math_constants PRIVATE Catch2::Catch2WithMain)
-target_include_directories(test_math_constants PRIVATE "${CMAKE_SOURCE_DIR}/engine")
-catch_discover_tests(test_math_constants)
+fl_add_test(test_math_constants INCLUDES "${CMAKE_SOURCE_DIR}/engine")
 
-add_executable(test_rate_window test_rate_window.cpp)
-target_link_libraries(test_rate_window PRIVATE Catch2::Catch2WithMain)
-target_include_directories(test_rate_window PRIVATE "${CMAKE_SOURCE_DIR}/engine")
-catch_discover_tests(test_rate_window)
+fl_add_test(test_rate_window INCLUDES "${CMAKE_SOURCE_DIR}/engine")
 
-add_executable(test_toml_numeric test_toml_numeric.cpp)
-target_link_libraries(test_toml_numeric PRIVATE Catch2::Catch2WithMain tomlplusplus::tomlplusplus)
-target_include_directories(test_toml_numeric PRIVATE "${CMAKE_SOURCE_DIR}/engine")
-catch_discover_tests(test_toml_numeric)
+fl_add_test(test_toml_numeric LIBS tomlplusplus::tomlplusplus INCLUDES "${CMAKE_SOURCE_DIR}/engine")
 
 # The shared required/optional TOML field reads behind the seven def parsers (#1245).
-add_executable(test_toml_read test_toml_read.cpp)
-target_link_libraries(test_toml_read PRIVATE Catch2::Catch2WithMain tomlplusplus::tomlplusplus)
-target_include_directories(test_toml_read PRIVATE "${CMAKE_SOURCE_DIR}/engine")
-catch_discover_tests(test_toml_read)
+fl_add_test(test_toml_read LIBS tomlplusplus::tomlplusplus INCLUDES "${CMAKE_SOURCE_DIR}/engine")
 
-add_executable(test_content_index test_content_index.cpp)
-target_link_libraries(test_content_index PRIVATE Catch2::Catch2WithMain engine-content)
-target_include_directories(test_content_index PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+fl_add_test(test_content_index LIBS engine-content INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_livery_def test_livery_def.cpp)
-target_link_libraries(test_livery_def PRIVATE Catch2::Catch2WithMain engine-content)
-target_include_directories(test_livery_def PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_livery_def)
-catch_discover_tests(test_content_index)
+fl_add_test(test_livery_def LIBS engine-content INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_difficulty test_difficulty.cpp)
-target_link_libraries(test_difficulty PRIVATE Catch2::Catch2WithMain engine-difficulty)
-target_include_directories(test_difficulty PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_difficulty)
+fl_add_test(test_difficulty LIBS engine-difficulty INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_input test_input.cpp)
-target_link_libraries(test_input PRIVATE Catch2::Catch2WithMain engine-input)
-catch_discover_tests(test_input)
+fl_add_test(test_input LIBS engine-input)
 
-add_executable(test_localization test_localization.cpp)
-target_link_libraries(test_localization PRIVATE Catch2::Catch2WithMain engine-i18n)
+fl_add_test(test_localization LIBS engine-i18n)
 
 # Session-failure i18n coverage (#358): keys present in the repo locale/en/ui.toml + tr fallback.
+# Longhand for the compile definition; the discover call stays with its own target (#1265).
 add_executable(test_session_i18n test_session_i18n.cpp)
 target_link_libraries(test_session_i18n PRIVATE Catch2::Catch2WithMain engine-i18n platform-stdfs platform-hal)
 target_include_directories(test_session_i18n PRIVATE "${CMAKE_SOURCE_DIR}/game/fighters-legacy")
 target_compile_definitions(test_session_i18n PRIVATE FL_REPO_ROOT="${CMAKE_SOURCE_DIR}")
 catch_discover_tests(test_session_i18n)
-catch_discover_tests(test_localization)
 
-add_executable(test_firstrun test_firstrun.cpp)
-target_link_libraries(test_firstrun PRIVATE Catch2::Catch2WithMain engine-firstrun)
-target_include_directories(test_firstrun PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_firstrun)
+fl_add_test(test_firstrun LIBS engine-firstrun INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_file_logger test_file_logger.cpp)
-target_link_libraries(test_file_logger PRIVATE Catch2::Catch2WithMain platform-file-logger)
-catch_discover_tests(test_file_logger)
+fl_add_test(test_file_logger LIBS platform-file-logger)
 
-add_executable(test_crash_reporter test_crash_reporter.cpp)
-target_link_libraries(test_crash_reporter PRIVATE Catch2::Catch2WithMain engine-crash platform-file-logger)
-target_include_directories(test_crash_reporter PRIVATE ${CMAKE_BINARY_DIR}/engine)
-catch_discover_tests(test_crash_reporter)
+fl_add_test(test_crash_reporter LIBS engine-crash platform-file-logger INCLUDES ${CMAKE_BINARY_DIR}/engine)
 
-add_executable(test_userconfig test_userconfig.cpp)
-target_link_libraries(test_userconfig PRIVATE Catch2::Catch2WithMain engine-config)
-target_include_directories(test_userconfig PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_userconfig)
+fl_add_test(test_userconfig LIBS engine-config INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_userconfig_enums test_userconfig_enums.cpp)
-target_link_libraries(test_userconfig_enums PRIVATE Catch2::Catch2WithMain engine-config)
-target_include_directories(test_userconfig_enums PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_userconfig_enums)
+fl_add_test(test_userconfig_enums LIBS engine-config INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_settings test_settings.cpp)
-target_link_libraries(test_settings PRIVATE Catch2::Catch2WithMain engine-config)
-target_include_directories(test_settings PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_settings)
+fl_add_test(test_settings LIBS engine-config INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Missions-as-integration-tests harness (#856): run the ci-mission-pack smoke mission headless via
 # fl-server --mission-report and assert on its JSON outcome. Gated on fl-server (absent in the
@@ -817,139 +627,76 @@ target_include_directories(test_mission_source PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_mission_source)
 
-add_executable(test_ai_controllers test_ai_controllers.cpp)
-target_link_libraries(test_ai_controllers PRIVATE engine-ai engine-entity engine-spatial engine-sensor
-    Catch2::Catch2WithMain)
-catch_discover_tests(test_ai_controllers)
+fl_add_test(test_ai_controllers LIBS engine-ai engine-entity engine-spatial engine-sensor)
 
-add_executable(test_state_machine_controller test_state_machine_controller.cpp)
-target_link_libraries(test_state_machine_controller PRIVATE engine-ai engine-entity engine-spatial engine-sensor
-    Catch2::Catch2WithMain)
-catch_discover_tests(test_state_machine_controller)
+fl_add_test(test_state_machine_controller LIBS engine-ai engine-entity engine-spatial engine-sensor)
 
 # Takeoff / landing ground-and-pattern controllers (#701, ATC epic #673).
-add_executable(test_takeoff_controller test_takeoff_controller.cpp)
-target_link_libraries(test_takeoff_controller PRIVATE engine-ai engine-entity engine-spatial Catch2::Catch2WithMain)
-catch_discover_tests(test_takeoff_controller)
+fl_add_test(test_takeoff_controller LIBS engine-ai engine-entity engine-spatial)
 
-add_executable(test_landing_controller test_landing_controller.cpp)
-target_link_libraries(test_landing_controller PRIVATE engine-ai engine-entity engine-spatial Catch2::Catch2WithMain)
-catch_discover_tests(test_landing_controller)
+fl_add_test(test_landing_controller LIBS engine-ai engine-entity engine-spatial)
 
 # ATC service core — facilities, runway sequencing, clearances (#702, ATC epic #673).
-add_executable(test_atc_service test_atc_service.cpp)
-target_link_libraries(test_atc_service PRIVATE engine-atc engine-world engine-entity engine-spatial
-    Catch2::Catch2WithMain)
-catch_discover_tests(test_atc_service)
+fl_add_test(test_atc_service LIBS engine-atc engine-world engine-entity engine-spatial)
 
-add_executable(test_atc_facility_sequencing test_atc_facility_sequencing.cpp)
-target_link_libraries(test_atc_facility_sequencing PRIVATE engine-atc engine-world engine-entity engine-spatial
-    Catch2::Catch2WithMain)
-catch_discover_tests(test_atc_facility_sequencing)
+fl_add_test(test_atc_facility_sequencing LIBS engine-atc engine-world engine-entity engine-spatial)
 
 # The scripted wingman grammar + its two wire messages (#610). Header-only + engine-protocol only.
-add_executable(test_wingman_command test_wingman_command.cpp)
-target_link_libraries(test_wingman_command PRIVATE engine-protocol engine-world engine-ai Catch2::Catch2WithMain)
-catch_discover_tests(test_wingman_command)
+fl_add_test(test_wingman_command LIBS engine-protocol engine-world engine-ai)
 
 # The formation / command tree (#610). Pure stdlib — no entity manager, no network.
-add_executable(test_formation_registry test_formation_registry.cpp)
-target_link_libraries(test_formation_registry PRIVATE engine-world Catch2::Catch2WithMain)
-catch_discover_tests(test_formation_registry)
+fl_add_test(test_formation_registry LIBS engine-world)
 
 # FormationController, boresight designation, and the six commands (#610).
-add_executable(test_wingman_behavior test_wingman_behavior.cpp)
-target_link_libraries(test_wingman_behavior PRIVATE engine-ai engine-entity engine-spatial Catch2::Catch2WithMain)
-catch_discover_tests(test_wingman_behavior)
+fl_add_test(test_wingman_behavior LIBS engine-ai engine-entity engine-spatial)
 
-add_executable(test_guidance test_guidance.cpp)
-target_link_libraries(test_guidance PRIVATE engine-ai engine-entity engine-spatial Catch2::Catch2WithMain)
-catch_discover_tests(test_guidance)
+fl_add_test(test_guidance LIBS engine-ai engine-entity engine-spatial)
 
-add_executable(test_spatial_index test_spatial_index.cpp)
-target_link_libraries(test_spatial_index PRIVATE Catch2::Catch2WithMain engine-spatial)
-catch_discover_tests(test_spatial_index)
+fl_add_test(test_spatial_index LIBS engine-spatial)
 
 # Isolated scale/characterisation benchmarks (issue #573). All cases are [.]-hidden so the default
 # ctest run skips them; run explicitly via `ctest -R test_entity_scale` or the [scale] tag.
-add_executable(test_entity_scale test_entity_scale.cpp)
-target_link_libraries(test_entity_scale PRIVATE Catch2::Catch2WithMain engine-entity engine-spatial)
-target_include_directories(test_entity_scale PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_entity_scale)
+fl_add_test(test_entity_scale LIBS engine-entity engine-spatial INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_job_system test_job_system.cpp)
-target_link_libraries(test_job_system PRIVATE Catch2::Catch2WithMain engine-job)
-catch_discover_tests(test_job_system)
+fl_add_test(test_job_system LIBS engine-job)
 
 # AdminChannel + AdminChannelRegistry (#1079): the six admin frontends' shared auth, dispatch and
 # async-ack drain. engine-net only -- no sockets, no registry, injected clock, so the drain deadline is
 # testable without opening a file descriptor (the test_rcon_server recipe generalised).
-add_executable(test_admin_channel test_admin_channel.cpp)
-target_link_libraries(test_admin_channel PRIVATE Catch2::Catch2WithMain engine-net)
-target_include_directories(test_admin_channel PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-catch_discover_tests(test_admin_channel)
+fl_add_test(test_admin_channel LIBS engine-net INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # The engine's one JSON escaper, writer set and reader (#1080). Header-only and stdlib-only, so this
 # links nothing: engine-protocol's zero-dep rule is the reason the helper is shaped that way.
 # The one whole-file read over IFilesystem (#1254). Header-only over the HAL interface, so it needs
 # no engine library -- the short-read case uses a local fake, since the shared mock never short-reads.
-add_executable(test_fs_read test_fs_read.cpp)
-target_link_libraries(test_fs_read PRIVATE Catch2::Catch2WithMain)
-target_include_directories(test_fs_read PRIVATE "${CMAKE_SOURCE_DIR}/engine" "${CMAKE_SOURCE_DIR}/platform")
-catch_discover_tests(test_fs_read)
+fl_add_test(test_fs_read INCLUDES "${CMAKE_SOURCE_DIR}/engine" "${CMAKE_SOURCE_DIR}/platform")
 
-add_executable(test_json test_json.cpp)
-target_link_libraries(test_json PRIVATE Catch2::Catch2WithMain)
-target_include_directories(test_json PRIVATE "${CMAKE_SOURCE_DIR}/engine")
-catch_discover_tests(test_json)
+fl_add_test(test_json INCLUDES "${CMAKE_SOURCE_DIR}/engine")
 
-add_executable(test_faction_registry test_faction_registry.cpp)
-target_link_libraries(test_faction_registry PRIVATE Catch2::Catch2WithMain engine-world)
-catch_discover_tests(test_faction_registry)
+fl_add_test(test_faction_registry LIBS engine-world)
 
 # Airspace alert system (#162): zone geometry, the escalation state machine (driven by an explicit
 # simDt, so time is injectable without a clock), the escalation-policy TOML schema, and the
 # sample-order independence the pass needs to stay deterministic.
-add_executable(test_alert_system test_alert_system.cpp)
-target_link_libraries(test_alert_system PRIVATE Catch2::Catch2WithMain engine-world)
-catch_discover_tests(test_alert_system)
+fl_add_test(test_alert_system LIBS engine-world)
 
-add_executable(test_game_mode test_game_mode.cpp)
-target_link_libraries(test_game_mode PRIVATE Catch2::Catch2WithMain engine-match)
-catch_discover_tests(test_game_mode)
+fl_add_test(test_game_mode LIBS engine-match)
 
-add_executable(test_match_controller test_match_controller.cpp)
-target_link_libraries(test_match_controller PRIVATE Catch2::Catch2WithMain engine-match)
-catch_discover_tests(test_match_controller)
+fl_add_test(test_match_controller LIBS engine-match)
 
-add_executable(test_airport_registry test_airport_registry.cpp)
-target_link_libraries(test_airport_registry PRIVATE Catch2::Catch2WithMain engine-world)
-catch_discover_tests(test_airport_registry)
+fl_add_test(test_airport_registry LIBS engine-world)
 
-add_executable(test_airport_csv_import test_airport_csv_import.cpp)
-target_link_libraries(test_airport_csv_import PRIVATE Catch2::Catch2WithMain engine-world)
-catch_discover_tests(test_airport_csv_import)
+fl_add_test(test_airport_csv_import LIBS engine-world)
 
-add_executable(test_airport_bootstrap test_airport_bootstrap.cpp)
-target_link_libraries(test_airport_bootstrap PRIVATE Catch2::Catch2WithMain engine-world)
-target_include_directories(test_airport_bootstrap PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_airport_bootstrap)
+fl_add_test(test_airport_bootstrap LIBS engine-world INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_crew_partition test_crew_partition.cpp)
-target_link_libraries(test_crew_partition PRIVATE Catch2::Catch2WithMain engine-entity)
-catch_discover_tests(test_crew_partition)
+fl_add_test(test_crew_partition LIBS engine-entity)
 
-add_executable(test_airport_renderer test_airport_renderer.cpp)
-target_link_libraries(test_airport_renderer PRIVATE Catch2::Catch2WithMain engine-render engine-world)
-catch_discover_tests(test_airport_renderer)
+fl_add_test(test_airport_renderer LIBS engine-render engine-world)
 
-add_executable(test_builtin_biomes test_builtin_biomes.cpp)
-target_link_libraries(test_builtin_biomes PRIVATE Catch2::Catch2WithMain engine-render)
-catch_discover_tests(test_builtin_biomes)
+fl_add_test(test_builtin_biomes LIBS engine-render)
 
-add_executable(test_biome_weights test_biome_weights.cpp)
-target_link_libraries(test_biome_weights PRIVATE Catch2::Catch2WithMain engine-render)
-catch_discover_tests(test_biome_weights)
+fl_add_test(test_biome_weights LIBS engine-render)
 
 add_executable(test_audio test_audio.cpp)
 target_link_libraries(test_audio PRIVATE Catch2::Catch2WithMain platform-openal OpenAL::OpenAL)
@@ -963,18 +710,11 @@ if(WIN32)
 endif()
 catch_discover_tests(test_audio DISCOVERY_MODE PRE_TEST)
 
-add_executable(test_subtitle_queue test_subtitle_queue.cpp)
-target_link_libraries(test_subtitle_queue PRIVATE Catch2::Catch2WithMain engine-audio)
-catch_discover_tests(test_subtitle_queue)
+fl_add_test(test_subtitle_queue LIBS engine-audio)
 
-add_executable(test_music_manager test_music_manager.cpp)
-target_link_libraries(test_music_manager PRIVATE Catch2::Catch2WithMain engine-audio engine-config)
-catch_discover_tests(test_music_manager)
+fl_add_test(test_music_manager LIBS engine-audio engine-config)
 
-add_executable(test_async_filesystem test_async_filesystem.cpp)
-target_link_libraries(test_async_filesystem PRIVATE Catch2::Catch2WithMain platform-hal)
-target_include_directories(test_async_filesystem PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_async_filesystem)
+fl_add_test(test_async_filesystem LIBS platform-hal INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_executable(test_sdl3 test_sdl3.cpp)
 target_link_libraries(test_sdl3 PRIVATE Catch2::Catch2WithMain platform-sdl3 SDL3::SDL3)
@@ -1053,18 +793,11 @@ add_executable(test_validate_weapon test_validate_weapon.cpp)
 target_link_libraries(test_validate_weapon PRIVATE Catch2::Catch2WithMain validate-weapon-lib engine-weapon)
 catch_discover_tests(test_validate_weapon)
 
-add_executable(test_validate_sensor test_validate_sensor.cpp)
-target_link_libraries(test_validate_sensor PRIVATE Catch2::Catch2WithMain validate-sensor-lib)
-catch_discover_tests(test_validate_sensor)
+fl_add_test(test_validate_sensor LIBS validate-sensor-lib)
 
-add_executable(test_validate_entity test_validate_entity.cpp)
-target_link_libraries(test_validate_entity PRIVATE Catch2::Catch2WithMain validate-entity-lib)
-catch_discover_tests(test_validate_entity)
+fl_add_test(test_validate_entity LIBS validate-entity-lib)
 
-add_executable(test_validate_livery test_validate_livery.cpp)
-target_link_libraries(test_validate_livery PRIVATE Catch2::Catch2WithMain validate-livery-lib)
-target_include_directories(test_validate_livery PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_validate_livery)
+fl_add_test(test_validate_livery LIBS validate-livery-lib INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_executable(test_validate_flight_model test_validate_flight_model.cpp)
 target_link_libraries(test_validate_flight_model
@@ -1116,62 +849,36 @@ catch_discover_tests(test_shot_director)
 # accumulation, and every way a fetch against a remote lobby can fail.
 # EntityDefParser's rejection rules (#1145): hardpoints, turrets, crew seats, sensors, decks. Each
 # rule exists because the alternative is an entity that registers and then misbehaves.
-add_executable(test_entity_def_parser_rules test_entity_def_parser_rules.cpp)
-target_link_libraries(test_entity_def_parser_rules PRIVATE Catch2::Catch2WithMain engine-entity)
-catch_discover_tests(test_entity_def_parser_rules)
+fl_add_test(test_entity_def_parser_rules LIBS engine-entity)
 
-add_executable(test_lobby_list_client test_lobby_list_client.cpp)
-target_link_libraries(test_lobby_list_client PRIVATE Catch2::Catch2WithMain engine-net platform-hal)
-target_include_directories(test_lobby_list_client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_lobby_list_client)
+fl_add_test(test_lobby_list_client LIBS engine-net platform-hal INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_aircraft_manual_vehicles test_aircraft_manual_vehicles.cpp)
-target_link_libraries(test_aircraft_manual_vehicles PRIVATE Catch2::Catch2WithMain engine-manual engine-flight
-    engine-entity engine-weapon engine-sensor)
-catch_discover_tests(test_aircraft_manual_vehicles)
+fl_add_test(test_aircraft_manual_vehicles LIBS engine-manual engine-flight engine-entity engine-weapon engine-sensor)
 
-add_executable(test_content_bootstrap_loaders test_content_bootstrap_loaders.cpp)
-target_link_libraries(test_content_bootstrap_loaders PRIVATE Catch2::Catch2WithMain engine-bootstrap
-    engine-content engine-entity engine-weapon engine-world)
-target_include_directories(test_content_bootstrap_loaders PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_content_bootstrap_loaders)
+fl_add_test(test_content_bootstrap_loaders
+    LIBS engine-bootstrap engine-content engine-entity engine-weapon engine-world
+    INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_voice_callout_paths test_voice_callout_paths.cpp)
-target_link_libraries(test_voice_callout_paths PRIVATE Catch2::Catch2WithMain engine-audio engine-content
-    engine-radio engine-i18n)
-target_include_directories(test_voice_callout_paths PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_voice_callout_paths)
+fl_add_test(test_voice_callout_paths
+    LIBS engine-audio engine-content engine-radio engine-i18n
+    INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_ai_controller_factory test_ai_controller_factory.cpp)
-target_link_libraries(test_ai_controller_factory PRIVATE Catch2::Catch2WithMain engine-ai engine-entity
-    engine-spatial engine-sensor engine-worldai)
-catch_discover_tests(test_ai_controller_factory)
+fl_add_test(test_ai_controller_factory LIBS engine-ai engine-entity engine-spatial engine-sensor engine-worldai)
 
-add_executable(test_asset_manager_fallback test_asset_manager_fallback.cpp)
-target_link_libraries(test_asset_manager_fallback PRIVATE Catch2::Catch2WithMain engine-content)
-target_include_directories(test_asset_manager_fallback PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_asset_manager_fallback)
+fl_add_test(test_asset_manager_fallback LIBS engine-content INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_flight_model_parser_validation test_flight_model_parser_validation.cpp)
-target_link_libraries(test_flight_model_parser_validation PRIVATE Catch2::Catch2WithMain engine-flight)
-catch_discover_tests(test_flight_model_parser_validation)
+fl_add_test(test_flight_model_parser_validation LIBS engine-flight)
 
-add_executable(test_mission_parser_validation test_mission_parser_validation.cpp)
-target_link_libraries(test_mission_parser_validation PRIVATE Catch2::Catch2WithMain engine-mission)
-catch_discover_tests(test_mission_parser_validation)
+fl_add_test(test_mission_parser_validation LIBS engine-mission)
 
-add_executable(test_campaign_parser_validation test_campaign_parser_validation.cpp)
-target_link_libraries(test_campaign_parser_validation PRIVATE Catch2::Catch2WithMain engine-campaign)
-catch_discover_tests(test_campaign_parser_validation)
+fl_add_test(test_campaign_parser_validation LIBS engine-campaign)
 
 add_executable(test_campaign test_campaign.cpp)
 target_link_libraries(test_campaign
     PRIVATE Catch2::Catch2WithMain engine-campaign engine-mission) # engine-mission: a generated sortie must parse
 catch_discover_tests(test_campaign)
 
-add_executable(test_campaign_engine_branches test_campaign_engine_branches.cpp)
-target_link_libraries(test_campaign_engine_branches PRIVATE Catch2::Catch2WithMain engine-campaign)
-catch_discover_tests(test_campaign_engine_branches)
+fl_add_test(test_campaign_engine_branches LIBS engine-campaign)
 
 add_executable(test_validate_licenses test_validate_licenses.cpp)
 target_link_libraries(test_validate_licenses
@@ -1184,30 +891,18 @@ target_link_libraries(test_validate_mesh
 catch_discover_tests(test_validate_mesh)
 
 # validate-campaign (#847) + the frontline PNG codec.
-add_executable(test_frontline_png test_frontline_png.cpp)
-target_link_libraries(test_frontline_png PRIVATE Catch2::Catch2WithMain engine-campaign-png)
-catch_discover_tests(test_frontline_png)
+fl_add_test(test_frontline_png LIBS engine-campaign-png)
 
 # The one untrusted-PNG chunk guard behind terrain, frontline and the Vulkan texture loader (#1237).
-add_executable(test_png_sanity test_png_sanity.cpp)
-target_link_libraries(test_png_sanity PRIVATE Catch2::Catch2WithMain platform-hal)
-catch_discover_tests(test_png_sanity)
+fl_add_test(test_png_sanity LIBS platform-hal)
 
-add_executable(test_validate_campaign test_validate_campaign.cpp)
-target_link_libraries(test_validate_campaign PRIVATE Catch2::Catch2WithMain validate-campaign-lib engine-campaign-png)
-target_include_directories(test_validate_campaign PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_validate_campaign)
+fl_add_test(test_validate_campaign LIBS validate-campaign-lib engine-campaign-png INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
 # validate-mod (#651): the whole-pack validator.
-add_executable(test_validate_mod test_validate_mod.cpp)
-target_link_libraries(test_validate_mod PRIVATE Catch2::Catch2WithMain validate-mod-lib engine-crypto)
-target_include_directories(test_validate_mod PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_validate_mod)
+fl_add_test(test_validate_mod LIBS validate-mod-lib engine-crypto INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Mesh node-tree description for the fl-viewer panel (#838).
-add_executable(test_mesh_node_tree test_mesh_node_tree.cpp)
-target_link_libraries(test_mesh_node_tree PRIVATE Catch2::Catch2WithMain validate-mesh-lib)
-catch_discover_tests(test_mesh_node_tree)
+fl_add_test(test_mesh_node_tree LIBS validate-mesh-lib)
 
 add_executable(test_tex_compress test_tex_compress.cpp)
 target_link_libraries(test_tex_compress
@@ -1225,287 +920,161 @@ target_include_directories(test_async_filesystem_std PRIVATE
 catch_discover_tests(test_async_filesystem_std)
 
 # Pure wire-protocol/codec tests link the zero-dep engine-protocol seam, not engine-net.
-add_executable(test_game_protocol test_game_protocol.cpp)
-target_link_libraries(test_game_protocol PRIVATE Catch2::Catch2WithMain engine-protocol engine-weather)
-catch_discover_tests(test_game_protocol)
+fl_add_test(test_game_protocol LIBS engine-protocol engine-weather)
 
-add_executable(test_wire_codec test_wire_codec.cpp)
-target_link_libraries(test_wire_codec PRIVATE Catch2::Catch2WithMain engine-protocol)
-catch_discover_tests(test_wire_codec)
+fl_add_test(test_wire_codec LIBS engine-protocol)
 
-add_executable(test_snapshot_codec test_snapshot_codec.cpp)
-target_link_libraries(test_snapshot_codec PRIVATE Catch2::Catch2WithMain engine-protocol)
-catch_discover_tests(test_snapshot_codec)
+fl_add_test(test_snapshot_codec LIBS engine-protocol)
 
 # Scheduler lives in engine-net (SnapshotScheduler.cpp), so this test keeps the engine-net link.
-add_executable(test_snapshot_scheduler test_snapshot_scheduler.cpp)
-target_link_libraries(test_snapshot_scheduler PRIVATE Catch2::Catch2WithMain engine-net)
-catch_discover_tests(test_snapshot_scheduler)
+fl_add_test(test_snapshot_scheduler LIBS engine-net)
 
-add_executable(test_ack_window test_ack_window.cpp)
-target_link_libraries(test_ack_window PRIVATE Catch2::Catch2WithMain engine-protocol)
-catch_discover_tests(test_ack_window)
+fl_add_test(test_ack_window LIBS engine-protocol)
 
 # --- Epic J: in-game voice comms (#499) --------------------------------------------------------
 # Opus codec wrapper (#531). Real libopus round trips, so a broken encoder configuration or a
 # regressed payload cap fails here rather than on a live server.
-add_executable(test_voice_codec test_voice_codec.cpp)
-target_link_libraries(test_voice_codec PRIVATE Catch2::Catch2WithMain engine-voice)
-catch_discover_tests(test_voice_codec)
+fl_add_test(test_voice_codec LIBS engine-voice)
 
 # Per-speaker voice jitter buffer (#531; pure, no codec/device).
-add_executable(test_voice_jitter test_voice_jitter.cpp)
-target_link_libraries(test_voice_jitter PRIVATE Catch2::Catch2WithMain engine-voice)
-catch_discover_tests(test_voice_jitter)
+fl_add_test(test_voice_jitter LIBS engine-voice)
 
 # PTT/VOX keying gate (#531; pure, header-only).
-add_executable(test_voice_activity test_voice_activity.cpp)
-target_link_libraries(test_voice_activity PRIVATE Catch2::Catch2WithMain engine-voice)
-catch_discover_tests(test_voice_activity)
+fl_add_test(test_voice_activity LIBS engine-voice)
 
 # Radio-net table + the builtin zero-config net stack (#531/#532).
-add_executable(test_radio_net test_radio_net.cpp)
-target_link_libraries(test_radio_net PRIVATE Catch2::Catch2WithMain engine-voice)
-catch_discover_tests(test_radio_net)
+fl_add_test(test_radio_net LIBS engine-voice)
 
 # Remote voice playback / positional mix (#531) against a queue-tracking IAudio double.
-add_executable(test_voice_mixer test_voice_mixer.cpp)
-target_link_libraries(test_voice_mixer PRIVATE Catch2::Catch2WithMain engine-voice)
-catch_discover_tests(test_voice_mixer)
+fl_add_test(test_voice_mixer LIBS engine-voice)
 
 # The client voice facade (#531). Its five components each had a test; the object that decides WHEN
 # to key, WHICH net to key on, and when the capture device runs had none — 0.0% branch coverage
 # until #1145, and that is exactly where the player-visible behaviour lives.
-add_executable(test_voice_chat test_voice_chat.cpp)
-target_link_libraries(test_voice_chat PRIVATE Catch2::Catch2WithMain engine-voice)
-target_include_directories(test_voice_chat PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_voice_chat)
+fl_add_test(test_voice_chat LIBS engine-voice INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Radio presentation DSP (#925): band-limiting, soft clipping, and the byte-stable click/squelch cues.
-add_executable(test_radio_dsp test_radio_dsp.cpp)
-target_link_libraries(test_radio_dsp PRIVATE Catch2::Catch2WithMain engine-radio)
-catch_discover_tests(test_radio_dsp)
+fl_add_test(test_radio_dsp LIBS engine-radio)
 
 # Voice routing (#532): who hears a transmission, as pure functions over a net table + peer list.
-add_executable(test_voice_router test_voice_router.cpp)
-target_link_libraries(test_voice_router PRIVATE Catch2::Catch2WithMain engine-net)
-catch_discover_tests(test_voice_router)
+fl_add_test(test_voice_router LIBS engine-net)
 
 # Server capability vocabulary + role presets (#945; header-only, stdlib).
-add_executable(test_capability test_capability.cpp)
-target_link_libraries(test_capability PRIVATE Catch2::Catch2WithMain engine-protocol)
-catch_discover_tests(test_capability)
+fl_add_test(test_capability LIBS engine-protocol)
 
 # Aggregated world-state surface (#600; pure builder, SDL/ENet-free).
-add_executable(test_world_state test_world_state.cpp)
-target_link_libraries(test_world_state PRIVATE Catch2::Catch2WithMain engine-net)
-catch_discover_tests(test_world_state)
+fl_add_test(test_world_state LIBS engine-net)
 
 # The match event log (#600): ring bounds + gap detection, JSON schema stability, string escaping,
 # and a concurrent append/read case. Links only engine-net (no SDL/ENet), so it joins the TSan set
 # alongside test_world_state -- the log is written on the sim thread and read from another.
-add_executable(test_match_event_log test_match_event_log.cpp)
-target_link_libraries(test_match_event_log PRIVATE Catch2::Catch2WithMain engine-net)
-catch_discover_tests(test_match_event_log)
+fl_add_test(test_match_event_log LIBS engine-net)
 
 # MissionReport stays valid JSON whatever the mission is named (#1234).
-add_executable(test_mission_report test_mission_report.cpp)
-target_link_libraries(test_mission_report PRIVATE Catch2::Catch2WithMain engine-mission)
-catch_discover_tests(test_mission_report)
+fl_add_test(test_mission_report LIBS engine-mission)
 
 # Engine-layer snapshot payload codec (#775; zstd wrapper in engine-compress).
-add_executable(test_snapshot_compression test_snapshot_compression.cpp)
-target_link_libraries(test_snapshot_compression PRIVATE Catch2::Catch2WithMain engine-compress)
-catch_discover_tests(test_snapshot_compression)
+fl_add_test(test_snapshot_compression LIBS engine-compress)
 
 # FLIT input-trace codec (writer + reader; header-only, stdlib-only — #560).
-add_executable(test_input_trace test_input_trace.cpp)
-target_link_libraries(test_input_trace PRIVATE Catch2::Catch2WithMain engine-protocol)
-catch_discover_tests(test_input_trace)
+fl_add_test(test_input_trace LIBS engine-protocol)
 
-add_executable(test_congestion_controller test_congestion_controller.cpp)
-target_link_libraries(test_congestion_controller PRIVATE Catch2::Catch2WithMain engine-net)
-catch_discover_tests(test_congestion_controller)
+fl_add_test(test_congestion_controller LIBS engine-net)
 
 # The one tick-rate authority (#1075) and the conversions #1253 folded back into it. Header-only
 # and stdlib-only, so no engine library is needed.
-add_executable(test_tick_rate test_tick_rate.cpp)
-target_link_libraries(test_tick_rate PRIVATE Catch2::Catch2WithMain)
-target_include_directories(test_tick_rate PRIVATE "${CMAKE_SOURCE_DIR}/engine")
-catch_discover_tests(test_tick_rate)
+fl_add_test(test_tick_rate INCLUDES "${CMAKE_SOURCE_DIR}/engine")
 
-add_executable(test_tick_governor test_tick_governor.cpp)
-target_link_libraries(test_tick_governor PRIVATE Catch2::Catch2WithMain engine-net)
-catch_discover_tests(test_tick_governor)
+fl_add_test(test_tick_governor LIBS engine-net)
 
-add_executable(test_performance_overlay test_performance_overlay.cpp)
-target_link_libraries(test_performance_overlay PRIVATE Catch2::Catch2WithMain engine-perf)
-catch_discover_tests(test_performance_overlay)
+fl_add_test(test_performance_overlay LIBS engine-perf)
 
-add_executable(test_utf8_decode test_utf8_decode.cpp)
-target_link_libraries(test_utf8_decode PRIVATE Catch2::Catch2WithMain platform-hal)
-catch_discover_tests(test_utf8_decode)
+fl_add_test(test_utf8_decode LIBS platform-hal)
 
 # The no-op IAudio (#1117) — the degradation path a machine with no audio device takes, and the
 # base every audio test double derives from. Header-only, so platform-hal is the whole dependency.
-add_executable(test_null_audio test_null_audio.cpp)
-target_link_libraries(test_null_audio PRIVATE Catch2::Catch2WithMain platform-hal)
-catch_discover_tests(test_null_audio)
+fl_add_test(test_null_audio LIBS platform-hal)
 
 # IGui HAL contract test (#156) — drives the scripted NullGui (tests/mock_gui.h), the seam every
 # UI-screen test uses. platform-hal supplies IGui.h; the real Dear ImGui backend needs a GPU (not in CI).
-add_executable(test_gui test_gui.cpp)
-target_link_libraries(test_gui PRIVATE Catch2::Catch2WithMain platform-hal)
-catch_discover_tests(test_gui)
+fl_add_test(test_gui LIBS platform-hal)
 
 # JoinServerScreen (#322) — the first IGui screen, driven against NullGui + the HAL mocks.
-add_executable(test_join_server_screen test_join_server_screen.cpp)
-target_link_libraries(test_join_server_screen PRIVATE Catch2::Catch2WithMain platform-hal game-client)
-catch_discover_tests(test_join_server_screen)
+fl_add_test(test_join_server_screen LIBS platform-hal game-client)
 
 # ServerBrowserScreen (#143) — the IGui server-browser list, driven against NullGui.
-add_executable(test_server_browser_screen test_server_browser_screen.cpp)
-target_link_libraries(test_server_browser_screen PRIVATE Catch2::Catch2WithMain engine-net platform-hal game-client)
-catch_discover_tests(test_server_browser_screen)
+fl_add_test(test_server_browser_screen LIBS engine-net platform-hal game-client)
 
 # ScoreboardOverlay (#647) — the IGui scoreboard table, driven against NullGui.
-add_executable(test_scoreboard_overlay test_scoreboard_overlay.cpp)
-target_link_libraries(test_scoreboard_overlay PRIVATE Catch2::Catch2WithMain platform-hal game-client)
-catch_discover_tests(test_scoreboard_overlay)
+fl_add_test(test_scoreboard_overlay LIBS platform-hal game-client)
 
 # KillFeed (#647) — the HudElement kill-feed ring; header-only, deterministic clock.
-add_executable(test_kill_feed test_kill_feed.cpp)
-target_link_libraries(test_kill_feed PRIVATE Catch2::Catch2WithMain platform-hal)
-target_include_directories(test_kill_feed PRIVATE ${CMAKE_SOURCE_DIR}/game/fighters-legacy)
-catch_discover_tests(test_kill_feed)
+fl_add_test(test_kill_feed LIBS platform-hal INCLUDES ${CMAKE_SOURCE_DIR}/game/fighters-legacy)
 
 # ChatOverlay (#646) — the chat display ring + IGui input box, driven against NullGui + a manual clock.
-add_executable(test_chat_overlay test_chat_overlay.cpp)
-target_link_libraries(test_chat_overlay PRIVATE Catch2::Catch2WithMain engine-net platform-hal game-client)
-catch_discover_tests(test_chat_overlay)
+fl_add_test(test_chat_overlay LIBS engine-net platform-hal game-client)
 
 # Frame-capture swizzle helper (#912): the pure GPU-independent core of the capture readback.
-add_executable(test_capture_frame test_capture_frame.cpp)
-target_link_libraries(test_capture_frame PRIVATE Catch2::Catch2WithMain platform-hal)
-catch_discover_tests(test_capture_frame)
+fl_add_test(test_capture_frame LIBS platform-hal)
 
 # Capture-boundary scheduler (#916): the pure tick-stream -> output-frame / dup-count logic behind the
 # cinematic recorder. Header-only, no HAL — just needs the game include dir for RecordScheduler.h.
-add_executable(test_record_scheduler test_record_scheduler.cpp)
-target_link_libraries(test_record_scheduler PRIVATE Catch2::Catch2WithMain)
-target_include_directories(test_record_scheduler PRIVATE "${CMAKE_SOURCE_DIR}/game/fighters-legacy")
-catch_discover_tests(test_record_scheduler)
+fl_add_test(test_record_scheduler INCLUDES "${CMAKE_SOURCE_DIR}/game/fighters-legacy")
 
-add_executable(test_hud_align test_hud_align.cpp)
-target_link_libraries(test_hud_align PRIVATE Catch2::Catch2WithMain platform-hal)
-catch_discover_tests(test_hud_align)
+fl_add_test(test_hud_align LIBS platform-hal)
 
 # Content → body mesh orientation mapping (#906); header-only, glm via platform-hal.
-add_executable(test_mesh_orient test_mesh_orient.cpp)
-target_link_libraries(test_mesh_orient PRIVATE Catch2::Catch2WithMain platform-hal)
-catch_discover_tests(test_mesh_orient)
+fl_add_test(test_mesh_orient LIBS platform-hal)
 
-add_executable(test_game_console test_game_console.cpp)
-target_link_libraries(test_game_console PRIVATE Catch2::Catch2WithMain engine-console engine-entity engine-weather)
-target_include_directories(test_game_console PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_game_console)
+fl_add_test(test_game_console LIBS engine-console engine-entity engine-weather INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_console_commands_paths test_console_commands_paths.cpp)
-target_link_libraries(test_console_commands_paths PRIVATE Catch2::Catch2WithMain engine-console engine-entity)
-catch_discover_tests(test_console_commands_paths)
+fl_add_test(test_console_commands_paths LIBS engine-console engine-entity)
 
-add_executable(test_command_shell test_command_shell.cpp)
-target_link_libraries(test_command_shell PRIVATE Catch2::Catch2WithMain engine-console)
-target_include_directories(test_command_shell PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_command_shell)
+fl_add_test(test_command_shell LIBS engine-console INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_world_broadcaster test_world_broadcaster.cpp)
-target_link_libraries(test_world_broadcaster PRIVATE Catch2::Catch2WithMain engine-net engine-weather
-    engine-bootstrap) # builtinDebugEntityDef/registerBuiltinWeapons — the sandbox arming smoke (#440)
-catch_discover_tests(test_world_broadcaster)
+fl_add_test(test_world_broadcaster
+    LIBS engine-net engine-weather engine-bootstrap) # builtinDebugEntityDef/registerBuiltinWeapons — the sandbox arming smoke (#440)
 
 # The admission half of the old broadcaster suite (#1085), sharing its fixtures via
 # world_broadcaster_test_util.h. Same link set: it drives PeerAdmission through its owner.
-add_executable(test_peer_admission test_peer_admission.cpp)
-target_link_libraries(test_peer_admission PRIVATE Catch2::Catch2WithMain engine-net engine-weather
-    engine-bootstrap)
-catch_discover_tests(test_peer_admission)
+fl_add_test(test_peer_admission LIBS engine-net engine-weather engine-bootstrap)
 
 # The snapshot half (#1086), same arrangement.
-add_executable(test_snapshot_pipeline test_snapshot_pipeline.cpp)
-target_link_libraries(test_snapshot_pipeline PRIVATE Catch2::Catch2WithMain engine-net engine-weather
-    engine-bootstrap)
-catch_discover_tests(test_snapshot_pipeline)
+fl_add_test(test_snapshot_pipeline LIBS engine-net engine-weather engine-bootstrap)
 
 # The comms half (#1087), same arrangement.
-add_executable(test_session_comms test_session_comms.cpp)
-target_link_libraries(test_session_comms PRIVATE Catch2::Catch2WithMain engine-net engine-weather
-    engine-bootstrap)
-catch_discover_tests(test_session_comms)
+fl_add_test(test_session_comms LIBS engine-net engine-weather engine-bootstrap)
 
 add_executable(test_weather test_weather.cpp)
 # engine-world for SandboxHome.h — the solar case contrasts the home with the pole it replaced (#1211).
 target_link_libraries(test_weather PRIVATE Catch2::Catch2WithMain engine-weather engine-world)
 
-add_executable(test_celestial test_celestial.cpp)
-target_link_libraries(test_celestial PRIVATE Catch2::Catch2WithMain engine-weather engine-flight)
-catch_discover_tests(test_celestial)
+fl_add_test(test_celestial LIBS engine-weather engine-flight)
 catch_discover_tests(test_weather)
 
-add_executable(test_solar_position test_solar_position.cpp)
-target_link_libraries(test_solar_position PRIVATE Catch2::Catch2WithMain engine-weather)
-catch_discover_tests(test_solar_position)
+fl_add_test(test_solar_position LIBS engine-weather)
 
-add_executable(test_magnetic_model test_magnetic_model.cpp)
-target_link_libraries(test_magnetic_model PRIVATE Catch2::Catch2WithMain engine-nav)
-catch_discover_tests(test_magnetic_model)
+fl_add_test(test_magnetic_model LIBS engine-nav)
 
-add_executable(test_terrain_chunk_io test_terrain_chunk_io.cpp)
-target_link_libraries(test_terrain_chunk_io PRIVATE Catch2::Catch2WithMain engine-render)
-target_include_directories(test_terrain_chunk_io PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_terrain_chunk_io)
+fl_add_test(test_terrain_chunk_io LIBS engine-render INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_terrain_streamer test_terrain_streamer.cpp)
-target_link_libraries(test_terrain_streamer PRIVATE Catch2::Catch2WithMain engine-render)
-target_include_directories(test_terrain_streamer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_terrain_streamer)
+fl_add_test(test_terrain_streamer LIBS engine-render INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_terrain_mesh_builder test_terrain_mesh_builder.cpp)
-target_link_libraries(test_terrain_mesh_builder PRIVATE Catch2::Catch2WithMain engine-render)
-target_include_directories(test_terrain_mesh_builder PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_terrain_mesh_builder)
+fl_add_test(test_terrain_mesh_builder LIBS engine-render INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_config_file test_config_file.cpp)
-target_link_libraries(test_config_file PRIVATE Catch2::Catch2WithMain engine-config)
-catch_discover_tests(test_config_file)
+fl_add_test(test_config_file LIBS engine-config)
 
-add_executable(test_network_utils test_network_utils.cpp)
-target_link_libraries(test_network_utils PRIVATE Catch2::Catch2WithMain engine-net)
-catch_discover_tests(test_network_utils)
+fl_add_test(test_network_utils LIBS engine-net)
 
-add_executable(test_subprocess test_subprocess.cpp)
-target_link_libraries(test_subprocess PRIVATE Catch2::Catch2WithMain platform-subprocess)
-catch_discover_tests(test_subprocess)
+fl_add_test(test_subprocess LIBS platform-subprocess)
 
-add_executable(test_manifest_sanitization test_manifest_sanitization.cpp)
-target_link_libraries(test_manifest_sanitization PRIVATE Catch2::Catch2WithMain engine-content)
-target_include_directories(test_manifest_sanitization PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_manifest_sanitization)
+fl_add_test(test_manifest_sanitization LIBS engine-content INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_trust_framework test_trust_framework.cpp)
-target_link_libraries(test_trust_framework PRIVATE Catch2::Catch2WithMain engine-content)
-target_include_directories(test_trust_framework PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_trust_framework)
+fl_add_test(test_trust_framework LIBS engine-content INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_mod_loader_load test_mod_loader_load.cpp)
-target_link_libraries(test_mod_loader_load PRIVATE Catch2::Catch2WithMain engine-content)
-target_include_directories(test_mod_loader_load PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_mod_loader_load)
+fl_add_test(test_mod_loader_load LIBS engine-content INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_asset_validator test_asset_validator.cpp)
-target_link_libraries(test_asset_validator PRIVATE Catch2::Catch2WithMain engine-content)
-target_include_directories(test_asset_validator PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_asset_validator)
+fl_add_test(test_asset_validator LIBS engine-content INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_executable(test_lua_sandbox test_lua_sandbox.cpp)
 # lua::lua is linked directly (engine-script keeps it PRIVATE) so this suite can
@@ -1630,10 +1199,7 @@ target_include_directories(test_settings_screen PRIVATE
 catch_discover_tests(test_settings_screen)
 
 # The one menu input contract behind the six screens (#1260).
-add_executable(test_menu_nav test_menu_nav.cpp)
-target_link_libraries(test_menu_nav PRIVATE Catch2::Catch2WithMain platform-hal game-client)
-target_include_directories(test_menu_nav PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-catch_discover_tests(test_menu_nav)
+fl_add_test(test_menu_nav LIBS platform-hal game-client INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}")
 
 add_executable(test_pause_menu_screen test_pause_menu_screen.cpp)
 target_link_libraries(test_pause_menu_screen PRIVATE Catch2::Catch2WithMain platform-hal game-client)
@@ -1760,15 +1326,9 @@ target_link_libraries(test_effect_router PRIVATE
 catch_discover_tests(test_effect_router)
 
 # SfxBuiltinSounds byte-stability + SfxManager voice pool / camera-relative play (#631).
-add_executable(test_sfx test_sfx.cpp)
-target_link_libraries(test_sfx PRIVATE Catch2::Catch2WithMain engine-audio engine-config engine-content)
-target_include_directories(test_sfx PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-catch_discover_tests(test_sfx)
+fl_add_test(test_sfx LIBS engine-audio engine-config engine-content INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}")
 
-add_executable(test_warning_tones test_warning_tones.cpp)
-target_link_libraries(test_warning_tones PRIVATE Catch2::Catch2WithMain engine-audio engine-config engine-content)
-target_include_directories(test_warning_tones PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-catch_discover_tests(test_warning_tones)
+fl_add_test(test_warning_tones LIBS engine-audio engine-config engine-content INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # #959 — engine/aero doppler layers: pure mapping + byte-stable loops (engine-audio) plus the
 # game-layer EngineAudioManager source wiring, compiled in directly.
@@ -1778,14 +1338,10 @@ target_include_directories(test_engine_audio PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_engine_audio)
 
-add_executable(test_sha256 test_sha256.cpp)
-target_link_libraries(test_sha256 PRIVATE Catch2::Catch2WithMain engine-crypto)
-catch_discover_tests(test_sha256)
+fl_add_test(test_sha256 LIBS engine-crypto)
 
 # The full-entropy token generator behind the admin token, MCP session ids and the pilot GUID (#1233).
-add_executable(test_random_token test_random_token.cpp)
-target_link_libraries(test_random_token PRIVATE Catch2::Catch2WithMain engine-crypto)
-catch_discover_tests(test_random_token)
+fl_add_test(test_random_token LIBS engine-crypto)
 
 add_executable(test_content_downloader test_content_downloader.cpp)
 # engine-net for LobbyListClient: the #1083 regression drives TWO IHttpClient consumers at once,
@@ -1795,20 +1351,11 @@ target_link_libraries(test_content_downloader PRIVATE Catch2::Catch2WithMain eng
 target_include_directories(test_content_downloader PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Lobby / server browser (#143): pure parser, registration client, and merge model.
-add_executable(test_lobby_list_parser test_lobby_list_parser.cpp)
-target_link_libraries(test_lobby_list_parser PRIVATE Catch2::Catch2WithMain engine-net platform-hal)
-catch_discover_tests(test_lobby_list_parser)
+fl_add_test(test_lobby_list_parser LIBS engine-net platform-hal)
 
-add_executable(test_lobby_registration test_lobby_registration.cpp)
-target_link_libraries(test_lobby_registration PRIVATE Catch2::Catch2WithMain engine-net platform-hal)
-target_include_directories(test_lobby_registration PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_lobby_registration)
+fl_add_test(test_lobby_registration LIBS engine-net platform-hal INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(test_server_browser_model test_server_browser_model.cpp)
-target_link_libraries(test_server_browser_model PRIVATE Catch2::Catch2WithMain engine-net platform-hal)
-catch_discover_tests(test_server_browser_model)
+fl_add_test(test_server_browser_model LIBS engine-net platform-hal)
 catch_discover_tests(test_content_downloader)
 
-add_executable(test_wind_profile test_wind_profile.cpp)
-target_link_libraries(test_wind_profile PRIVATE Catch2::Catch2WithMain engine-weather engine-flight)
-catch_discover_tests(test_wind_profile)
+fl_add_test(test_wind_profile LIBS engine-weather engine-flight)

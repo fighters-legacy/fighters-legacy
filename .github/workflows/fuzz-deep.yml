@@ -58,10 +58,9 @@ jobs:
           clang: 'true'
 
       - name: Cache CMake FetchContent dependencies
-        uses: actions/cache@v6
+        uses: ./.github/actions/cache-cmake-deps
         with:
-          path: build/_deps
-          key: cmake-deps-v2-fuzz-${{ hashFiles('cmake/dependencies.cmake') }}
+          flavor: fuzz
 
       - name: Configure
         run: cmake --preset fuzz

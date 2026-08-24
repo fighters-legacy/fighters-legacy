@@ -23,6 +23,13 @@ inputs:
   gns:
     description: 'Install GameNetworkingSockets deps (OpenSSL + protobuf) for FL_ENABLE_GNS'
     default: 'false'
+  extra_packages:
+    description: >
+      Space-separated apt packages this job needs that no flag above covers (#1265). Two workflows
+      were re-copying the bounded-apt snippet below just to add one or two packages of their own,
+      which meant the #1216 mirror handling existed in three places and only one of them was
+      maintained. Add them here instead and they go through the same bounded update.
+    default: ''
 
 runs:
   using: composite
@@ -51,6 +58,7 @@ runs:
         WANT_PYTHON_TOOLS: ${{ inputs.python_tools }}
         WANT_LCOV: ${{ inputs.lcov }}
         WANT_GNS: ${{ inputs.gns }}
+        EXTRA_PACKAGES: ${{ inputs.extra_packages }}
       run: |
         # libzstd-dev: engine-compress (#775) is in every build; system-preferred saves the FetchContent build.
         # libcurl4-openssl-dev: platform-http libcurl backend (#490); without it the HTTP backend is disabled.
@@ -77,6 +85,9 @@ runs:
           # GameNetworkingSockets deps: OpenSSL crypto + system protobuf (compiler + libs). protobuf
           # is system-preferred (find_package); no abseil since GNS is built with ICE/WebRTC off.
           pkgs="$pkgs libssl-dev libprotobuf-dev protobuf-compiler pkg-config"
+        fi
+        if [ -n "$EXTRA_PACKAGES" ]; then
+          pkgs="$pkgs $EXTRA_PACKAGES"
         fi
         # Bounded apt (#1216). On 2026-08-18 an unreachable Azure apt mirror parked EIGHT jobs
         # across four PRs in this step's `apt-get update` — the longest for 95 minutes, reading
