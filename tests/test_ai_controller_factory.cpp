@@ -220,6 +220,47 @@ TEST_CASE("createController: a malformed optional argument is rejected too (#114
 // Formation, swarm, wingman
 // ---------------------------------------------------------------------------
 
+TEST_CASE("createController: the shared argument cursor keeps each clause's own bounds (#1265)", "[ai][factory]") {
+    // Stage C moved the per-clause argument parsing behind one cursor. The clauses do NOT all share
+    // one validity rule, and these are the boundaries where a shared reader would be tempting to
+    // over-unify -- so they are pinned rather than left to the reader's default.
+    World w;
+    const std::string idx = w.targetIdx();
+
+    // Strictly positive, NOT "zero or more": a zero engagement range or muzzle velocity is a broken
+    // spawn, not a request for the default.
+    CHECK(make("sam", {"0"}, &w.em) == nullptr);
+    CHECK(make("sam", {"-1"}, &w.em) == nullptr);
+    CHECK(make("aaa", {"1200", "0"}, &w.em) == nullptr);
+    CHECK(make("guns", {idx, "0"}, &w.em) == nullptr);
+    CHECK(make("guns", {idx, "1030", "0"}, &w.em) == nullptr);
+
+    // The SAM launch-elevation floor is the one numeric argument where zero IS legal (a launcher
+    // that genuinely fires flat), and it is bounded above at 89 deg.
+    CHECK(make("sam", {"30000", "90", "4", "0"}, &w.em) != nullptr);
+    CHECK(make("sam", {"30000", "90", "4", "89"}, &w.em) != nullptr);
+    CHECK(make("sam", {"30000", "90", "4", "90"}, &w.em) == nullptr);
+    CHECK(make("sam", {"30000", "90", "4", "-1"}, &w.em) == nullptr);
+
+    // MIRV count is capped; the spread admits zero but not a negative.
+    CHECK(make("ballistic", {"0", "0", "0", "64"}) != nullptr);
+    CHECK(make("ballistic", {"0", "0", "0", "65"}) == nullptr);
+    CHECK(make("ballistic", {"0", "0", "0", "2", "0"}) != nullptr);
+    CHECK(make("ballistic", {"0", "0", "0", "2", "-1"}) == nullptr);
+
+    // The orbit direction is a closed vocabulary, not a truthy string.
+    CHECK(make("loiter", {"0", "600", "0", "3000", "600", "0.65", "cw"}) != nullptr);
+    CHECK(make("loiter", {"0", "600", "0", "3000", "600", "0.65", "ccw"}) != nullptr);
+    CHECK(make("loiter", {"0", "600", "0", "3000", "600", "0.65", "left"}) == nullptr);
+    CHECK(make("dynamic_loiter", {idx, "3000", "0.65", "widdershins"}, &w.em) == nullptr);
+
+    // An absent optional leaves the default standing; a malformed one fails the whole spawn rather
+    // than falling back to it.
+    CHECK(make("low_yo_yo", {idx}, &w.em) != nullptr);
+    CHECK(make("low_yo_yo", {idx, "1.5"}, &w.em) != nullptr);
+    CHECK(make("low_yo_yo", {idx, "1.5", "soon"}, &w.em) == nullptr);
+}
+
 TEST_CASE("createController: formation takes an anchor and slot geometry (#1145)", "[ai][factory]") {
     World w;
     const std::string idx = w.targetIdx();

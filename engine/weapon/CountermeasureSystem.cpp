@@ -1,31 +1,29 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "weapon/CountermeasureSystem.h"
 
-#include <algorithm>
-#include <cmath>
+#include "sensor/Detection.h" // sensor::rollPasses -- the ONE 24-bit threshold roll (#1265)
+
 #include <glm/geometric.hpp> // glm::dot
 
 namespace fl {
 
 namespace {
 
-// Deterministic seduction die for one (missile, tick) check — the same seeded-hash idiom as
-// Detection.cpp's detectionHash/rollPasses, so a broken lock is identical across worker counts,
-// platforms and replays. Integer compare in a 24-bit domain: no float-ordering ambiguity.
+// Deterministic seduction die for one (missile, tick) check, so a broken lock is identical across
+// worker counts, platforms and replays.
+//
+// The HASH is this system's own -- it is seeded from the missile and the tick, which is what makes
+// the roll reproducible here. The THRESHOLD TEST is sensor::rollPasses: the 24-bit integer compare
+// on the hash's high bits, with the p<=0 / p>=1 early-outs. That half was written out a second time
+// operation for operation (#1265), and two copies of a probability rule are two chances for a decoy
+// to become slightly more or less effective than the sensor model it is fighting.
 [[nodiscard]] bool rollSeduce(uint32_t missileIdx, uint64_t tick, float fraction) noexcept {
-    const float f = std::clamp(fraction, 0.f, 1.f);
-    if (f <= 0.f)
-        return false;
-    if (f >= 1.f)
-        return true;
     uint32_t rng = missileIdx * 0x9E3779B1u + static_cast<uint32_t>(tick) * 0xC2B2AE3Du +
                    static_cast<uint32_t>(tick >> 32) * 0x27D4EB2Fu + 0x165667B1u;
     rng = rng * 1664525u + 1013904223u;
     rng ^= rng >> 15;
     rng = rng * 1664525u + 1013904223u;
-    constexpr uint32_t kDomain = 1u << 24;
-    const auto threshold = static_cast<uint32_t>(f * static_cast<float>(kDomain));
-    return (rng >> 8) < threshold;
+    return sensor::rollPasses(rng, fraction);
 }
 
 [[nodiscard]] DecoyKind kindForChannel(sensor::SensorType channel, bool& decoyable) noexcept {

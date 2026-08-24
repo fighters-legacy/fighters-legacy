@@ -14,6 +14,18 @@ namespace fl {
 // registerProjectileEntityDefs skips it; only the loadout mass/drag accounting reads it.
 enum class WeaponType : uint8_t { Missile, Bomb, Rocket, Gun, Pod, Fuel };
 
+// An INERT store (#862) — a `fuel` drop tank or a `pod` (ECM/targeting/recon) — has no reach, no
+// seeker and no warhead, only mass and drag. It is carried and it is jettisonable, but it is never
+// a firing station.
+//
+// Inert-ness is the WEAPON's kind, not the station's: the same wet pylon can offer a bomb or a tank,
+// and only the mounted store decides. The rule was stated four times — three loadout builders and
+// the def parser, which relaxes [performance]/[warhead] on exactly this predicate — so a new inert
+// kind would have had to be remembered in four places to be carried without being fireable (#1265).
+[[nodiscard]] constexpr bool isInertStore(WeaponType t) noexcept {
+    return t == WeaponType::Fuel || t == WeaponType::Pod;
+}
+
 enum class WeaponCategory : uint8_t { AirToAir, AirToGround, AirToSea, AntiRadiation };
 
 // How a weapon finds its target. Authored as [seeker] (self-guided) or [guidance] (externally

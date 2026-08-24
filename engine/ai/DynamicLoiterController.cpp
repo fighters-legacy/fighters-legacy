@@ -4,15 +4,12 @@
 #include "ai/Guidance.h"
 #include "entity/EntityState.h"
 
-#include <algorithm>
-#include <cmath>
-
 namespace fl::ai {
 
 DynamicLoiterController::DynamicLoiterController(const fl::EntityManager& entityManager, fl::EntityId targetId,
                                                  float radiusM, float throttle, LoiterDir dir)
     : m_entityManager(entityManager), m_targetId(targetId), m_radiusM(radiusM), m_throttle(throttle),
-      m_targetSpeedMps(std::clamp(0.85f * turnSpeedForRadius(radiusM, kMaxBankRad), 60.f, 300.f)), m_dir(dir) {}
+      m_targetSpeedMps(orbitSpeedForRadius(radiusM)), m_dir(dir) {}
 
 fl::ControlInput DynamicLoiterController::sample(const fl::EntityState& state, uint64_t /*tick*/, double dt,
                                                  const fl::AiTickContext& /*ctx*/) {
@@ -20,64 +17,20 @@ fl::ControlInput DynamicLoiterController::sample(const fl::EntityState& state, u
     if (!target || target->dead)
         return fl::ControlInput{}; // neutral: nothing to escort (same contract as PursuitController)
 
-    // The orbit centre follows the target's LIVE position — this is the whole point vs LoiterController.
+    // The orbit centre follows the target's LIVE position -- this is the whole point vs
+    // LoiterController -- and the escort holds the covered asset's own altitude. Those two are the
+    // ONLY differences; the geometry and the three loops below them are orbitSteer's (#1265).
     const glm::dvec3 center(target->transform.pos[0], target->transform.pos[1], target->transform.pos[2]);
+    const OrbitParams orbit{
+        center,           m_radiusM,  static_cast<float>(fl::localAltitude(center, m_planetRadiusM)),
+        m_targetSpeedMps, m_throttle, m_dir};
 
     fl::ControlInput ctrl{};
-    // Same three loops as LoiterController, for the same reason (#1141): this orbits indefinitely
-    // too, so a rate-only turn law winds the roll up, an attitude-only altitude law mushes it into
-    // the ground, and a fixed throttle lets the airspeed run past what the orbit can be turned at.
-    const float speed =
-        std::sqrt(state.transform.vel[0] * state.transform.vel[0] + state.transform.vel[1] * state.transform.vel[1] +
-                  state.transform.vel[2] * state.transform.vel[2]);
-    ctrl.throttle = throttleForSpeed(speed, m_targetSpeedMps, m_throttle);
-
-    // Vector from entity to centre in the XZ plane.
-    float tx = static_cast<float>(center.x - state.transform.pos[0]);
-    float tz = static_cast<float>(center.z - state.transform.pos[2]);
-    float tLen = std::sqrt(tx * tx + tz * tz);
-
-    if (tLen < 1.f)
-        return ctrl; // atop the target: hold throttle, neutral surfaces
-
-    float nx = tx / tLen;
-    float nz = tz / tLen;
-
-    // Tangent direction for the orbit (matches LoiterController):
-    //   Clockwise:        tangent = (nz, -nx) in XZ
-    //   CounterClockwise: tangent = (-nz, nx) in XZ
-    float tanX, tanZ;
-    if (m_dir == LoiterDir::Clockwise) {
-        tanX = nz;
-        tanZ = -nx;
-    } else {
-        tanX = -nz;
-        tanZ = nx;
-    }
-
-    // Lookahead point along the tangent, scaled by the orbit radius.
-    double lookahead[3] = {
-        state.transform.pos[0] + static_cast<double>(m_radiusM) * static_cast<double>(tanX),
-        center.y,
-        state.transform.pos[2] + static_cast<double>(m_radiusM) * static_cast<double>(tanZ),
-    };
-
-    float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, lookahead, m_planetRadiusM);
-    ctrl.aileron = bankToTurnAileron(state.transform.quat, state.transform.pos, headErr, m_planetRadiusM, kMaxBankRad);
-    ctrl.rudder = rudderToCoordinate(sideslipOf(state.transform.quat, state.transform.vel));
-
-    // Escort at the covered asset's own altitude, held on climb rate rather than pitch attitude.
-    const glm::dvec3 ownWorld(state.transform.pos[0], state.transform.pos[1], state.transform.pos[2]);
-    const float curPitch = fl::pitchOf(state.transform.quat, ownWorld, m_planetRadiusM);
-    float pitchRate = 0.f;
-    if (m_havePrevPitch && dt > 1e-6)
-        pitchRate = static_cast<float>((curPitch - m_prevPitchRad) / dt);
-    m_prevPitchRad = curPitch;
-    m_havePrevPitch = true;
-    ctrl.elevator = elevatorForAltitudeHold(state.transform.quat, state.transform.pos, state.transform.vel,
-                                            static_cast<float>(fl::localAltitude(center, m_planetRadiusM)),
-                                            m_planetRadiusM, pitchRate);
-
+    const float curPitch = fl::pitchOf(
+        state.transform.quat, glm::dvec3(state.transform.pos[0], state.transform.pos[1], state.transform.pos[2]),
+        m_planetRadiusM);
+    orbitSteer(ctrl, state.transform.quat, state.transform.pos, state.transform.vel, orbit, m_planetRadiusM,
+               m_pitchRate.step(curPitch, dt));
     return ctrl;
 }
 

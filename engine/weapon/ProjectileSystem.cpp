@@ -155,13 +155,7 @@ EntityId ProjectileSystem::launch(EntityManager& em, uint32_t weaponIndex, const
     //
     // A failed gate, a missing head, or no designation at all = the store flies dumb.
     if (def->seeker && def->seeker->type != SeekerType::Unguided && designatedTarget.valid()) {
-        std::shared_ptr<const sensor::SensorDef> head;
-        if (!def->seeker->sensorId.empty()) {
-            if (m_sensorResolver)
-                head = m_sensorResolver(def->seeker->sensorId);
-        } else if (def->seeker->usesLegacyLobe()) {
-            head = std::make_shared<const sensor::SensorDef>(synthesizeLegacySeekerDef(*def->seeker));
-        }
+        std::shared_ptr<const sensor::SensorDef> head = resolveSeekerHead(*def->seeker);
         const EntityState* target = em.get(designatedTarget);
         if (head && target && !target->dead) {
             if (usesSupport(*def->seeker)) {
@@ -178,10 +172,9 @@ EntityId ProjectileSystem::launch(EntityManager& em, uint32_t weaponIndex, const
                     p.emitting = false; // quiet until pitbull; SARH never radiates at all
                 }
             } else {
-                const SignatureDef sig = signatureFor(m_registry, *target);
-                const float eff = sensor::effectiveMaxRangeM(head->search, head->type, sig);
+                // From the MISSILE's pose at release, not the shooter's.
                 const double mp[3] = {p.pos.x, p.pos.y, p.pos.z};
-                if (sensor::inLobe(mp, t.quat, target->transform.pos, head->search, head->omnidirectional, eff)) {
+                if (headSeesTarget(*head, mp, t.quat, *target)) {
                     p.seekerDef = std::move(head);
                     p.seeker.targetId = designatedTarget;
                     p.seeker.track.state = sensor::ContactState::Locked;
@@ -213,20 +206,27 @@ bool ProjectileSystem::wouldAcquire(const EntityManager& em, uint32_t weaponInde
         return contact && contact->state == sensor::ContactState::Locked;
     }
 
-    std::shared_ptr<const sensor::SensorDef> head;
-    if (!def->seeker->sensorId.empty()) {
-        if (m_sensorResolver)
-            head = m_sensorResolver(def->seeker->sensorId);
-    } else if (def->seeker->usesLegacyLobe()) {
-        head = std::make_shared<const sensor::SensorDef>(synthesizeLegacySeekerDef(*def->seeker));
-    }
+    const std::shared_ptr<const sensor::SensorDef> head = resolveSeekerHead(*def->seeker);
     const EntityState* ts = em.get(target);
     if (!head || !ts || ts->dead)
         return false;
-    const SignatureDef sig = signatureFor(m_registry, *ts);
-    const float eff = sensor::effectiveMaxRangeM(head->search, head->type, sig);
-    return sensor::inLobe(shooter.transform.pos, shooter.transform.quat, ts->transform.pos, head->search,
-                          head->omnidirectional, eff);
+    // From the SHOOTER's pose -- this is the pre-launch question, asked before the missile exists.
+    return headSeesTarget(*head, shooter.transform.pos, shooter.transform.quat, *ts);
+}
+
+std::shared_ptr<const sensor::SensorDef> ProjectileSystem::resolveSeekerHead(const SeekerDef& seeker) const {
+    if (!seeker.sensorId.empty())
+        return m_sensorResolver ? m_sensorResolver(seeker.sensorId) : nullptr;
+    if (seeker.usesLegacyLobe())
+        return std::make_shared<const sensor::SensorDef>(synthesizeLegacySeekerDef(seeker));
+    return nullptr;
+}
+
+bool ProjectileSystem::headSeesTarget(const sensor::SensorDef& head, const double pos[3], const float quat[4],
+                                      const EntityState& target) const {
+    const SignatureDef sig = signatureFor(m_registry, target);
+    const float eff = sensor::effectiveMaxRangeM(head.search, head.type, sig);
+    return sensor::inLobe(pos, quat, target.transform.pos, head.search, head.omnidirectional, eff);
 }
 
 void ProjectileSystem::step(EntityManager& em, const SpatialIndex& si, float dt, const GroundQuery& ground,

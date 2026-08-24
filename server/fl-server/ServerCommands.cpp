@@ -5,7 +5,8 @@
 
 #include "AiControllerBuild.h" // the one AI-controller construction ladder (#1236)
 #include "ai/AiControllerFactory.h"
-#include "atc/AtcService.h" // atc_status/atc_scramble/atc_hold (#705)
+#include "ai/WingmanCommand.h" // the six-command grammar (was transitive via the factory)
+#include "atc/AtcService.h"    // atc_status/atc_scramble/atc_hold (#705)
 #include "entity/EntityTypeRegistry.h"
 #include "script/LuaController.h"
 #include "server_config.h"

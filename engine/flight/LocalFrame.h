@@ -20,6 +20,7 @@
 // Header-only, pure math, no new link deps.
 
 #include "flight/Geodetic.h"
+#include "math/Angles.h" // kPi -- the one pi (the deg->rad FORM here is deliberate, see below)
 #include "math/Units.h"
 
 #include <glm/geometric.hpp> // normalize, cross, dot, length
@@ -67,6 +68,30 @@ namespace fl {
 // Radial MSL altitude (m) of `pos` — the local "up" distance above the sphere.
 [[nodiscard]] inline double localAltitude(glm::dvec3 pos, double R) noexcept {
     return geodeticAltitude(pos.x, pos.y, pos.z, R);
+}
+
+// The inverse of headingTo: the world-frame unit direction a compass heading points at `pos`.
+// 0 deg = North, 90 deg = East, measured in the local ENU tangent plane. Named for its first two
+// callers -- the takeoff and landing controllers each carried a copy, one naming its dvec3 locals
+// and the other inlining the casts (#1265).
+//
+// The degrees->radians conversion keeps its original `deg * pi / 180` FORM rather than adopting
+// kDegToRad. `deg * (pi/180)` is a different rounding from `(deg * pi) / 180` and this feeds a
+// runway centreline, so the multiply stays first. kPi is still the one pi.
+[[nodiscard]] inline glm::dvec3 worldDirFromHeading(glm::dvec3 pos, float headingDeg, double R) noexcept {
+    const glm::mat3 enu = enuBasis(pos, R);
+    const double hdg = static_cast<double>(headingDeg) * kPi<double> / 180.0;
+    return glm::normalize(glm::dvec3(enu[0]) * std::sin(hdg) + glm::dvec3(enu[1]) * std::cos(hdg));
+}
+
+// Horizontal ground speed (m/s): the world velocity with its radial (vertical) component removed.
+// Takes the raw velocity array rather than an EntityState so this header keeps its no-link,
+// pure-math shape -- engine/flight does not depend on engine/entity.
+[[nodiscard]] inline float horizontalGroundSpeed(const float vel[3], glm::dvec3 pos, double R) noexcept {
+    const glm::vec3 up = radialUp(pos, R);
+    const glm::vec3 v(vel[0], vel[1], vel[2]);
+    const glm::vec3 horiz = v - glm::dot(v, up) * up;
+    return glm::length(horiz);
 }
 
 // Compass bearing (rad) from `pos` toward `target` in the local tangent plane at `pos`.

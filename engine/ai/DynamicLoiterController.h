@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
-#include "ai/LoiterController.h" // LoiterDir
+#include "ai/Guidance.h" // LoiterDir + OrbitParams + orbitSteer -- the shared orbit body (#1265)
 #include "entity/EntityId.h"
 #include "entity/EntityManager.h"
 #include "entity/IEntityController.h"
@@ -39,8 +39,7 @@ class DynamicLoiterController : public fl::IEntityController {
     float m_throttle;       // trim throttle; the speed hold trims around it (#1141)
     float m_targetSpeedMps; // airspeed the orbit is flyable at, from radius + bank limit
     LoiterDir m_dir;
-    float m_prevPitchRad{0.f}; // pitch differentiated for inner-loop damping (#1141)
-    bool m_havePrevPitch{false};
+    PitchRateEstimator m_pitchRate; // pitch differentiated for inner-loop damping (#1141)
 };
 
 } // namespace fl::ai

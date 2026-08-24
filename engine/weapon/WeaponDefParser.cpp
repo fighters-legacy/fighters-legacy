@@ -158,17 +158,16 @@ WeaponDef parseWeaponDef(std::string_view toml_src) {
         w.seeker = s;
     }
 
-    // An inert store (#862) — a `fuel` drop tank or a `pod` (ECM/targeting/recon) — has no reach, no
-    // seeker, and no warhead, only mass and drag. So [performance] and [warhead] are OPTIONAL for it
-    // (and default to zero); for every real weapon they stay required.
-    const bool isInertStore = w.type == WeaponType::Fuel || w.type == WeaponType::Pod;
+    // [performance] and [warhead] are OPTIONAL for an inert store (#862) and default to zero; for
+    // every real weapon they stay required. The predicate itself lives in WeaponDef.h (#1265).
+    const bool inert = isInertStore(w.type);
 
     // ── [performance] (required, except for an inert store) ──────────────────
     auto perf = tbl["performance"];
-    if (!isInertStore && (!perf || !perf.as_table()))
+    if (!inert && (!perf || !perf.as_table()))
         throw std::runtime_error("weapon def parse error: missing [performance] table");
 
-    if (isInertStore && (!perf || !perf.as_table())) {
+    if (inert && (!perf || !perf.as_table())) {
         // No performance section: an inert tank stays all-zero. Skip the range requirement entirely.
     } else {
         // A powered weapon states its own reach (max_range_nm); a dropped one states how far it glides
@@ -208,7 +207,7 @@ WeaponDef parseWeaponDef(std::string_view toml_src) {
 
     // ── [warhead] (required, except for an inert store) ──────────────────────
     auto wh = tbl["warhead"];
-    if (!isInertStore && (!wh || !wh.as_table()))
+    if (!inert && (!wh || !wh.as_table()))
         throw std::runtime_error("weapon def parse error: missing [warhead] table");
 
     if (wh && wh.as_table()) {

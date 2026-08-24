@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ai/TurretGunnerController.h"
 
+#include "ai/GunLead.h" // the shared gun lead preamble (#1265)
 #include "ai/PerInstanceSkill.h"
 #include "ai/TargetView.h"
 #include "ai/Threat.h"
@@ -78,16 +79,10 @@ SeatCommand TurretGunnerController::sample(const EntityState& airframe, const Se
         return cmd;
     }
 
-    const glm::dvec3 ownPos{airframe.transform.pos[0], airframe.transform.pos[1], airframe.transform.pos[2]};
-    const glm::vec3 ownVel{airframe.transform.vel[0], airframe.transform.vel[1], airframe.transform.vel[2]};
-    const glm::dvec3 tgtPos{tv.pos[0], tv.pos[1], tv.pos[2]};
-    const glm::vec3 tgtVel{tv.vel[0], tv.vel[1], tv.vel[2]};
+    const GunLeadSolution sol = leadSolution(airframe, tv, m_muzzleVelMps, m_planetRadiusM);
+    const glm::dvec3 aimAt = sol.lead.valid ? sol.lead.aimPoint : sol.tgtPos;
 
-    const glm::vec3 gravity = fl::localGravity(ownPos, m_planetRadiusM);
-    const BallisticLeadResult lead = computeBallisticLead(ownPos, ownVel, tgtPos, tgtVel, m_muzzleVelMps, gravity);
-    const glm::dvec3 aimAt = lead.valid ? lead.aimPoint : tgtPos;
-
-    glm::vec3 want = glm::vec3(aimAt - ownPos);
+    glm::vec3 want = glm::vec3(aimAt - sol.ownPos);
     const float wantLen = glm::length(want);
     if (wantLen < 1e-3f) {
         m_engaged = false;
@@ -138,11 +133,9 @@ SeatCommand TurretGunnerController::sample(const EntityState& airframe, const Se
     // Trigger discipline: fire only when reachable, past the reaction delay, in range, and the turret's
     // CURRENT bore is within the lethal cone of the aim (i.e. the servo has actually pointed the gun on
     // target — hold fire while slewing).
-    const float rangeM = static_cast<float>(glm::length(tgtPos - ownPos));
+    const float rangeM = sol.rangeM();
     if (reachable && reacted && rangeM > 1.f && rangeM <= m_engageRangeM) {
-        const float cosOff = std::clamp(glm::dot(glm::normalize(seat.turret.boreWorld), want), -1.f, 1.f);
-        const float missM = std::acos(cosOff) * rangeM; // small-angle arc at the target's range
-        cmd.trigger = missM <= m_lethalRadiusM;
+        cmd.trigger = fl::withinLethalMiss(glm::normalize(seat.turret.boreWorld), want, rangeM, m_lethalRadiusM);
     }
     return cmd;
 }
