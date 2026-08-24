@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "HudFade.h" // fadeAlpha — the one timed-line fade curve (#1265)
 #include "IClock.h"
 #include "RenderTypes.h"
-#include "render/HudBuilder.h" // fadeAlpha — the one timed-line fade curve (#1265)
 
 #include <algorithm>
 #include <array>
