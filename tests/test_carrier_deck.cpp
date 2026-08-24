@@ -12,6 +12,7 @@
 #include "flight/FlightIntegrator.h"
 #include "flight/FlightModelParser.h"
 #include "flight/ForceModelSelect.h"
+#include "mock_log.h"
 #include "mock_network.h"
 #include "net/WorldBroadcaster.h"
 
@@ -22,12 +23,6 @@
 using namespace fl;
 
 namespace {
-
-struct NullLogger : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 // A controller that returns a fixed input every tick.
 struct ConstCtl : IEntityController {

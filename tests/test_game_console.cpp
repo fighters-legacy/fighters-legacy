@@ -20,12 +20,6 @@ using namespace fl;
 // Minimal ILogger stub — no output, no deps
 // ---------------------------------------------------------------------------
 
-struct NullLogger : public ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
-
 // ============================================================================
 // CommandRegistry
 // ============================================================================

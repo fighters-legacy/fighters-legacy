@@ -20,6 +20,7 @@
 #include "entity/EntityState.h"
 #include "entity/EntityTypeRegistry.h"
 #include "flight/Geodetic.h"
+#include "mock_log.h"
 
 #include <vector>
 
@@ -27,12 +28,6 @@ using namespace fl;
 using namespace fl::atc;
 
 namespace {
-
-struct NullLogger final : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 EntityDef basicDef() {
     EntityDef d;

@@ -13,6 +13,7 @@
 // both integrators from identical state with identical inputs and asserts they stay together.
 
 #include "ClientFlightModelResolver.h"
+#include "mock_log.h"
 
 #include <ILogger.h>
 #include <content/AssetManager.h>
@@ -46,12 +47,6 @@ using Catch::Matchers::WithinAbs;
 using namespace fl;
 
 namespace {
-
-struct QuietLog : public ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 // A real, distinctly non-builtin flight model: heavier, draggier and far less powerful than the
 // BuiltinFlightModel UFO, so predicting with the wrong one diverges within a second of flight.
@@ -222,7 +217,7 @@ void connectPilot(WorldBroadcaster& b, uint32_t peerId) {
 } // namespace
 
 TEST_CASE("MsgEntityTypeDef carries the flight model asset name to the client", "[prediction_parity]") {
-    QuietLog log;
+    NullLogger log;
     TrackingNetwork net;
     EntityTypeRegistry serverRegistry;
     EntityManager em(log, serverRegistry);
@@ -245,7 +240,7 @@ TEST_CASE("MsgEntityTypeDef carries the flight model asset name to the client", 
 }
 
 TEST_CASE("client and server resolve the same flight model for the same entity type", "[prediction_parity]") {
-    QuietLog log;
+    NullLogger log;
     TrackingNetwork net;
     EntityTypeRegistry serverRegistry;
     EntityManager em(log, serverRegistry);
@@ -289,7 +284,7 @@ TEST_CASE("client and server resolve the same flight model for the same entity t
 }
 
 TEST_CASE("client and server integrators do not diverge over 600 ticks", "[prediction_parity]") {
-    QuietLog log;
+    NullLogger log;
     TrackingNetwork net;
     EntityTypeRegistry serverRegistry;
     EntityManager em(log, serverRegistry);
@@ -361,7 +356,7 @@ TEST_CASE("gear and flap cycling keeps the two integrators in parity", "[predict
     // Gear and flap POSITION is drag (#842). If the two sides ever disagree about where the gear is,
     // they disagree about where the aircraft is — so cycling the actuators mid-run is the gate that
     // the shared advanceArticulation really is shared, not merely similar.
-    QuietLog log;
+    NullLogger log;
     TrackingNetwork net;
     EntityTypeRegistry serverRegistry;
     EntityManager em(log, serverRegistry);
@@ -438,7 +433,7 @@ TEST_CASE("a non-zero payload reaches BOTH integrators and they still agree", "[
     // and sends the resulting mass/drag on MsgEntityTypeDef; the client reads those two floats. If
     // either side skipped the payload, the aircraft would be ~250 kg lighter and slicker on that
     // side, and prediction would drift by exactly the weight of the stores.
-    QuietLog log;
+    NullLogger log;
     TrackingNetwork net;
     EntityTypeRegistry serverRegistry;
     EntityManager em(log, serverRegistry);
@@ -532,14 +527,7 @@ TEST_CASE("a non-zero payload reaches BOTH integrators and they still agree", "[
 }
 
 TEST_CASE("a missing flight model logs at Error and names the id", "[prediction_parity]") {
-    struct CountingLog : public ILogger {
-        std::vector<std::pair<LogLevel, std::string>> entries;
-        void log(LogLevel lvl, const char*, int, const char* msg) override {
-            entries.push_back({lvl, msg ? msg : ""});
-        }
-        void setMinLevel(LogLevel) override {}
-        void flush() override {}
-    } log;
+    RecordingLogger log;
 
     // A pack with NO flight models at all: the entity names one that nobody provides.
     std::vector<std::unique_ptr<IContentPack>> packs;

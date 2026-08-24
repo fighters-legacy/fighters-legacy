@@ -15,6 +15,7 @@
 #include "flight/FlightIntegrator.h"
 #include "flight/FlightModelParser.h"
 #include "flight/LocalFrame.h"
+#include "mock_log.h"
 #include "net/WorldBroadcaster.h"
 
 #include "mock_network.h"
@@ -26,12 +27,6 @@
 using namespace fl;
 
 namespace {
-
-struct NullLoggerBG : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 const std::string kSrbmToml = R"(
 [aircraft]
@@ -161,7 +156,7 @@ TEST_CASE("BallisticGuidance: MIRV deploys past apogee, deterministically", "[ba
 
 TEST_CASE("WorldBroadcaster: MIRV children spawn through the seam and inherit ownership",
           "[ballistic_guidance][world_broadcaster]") {
-    NullLoggerBG logger;
+    NullLogger logger;
     NullNetwork net;
     EntityTypeRegistry registry;
     EntityDef srbm;

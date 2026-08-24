@@ -13,7 +13,7 @@ using namespace fl;
 // off the sim thread, so it gets a test rather than trust -- an event log whose timestamp silently
 // stops moving is exactly the failure this issue existed to end.
 TEST_CASE("WorldBroadcaster: onTick advances the match event log's tick (#1076)", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -44,7 +44,7 @@ TEST_CASE("WorldBroadcaster: onTick advances the match event log's tick (#1076)"
 
 TEST_CASE("WorldBroadcaster: replaceController swaps the controller preserving the integrator (#152)",
           "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -86,7 +86,7 @@ TEST_CASE("WorldBroadcaster: replaceController swaps the controller preserving t
 }
 
 TEST_CASE("WorldBroadcaster: an airborne spawn flies along its heading at t=0 (#883)", "[world_broadcaster][mission]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -131,7 +131,7 @@ TEST_CASE("WorldBroadcaster: an airborne spawn flies along its heading at t=0 (#
 
 TEST_CASE("WorldBroadcaster::ejectPilot spawns a parachute and resolves the pilot outcome (#672)",
           "[world_broadcaster][ejection]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -207,7 +207,7 @@ TEST_CASE("WorldBroadcaster::ejectPilot spawns a parachute and resolves the pilo
 }
 
 TEST_CASE("WorldBroadcaster: an AI pilot auto-ejects when critically hit (#672)", "[world_broadcaster][ejection]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -244,7 +244,7 @@ TEST_CASE("WorldBroadcaster: an AI pilot auto-ejects when critically hit (#672)"
 }
 
 TEST_CASE("WorldBroadcaster: registerController steps a non-peer entity and serializes it", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -295,7 +295,7 @@ TEST_CASE("WorldBroadcaster: registerController steps a non-peer entity and seri
 }
 
 TEST_CASE("WorldBroadcaster: reaps an orphaned controller when its entity is destroyed (#702)", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -331,7 +331,7 @@ struct FinalState {
 };
 
 std::vector<FinalState> runParallelScenario(fl::JobSystem* jobs) {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -429,7 +429,7 @@ struct DecimationResult {
 // When `jobs` is non-null the per-entity passes run data-parallel. Used to prove the AI-sample
 // decimation lever is serial-equivalent across worker counts.
 DecimationResult runDecimationScenario(fl::JobSystem* jobs) {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -517,7 +517,7 @@ TEST_CASE("WorldBroadcaster: AI-sample decimation is serial-equivalent across wo
 namespace {} // namespace
 
 TEST_CASE("WorldBroadcaster: getTickBudget records per-phase timing after onTick", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -556,7 +556,7 @@ TEST_CASE("WorldBroadcaster: getTickBudget records per-phase timing after onTick
 
 TEST_CASE("WorldBroadcaster: flight model resolver is consulted for a flightModelAsset, falls back on miss",
           "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -581,7 +581,7 @@ TEST_CASE("WorldBroadcaster: flight model resolver is consulted for a flightMode
 }
 
 TEST_CASE("WorldBroadcaster: flight model resolver is skipped when flightModelAsset is empty", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -603,7 +603,7 @@ TEST_CASE("WorldBroadcaster: flight model resolver is skipped when flightModelAs
 }
 
 TEST_CASE("WorldBroadcaster: onTick with no peers sends nothing", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -617,7 +617,7 @@ TEST_CASE("WorldBroadcaster: onTick with no peers sends nothing", "[world_broadc
 
 TEST_CASE("WorldBroadcaster: onTick with connected peer and no extra entities sends peer-only snapshot",
           "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -647,7 +647,7 @@ TEST_CASE("WorldBroadcaster: onTick with connected peer and no extra entities se
 
 TEST_CASE("WorldBroadcaster: match roster broadcasts joins, sanitizes callsigns, sends leaves (#996)",
           "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -719,7 +719,7 @@ TEST_CASE("WorldBroadcaster: match roster broadcasts joins, sanitizes callsigns,
 }
 
 TEST_CASE("WorldBroadcaster: respawn enrolls on death and respawnParticipant respawns (#648)", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -750,7 +750,7 @@ TEST_CASE("WorldBroadcaster: respawn enrolls on death and respawnParticipant res
 }
 
 TEST_CASE("WorldBroadcaster: bot participants get a roster row and are removable (#87)", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -784,7 +784,7 @@ TEST_CASE("WorldBroadcaster: bot participants get a roster row and are removable
 }
 
 TEST_CASE("WorldBroadcaster: match state + event sink + resetWorld (#523)", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -834,7 +834,7 @@ TEST_CASE("WorldBroadcaster: match state + event sink + resetWorld (#523)", "[wo
 }
 
 TEST_CASE("WorldBroadcaster: MsgTeamRequest honors the switch guard (#522)", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -879,7 +879,7 @@ TEST_CASE("WorldBroadcaster: MsgTeamRequest honors the switch guard (#522)", "[w
 namespace {} // namespace
 
 TEST_CASE("WorldBroadcaster: setSpectateTarget rejects unknown peers (#403)", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -894,7 +894,7 @@ TEST_CASE("WorldBroadcaster: setSpectateTarget rejects unknown peers (#403)", "[
 }
 
 TEST_CASE("WorldBroadcaster: onDisconnect after connect removes peer entity", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -916,7 +916,7 @@ TEST_CASE("WorldBroadcaster: onDisconnect after connect removes peer entity", "[
 }
 
 TEST_CASE("WorldBroadcaster: onDisconnect does not crash and sends nothing", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -928,7 +928,7 @@ TEST_CASE("WorldBroadcaster: onDisconnect does not crash and sends nothing", "[w
 }
 
 TEST_CASE("WorldBroadcaster: onReceive is a no-op for unknown msgId", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -941,7 +941,7 @@ TEST_CASE("WorldBroadcaster: onReceive is a no-op for unknown msgId", "[world_br
 }
 
 TEST_CASE("WorldBroadcaster: onReceive empty packet is discarded", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -970,7 +970,7 @@ TEST_CASE("WorldBroadcaster: onReceive empty packet is discarded", "[world_broad
 }
 
 TEST_CASE("WorldBroadcaster: onReceive valid ClientInput moves entity on next tick", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1002,7 +1002,7 @@ TEST_CASE("WorldBroadcaster: onReceive valid ClientInput moves entity on next ti
 }
 
 TEST_CASE("WorldBroadcaster: onReceive truncated ClientInput is discarded", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1031,7 +1031,7 @@ TEST_CASE("WorldBroadcaster: onReceive truncated ClientInput is discarded", "[wo
 }
 
 TEST_CASE("WorldBroadcaster: onReceive clamps out-of-range throttle", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1062,7 +1062,7 @@ TEST_CASE("WorldBroadcaster: onReceive clamps out-of-range throttle", "[world_br
 }
 
 TEST_CASE("WorldBroadcaster: onReceive zero viewAxis uses forward fallback", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1095,7 +1095,7 @@ TEST_CASE("WorldBroadcaster: onReceive zero viewAxis uses forward fallback", "[w
 }
 
 TEST_CASE("WorldBroadcaster: onReceive after peer disconnects has no effect on tick", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1120,7 +1120,7 @@ TEST_CASE("WorldBroadcaster: onReceive after peer disconnects has no effect on t
 }
 
 TEST_CASE("WorldBroadcaster: onTick skips kinematics for dead entity", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1149,7 +1149,7 @@ TEST_CASE("WorldBroadcaster: onTick skips kinematics for dead entity", "[world_b
 }
 
 TEST_CASE("WorldBroadcaster: two peers each control independent entities", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1221,7 +1221,7 @@ TEST_CASE("WorldBroadcaster: two peers each control independent entities", "[wor
 
 TEST_CASE("WorldBroadcaster: onReceive discards MsgClientInput with mismatched protocolVersion",
           "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1258,7 +1258,7 @@ TEST_CASE("WorldBroadcaster: onReceive discards MsgClientInput with mismatched p
 // ---------------------------------------------------------------------------
 
 TEST_CASE("WorldBroadcaster: getPeerCount is zero before any connections", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1268,7 +1268,7 @@ TEST_CASE("WorldBroadcaster: getPeerCount is zero before any connections", "[wor
 }
 
 TEST_CASE("WorldBroadcaster: getPeerCount tracks connect and disconnect", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1286,7 +1286,7 @@ TEST_CASE("WorldBroadcaster: getPeerCount tracks connect and disconnect", "[worl
 
 TEST_CASE("WorldBroadcaster: engineFailFlags has kEngineFailGeneric when entity damage is Heavy",
           "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1326,7 +1326,7 @@ TEST_CASE("WorldBroadcaster: engineFailFlags has kEngineFailGeneric when entity 
 // ---------------------------------------------------------------------------
 
 TEST_CASE("WorldBroadcaster: onReceive discards duplicate seqNum", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1361,7 +1361,7 @@ TEST_CASE("WorldBroadcaster: onReceive discards duplicate seqNum", "[world_broad
 }
 
 TEST_CASE("WorldBroadcaster: onReceive discards stale seqNum (out-of-order)", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1397,7 +1397,7 @@ TEST_CASE("WorldBroadcaster: onReceive discards stale seqNum (out-of-order)", "[
 }
 
 TEST_CASE("WorldBroadcaster: onReceive accepts seqNum wrap-around", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1439,7 +1439,7 @@ TEST_CASE("WorldBroadcaster: onReceive accepts seqNum wrap-around", "[world_broa
 }
 
 TEST_CASE("WorldBroadcaster: onReceive computes estimatedDelayTicks from tickIndex", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1464,7 +1464,7 @@ TEST_CASE("WorldBroadcaster: onReceive computes estimatedDelayTicks from tickInd
 }
 
 TEST_CASE("WorldBroadcaster: onReceive future tickIndex does not update estimatedDelayTicks", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1495,7 +1495,7 @@ TEST_CASE("WorldBroadcaster: onReceive future tickIndex does not update estimate
 // ---------------------------------------------------------------------------
 
 TEST_CASE("WorldBroadcaster: with WeatherController broadcasts MsgWeatherState 0x04", "[world_broadcaster][weather]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1521,7 +1521,7 @@ TEST_CASE("WorldBroadcaster: with WeatherController broadcasts MsgWeatherState 0
 }
 
 TEST_CASE("WorldBroadcaster: without WeatherController does not broadcast 0x04", "[world_broadcaster][weather]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1542,7 +1542,7 @@ TEST_CASE("WorldBroadcaster: without WeatherController does not broadcast 0x04",
 // ---------------------------------------------------------------------------
 
 TEST_CASE("WorldBroadcaster: kickPeer calls disconnectPeer on network", "[world_broadcaster][admin]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1560,7 +1560,7 @@ TEST_CASE("WorldBroadcaster: kickPeer calls disconnectPeer on network", "[world_
 }
 
 TEST_CASE("WorldBroadcaster: forEachPeer calls fn for each connected peer", "[world_broadcaster][admin]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1582,7 +1582,7 @@ TEST_CASE("WorldBroadcaster: forEachPeer calls fn for each connected peer", "[wo
 }
 
 TEST_CASE("WorldBroadcaster: forEachPeer with no connected peers does not call fn", "[world_broadcaster][admin]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1631,7 +1631,7 @@ namespace {} // namespace
 
 TEST_CASE("WorldBroadcaster: a peer transitions pilot<->observer without reconnecting (#857)",
           "[world_broadcaster][observer]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1656,7 +1656,7 @@ TEST_CASE("WorldBroadcaster: a peer transitions pilot<->observer without reconne
 // ---------------------------------------------------------------------------
 
 TEST_CASE("WorldBroadcaster: peer within flood limit is not disconnected", "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1678,7 +1678,7 @@ TEST_CASE("WorldBroadcaster: peer within flood limit is not disconnected", "[wor
 }
 
 TEST_CASE("WorldBroadcaster: peer exceeding flood limit is disconnected", "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1701,7 +1701,7 @@ TEST_CASE("WorldBroadcaster: peer exceeding flood limit is disconnected", "[worl
 }
 
 TEST_CASE("WorldBroadcaster: flood counter resets after 1s window", "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1730,7 +1730,7 @@ TEST_CASE("WorldBroadcaster: flood counter resets after 1s window", "[world_broa
 }
 
 TEST_CASE("WorldBroadcaster: non-ClientInput packets do not count toward flood", "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1753,7 +1753,7 @@ TEST_CASE("WorldBroadcaster: non-ClientInput packets do not count toward flood",
 }
 
 TEST_CASE("WorldBroadcaster: onDisconnect clears flood state", "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1797,7 +1797,7 @@ TEST_CASE("WorldBroadcaster: onDisconnect clears flood state", "[world_broadcast
 
 TEST_CASE("WorldBroadcaster: initiateShutdown broadcasts first notice on next tick", "[world_broadcaster][shutdown]") {
     MockNetwork net;
-    MockLogger logger;
+    NullLogger logger;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
@@ -1826,7 +1826,7 @@ TEST_CASE("WorldBroadcaster: initiateShutdown broadcasts first notice on next ti
 
 TEST_CASE("WorldBroadcaster: no notice broadcast when interval not reached", "[world_broadcaster][shutdown]") {
     MockNetwork net;
-    MockLogger logger;
+    NullLogger logger;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
@@ -1857,7 +1857,7 @@ TEST_CASE("WorldBroadcaster: no notice broadcast when interval not reached", "[w
 
 TEST_CASE("WorldBroadcaster: cancelShutdown stops countdown", "[world_broadcaster][shutdown]") {
     MockNetwork net;
-    MockLogger logger;
+    NullLogger logger;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
@@ -1879,7 +1879,7 @@ TEST_CASE("WorldBroadcaster: cancelShutdown stops countdown", "[world_broadcaste
 
 TEST_CASE("WorldBroadcaster: extendShutdown pushes back and fires immediate notice", "[world_broadcaster][shutdown]") {
     MockNetwork net;
-    MockLogger logger;
+    NullLogger logger;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
@@ -1902,7 +1902,7 @@ TEST_CASE("WorldBroadcaster: extendShutdown pushes back and fires immediate noti
 
 TEST_CASE("WorldBroadcaster: extendShutdown returns false when not shutting down", "[world_broadcaster][shutdown]") {
     MockNetwork net;
-    MockLogger logger;
+    NullLogger logger;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
@@ -1911,7 +1911,7 @@ TEST_CASE("WorldBroadcaster: extendShutdown returns false when not shutting down
 
 TEST_CASE("WorldBroadcaster: shutdown callback fires at T=0", "[world_broadcaster][shutdown]") {
     MockNetwork net;
-    MockLogger logger;
+    NullLogger logger;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
     bool called = false;
@@ -1933,7 +1933,7 @@ TEST_CASE("WorldBroadcaster: shutdown callback fires at T=0", "[world_broadcaste
 
 TEST_CASE("WorldBroadcaster: T=0 fires without crash when no callback set", "[world_broadcaster][shutdown]") {
     MockNetwork net;
-    MockLogger logger;
+    NullLogger logger;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
@@ -1952,7 +1952,7 @@ TEST_CASE("WorldBroadcaster: T=0 fires without crash when no callback set", "[wo
 
 TEST_CASE("WorldBroadcaster: initiateShutdown delay=0 fires on very next tick", "[world_broadcaster][shutdown]") {
     MockNetwork net;
-    MockLogger logger;
+    NullLogger logger;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
     bool called = false;
@@ -1974,7 +1974,7 @@ TEST_CASE("WorldBroadcaster: initiateShutdown delay=0 fires on very next tick", 
 
 TEST_CASE("WorldBroadcaster: T-60 notice always fires with 5-min interval", "[world_broadcaster][shutdown]") {
     MockNetwork net;
-    MockLogger logger;
+    NullLogger logger;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
@@ -1998,7 +1998,7 @@ TEST_CASE("WorldBroadcaster: T-60 notice always fires with 5-min interval", "[wo
 
 TEST_CASE("WorldBroadcaster: notice text contains hours for delays >= 3600s", "[world_broadcaster][shutdown]") {
     MockNetwork net;
-    MockLogger logger;
+    NullLogger logger;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
@@ -2016,7 +2016,7 @@ TEST_CASE("WorldBroadcaster: notice text contains hours for delays >= 3600s", "[
 
 TEST_CASE("WorldBroadcaster: notice text contains minutes for delays 61-3599s", "[world_broadcaster][shutdown]") {
     MockNetwork net;
-    MockLogger logger;
+    NullLogger logger;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
@@ -2034,7 +2034,7 @@ TEST_CASE("WorldBroadcaster: notice text contains minutes for delays 61-3599s", 
 
 TEST_CASE("WorldBroadcaster: notice text uses final-minute wording at T-60s", "[world_broadcaster][shutdown]") {
     MockNetwork net;
-    MockLogger logger;
+    NullLogger logger;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
@@ -2054,7 +2054,7 @@ TEST_CASE("WorldBroadcaster: notice text uses final-minute wording at T-60s", "[
 TEST_CASE("WorldBroadcaster: initiateShutdown with reason includes reason in countdown notice",
           "[world_broadcaster][shutdown]") {
     MockNetwork net;
-    MockLogger logger;
+    NullLogger logger;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
@@ -2075,7 +2075,7 @@ TEST_CASE("WorldBroadcaster: initiateShutdown with reason includes reason in cou
 TEST_CASE("WorldBroadcaster: initiateShutdown with reason uses short format for secsLeft at most 60",
           "[world_broadcaster][shutdown]") {
     MockNetwork net;
-    MockLogger logger;
+    NullLogger logger;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
@@ -2097,7 +2097,7 @@ TEST_CASE("WorldBroadcaster: initiateShutdown with reason uses short format for 
 TEST_CASE("WorldBroadcaster: initiateShutdown with reason includes reason in T=0 notice",
           "[world_broadcaster][shutdown]") {
     MockNetwork net;
-    MockLogger logger;
+    NullLogger logger;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
@@ -2117,7 +2117,7 @@ TEST_CASE("WorldBroadcaster: initiateShutdown with reason includes reason in T=0
 TEST_CASE("WorldBroadcaster: long reason is safely truncated to fit MsgServerNotice text",
           "[world_broadcaster][shutdown]") {
     MockNetwork net;
-    MockLogger logger;
+    NullLogger logger;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
@@ -2137,7 +2137,7 @@ TEST_CASE("WorldBroadcaster: long reason is safely truncated to fit MsgServerNot
 TEST_CASE("WorldBroadcaster: cancelShutdown clears reason so subsequent shutdown uses default text",
           "[world_broadcaster][shutdown]") {
     MockNetwork net;
-    MockLogger logger;
+    NullLogger logger;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
@@ -2159,7 +2159,7 @@ TEST_CASE("WorldBroadcaster: cancelShutdown clears reason so subsequent shutdown
 
 TEST_CASE("WorldBroadcaster: extendShutdown preserves reason in subsequent notices", "[world_broadcaster][shutdown]") {
     MockNetwork net;
-    MockLogger logger;
+    NullLogger logger;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
@@ -2291,7 +2291,7 @@ static bool parseLastAdminResponse(const MockNetwork& net, fl::MsgAdminResponse&
 } // namespace
 
 TEST_CASE("WorldBroadcaster: MsgAdminCommand discarded when no dispatcher set", "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -2311,7 +2311,7 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand discarded when no dispatcher set", 
 
 TEST_CASE("WorldBroadcaster: MsgAdminCommand discarded when no password configured",
           "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -2333,7 +2333,7 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand discarded when no password configur
 }
 
 TEST_CASE("WorldBroadcaster: MsgAdminCommand discarded on wrong token", "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -2355,7 +2355,7 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand discarded on wrong token", "[world_
 
 TEST_CASE("WorldBroadcaster: MsgAdminCommand dispatches on correct token and sends MsgAdminResponse",
           "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -2387,7 +2387,7 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand dispatches on correct token and sen
 
 TEST_CASE("WorldBroadcaster: empty-token admin command dispatches with granted caps (#946)",
           "[world_broadcaster][admin_command][permission]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -2444,7 +2444,7 @@ static bool findConnectAckAuthority(const MockNetwork& net, uint64_t& caps, uint
 
 TEST_CASE("WorldBroadcaster: grant re-sends ConnectAck with the authority TLV (#949)",
           "[world_broadcaster][admin_command][permission]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -2495,7 +2495,7 @@ static void gmFeedFor(const MockNetwork& net, uint32_t peerId, std::size_t& pack
 
 TEST_CASE("WorldBroadcaster: GM world-state feed goes only to GmMap-capable peers (#861)",
           "[world_broadcaster][gm_map]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.0.0.1:1";
     net.peerAddresses[1] = "1.0.0.2:2";
@@ -2527,7 +2527,7 @@ TEST_CASE("WorldBroadcaster: GM world-state feed goes only to GmMap-capable peer
 }
 
 TEST_CASE("WorldBroadcaster: GM feed chunks large entity sets under the MTU (#861)", "[world_broadcaster][gm_map]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.0.0.1:1";
     fl::EntityTypeRegistry registry;
@@ -2555,7 +2555,7 @@ TEST_CASE("WorldBroadcaster: GM feed chunks large entity sets under the MTU (#86
 
 TEST_CASE("WorldBroadcaster: worldState aggregate is rebuilt at ~1 Hz and lists live entities (#600)",
           "[world_broadcaster][world_state]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -2594,7 +2594,7 @@ TEST_CASE("WorldBroadcaster: worldState reports wing sweep for a variable-geomet
     // command — so a swing-wing aircraft's own acceptance criterion ("sweep follows the Mach
     // schedule in telemetry") could not be evaluated at all. It is on the ~1 Hz aggregate now, which
     // the `worldstate` command, GET /worldstate and the MCP resource all serve.
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityDef def = makeDebugDef();
@@ -2623,7 +2623,7 @@ TEST_CASE("WorldBroadcaster: worldState reports zero sweep for a fixed-geometry 
     // FlightState's default is a bare 55 deg and the spawn path used to hand it straight to the
     // integrator, so every fixed-geometry aircraft in the game carried a wing-sweep angle it does
     // not have. Harmless while nothing read it; a wrong number the moment it became telemetry.
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef()); // the builtin model — no [wing_sweep]
@@ -2638,7 +2638,7 @@ TEST_CASE("WorldBroadcaster: worldState reports zero sweep for a fixed-geometry 
 
 TEST_CASE("WorldBroadcaster: password auth grants Admin caps (rung 1 unchanged, #946)",
           "[world_broadcaster][admin_command][permission]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -2663,7 +2663,7 @@ TEST_CASE("WorldBroadcaster: password auth grants Admin caps (rung 1 unchanged, 
 
 TEST_CASE("WorldBroadcaster: zero-cap empty-token command refused without lockout pollution (#947)",
           "[world_broadcaster][admin_command][permission]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -2701,7 +2701,7 @@ TEST_CASE("WorldBroadcaster: zero-cap empty-token command refused without lockou
 }
 
 TEST_CASE("WorldBroadcaster: MsgAdminCommand discarded if packet too small", "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -2724,7 +2724,7 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand discarded if packet too small", "[w
 
 TEST_CASE("WorldBroadcaster: MsgAdminCommand token without null terminator fails auth",
           "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -2752,7 +2752,7 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand token without null terminator fails
 
 TEST_CASE("WorldBroadcaster: MsgAdminCommand with empty command string is discarded",
           "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -2781,7 +2781,7 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand with empty command string is discar
 
 TEST_CASE("WorldBroadcaster: MsgAdminCommand empty dispatcher result still sends MsgAdminResponse",
           "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -2808,7 +2808,7 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand empty dispatcher result still sends
 
 TEST_CASE("WorldBroadcaster: MsgAdminCommand result >123 chars streams as MsgAdminResponseChunk",
           "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -2835,7 +2835,7 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand result >123 chars streams as MsgAdm
 
 TEST_CASE("WorldBroadcaster: sendAdminResponse fast-path for result <=123 chars",
           "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -2860,7 +2860,7 @@ TEST_CASE("WorldBroadcaster: sendAdminResponse fast-path for result <=123 chars"
 }
 
 TEST_CASE("WorldBroadcaster: sendAdminResponse fast-path at exactly 123 chars", "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -2886,7 +2886,7 @@ TEST_CASE("WorldBroadcaster: sendAdminResponse fast-path at exactly 123 chars", 
 
 TEST_CASE("WorldBroadcaster: sendAdminResponse echoes reqId in MsgAdminResponse",
           "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -2911,7 +2911,7 @@ TEST_CASE("WorldBroadcaster: sendAdminResponse echoes reqId in MsgAdminResponse"
 
 TEST_CASE("WorldBroadcaster: sendAdminResponse 124-char result sends one chunk with kChunkFlagEnd",
           "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -2940,7 +2940,7 @@ TEST_CASE("WorldBroadcaster: sendAdminResponse 124-char result sends one chunk w
 TEST_CASE("WorldBroadcaster: sendAdminResponse >505 chars sends two chunks", "[world_broadcaster][admin_command]") {
     const std::string longResult(506, 'z');
 
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -2978,7 +2978,7 @@ TEST_CASE("WorldBroadcaster: sendAdminResponse echoes reqId in every MsgAdminRes
           "[world_broadcaster][admin_command]") {
     const std::string longResult(506, 'q');
 
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -3030,7 +3030,7 @@ static void startAuthFixture(fl::WorldBroadcaster& broadcaster, MockNetwork& net
 }
 
 TEST_CASE("WorldBroadcaster: admin auth no lockout before threshold", "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -3052,7 +3052,7 @@ TEST_CASE("WorldBroadcaster: admin auth no lockout before threshold", "[world_br
 
 TEST_CASE("WorldBroadcaster: admin auth lockout triggered on Nth failure -- peer kicked",
           "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -3079,7 +3079,7 @@ TEST_CASE("WorldBroadcaster: admin auth lockout triggered on Nth failure -- peer
 }
 
 TEST_CASE("WorldBroadcaster: admin auth onConnect refused while locked", "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     net.peerAddresses[1] = "1.2.3.4:5678"; // same IP, new port (reconnect)
@@ -3110,7 +3110,7 @@ TEST_CASE("WorldBroadcaster: admin auth onConnect refused while locked", "[world
 }
 
 TEST_CASE("WorldBroadcaster: admin auth lockout expires after TTL", "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     net.peerAddresses[1] = "1.2.3.4:5678";
@@ -3144,7 +3144,7 @@ TEST_CASE("WorldBroadcaster: admin auth lockout expires after TTL", "[world_broa
 }
 
 TEST_CASE("WorldBroadcaster: admin auth per-IP isolation", "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234"; // IP A
     net.peerAddresses[1] = "5.6.7.8:2222"; // IP B — different
@@ -3182,7 +3182,7 @@ TEST_CASE("WorldBroadcaster: admin auth per-IP isolation", "[world_broadcaster][
 
 TEST_CASE("WorldBroadcaster: admin auth failure counter persists across disconnect-reconnect",
           "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     net.peerAddresses[1] = "1.2.3.4:5678"; // same normalized IP, new peerId
@@ -3219,7 +3219,7 @@ TEST_CASE("WorldBroadcaster: admin auth failure counter persists across disconne
 }
 
 TEST_CASE("WorldBroadcaster: admin auth correct token resets failure counter", "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -3253,7 +3253,7 @@ TEST_CASE("WorldBroadcaster: admin auth correct token resets failure counter", "
 
 TEST_CASE("WorldBroadcaster: admin auth wrong tokens when operator_password unset do not record failures",
           "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     net.peerAddresses[1] = "1.2.3.4:5678";
@@ -3282,7 +3282,7 @@ TEST_CASE("WorldBroadcaster: admin auth wrong tokens when operator_password unse
 
 TEST_CASE("WorldBroadcaster: admin auth pruneExpired fires after 600 onTick calls",
           "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     net.peerAddresses[1] = "1.2.3.4:5678";
@@ -3325,7 +3325,7 @@ TEST_CASE("WorldBroadcaster: admin auth pruneExpired fires after 600 onTick call
 }
 
 TEST_CASE("WorldBroadcaster: admin_unlock clears lockout -- onConnect succeeds", "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     net.peerAddresses[1] = "1.2.3.4:5678";
@@ -3359,7 +3359,7 @@ TEST_CASE("WorldBroadcaster: admin_unlock clears lockout -- onConnect succeeds",
 }
 
 TEST_CASE("WorldBroadcaster: admin_unlock is a no-op when IP is not locked", "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     net.peerAddresses[1] = "1.2.3.4:5678";
@@ -3386,7 +3386,7 @@ TEST_CASE("WorldBroadcaster: admin_unlock is a no-op when IP is not locked", "[w
 
 TEST_CASE("WorldBroadcaster: admin shell drain sends no follow-on when shell not configured",
           "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -3416,7 +3416,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain sends no follow-on when shell not
 
 TEST_CASE("WorldBroadcaster: admin shell drain does not fire before wall-clock deadline",
           "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -3449,7 +3449,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain does not fire before wall-clock d
 
 TEST_CASE("WorldBroadcaster: admin shell drain fires after wall-clock deadline and forwards shell lines",
           "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -3490,7 +3490,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain fires after wall-clock deadline a
 
 TEST_CASE("WorldBroadcaster: admin shell drain sends nothing when drain returns empty vector",
           "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -3521,7 +3521,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain sends nothing when drain returns 
 }
 
 TEST_CASE("WorldBroadcaster: admin shell drain skips disconnected peer", "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -3558,7 +3558,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain skips disconnected peer", "[world
 
 TEST_CASE("WorldBroadcaster: admin shell drain echoes correct reqId in follow-on response",
           "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -3596,7 +3596,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain echoes correct reqId in follow-on
 
 TEST_CASE("WorldBroadcaster: two admin commands queue independent drains with separate reqIds",
           "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -3646,7 +3646,7 @@ TEST_CASE("WorldBroadcaster: two admin commands queue independent drains with se
 }
 
 TEST_CASE("WorldBroadcaster: admin shell drain fires exactly once", "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -3687,7 +3687,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain fires exactly once", "[world_broa
 
 TEST_CASE("WorldBroadcaster: admin shell drain with long output streams as MsgAdminResponseChunk",
           "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -3729,7 +3729,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain with long output streams as MsgAd
 
 TEST_CASE("WorldBroadcaster: admin shell drain joins multiple lines with newline",
           "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -3768,7 +3768,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain joins multiple lines with newline
 
 TEST_CASE("WorldBroadcaster: admin shell drain sends nothing when all drain lines are empty",
           "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -3803,7 +3803,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain sends nothing when all drain line
 
 TEST_CASE("WorldBroadcaster: admin shell drain fires at wall-clock deadline regardless of tick index",
           "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -3844,7 +3844,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain fires at wall-clock deadline rega
 
 TEST_CASE("WorldBroadcaster: two admin commands at staggered deadlines drain independently",
           "[world_broadcaster][admin_command]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -3908,7 +3908,7 @@ TEST_CASE("WorldBroadcaster: spawn position preserves sub-mm precision at large 
     // At x = 1e5 m, float ULP is ~0.0119 m — a 1 mm fractional component would be
     // rounded away when storing into float pos_world.  With double pos_world the
     // 1 mm offset must survive the spawn -> integrator -> broadcast round-trip.
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:5000";
     fl::EntityTypeRegistry registry;
@@ -3940,7 +3940,7 @@ TEST_CASE("WorldBroadcaster: spawn position preserves sub-mm precision at large 
 // ---------------------------------------------------------------------------
 
 TEST_CASE("WorldBroadcaster: MsgHeartbeat triggers MsgPeerDelay reply", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -3967,7 +3967,7 @@ TEST_CASE("WorldBroadcaster: MsgHeartbeat triggers MsgPeerDelay reply", "[world_
 }
 
 TEST_CASE("WorldBroadcaster: MsgHeartbeat with future tickIndex does not update delay", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -3989,7 +3989,7 @@ TEST_CASE("WorldBroadcaster: MsgHeartbeat with future tickIndex does not update 
 }
 
 TEST_CASE("WorldBroadcaster: MsgHeartbeat caps delayTicks at uint16 max", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -4011,7 +4011,7 @@ TEST_CASE("WorldBroadcaster: MsgHeartbeat caps delayTicks at uint16 max", "[worl
 }
 
 TEST_CASE("WorldBroadcaster: truncated MsgHeartbeat is discarded", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -4028,7 +4028,7 @@ TEST_CASE("WorldBroadcaster: truncated MsgHeartbeat is discarded", "[world_broad
 }
 
 TEST_CASE("WorldBroadcaster: two peers each receive their own MsgPeerDelay", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -4064,7 +4064,7 @@ TEST_CASE("WorldBroadcaster: two peers each receive their own MsgPeerDelay", "[w
 // ---------------------------------------------------------------------------
 
 TEST_CASE("WorldBroadcaster: idle timeout 0 never kicks", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -4080,7 +4080,7 @@ TEST_CASE("WorldBroadcaster: idle timeout 0 never kicks", "[world_broadcaster]")
 }
 
 TEST_CASE("WorldBroadcaster: idle timeout disconnects peer after inactivity", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -4101,7 +4101,7 @@ TEST_CASE("WorldBroadcaster: idle timeout disconnects peer after inactivity", "[
 }
 
 TEST_CASE("WorldBroadcaster: MsgHeartbeat resets idle timer", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -4132,7 +4132,7 @@ TEST_CASE("WorldBroadcaster: MsgHeartbeat resets idle timer", "[world_broadcaste
 }
 
 TEST_CASE("WorldBroadcaster: MsgClientInput resets idle timer", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -4165,7 +4165,7 @@ TEST_CASE("WorldBroadcaster: MsgClientInput resets idle timer", "[world_broadcas
 // ---------------------------------------------------------------------------
 
 TEST_CASE("WorldBroadcaster: spatialIndex is populated with live entity count after onTick", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -4194,7 +4194,7 @@ struct SpyController : fl::IEntityController {
 };
 
 TEST_CASE("WorldBroadcaster: sample receives the AiTickContext from onTick", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -4235,7 +4235,7 @@ TEST_CASE("WorldBroadcaster: an injected AiScaling reaches the controller throug
     // #682: difficulty is resolved by fl-server (from a mod-overridable difficulty.toml) and injected
     // here, rather than invented in the engine. A controller sees it through ctx.difficulty; the
     // sensing pass applies radarSensorRange to radar ranges and reactionTimeS to the reaction delay.
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -4271,7 +4271,7 @@ TEST_CASE("WorldBroadcaster: an injected AiScaling reaches the controller throug
 
 TEST_CASE("WorldBroadcaster: auto spatial cell size resolves from draw distance (#573)",
           "[world_broadcaster][interest]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -4298,7 +4298,7 @@ TEST_CASE("WorldBroadcaster: auto spatial cell size resolves from draw distance 
 
 TEST_CASE("WorldBroadcaster: two peers at different positions see disjoint entity sets",
           "[world_broadcaster][interest]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -4325,7 +4325,7 @@ TEST_CASE("WorldBroadcaster: two peers at different positions see disjoint entit
 
 TEST_CASE("WorldBroadcaster: 3D interest cull rejects an entity far in altitude (#402)",
           "[world_broadcaster][interest]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -4364,7 +4364,7 @@ TEST_CASE("WorldBroadcaster: 3D interest cull rejects an entity far in altitude 
 }
 
 TEST_CASE("WorldBroadcaster: applyConfig propagates drawDistanceKm", "[world_broadcaster][interest]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -4390,7 +4390,7 @@ TEST_CASE("WorldBroadcaster: applyConfig propagates drawDistanceKm", "[world_bro
 }
 
 TEST_CASE("WorldBroadcaster: first tick sends full entries, second tick sends updates", "[world_broadcaster][delta]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -4417,7 +4417,7 @@ TEST_CASE("WorldBroadcaster: first tick sends full entries, second tick sends up
 }
 
 TEST_CASE("WorldBroadcaster: entity stays full every tick until the client acks", "[world_broadcaster][delta]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -4449,7 +4449,7 @@ TEST_CASE("WorldBroadcaster: entity stays full every tick until the client acks"
 
 TEST_CASE("WorldBroadcaster: a dropped full keeps re-sending full until a later tick is acked",
           "[world_broadcaster][delta]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -4480,7 +4480,7 @@ TEST_CASE("WorldBroadcaster: a dropped full keeps re-sending full until a later 
 TEST_CASE("WorldBroadcaster: acking a later tick does not confirm a full whose streak-start tick was "
           "not decoded",
           "[world_broadcaster][identity-ack]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -4515,7 +4515,7 @@ TEST_CASE("WorldBroadcaster: acking a later tick does not confirm a full whose s
 }
 
 TEST_CASE("WorldBroadcaster: entity gen change forces a full entry", "[world_broadcaster][delta]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -4557,7 +4557,7 @@ TEST_CASE("WorldBroadcaster: entity gen change forces a full entry", "[world_bro
 
 TEST_CASE("WorldBroadcaster: reconnect after disconnect starts with fresh known-gen state",
           "[world_broadcaster][delta]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -4593,7 +4593,7 @@ TEST_CASE("WorldBroadcaster: reconnect after disconnect starts with fresh known-
 }
 
 TEST_CASE("WorldBroadcaster: totalEntityCount matches buffer content", "[world_broadcaster][delta]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -4632,7 +4632,7 @@ TEST_CASE("WorldBroadcaster: totalEntityCount matches buffer content", "[world_b
 }
 
 TEST_CASE("WorldBroadcaster: no connected peers produces no snapshot sends", "[world_broadcaster][interest]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -4803,7 +4803,7 @@ static fl::MsgClientInput makeJitterInput(uint32_t seqNum, float throttle, uint6
 
 TEST_CASE("WorldBroadcaster: received input is buffered and not applied until tick",
           "[world_broadcaster][jitter_buffer]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -4821,7 +4821,7 @@ TEST_CASE("WorldBroadcaster: received input is buffered and not applied until ti
 }
 
 TEST_CASE("WorldBroadcaster: jitter buffer drains one per tick", "[world_broadcaster][jitter_buffer]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -4852,7 +4852,7 @@ TEST_CASE("WorldBroadcaster: jitter buffer drains one per tick", "[world_broadca
 }
 
 TEST_CASE("WorldBroadcaster: empty buffer tick uses stale repeat without crash", "[world_broadcaster][jitter_buffer]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -4875,7 +4875,7 @@ TEST_CASE("WorldBroadcaster: empty buffer tick uses stale repeat without crash",
 }
 
 TEST_CASE("WorldBroadcaster: forEachPeer reports queueDepth", "[world_broadcaster][jitter_buffer]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -4899,7 +4899,7 @@ TEST_CASE("WorldBroadcaster: forEachPeer reports queueDepth", "[world_broadcaste
 
 TEST_CASE("WorldBroadcaster: jitter buffer depth seeded from estimatedDelayTicks",
           "[world_broadcaster][jitter_buffer]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -4928,7 +4928,7 @@ TEST_CASE("WorldBroadcaster: jitter buffer depth seeded from estimatedDelayTicks
 }
 
 TEST_CASE("WorldBroadcaster: jitter buffer depth capped at jitterMaxDepth", "[world_broadcaster][jitter_buffer]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -4957,7 +4957,7 @@ TEST_CASE("WorldBroadcaster: jitter buffer depth capped at jitterMaxDepth", "[wo
 }
 
 TEST_CASE("WorldBroadcaster: jitter buffers are independent per peer", "[world_broadcaster][jitter_buffer]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -4988,7 +4988,7 @@ TEST_CASE("WorldBroadcaster: jitter buffers are independent per peer", "[world_b
 
 TEST_CASE("WorldBroadcaster: setJitterBufferDepth affects initial depth for new peers",
           "[world_broadcaster][jitter_buffer]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -5038,7 +5038,7 @@ TEST_CASE("WorldBroadcaster: setJitterBufferDepth affects initial depth for new 
 // ---------------------------------------------------------------------------
 
 TEST_CASE("WorldBroadcaster: EWMA delay seeded from first estimatedDelayTicks", "[world_broadcaster][jitter_buffer]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -5064,7 +5064,7 @@ TEST_CASE("WorldBroadcaster: EWMA delay seeded from first estimatedDelayTicks", 
 }
 
 TEST_CASE("WorldBroadcaster: EWMA delay converges toward new samples", "[world_broadcaster][jitter_buffer]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -5100,7 +5100,7 @@ TEST_CASE("WorldBroadcaster: EWMA delay converges toward new samples", "[world_b
 
 TEST_CASE("WorldBroadcaster: adaptive resize grows buffer when EWMA delay increases",
           "[world_broadcaster][jitter_buffer]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -5141,7 +5141,7 @@ TEST_CASE("WorldBroadcaster: adaptive resize grows buffer when EWMA delay increa
 }
 
 TEST_CASE("WorldBroadcaster: adaptive resize shrinks buffer when delay drops", "[world_broadcaster][jitter_buffer]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -5177,7 +5177,7 @@ TEST_CASE("WorldBroadcaster: adaptive resize shrinks buffer when delay drops", "
 }
 
 TEST_CASE("WorldBroadcaster: hysteresis prevents resize for small EWMA drift", "[world_broadcaster][jitter_buffer]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -5212,7 +5212,7 @@ TEST_CASE("WorldBroadcaster: hysteresis prevents resize for small EWMA drift", "
 }
 
 TEST_CASE("WorldBroadcaster: adaptive resize clamped at jitterMaxDepth", "[world_broadcaster][jitter_buffer]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -5244,7 +5244,7 @@ TEST_CASE("WorldBroadcaster: adaptive resize clamped at jitterMaxDepth", "[world
 }
 
 TEST_CASE("WorldBroadcaster: setJitterMultiplier 0 gives delay-only depth", "[world_broadcaster][jitter_buffer]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -5285,7 +5285,7 @@ TEST_CASE("WorldBroadcaster: setJitterMultiplier 0 gives delay-only depth", "[wo
 
 TEST_CASE("WorldBroadcaster: forEachPeer PeerInfo carries bufferMaxDepth after adaptive resize",
           "[world_broadcaster][jitter_buffer]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -5317,7 +5317,7 @@ TEST_CASE("WorldBroadcaster: forEachPeer PeerInfo carries bufferMaxDepth after a
 }
 
 TEST_CASE("WorldBroadcaster: adaptive resize skips peer with no EWMA sample", "[world_broadcaster][jitter_buffer]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -5340,7 +5340,7 @@ TEST_CASE("WorldBroadcaster: adaptive resize skips peer with no EWMA sample", "[
 
 TEST_CASE("WorldBroadcaster: adaptive resize floors target at 1 with zero delay",
           "[world_broadcaster][jitter_buffer]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -5369,7 +5369,7 @@ TEST_CASE("WorldBroadcaster: adaptive resize floors target at 1 with zero delay"
 
 TEST_CASE("WorldBroadcaster: jitter EWMA stays near zero for regular 1-tick-spaced inputs",
           "[world_broadcaster][jitter_buffer]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -5394,7 +5394,7 @@ TEST_CASE("WorldBroadcaster: jitter EWMA stays near zero for regular 1-tick-spac
 }
 
 TEST_CASE("WorldBroadcaster: jitter EWMA grows for irregular arrivals", "[world_broadcaster][jitter_buffer]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -5427,7 +5427,7 @@ TEST_CASE("WorldBroadcaster: jitter EWMA grows for irregular arrivals", "[world_
 
 TEST_CASE("WorldBroadcaster: adaptive resize shrinks buffer and drops excess fill",
           "[world_broadcaster][jitter_buffer]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -5481,7 +5481,7 @@ TEST_CASE("WorldBroadcaster: adaptive resize shrinks buffer and drops excess fil
 
 TEST_CASE("WorldBroadcaster: applyConfig wires jitterAdaptWindow hysteresis multiplier",
           "[world_broadcaster][jitter_buffer]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -5521,7 +5521,7 @@ TEST_CASE("WorldBroadcaster: applyConfig wires jitterAdaptWindow hysteresis mult
 
 TEST_CASE("WorldBroadcaster: re-entry after retention gap forces a full record",
           "[world_broadcaster][interest][budget]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -5565,7 +5565,7 @@ TEST_CASE("WorldBroadcaster: re-entry after retention gap forces a full record",
 
 TEST_CASE("WorldBroadcaster: zero link stats leave every peer at the full per-tick rate",
           "[world_broadcaster][congestion]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -5583,7 +5583,7 @@ TEST_CASE("WorldBroadcaster: zero link stats leave every peer at the full per-ti
 
 TEST_CASE("WorldBroadcaster: forEachPeer reports throttled send rate and packet loss",
           "[world_broadcaster][congestion]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -5610,7 +5610,7 @@ TEST_CASE("WorldBroadcaster: forEachPeer reports throttled send rate and packet 
 // entering the sim. std::clamp passes NaN through unchanged, and a NaN throttle later trips UB at the
 // float->uint8 telemetry cast during snapshot assembly.
 TEST_CASE("WorldBroadcaster: NaN/Inf client input is sanitized, not propagated", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -5637,7 +5637,7 @@ TEST_CASE("WorldBroadcaster: NaN/Inf client input is sanitized, not propagated",
 // flagged 9.52682e+135). The spatial index now saturates the cell coordinate; the whole tick must
 // stay UB-free and still deliver a snapshot to the observer.
 TEST_CASE("WorldBroadcaster: extreme observer camera eye does not trip spatial-hash UB", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -5664,7 +5664,7 @@ TEST_CASE("WorldBroadcaster: extreme observer camera eye does not trip spatial-h
 // ---------------------------------------------------------------------------
 
 TEST_CASE("WorldBroadcaster: input tracing records accepted inputs only", "[world_broadcaster][trace]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -5735,7 +5735,7 @@ TEST_CASE("WorldBroadcaster: input tracing records accepted inputs only", "[worl
 }
 
 TEST_CASE("WorldBroadcaster: tracing disabled writes nothing", "[world_broadcaster][trace]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -5797,7 +5797,7 @@ constexpr uint8_t kRejoin = 2; // fl::ai::WingmanCommand::Rejoin — spelled out
 } // namespace
 
 TEST_CASE("WorldBroadcaster: a player entity is stamped with the configured faction", "[world_broadcaster][wingman]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -5819,7 +5819,7 @@ TEST_CASE("WorldBroadcaster: a player entity is stamped with the configured fact
 }
 
 TEST_CASE("WorldBroadcaster: player faction 0 restores the legacy neutral behavior", "[world_broadcaster][wingman]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -5834,7 +5834,7 @@ TEST_CASE("WorldBroadcaster: player faction 0 restores the legacy neutral behavi
 
 TEST_CASE("WorldBroadcaster: the flight check-in tells the client its flight id and size",
           "[world_broadcaster][wingman]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -5864,7 +5864,7 @@ TEST_CASE("WorldBroadcaster: the flight check-in tells the client its flight id 
 }
 
 TEST_CASE("WorldBroadcaster: an order retasks an AI member and is acknowledged", "[world_broadcaster][wingman]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -5908,7 +5908,7 @@ TEST_CASE("WorldBroadcaster: a peer cannot order a flight it does not command", 
     // THE AUTHORIZATION TEST. Authority comes from commanding the formation, never from the packet —
     // and the refusal is the SAME code as "no such flight", so the order channel cannot be used to
     // enumerate which formations exist or who leads them.
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -5953,7 +5953,7 @@ TEST_CASE("WorldBroadcaster: a peer cannot order a flight it does not command", 
 
 TEST_CASE("WorldBroadcaster: an unknown command ordinal is rejected without calling the handler",
           "[world_broadcaster][wingman]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -5994,7 +5994,7 @@ TEST_CASE("WorldBroadcaster: an unknown command ordinal is rejected without call
 
 TEST_CASE("WorldBroadcaster: attack_my_target refuses when nothing is in the boresight cone",
           "[world_broadcaster][wingman]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -6041,7 +6041,7 @@ TEST_CASE("WorldBroadcaster: attack_my_target refuses when nothing is in the bor
 TEST_CASE("WorldBroadcaster: an order to a HUMAN member is relayed, not applied", "[world_broadcaster][wingman]") {
     // The server cannot retask a person. It relays the call and tells the commander it was passed on,
     // rather than letting them believe an aircraft is now obeying.
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -6098,7 +6098,7 @@ TEST_CASE("WorldBroadcaster: an order to a HUMAN member is relayed, not applied"
 TEST_CASE("WorldBroadcaster: the order rate limit acks once per window, not once per packet",
           "[world_broadcaster][wingman]") {
     // An ack for every rejected packet would turn a flood into an amplifier pointed at the sender.
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -6142,7 +6142,7 @@ TEST_CASE("WorldBroadcaster: the order rate limit acks once per window, not once
 }
 
 TEST_CASE("WorldBroadcaster: a truncated or mis-versioned order is discarded", "[world_broadcaster][wingman]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -6172,7 +6172,7 @@ TEST_CASE("WorldBroadcaster: a truncated or mis-versioned order is discarded", "
 }
 
 TEST_CASE("WorldBroadcaster: disconnect tears the peer's flight down", "[world_broadcaster][wingman]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -6214,7 +6214,7 @@ TEST_CASE("WorldBroadcaster: disconnect tears the peer's flight down", "[world_b
 namespace {} // namespace
 
 TEST_CASE("WorldBroadcaster: losing your aircraft is a loss on your stats", "[world_broadcaster][combat]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -6236,7 +6236,7 @@ TEST_CASE("WorldBroadcaster: losing your aircraft is a loss on your stats", "[wo
 
 TEST_CASE("WorldBroadcaster: DamageLevelChanged applies the DamageDef penalties to the integrator",
           "[world_broadcaster][combat]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
 
@@ -6275,7 +6275,7 @@ TEST_CASE("WorldBroadcaster: DamageLevelChanged applies the DamageDef penalties 
 
 TEST_CASE("WorldBroadcaster: applyWarheadAt damages through the pipeline and EMPs on nuclear",
           "[world_broadcaster][combat]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -6411,7 +6411,7 @@ bool hasEffect(const std::vector<DecodedEffect>& fx, fl::EffectType t) {
 
 TEST_CASE("WorldBroadcaster: the trigger bit fires the gun -- damage lands and effects replicate",
           "[world_broadcaster][firepath]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeArmedDebugDef());
@@ -6459,7 +6459,7 @@ TEST_CASE("WorldBroadcaster: the trigger bit fires the gun -- damage lands and e
 
 TEST_CASE("WorldBroadcaster: store release spawns ONE replicated projectile; stale repeat never re-fires",
           "[world_broadcaster][firepath]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeArmedDebugDef());
@@ -6514,7 +6514,7 @@ TEST_CASE("WorldBroadcaster: store release spawns ONE replicated projectile; sta
 
 TEST_CASE("WorldBroadcaster: a delayed player's gun hits where the target WAS -- lag compensation",
           "[world_broadcaster][firepath][lagcomp]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeArmedDebugDef());
@@ -6564,7 +6564,7 @@ TEST_CASE("WorldBroadcaster: a delayed player's gun hits where the target WAS --
 
 TEST_CASE("WorldBroadcaster: with no delay the same jink is a clean miss -- no free rewind",
           "[world_broadcaster][firepath][lagcomp]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeArmedDebugDef());
@@ -6610,7 +6610,7 @@ TEST_CASE("WorldBroadcaster: with no delay the same jink is a clean miss -- no f
 
 TEST_CASE("WorldBroadcaster: the zero-pack sandbox peer spawns ARMED and the cannon fires",
           "[world_broadcaster][firepath][sandbox]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(fl::builtinDebugEntityDef()); // the REAL sandbox def (#440), not a fixture
@@ -6658,7 +6658,7 @@ TEST_CASE("WorldBroadcaster: the zero-pack sandbox peer spawns ARMED and the can
 
 TEST_CASE("WorldBroadcaster: a designated IR missile launch flies out and kills through the pipeline",
           "[world_broadcaster][firepath][seeker]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(fl::builtinDebugEntityDef());
@@ -6726,7 +6726,7 @@ TEST_CASE("WorldBroadcaster: a designated IR missile launch flies out and kills 
 
 TEST_CASE("WorldBroadcaster: every builtin flying store releases from the zero-pack debug entity (#862)",
           "[world_broadcaster][firepath][sandbox]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(fl::builtinDebugEntityDef());
@@ -6826,7 +6826,7 @@ TEST_CASE("WorldBroadcaster: every builtin flying store releases from the zero-p
 
 TEST_CASE("WorldBroadcaster: the pre-launch LOCK cue reaches the own record's weaponFlags",
           "[world_broadcaster][firepath][seeker]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(fl::builtinDebugEntityDef());
@@ -6897,7 +6897,7 @@ struct CollisionOutcome {
     float hpB{-1.f};
 };
 CollisionOutcome runCollisionCase(bool crashDamage, double separationM, float speedMps, fl::JobSystem* jobs) {
-    static MockLogger logger;
+    static NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef()); // AirVehicle, 100 hp, 8 m default collision radius
@@ -6982,7 +6982,7 @@ TEST_CASE("WorldBroadcaster: collision detection is serial-equivalent across wor
 
 TEST_CASE("WorldBroadcaster: a warhead that fails an engine subsystem shows on the wire flags",
           "[world_broadcaster][subsystem]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
 
@@ -7027,7 +7027,7 @@ TEST_CASE("WorldBroadcaster: a warhead that fails an engine subsystem shows on t
 
 TEST_CASE("WorldBroadcaster: the builtin debug entity walks through damage levels + a subsystem failure (#864)",
           "[world_broadcaster][subsystem][sandbox]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(fl::builtinDebugEntityDef()); // the REAL sandbox def, now with a damage model
@@ -7072,7 +7072,7 @@ TEST_CASE("WorldBroadcaster: the builtin debug entity walks through damage level
 
 TEST_CASE("WorldBroadcaster: directed hits on the builtin debug entity fail its subsystems (#864)",
           "[world_broadcaster][subsystem][sandbox]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(fl::builtinDebugEntityDef());
@@ -7110,7 +7110,7 @@ TEST_CASE("WorldBroadcaster: directed hits on the builtin debug entity fail its 
 
 TEST_CASE("WorldBroadcaster: an entity without a subsystems table is unaffected by the router",
           "[world_broadcaster][subsystem]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef()); // no [damage.subsystems]
@@ -7138,7 +7138,7 @@ TEST_CASE("WorldBroadcaster: an entity without a subsystems table is unaffected 
 // ---------------------------------------------------------------------------
 
 TEST_CASE("WorldBroadcaster: a pilot beyond the slots falls back to the default spawn", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -7175,7 +7175,7 @@ TEST_CASE("WorldBroadcaster: a pilot takes off with the loadout the mission slot
           "[world_broadcaster][firepath]") {
     // The training case: a gunnery lesson wants the student on the gun, not holding two missiles.
     // The slot strips the rail, so pulling the store-release trigger produces NOTHING to launch.
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeArmedDebugDef());
@@ -7217,7 +7217,7 @@ TEST_CASE("WorldBroadcaster: a mission slot with no loadout keeps the entity's d
           "[world_broadcaster][firepath]") {
     // The same slot without a loadout: the default rail is still armed and still fires. This is what
     // every mission slot did before #1209, and the field defaulting empty is what keeps it that way.
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeArmedDebugDef());
@@ -7256,7 +7256,7 @@ TEST_CASE("WorldBroadcaster: a mission slot with no loadout keeps the entity's d
 
 TEST_CASE("WorldBroadcaster: setEntityLoadout overrides a controlled entity's stores (#855)",
           "[world_broadcaster][firepath]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeArmedDebugDef());
@@ -7298,7 +7298,7 @@ namespace {} // namespace
 
 TEST_CASE("WorldBroadcaster: crewed aircraft replicate roster on connect; single-seat do not (#972)",
           "[world_broadcaster][crew]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef()); // a single-seat entity
@@ -7369,7 +7369,7 @@ TEST_CASE("WorldBroadcaster: crewed aircraft replicate roster on connect; single
 }
 
 TEST_CASE("WorldBroadcaster: a single-seat-only world emits no SnapshotCrew TLV (#972)", "[world_broadcaster][crew]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -7422,7 +7422,7 @@ static std::vector<fl::MsgSeatResult> seatResultsFor(const MockNetwork& net, uin
 
 TEST_CASE("WorldBroadcaster: a human joins a gunner seat; a second human is denied (#974)",
           "[world_broadcaster][crew]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -7478,7 +7478,7 @@ TEST_CASE("WorldBroadcaster: a human joins a gunner seat; a second human is deni
 
 TEST_CASE("WorldBroadcaster: a peer-spawned crewed airframe persists while a human gunner remains (#974)",
           "[world_broadcaster][crew]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -7528,7 +7528,7 @@ TEST_CASE("WorldBroadcaster: a peer-spawned crewed airframe persists while a hum
 
 TEST_CASE("WorldBroadcaster: a peer-spawned single-seat aircraft despawns on pilot disconnect (#974)",
           "[world_broadcaster][crew]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -7553,7 +7553,7 @@ TEST_CASE("WorldBroadcaster: a peer-spawned single-seat aircraft despawns on pil
 
 TEST_CASE("WorldBroadcaster: seats/set_seat operator surface reads and forces occupancy (#974)",
           "[world_broadcaster][crew]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -7604,7 +7604,7 @@ TEST_CASE("WorldBroadcaster: seats/set_seat operator surface reads and forces oc
 
 TEST_CASE("WorldBroadcaster: two humans on one crewed airframe each get an own record (#972/#980)",
           "[world_broadcaster][crew]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -7663,7 +7663,7 @@ namespace {} // namespace
 
 TEST_CASE("WorldBroadcaster: MsgClientInput articulation commands reach the flight sim (#843)",
           "[world_broadcaster][articulation]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -7733,7 +7733,7 @@ struct ScriptedController : fl::IEntityController {
 
 // Step a fixed scripted world and return the per-tick state-hash stream from the replay tap.
 std::vector<uint64_t> runDeterminismScenario(fl::JobSystem* jobs, int entityCount = 24) {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -7845,7 +7845,7 @@ static int countMsgsTo(const MockNetwork& net, uint32_t peerId, fl::MsgId id) {
 
 TEST_CASE("WorldBroadcaster: heartbeat replies are rate-limited but liveness still counts (#1069)",
           "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -7893,7 +7893,7 @@ TEST_CASE("WorldBroadcaster: heartbeat replies are rate-limited but liveness sti
 
 TEST_CASE("WorldBroadcaster: seat requests are rate-limited and over-limit ones are silent (#1069)",
           "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -7942,7 +7942,7 @@ TEST_CASE("WorldBroadcaster: a seat-request flood cannot amplify past the limite
     // The amplification RATIO is the defect: a 12-byte MsgSeatRequest whose grant re-sends the whole
     // ConnectAck type table was ~1900x at a realistic registry. This bounds bytes-out/bytes-in for a
     // flood, which is what an attacker actually controls.
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -7998,7 +7998,7 @@ TEST_CASE("WorldBroadcaster: a seat-request flood cannot amplify past the limite
 
 TEST_CASE("WorldBroadcaster: team switches are on a cooldown, and a rejected one is silent (#1069)",
           "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -8041,7 +8041,7 @@ TEST_CASE("WorldBroadcaster: team switches are on a cooldown, and a rejected one
 }
 
 TEST_CASE("WorldBroadcaster: an unadmitted peer's client input is ignored (#1069)", "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -8128,7 +8128,7 @@ TEST_CASE("WorldBroadcaster: an all-mics-open session cannot fan out without bou
     // cap this is (talkers x listeners) — at 128 players roughly 975,000 sendChannel calls a second.
     // With it, only maxTalkers peers per net relay at any moment, so the fan-out is bounded by
     // (cap x listeners) no matter how many mics are open.
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());

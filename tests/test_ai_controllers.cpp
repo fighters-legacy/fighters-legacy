@@ -26,6 +26,7 @@
 #include "entity/EntityState.h"
 #include "entity/EntityTypeRegistry.h"
 #include "flight/BallisticLead.h"
+#include "mock_log.h"
 #include "sensor/SensorSystem.h"
 #include "spatial/SpatialIndex.h"
 
@@ -42,12 +43,6 @@ using namespace fl;
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
-
-struct NullLogger : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 // Build an EntityState at (px,py,pz) with the given quaternion [x,y,z,w].
 // Default quaternion is identity (forward = +X world axis).

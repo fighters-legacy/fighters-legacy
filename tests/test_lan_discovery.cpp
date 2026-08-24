@@ -371,11 +371,7 @@ TEST_CASE("DiscoveryListener deduplicates repeated beacons from same server", "[
 }
 
 TEST_CASE("DiscoveryBeacon: setName updates the server name for future broadcasts", "[lan_discovery]") {
-    struct NullLogger : ILogger {
-        void log(LogLevel, const char*, int, const char*) override {}
-        void setMinLevel(LogLevel) override {}
-        void flush() override {}
-    } log;
+    NullLogger log;
 
     DiscoveryBeacon::Config cfg;
     cfg.name = "original";

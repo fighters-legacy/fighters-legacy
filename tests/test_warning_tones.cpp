@@ -9,6 +9,7 @@
 #include "NullAudio.h"
 #include "audio/WarningToneManager.h"
 #include "config/AudioSettings.h"
+#include "mock_log.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -17,12 +18,6 @@
 using namespace fl;
 
 namespace {
-
-struct NullLoggerWt : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 // Records what WarningToneManager did to each source: play/stop, looping, relative, gain.
 struct TrackingAudio : fl::NullAudio {
@@ -106,7 +101,7 @@ TEST_CASE("warning tones no-op with null audio", "[warning]") {
 
 TEST_CASE("stall tone activates and plays a looping head-locked source", "[warning]") {
     TrackingAudio audio;
-    NullLoggerWt log;
+    NullLogger log;
     WarningToneManager wt;
     wt.init(&audio, &log);
 

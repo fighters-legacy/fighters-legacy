@@ -20,6 +20,7 @@
 #include "entity/EntityManager.h"
 #include "entity/EntityState.h"
 #include "entity/EntityTypeRegistry.h"
+#include "mock_log.h"
 #include "sensor/SensorSystem.h"
 #include "spatial/SpatialIndex.h"
 
@@ -31,12 +32,6 @@ using namespace fl;
 using namespace fl::ai;
 
 namespace {
-
-struct NullLogger final : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 // A child controller that reports which state built it, through the throttle channel.
 class TagController final : public fl::IEntityController {

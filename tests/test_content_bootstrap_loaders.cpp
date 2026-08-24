@@ -15,6 +15,7 @@
 #include "content/ContentBootstrap.h"
 #include "entity/EntityTypeRegistry.h"
 #include "mock_content.h"
+#include "mock_log.h"
 #include "weapon/WeaponRegistry.h"
 #include "world/AirportDef.h"
 #include "world/EscalationPolicy.h"
@@ -27,22 +28,6 @@
 using namespace fl;
 
 namespace {
-
-struct RecordingLog final : ILogger {
-    std::vector<std::string> warnings;
-    void log(LogLevel lvl, const char*, int, const char* msg) override {
-        if (lvl == LogLevel::Warn && msg)
-            warnings.emplace_back(msg);
-    }
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-    [[nodiscard]] bool mentions(std::string_view needle) const {
-        for (const auto& w : warnings)
-            if (w.find(needle) != std::string::npos)
-                return true;
-        return false;
-    }
-};
 
 // One pack that can serve any of the def types from an in-memory table, and can be told to hand
 // back empty bytes for a given name (the "could not be loaded" path).
@@ -121,15 +106,15 @@ width_m = 45.0
 )";
     pack.airports["broken"] = kGarbage;
 
-    RecordingLog log;
+    RecordingLogger log;
     auto assets = assetsFor(std::move(pack), log);
     std::vector<AirportDef> out;
     const uint32_t n = registerPackAirportDefs(*assets, out, log);
 
     CHECK(n == 1);
     CHECK(out.size() == 1);
-    CHECK(log.mentions("parse error"));
-    CHECK(log.mentions("broken")); // it names the file the author has to go and fix
+    CHECK(log.hasMessage(LogLevel::Warn, "parse error"));
+    CHECK(log.hasMessage(LogLevel::Warn, "broken")); // it names the file the author has to go and fix
 }
 
 TEST_CASE("registerPackAirportDefs: the placement and runway rules are enforced (#1145)", "[content][bootstrap]") {
@@ -147,22 +132,22 @@ length_m = 0.0
 width_m = 45.0
 )";
 
-    RecordingLog log;
+    RecordingLogger log;
     auto assets = assetsFor(std::move(pack), log);
     std::vector<AirportDef> out;
     CHECK(registerPackAirportDefs(*assets, out, log) == 0);
-    CHECK(log.mentions("no_placement"));
-    CHECK(log.mentions("bad_runway"));
+    CHECK(log.hasMessage(LogLevel::Warn, "no_placement"));
+    CHECK(log.hasMessage(LogLevel::Warn, "bad_runway"));
 }
 
 TEST_CASE("registerPackAirportDefs: an empty pack yields nothing and warns about nothing (#1145)",
           "[content][bootstrap]") {
-    RecordingLog log;
+    RecordingLogger log;
     auto assets = assetsFor(DefPack{}, log);
     std::vector<AirportDef> out;
     CHECK(registerPackAirportDefs(*assets, out, log) == 0);
     CHECK(out.empty());
-    CHECK(log.warnings.empty());
+    CHECK(log.messages(LogLevel::Warn).empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -177,13 +162,13 @@ name = "Standard ROE"
 )";
     pack.zonePolicies["broken"] = kGarbage;
 
-    RecordingLog log;
+    RecordingLogger log;
     auto assets = assetsFor(std::move(pack), log);
     std::vector<EscalationPolicy> out;
     const uint32_t n = registerPackZonePolicies(*assets, out, log);
 
     CHECK(n <= 1); // the good one if the schema matches; the broken one never
-    CHECK(log.mentions("broken"));
+    CHECK(log.hasMessage(LogLevel::Warn, "broken"));
 }
 
 // ---------------------------------------------------------------------------
@@ -200,13 +185,13 @@ mass_kg = 85.0
 )";
     pack.weapons["broken"] = kGarbage;
 
-    RecordingLog log;
+    RecordingLogger log;
     auto assets = assetsFor(std::move(pack), log);
     WeaponRegistry registry;
     const uint32_t n = registerPackWeaponDefs(*assets, registry, log);
 
     CHECK(n <= 1);
-    CHECK(log.mentions("broken"));
+    CHECK(log.hasMessage(LogLevel::Warn, "broken"));
 }
 
 TEST_CASE("registerPackWeaponDefs: a duplicate id is reported and not double-registered (#1145)",
@@ -223,14 +208,14 @@ mass_kg = 85.0
     pack.weapons["a_first"] = body;
     pack.weapons["b_second"] = body;
 
-    RecordingLog log;
+    RecordingLogger log;
     auto assets = assetsFor(std::move(pack), log);
     WeaponRegistry registry;
     const uint32_t n = registerPackWeaponDefs(*assets, registry, log);
 
     CHECK(n <= 1);
     if (n == 1)
-        CHECK(log.mentions("already registered"));
+        CHECK(log.hasMessage(LogLevel::Warn, "already registered"));
 }
 
 // ---------------------------------------------------------------------------
@@ -255,7 +240,7 @@ TEST_CASE("registerBuiltinWeapons and surface entities are idempotent per regist
 TEST_CASE("registerProjectileEntityDefs: one entity type per flyable weapon (#1145)", "[content][bootstrap]") {
     // MsgEntityTypeDef only travels in ConnectAck, so a projectile type registered after a client
     // connects would reach it as an unresolvable typeIndex — these must all exist up front.
-    RecordingLog log;
+    RecordingLogger log;
     WeaponRegistry weapons;
     registerBuiltinWeapons(weapons);
 
@@ -270,7 +255,7 @@ TEST_CASE("registerProjectileEntityDefs: one entity type per flyable weapon (#11
 
 TEST_CASE("registerProjectileEntityDefs: an empty weapon registry yields no projectiles (#1145)",
           "[content][bootstrap]") {
-    RecordingLog log;
+    RecordingLogger log;
     const WeaponRegistry empty;
     EntityTypeRegistry entities;
     CHECK(registerProjectileEntityDefs(empty, entities, log) == 0);

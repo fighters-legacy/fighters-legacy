@@ -11,6 +11,7 @@
 #include "NullAudio.h"
 #include "audio/EngineAudio.h"
 #include "config/AudioSettings.h"
+#include "mock_log.h"
 
 #include <map>
 #include <vector>
@@ -19,12 +20,6 @@ using namespace fl;
 using Catch::Approx;
 
 namespace {
-
-struct NullLoggerEa : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 // Records the per-source state EngineAudioManager sets, so the doppler / head-lock / distance wiring
 // can be asserted without a device.
@@ -171,7 +166,7 @@ TEST_CASE("builtin engine loops are non-empty and byte-stable") {
 
 TEST_CASE("EngineAudioManager: own engine is head-locked, flyby is positional with doppler") {
     TrackingAudio audio;
-    NullLoggerEa log;
+    NullLogger log;
     EngineAudioManager mgr;
     REQUIRE(mgr.init(&audio, &log));
     // No air predicate ⇒ every non-own entity qualifies.
@@ -216,7 +211,7 @@ TEST_CASE("EngineAudioManager: own engine is head-locked, flyby is positional wi
 
 TEST_CASE("EngineAudioManager: a flyby leaving audible range stops its voice") {
     TrackingAudio audio;
-    NullLoggerEa log;
+    NullLogger log;
     EngineAudioManager mgr;
     mgr.init(&audio, &log);
 
@@ -234,7 +229,7 @@ TEST_CASE("EngineAudioManager: a flyby leaving audible range stops its voice") {
 
 TEST_CASE("EngineAudioManager: the air-vehicle predicate excludes non-aircraft") {
     TrackingAudio audio;
-    NullLoggerEa log;
+    NullLogger log;
     EngineAudioManager mgr;
     mgr.init(&audio, &log);
     mgr.setAirVehiclePredicate([](uint32_t typeIndex) { return typeIndex == 7; }); // only type 7 is "air"
@@ -249,7 +244,7 @@ TEST_CASE("EngineAudioManager: the air-vehicle predicate excludes non-aircraft")
 }
 
 TEST_CASE("EngineAudioManager tolerates a null audio device") {
-    NullLoggerEa log;
+    NullLogger log;
     EngineAudioManager mgr;
     REQUIRE(mgr.init(nullptr, &log));
     std::vector<EntityRenderEntry> ents;

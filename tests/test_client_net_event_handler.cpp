@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "IClock.h"
+#include "mock_log.h"
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
@@ -109,12 +110,6 @@ inline std::vector<uint8_t> buildSnapshotPkt(uint64_t tick, const std::vector<Te
     return buf;
 }
 
-struct MockLogger : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
-
 // Records disconnect()/disconnectPeer() so the version-mismatch and refusal paths are assertable.
 using MockNetwork = TrackingNetwork;
 
@@ -135,7 +130,7 @@ TEST_CASE("ClientNetEventHandler: MsgPlayerRoster upserts and leaves resolve dis
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -182,7 +177,7 @@ TEST_CASE("ClientNetEventHandler: MsgPlayerRoster upserts and leaves resolve dis
 TEST_CASE("ClientNetEventHandler: MsgMatchState decodes phase + team scores (#647)", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -224,7 +219,7 @@ TEST_CASE("ClientNetEventHandler: MsgScoreboard upserts rows; roster leave prune
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -274,7 +269,7 @@ TEST_CASE("ClientNetEventHandler: MsgScoreboard upserts rows; roster leave prune
 TEST_CASE("ClientNetEventHandler: kill feed resolves participant callsigns (#647)", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -320,7 +315,7 @@ TEST_CASE("ClientNetEventHandler: kill feed resolves participant callsigns (#647
 TEST_CASE("ClientNetEventHandler: sendChat builds a MsgChat packet (#646)", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -348,7 +343,7 @@ TEST_CASE("ClientNetEventHandler: sendChat truncates to kMaxChatBytes on a codep
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -368,7 +363,7 @@ TEST_CASE("ClientNetEventHandler: MsgChatEvent pushes to the chat overlay + cons
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -407,7 +402,7 @@ TEST_CASE("ClientNetEventHandler: MsgChatEvent pushes to the chat overlay + cons
 TEST_CASE("ClientNetEventHandler: MsgConnectAck captures own peer id (#996)", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -443,7 +438,7 @@ TEST_CASE("ClientNetEventHandler: ownFactionIndex prefers the assigned entity, f
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -483,7 +478,7 @@ TEST_CASE("ClientNetEventHandler: identForEntity precedence - faction, then trac
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -526,7 +521,7 @@ TEST_CASE("ClientNetEventHandler: identForEntity precedence - faction, then trac
 TEST_CASE("ClientNetEventHandler: MsgMotd single-line text shown in notice", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ServerNotice notice;
@@ -545,7 +540,7 @@ TEST_CASE("ClientNetEventHandler: MsgMotd single-line text shown in notice", "[c
 TEST_CASE("ClientNetEventHandler: MsgMotd multi-line; notice receives first line only", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ServerNotice notice;
@@ -564,7 +559,7 @@ TEST_CASE("ClientNetEventHandler: MsgMotd multi-line; notice receives first line
 TEST_CASE("ClientNetEventHandler: MsgMotd CRLF line ending stripped", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ServerNotice notice;
@@ -583,7 +578,7 @@ TEST_CASE("ClientNetEventHandler: MsgMotd CRLF line ending stripped", "[client_n
 TEST_CASE("ClientNetEventHandler: MsgMotd packet too small does not set notice", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ServerNotice notice;
@@ -611,7 +606,7 @@ TEST_CASE("ClientNetEventHandler: MsgMissionRoster populates the object-id -> en
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
 
@@ -658,7 +653,7 @@ TEST_CASE("ClientNetEventHandler: MsgMissionRoster populates the object-id -> en
 TEST_CASE("ClientNetEventHandler: unknown msgId discarded, no notice", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ServerNotice notice;
@@ -675,7 +670,7 @@ TEST_CASE("ClientNetEventHandler: unknown msgId discarded, no notice", "[client_
 TEST_CASE("ClientNetEventHandler: MsgMotd notice auto-dismisses after 15 seconds", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     fl::ManualClock fakeTime;
@@ -697,7 +692,7 @@ TEST_CASE("ClientNetEventHandler: MsgMotd notice auto-dismisses after 15 seconds
 TEST_CASE("ClientNetEventHandler: MsgMotd single-line text printed to console", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     CommandRegistry cmdReg;
@@ -717,7 +712,7 @@ TEST_CASE("ClientNetEventHandler: MsgMotd single-line text printed to console", 
 TEST_CASE("ClientNetEventHandler: MsgMotd multi-line text each line printed to console", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     CommandRegistry cmdReg;
@@ -740,7 +735,7 @@ TEST_CASE("ClientNetEventHandler: MsgWorldSnapshot abEngaged and engineFailFlags
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
 
@@ -810,7 +805,7 @@ TEST_CASE("ClientNetEventHandler: compressed WorldSnapshot decodes like the raw 
           "[client_net_event_handler][compress]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -836,7 +831,7 @@ TEST_CASE("ClientNetEventHandler: malformed compressed snapshots are dropped fai
           "[client_net_event_handler][compress]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -879,7 +874,7 @@ TEST_CASE("ClientNetEventHandler: malformed compressed snapshots are dropped fai
 TEST_CASE("ClientNetEventHandler: out-of-order WorldSnapshot is ignored", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -911,7 +906,7 @@ TEST_CASE("ClientNetEventHandler: out-of-order WorldSnapshot is ignored", "[clie
 TEST_CASE("ClientNetEventHandler: first WorldSnapshot at tick 0 is processed", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -931,7 +926,7 @@ TEST_CASE("ClientNetEventHandler: first WorldSnapshot at tick 0 is processed", "
 TEST_CASE("ClientNetEventHandler: MsgMotd honours custom motdDisplaySeconds", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     fl::ManualClock fakeTime;
@@ -957,7 +952,7 @@ TEST_CASE("ClientNetEventHandler: MsgMotd honours custom motdDisplaySeconds", "[
 TEST_CASE("ClientNetEventHandler: MsgMotd motdDisplaySeconds 0 is persistent", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     fl::ManualClock fakeTime;
@@ -981,7 +976,7 @@ TEST_CASE("ClientNetEventHandler: MsgMotd server displaySeconds overrides client
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     fl::ManualClock fakeTime;
@@ -1033,7 +1028,7 @@ TEST_CASE("ClientNetEventHandler: MsgHello version mismatch sets atomic and disc
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     std::atomic<SessionFailure> failMsg{SessionFailure::None};
@@ -1053,7 +1048,7 @@ TEST_CASE("ClientNetEventHandler: ENet rejection sets connection refused via onD
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     std::atomic<SessionFailure> failMsg{SessionFailure::None};
@@ -1071,7 +1066,7 @@ TEST_CASE("ClientNetEventHandler: version mismatch message not overwritten by on
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     std::atomic<SessionFailure> failMsg{SessionFailure::None};
@@ -1091,7 +1086,7 @@ TEST_CASE("ClientNetEventHandler: onDisconnect does not signal after a successfu
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     std::atomic<SessionFailure> failMsg{SessionFailure::None};
@@ -1118,7 +1113,7 @@ TEST_CASE("ClientNetEventHandler: an observer's entity-less ack is not a rejecti
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     std::atomic<SessionFailure> failMsg{SessionFailure::None};
@@ -1144,7 +1139,7 @@ TEST_CASE("ClientNetEventHandler: an observer's entity-less ack is not a rejecti
 TEST_CASE("ClientNetEventHandler: null connectFailMsg does not crash on rejection", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
 
@@ -1159,7 +1154,7 @@ TEST_CASE("ClientNetEventHandler: ENet timeout path does not signal when onConne
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     std::atomic<SessionFailure> failMsg{SessionFailure::None};
@@ -1177,7 +1172,7 @@ TEST_CASE("ClientNetEventHandler: correct protocolVersion does not disconnect or
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     std::atomic<SessionFailure> failMsg{SessionFailure::None};
@@ -1201,7 +1196,7 @@ TEST_CASE("ClientNetEventHandler: MsgConnectRefusal sets connectFailMsg with rea
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     std::atomic<SessionFailure> failMsg{SessionFailure::None};
@@ -1220,7 +1215,7 @@ TEST_CASE("ClientNetEventHandler: MsgConnectRefusal reason not overwritten by on
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     std::atomic<SessionFailure> failMsg{SessionFailure::None};
@@ -1240,7 +1235,7 @@ TEST_CASE("ClientNetEventHandler: MsgConnectRefusal packet too small does not se
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     std::atomic<SessionFailure> failMsg{SessionFailure::None};
@@ -1259,7 +1254,7 @@ TEST_CASE("ClientNetEventHandler: MsgConnectRefusal with null connectFailMsg doe
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
 
@@ -1274,7 +1269,7 @@ TEST_CASE("ClientNetEventHandler: MsgMotd server displaySeconds 0 falls back to 
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     fl::ManualClock fakeTime;
@@ -1300,7 +1295,7 @@ TEST_CASE("ClientNetEventHandler: MsgMotd server displaySeconds 0 falls back to 
 TEST_CASE("ClientNetEventHandler: MsgConnectAck planetRadiusKm parsed correctly", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
 
@@ -1317,7 +1312,7 @@ TEST_CASE("ClientNetEventHandler: MsgConnectAck planetRadiusKm parsed correctly"
 TEST_CASE("ClientNetEventHandler: short MsgConnectAck (12 bytes) does not crash", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
 
@@ -1355,7 +1350,7 @@ TEST_CASE("ClientNetEventHandler: single chunk with kChunkFlagEnd prints to cons
           "[client_net_event_handler][admin_chunk]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     CommandRegistry cmdRegistry;
@@ -1376,7 +1371,7 @@ TEST_CASE("ClientNetEventHandler: two chunks assembled before printing to consol
           "[client_net_event_handler][admin_chunk]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     CommandRegistry cmdRegistry;
@@ -1403,7 +1398,7 @@ TEST_CASE("ClientNetEventHandler: MsgAdminResponse fast-path still prints to con
           "[client_net_event_handler][admin_chunk]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     CommandRegistry cmdRegistry;
@@ -1428,7 +1423,7 @@ TEST_CASE("ClientNetEventHandler: oversized chunk stream dropped gracefully",
           "[client_net_event_handler][admin_chunk]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     CommandRegistry cmdRegistry;
@@ -1451,7 +1446,7 @@ TEST_CASE("ClientNetEventHandler: end chunk with empty body does not print",
           "[client_net_event_handler][admin_chunk]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     CommandRegistry cmdRegistry;
@@ -1470,7 +1465,7 @@ TEST_CASE("ClientNetEventHandler: null console does not crash on chunk receipt",
           "[client_net_event_handler][admin_chunk]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
 
@@ -1485,7 +1480,7 @@ TEST_CASE("ClientNetEventHandler: second complete chunk stream prints correctly 
           "[client_net_event_handler][admin_chunk]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     CommandRegistry cmdRegistry;
@@ -1516,7 +1511,7 @@ TEST_CASE("ClientNetEventHandler: MsgAdminResponse multi-line body splits into o
           "[client_net_event_handler][admin_chunk]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     CommandRegistry cmdRegistry;
@@ -1542,7 +1537,7 @@ TEST_CASE("ClientNetEventHandler: MsgAdminResponse empty lines in body are skipp
           "[client_net_event_handler][admin_chunk]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     CommandRegistry cmdRegistry;
@@ -1567,7 +1562,7 @@ TEST_CASE("ClientNetEventHandler: MsgAdminResponse trailing newline does not pro
           "[client_net_event_handler][admin_chunk]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     CommandRegistry cmdRegistry;
@@ -1591,7 +1586,7 @@ TEST_CASE("ClientNetEventHandler: MsgAdminResponse CRLF line endings stripped",
           "[client_net_event_handler][admin_chunk]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     CommandRegistry cmdRegistry;
@@ -1618,7 +1613,7 @@ TEST_CASE("ClientNetEventHandler: MsgAdminResponse body of only newlines produce
           "[client_net_event_handler][admin_chunk]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     CommandRegistry cmdRegistry;
@@ -1641,7 +1636,7 @@ TEST_CASE("ClientNetEventHandler: MsgAdminResponseChunk multi-line final chunk s
           "[client_net_event_handler][admin_chunk]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     CommandRegistry cmdRegistry;
@@ -1663,7 +1658,7 @@ TEST_CASE("ClientNetEventHandler: MsgAdminResponseChunk newline spanning two chu
           "[client_net_event_handler][admin_chunk]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     CommandRegistry cmdRegistry;
@@ -1691,7 +1686,7 @@ TEST_CASE("ClientNetEventHandler: MsgAdminResponseChunk consecutive multi-line s
           "[client_net_event_handler][admin_chunk]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     CommandRegistry cmdRegistry;
@@ -1720,7 +1715,7 @@ TEST_CASE("ClientNetEventHandler: WorldSnapshot with SnapshotPeerCount extension
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
 
@@ -1744,7 +1739,7 @@ TEST_CASE("ClientNetEventHandler: WorldSnapshot without extension leaves peer co
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
 
@@ -1794,7 +1789,7 @@ static std::vector<uint8_t> makePeerDelayPacket(uint16_t delayTicks) {
 TEST_CASE("ClientNetEventHandler: hasRtt false before first MsgPeerDelay", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -1806,7 +1801,7 @@ TEST_CASE("ClientNetEventHandler: hasRtt false before first MsgPeerDelay", "[cli
 TEST_CASE("ClientNetEventHandler: MsgPeerDelay sets lastRttMs", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -1822,7 +1817,7 @@ TEST_CASE("ClientNetEventHandler: MsgPeerDelay sets lastRttMs", "[client_net_eve
 TEST_CASE("ClientNetEventHandler: MsgPeerDelay delayTicks zero does not set hasRtt", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -1836,7 +1831,7 @@ TEST_CASE("ClientNetEventHandler: MsgPeerDelay delayTicks zero does not set hasR
 TEST_CASE("ClientNetEventHandler: multiple MsgPeerDelay packets update to latest value", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -1853,7 +1848,7 @@ TEST_CASE("ClientNetEventHandler: multiple MsgPeerDelay packets update to latest
 TEST_CASE("ClientNetEventHandler: truncated MsgPeerDelay discarded", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -1868,7 +1863,7 @@ TEST_CASE("ClientNetEventHandler: sendHeartbeatIfNeeded suppressed before first 
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -1887,7 +1882,7 @@ TEST_CASE("ClientNetEventHandler: sendHeartbeatIfNeeded sends on first call afte
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -1915,7 +1910,7 @@ TEST_CASE("ClientNetEventHandler: sendHeartbeatIfNeeded sends on first call afte
 TEST_CASE("ClientNetEventHandler: sendHeartbeatIfNeeded throttles to 1 Hz", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -1946,7 +1941,7 @@ TEST_CASE("ClientNetEventHandler: sendHeartbeatIfNeeded uses last received snaps
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -2000,7 +1995,7 @@ static std::vector<uint8_t> makeFullThenUpdatePacket(uint32_t entityIdx, uint32_
 TEST_CASE("ClientNetEventHandler: MsgEntityUpdate decoded using cached typeIndex", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -2034,7 +2029,7 @@ TEST_CASE("ClientNetEventHandler: MsgEntityUpdate decoded using cached typeIndex
 TEST_CASE("ClientNetEventHandler: MsgEntityUpdate skipped when entity not in cache", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -2055,7 +2050,7 @@ TEST_CASE("ClientNetEventHandler: MsgEntityUpdate skipped when entityGen mismatc
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -2094,7 +2089,7 @@ TEST_CASE("ClientNetEventHandler: SnapshotPeerCount TLV at correct offset after 
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -2141,7 +2136,7 @@ TEST_CASE("ClientNetEventHandler: WorldSnapshot with SnapshotPeerLatency TLV sto
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -2162,7 +2157,7 @@ TEST_CASE("ClientNetEventHandler: WorldSnapshot without SnapshotPeerLatency leav
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -2179,7 +2174,7 @@ TEST_CASE("ClientNetEventHandler: SnapshotPeerLatency TLV parsed correctly along
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -2202,7 +2197,7 @@ TEST_CASE("ClientNetEventHandler: SnapshotPeerLatency TLV parsed correctly along
 TEST_CASE("ClientNetEventHandler: MsgEntityUpdate omega parsed into EntityRenderEntry", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
 
@@ -2251,7 +2246,7 @@ TEST_CASE("ClientNetEventHandler: SnapshotPeerDelayTicks TLV updates m_estimated
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
 
@@ -2280,7 +2275,7 @@ TEST_CASE("ClientNetEventHandler: SnapshotPeerDelayTicks TLV updates m_estimated
 TEST_CASE("ClientNetEventHandler: snapshotCallback called before publishExternal", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
 
@@ -2328,7 +2323,7 @@ TEST_CASE("ClientNetEventHandler: budget-deferred entity is retained across snap
           "[client_net_event_handler][retention]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -2364,7 +2359,7 @@ TEST_CASE("ClientNetEventHandler: SnapshotDespawn TLV removes the entity from th
           "[client_net_event_handler][retention]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -2399,7 +2394,7 @@ TEST_CASE("ClientNetEventHandler: despawn applied before upsert so same-idx resp
           "[client_net_event_handler][retention]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -2435,7 +2430,7 @@ TEST_CASE("ClientNetEventHandler: retained entity ages out after the retention w
           "[client_net_event_handler][retention]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -2487,7 +2482,7 @@ TEST_CASE("ClientNetEventHandler: consecutive snapshots fill the selective-ack m
           "[client_net_event_handler][identity-ack]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -2513,7 +2508,7 @@ TEST_CASE("ClientNetEventHandler: a dropped snapshot leaves its ack bit clear",
           "[client_net_event_handler][identity-ack]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -2534,7 +2529,7 @@ TEST_CASE("ClientNetEventHandler: a reordered/duplicate snapshot does not set it
           "[client_net_event_handler][identity-ack]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -2555,7 +2550,7 @@ TEST_CASE("ClientNetEventHandler: a jump beyond the ack window resets the mask",
           "[client_net_event_handler][identity-ack]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -2574,7 +2569,7 @@ TEST_CASE("ClientNetEventHandler: a jump beyond the ack window resets the mask",
 TEST_CASE("ClientNetEventHandler: non-terminated type-def fields do not over-read", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -2604,7 +2599,7 @@ TEST_CASE("ClientNetEventHandler: type-def category and projectileKind parse wit
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -2650,7 +2645,7 @@ TEST_CASE("ClientNetEventHandler: CombatEvent feeds the kill feed and the sessio
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     fl::CommandRegistry cmdReg;
@@ -2704,7 +2699,7 @@ TEST_CASE("ClientNetEventHandler: CombatEvent feeds the kill feed and the sessio
 TEST_CASE("ClientNetEventHandler: a truncated CombatEvent packet fails closed", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
 
@@ -2726,7 +2721,7 @@ TEST_CASE("ClientNetEventHandler: MsgDatalink round-trips tracks and RWR to abso
           "[client_net_event_handler][datalink]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
 
@@ -2795,7 +2790,7 @@ TEST_CASE("ClientNetEventHandler: a truncated MsgDatalink leaves the prior pictu
           "[client_net_event_handler][datalink]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -2814,7 +2809,7 @@ TEST_CASE("ClientNetEventHandler: MsgCrewRoster stored and queryable by entity (
           "[client_net_event_handler][crew]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -2871,7 +2866,7 @@ TEST_CASE("ClientNetEventHandler: SnapshotCrew TLV decodes live turret pose (#97
           "[client_net_event_handler][crew]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -2914,7 +2909,7 @@ TEST_CASE("ClientNetEventHandler: SnapshotCrew TLV decodes live turret pose (#97
 TEST_CASE("ClientNetEventHandler: seat request/result plumbing (#975)", "[client_net_event_handler][crew]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -2995,7 +2990,7 @@ TEST_CASE("ClientNetEventHandler: ConnectAck without authority TLV leaves zero c
           "[client_net_event_handler][permission]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -3015,7 +3010,7 @@ TEST_CASE("ClientNetEventHandler: ConnectAck authority TLV exposes granted caps 
           "[client_net_event_handler][permission]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -3036,7 +3031,7 @@ TEST_CASE("ClientNetEventHandler: a revoke re-ack clears the granted caps (#949)
           "[client_net_event_handler][permission]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -3078,7 +3073,7 @@ TEST_CASE("ClientNetEventHandler: GmWorldState reassembles chunks into one tick 
           "[client_net_event_handler][gm_map]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -3138,7 +3133,7 @@ static std::vector<uint8_t> makeConnectAck(const std::vector<std::string>& typeI
 TEST_CASE("ClientNetEventHandler: a skipped type table keeps the cached types (#1070)", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -3171,7 +3166,7 @@ TEST_CASE("ClientNetEventHandler: a client that ignores the skip tag still keeps
     // what an unaware client effectively processes.
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -3191,7 +3186,7 @@ TEST_CASE("ClientNetEventHandler: a re-ack that does carry types still merges th
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -3243,7 +3238,7 @@ TEST_CASE("TickRate: conversions follow the rate, and a zero rate is refused (#1
 TEST_CASE("ClientNetEventHandler: the ack's tickRateHz drives the ping readout (#1075)", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -3274,7 +3269,7 @@ TEST_CASE("ClientNetEventHandler: a malformed zero tick rate falls back rather t
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -3316,7 +3311,7 @@ TEST_CASE("ClientNetEventHandler: a differing server build warns but never refus
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -3334,7 +3329,7 @@ TEST_CASE("ClientNetEventHandler: a differing server build warns but never refus
 TEST_CASE("ClientNetEventHandler: a matching server build is not a mismatch (#1074)", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -3353,7 +3348,7 @@ TEST_CASE("ClientNetEventHandler: a server that advertises no build is not a mis
     // server "mismatched" would fire the warning constantly and teach players to ignore it.
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
@@ -3373,7 +3368,7 @@ TEST_CASE("ClientNetEventHandler: a protocol mismatch still disconnects, build o
     // mismatch is still fatal and must not be softened into a warning.
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);

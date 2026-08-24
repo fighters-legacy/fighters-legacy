@@ -13,6 +13,7 @@
 
 #include "ILogger.h"
 #include "NullAudio.h"
+#include "mock_log.h"
 #include "voice/VoiceChat.h"
 
 #include <algorithm>
@@ -24,12 +25,6 @@
 using namespace fl;
 
 namespace {
-
-struct NullLogger final : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 // A capture device under test control: it can refuse to open, report a device name, and hand back
 // exactly the samples a test wants to see encoded.

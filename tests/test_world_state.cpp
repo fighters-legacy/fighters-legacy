@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "mock_log.h"
 #include "net/WorldState.h"
 #include "net/WorldStateJson.h"
 #include "world/FactionRegistry.h"
@@ -16,12 +17,6 @@
 using namespace fl;
 
 namespace {
-
-struct NullLog : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 EntityDef makeDef(const char* id, ObjectCategory cat) {
     EntityDef def;
@@ -43,7 +38,7 @@ EntityTransform xform(double x, double y, double z) {
 } // namespace
 
 TEST_CASE("WorldState: entities are aggregated in ascending pool order (deterministic)", "[world_state]") {
-    NullLog log;
+    NullLogger log;
     EntityTypeRegistry registry;
     registry.registerType(makeDef("air", ObjectCategory::AirVehicle));
     registry.registerType(makeDef("ground", ObjectCategory::GroundVehicle));
@@ -102,7 +97,7 @@ TEST_CASE("WorldState: entities are aggregated in ascending pool order (determin
 }
 
 TEST_CASE("WorldState: dead entities are skipped", "[world_state]") {
-    NullLog log;
+    NullLogger log;
     EntityTypeRegistry registry;
     registry.registerType(makeDef("air", ObjectCategory::AirVehicle));
     EntityManager em(log, registry);
@@ -120,7 +115,7 @@ TEST_CASE("WorldState: dead entities are skipped", "[world_state]") {
 }
 
 TEST_CASE("WorldState: formationId is resolved from the formation registry", "[world_state]") {
-    NullLog log;
+    NullLogger log;
     EntityTypeRegistry registry;
     registry.registerType(makeDef("air", ObjectCategory::AirVehicle));
     EntityManager em(log, registry);
@@ -152,7 +147,7 @@ TEST_CASE("WorldState: formationId is resolved from the formation registry", "[w
 }
 
 TEST_CASE("WorldState: peers are sorted ascending by peerId", "[world_state]") {
-    NullLog log;
+    NullLogger log;
     EntityTypeRegistry registry;
     EntityManager em(log, registry);
 
@@ -174,7 +169,7 @@ TEST_CASE("WorldState: peers are sorted ascending by peerId", "[world_state]") {
 // ── enrichment + JSON (#600) ────────────────────────────────────────────────────────────────────
 
 TEST_CASE("world state carries the faction table, postures and the relationship matrix", "[world_state]") {
-    NullLog log;
+    NullLogger log;
     EntityTypeRegistry registry;
     registry.registerType(makeDef("f22", ObjectCategory::AirVehicle));
     EntityManager em(log, registry);
@@ -205,7 +200,7 @@ TEST_CASE("world state carries the faction table, postures and the relationship 
 }
 
 TEST_CASE("world state without a faction registry or mission omits those blocks", "[world_state]") {
-    NullLog log;
+    NullLogger log;
     EntityTypeRegistry registry;
     EntityManager em(log, registry);
 
@@ -223,7 +218,7 @@ TEST_CASE("world state without a faction registry or mission omits those blocks"
 }
 
 TEST_CASE("world state carries wind and mission state", "[world_state]") {
-    NullLog log;
+    NullLogger log;
     EntityTypeRegistry registry;
     EntityManager em(log, registry);
 
@@ -257,7 +252,7 @@ TEST_CASE("WorldState: sweep_deg defaults to zero and survives the JSON round tr
     // WorldBroadcaster, which stamps them on afterwards. So the invariant THIS test owns is that the
     // pure builder leaves it at a defined zero for everything — which is also the honest value for
     // an entity with no [wing_sweep] table, and for a ground vehicle or a missile.
-    NullLog log;
+    NullLogger log;
     EntityTypeRegistry registry;
     registry.registerType(makeDef("f22", ObjectCategory::AirVehicle));
     EntityManager em(log, registry);
@@ -276,7 +271,7 @@ TEST_CASE("WorldState: sweep_deg defaults to zero and survives the JSON round tr
 }
 
 TEST_CASE("world-state JSON is schema-stable and escapes faction names", "[world_state][json]") {
-    NullLog log;
+    NullLogger log;
     EntityTypeRegistry registry;
     registry.registerType(makeDef("f22", ObjectCategory::AirVehicle));
     EntityManager em(log, registry);
@@ -313,7 +308,7 @@ TEST_CASE("world-state JSON is schema-stable and escapes faction names", "[world
 TEST_CASE("world-state JSON is deterministic for a fixed entity set", "[world_state][json]") {
     // The property the golden-JSON claim rests on: build twice, get byte-identical output.
     auto build = [] {
-        NullLog log;
+        NullLogger log;
         EntityTypeRegistry registry;
         registry.registerType(makeDef("f22", ObjectCategory::AirVehicle));
         registry.registerType(makeDef("sam", ObjectCategory::GroundVehicle));

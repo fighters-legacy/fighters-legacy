@@ -33,6 +33,7 @@
 #include "entity/EntityDef.h"
 #include "entity/EntityManager.h"
 #include "entity/EntityTypeRegistry.h"
+#include "mock_log.h"
 
 #include "ai_flight_harness.h"
 
@@ -52,12 +53,6 @@ using fl::test::kHarnessR;
 using fl::test::levelStateAt;
 
 namespace {
-
-struct NullLogger : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 // A world with one other aircraft in it, which the test drives.
 struct TargetWorld {

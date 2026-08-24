@@ -2,6 +2,7 @@
 #include "MissionSource.h"
 
 #include "ILogger.h"
+#include "mock_log.h"
 #include "temp_path.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -11,12 +12,6 @@
 #include <string>
 
 namespace {
-
-struct NullLog : fl::ILogger {
-    void log(fl::LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(fl::LogLevel) override {}
-    void flush() override {}
-};
 
 // A unique temp .yaml path per test run; removed on destruction. ctest runs each TEST_CASE as its
 // own process, so the name must be unique across processes too -- a stem-derived path is not
@@ -37,7 +32,7 @@ struct TempYaml {
 } // namespace
 
 TEST_CASE("loadMissionYaml resolves builtin mission ids first", "[mission-source]") {
-    NullLog log;
+    fl::NullLogger log;
     auto yaml = fl::loadMissionYaml("builtin:sandbox", nullptr, log);
     REQUIRE(yaml.has_value());
     CHECK(yaml->find("Sandbox Skirmish") != std::string::npos);
@@ -48,7 +43,7 @@ TEST_CASE("loadMissionYaml resolves builtin mission ids first", "[mission-source
 }
 
 TEST_CASE("loadMissionYaml reads a .yaml file path directly", "[mission-source]") {
-    NullLog log;
+    fl::NullLogger log;
     const std::string contents = "name: \"From Disk\"\n";
     // Random stem: ctest runs in parallel, so never a fixed temp path.
     std::random_device rd;
@@ -60,7 +55,7 @@ TEST_CASE("loadMissionYaml reads a .yaml file path directly", "[mission-source]"
 }
 
 TEST_CASE("loadMissionYaml returns nullopt for an unknown name and an unreadable file path", "[mission-source]") {
-    NullLog log;
+    fl::NullLogger log;
     CHECK_FALSE(fl::loadMissionYaml("builtin:nope", nullptr, log).has_value());
     CHECK_FALSE(fl::loadMissionYaml("no_such_mission", nullptr, log).has_value());
     // Shaped like a file but missing: warns and falls through; with no assets it resolves nothing.

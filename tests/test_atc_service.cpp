@@ -7,6 +7,7 @@
 #include "entity/EntityState.h"
 #include "entity/EntityTypeRegistry.h"
 #include "flight/Geodetic.h"
+#include "mock_log.h"
 #include "world/AirportRegistry.h"
 #include "world/BuiltinAirport.h"
 
@@ -16,12 +17,6 @@
 using namespace fl;
 
 namespace {
-
-struct NullLogger : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 fl::EntityDef basicDef() {
     fl::EntityDef d;

@@ -10,6 +10,7 @@
 #include "content/ContentBootstrap.h"
 #include "entity/EntityManager.h"
 #include "entity/EntityTypeRegistry.h"
+#include "mock_log.h"
 #include "net/WorldBroadcaster.h"
 #include "sensor/BuiltinSensors.h"
 #include "weapon/WeaponRegistry.h"
@@ -27,12 +28,6 @@
 using namespace fl;
 
 namespace {
-
-struct NullLog : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 // Resolve the builtin sensor heads, exactly as makeSensorDefResolver does for fl-server.
 //
@@ -54,7 +49,7 @@ std::shared_ptr<const sensor::SensorDef> builtinSensorResolver(const std::string
 
 // A WB armed and wired the way fl-server wires it for the sandbox.
 struct ThreatFixture {
-    NullLog logger;
+    NullLogger logger;
     TrackingNetwork net;
     EntityTypeRegistry registry;
     WeaponRegistry weapons;

@@ -21,12 +21,6 @@ using namespace fl;
 
 namespace {
 
-struct NullLog : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
-
 // Feed a ConnectAck (optionally with the granted-authority TLV) into a handler so grantedCaps() is set.
 void feedConnectAck(ClientNetEventHandler& h, uint64_t caps) {
     MsgConnectAck ack{};
@@ -69,7 +63,7 @@ GmEntityRecord gmRec(uint32_t idx, uint16_t gen, float x, float z, uint16_t form
 }
 
 struct Harness {
-    NullLog log;
+    NullLogger log;
     SimRenderBridge bridge;
     EntityTypeRegistry registry;
     TrackingNetwork net;

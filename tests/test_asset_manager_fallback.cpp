@@ -21,22 +21,6 @@ using namespace fl;
 
 namespace {
 
-struct CountingLogger final : ILogger {
-    std::vector<std::string> errors;
-    void log(LogLevel lvl, const char*, int, const char* msg) override {
-        if (lvl == LogLevel::Error && msg)
-            errors.emplace_back(msg);
-    }
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-    [[nodiscard]] bool mentions(std::string_view needle) const {
-        for (const auto& e : errors)
-            if (e.find(needle) != std::string::npos)
-                return true;
-        return false;
-    }
-};
-
 // What the pack DID, held separately from the pack itself.
 //
 // AssetManager takes ownership of every pack and DESTROYS the ones it drops, so a raw pointer to a
@@ -108,7 +92,7 @@ std::unique_ptr<AssetManager> makeManager(std::vector<std::unique_ptr<IContentPa
 
 TEST_CASE("AssetManager: a pack needing configuration is configured when a window exists (#1145)",
           "[content][assets]") {
-    CountingLogger log;
+    RecordingLogger log;
     MockWindow window;
     auto p = std::make_unique<ScriptedPack>();
     p->initStatus = IContentPack::Status::NeedsConfiguration;
@@ -128,7 +112,7 @@ TEST_CASE("AssetManager: a pack needing configuration is dropped headless (#1145
     // configure() takes a window; without one there is nothing to configure against, so the pack
     // cannot be made usable and carrying it forward would mean asking a half-initialised pack for
     // assets. A headless server hits this path for every plugin pack.
-    CountingLogger log;
+    RecordingLogger log;
     auto p = std::make_unique<ScriptedPack>();
     p->initStatus = IContentPack::Status::NeedsConfiguration;
     const auto counters = p->counters; // outlives the pack, which the manager may destroy
@@ -144,7 +128,7 @@ TEST_CASE("AssetManager: a pack needing configuration is dropped headless (#1145
 }
 
 TEST_CASE("AssetManager: a pack whose configuration fails is dropped (#1145)", "[content][assets]") {
-    CountingLogger log;
+    RecordingLogger log;
     MockWindow window;
     auto bad = std::make_unique<ScriptedPack>();
     bad->packId = "bad";
@@ -174,7 +158,7 @@ TEST_CASE("AssetManager: packManifest tolerates a pack with null id and version 
             return nullptr;
         }
     };
-    CountingLogger log;
+    RecordingLogger log;
     std::vector<std::unique_ptr<IContentPack>> packs;
     packs.push_back(std::make_unique<NullIdPack>());
     auto am = makeManager(std::move(packs), log);
@@ -190,7 +174,7 @@ TEST_CASE("AssetManager: packManifest tolerates a pack with null id and version 
 // ---------------------------------------------------------------------------
 
 TEST_CASE("AssetManager: a pack without the asset falls through to the next (#1145)", "[content][assets]") {
-    CountingLogger log;
+    RecordingLogger log;
     auto empty = std::make_unique<ScriptedPack>();
     empty->packId = "empty";
     auto holder = std::make_unique<ScriptedPack>();
@@ -213,7 +197,7 @@ TEST_CASE("AssetManager: a pack without the asset falls through to the next (#11
 
 TEST_CASE("AssetManager: an asset failing validation is discarded and the next pack tried (#1145)",
           "[content][assets]") {
-    CountingLogger log;
+    RecordingLogger log;
     auto rubbish = std::make_unique<ScriptedPack>();
     rubbish->packId = "rubbish";
     rubbish->textureBytes = std::vector<uint8_t>{'n', 'o', 't', ' ', 'k', 't', 'x', '2', 0, 0, 0, 0, 0, 0, 0, 0};
@@ -228,12 +212,12 @@ TEST_CASE("AssetManager: an asset failing validation is discarded and the next p
     am->initialize(nullptr);
 
     const auto tex = am->loadTexture("hud_font");
-    CHECK(tex != nullptr);                   // the good pack supplied it
-    CHECK(log.mentions("discarding asset")); // and the bad one was reported, not silently ignored
+    CHECK(tex != nullptr);                                      // the good pack supplied it
+    CHECK(log.hasMessage(LogLevel::Error, "discarding asset")); // and the bad one was reported, not silently ignored
 }
 
 TEST_CASE("AssetManager: an asset no pack has returns null without throwing (#1145)", "[content][assets]") {
-    CountingLogger log;
+    RecordingLogger log;
     std::vector<std::unique_ptr<IContentPack>> packs;
     packs.push_back(std::make_unique<ScriptedPack>());
     auto am = makeManager(std::move(packs), log);
@@ -243,7 +227,7 @@ TEST_CASE("AssetManager: an asset no pack has returns null without throwing (#11
 }
 
 TEST_CASE("AssetManager: with no packs at all every load is a clean miss (#1145)", "[content][assets]") {
-    CountingLogger log;
+    RecordingLogger log;
     auto am = makeManager({}, log);
     am->initialize(nullptr);
     CHECK_FALSE(am->hasPacks());
@@ -252,7 +236,7 @@ TEST_CASE("AssetManager: with no packs at all every load is a clean miss (#1145)
 }
 
 TEST_CASE("AssetManager: a loaded asset is cached and the packs are not asked twice (#1145)", "[content][assets]") {
-    CountingLogger log;
+    RecordingLogger log;
     auto p = std::make_unique<ScriptedPack>();
     p->textureBytes = validKtx2();
     const auto counters = p->counters; // outlives the pack, which the manager may destroy
@@ -270,7 +254,7 @@ TEST_CASE("AssetManager: a loaded asset is cached and the packs are not asked tw
 }
 
 TEST_CASE("AssetManager: the pack sees the name without its type prefix (#1145)", "[content][assets]") {
-    CountingLogger log;
+    RecordingLogger log;
     auto p = std::make_unique<ScriptedPack>();
     p->textureBytes = validKtx2();
     const auto counters = p->counters; // outlives the pack, which the manager may destroy

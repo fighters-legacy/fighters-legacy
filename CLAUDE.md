@@ -131,10 +131,13 @@ to work around. Policy write-up: architecture.md → "Module Boundary Policy".
 
 - **Test mocks derive from a shared Null base**, so a new pure virtual on a HAL interface is a
   one-line default in that header rather than an edit to every mock: `tests/mock_content.h`
-  (`NullContentPack`), `tests/mock_network.h` (`NullNetwork`/`TrackingNetwork`), `tests/mock_hal.h`,
-  `tests/mock_gui.h`, `tests/mock_http.h`. Add the default there first. `BorrowedPack` in
-  `test_content_system.cpp` is a deliberate non-owning forwarding proxy, so it still tracks the
-  interface.
+  (`NullContentPack`), `tests/mock_network.h` (`NullNetwork`/`TrackingNetwork`), `tests/mock_log.h`
+  (`RecordingLogger`, and it re-exports `fl::NullLogger`), `tests/mock_hal.h`, `tests/mock_gui.h`,
+  `tests/mock_http.h`. Add the default there first. `BorrowedPack` in `test_content_system.cpp` is a
+  deliberate non-owning forwarding proxy, so it still tracks the interface.
+- **Two Null bases are production headers, not test ones** — `platform/NullAudio.h` and
+  `platform/NullLogger.h`. Tools, the game and the tests share those single implementations; never
+  add a second copy under `tests/`.
 - **Non-pure virtuals with defaults** are how `IRenderer` grew `createTextureArray`,
   `setTerrainBiomeTextures` and `captureScreenshot` without touching a single mock. Prefer that shape
   for an optional backend capability.

@@ -17,6 +17,7 @@
 #include "content/AssetManager.h"
 #include "i18n/Localization.h"
 #include "mock_content.h"
+#include "mock_log.h"
 #include "ogg_fixture.h"
 #include "voice/RadioDsp.h"
 
@@ -27,12 +28,6 @@
 using namespace fl;
 
 namespace {
-
-struct NullLogger final : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 // Counts what reached the device, so a test can tell "played something" from "played nothing".
 struct CountingAudio final : public NullAudio {

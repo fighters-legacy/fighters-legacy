@@ -1,18 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ILogger.h"
 #include "Subprocess.h"
+#include "mock_log.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <thread>
 
 using namespace fl;
-
-struct SilentLogger : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 // Platform-portable "echo hello" command.
 #if defined(_WIN32)
@@ -25,13 +20,13 @@ static const std::vector<std::string> kEchoArgs{"-c", "echo hello"};
 #endif
 
 TEST_CASE("Subprocess spawn nonexistent binary returns invalid", "[subprocess]") {
-    SilentLogger log;
+    NullLogger log;
     Subprocess sub = Subprocess::spawn("/definitely/does/not/exist/binary", {}, true, false, log);
     REQUIRE_FALSE(sub.valid());
 }
 
 TEST_CASE("Subprocess spawn echo command, read stdout, process exits", "[subprocess]") {
-    SilentLogger log;
+    NullLogger log;
     Subprocess sub = Subprocess::spawn(kEchoBin, kEchoArgs,
                                        /*captureStdout=*/true, /*captureStdin=*/false, log);
     REQUIRE(sub.valid());
@@ -48,7 +43,7 @@ TEST_CASE("Subprocess spawn echo command, read stdout, process exits", "[subproc
 }
 
 TEST_CASE("Subprocess stop on already-exited process does not crash", "[subprocess]") {
-    SilentLogger log;
+    NullLogger log;
     Subprocess sub = Subprocess::spawn(kEchoBin, kEchoArgs, false, false, log);
     // Let it exit naturally.
     std::this_thread::sleep_for(std::chrono::milliseconds(300));

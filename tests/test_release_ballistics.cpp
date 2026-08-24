@@ -10,6 +10,7 @@
 #include "entity/EntityTypeRegistry.h"
 #include "flight/BallisticLead.h"
 #include "flight/CentralGravityField.h"
+#include "mock_log.h"
 #include "spatial/SpatialIndex.h"
 #include "weapon/ProjectileSystem.h"
 
@@ -21,12 +22,6 @@
 using namespace fl;
 
 namespace {
-
-struct NullLoggerRB : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 WeaponDef makeBomb() {
     WeaponDef d;
@@ -62,7 +57,7 @@ WeaponDef makeRocket() {
 }
 
 struct ReleaseWorld {
-    NullLoggerRB log;
+    NullLogger log;
     EntityTypeRegistry registry;
     WeaponRegistry weapons;
     uint32_t bombIdx{UINT32_MAX};

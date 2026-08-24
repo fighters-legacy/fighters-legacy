@@ -9,6 +9,7 @@
 #include "audio/SfxBuiltinSounds.h"
 #include "audio/SfxManager.h"
 #include "config/AudioSettings.h"
+#include "mock_log.h"
 
 #include <cstdint>
 #include <map>
@@ -17,12 +18,6 @@
 using namespace fl;
 
 namespace {
-
-struct NullLoggerSfx : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 // A MockAudio that records what SfxManager did: uploads, source creation, and the last play's
 // position/gain per source.
@@ -97,7 +92,7 @@ TEST_CASE("generateBuiltinSfx is BYTE-STABLE across calls", "[sfx]") {
 // ---------------------------------------------------------------------------
 
 TEST_CASE("SfxManager: a null IAudio is a harmless no-op (headless / CI)", "[sfx]") {
-    NullLoggerSfx log;
+    NullLogger log;
     SfxManager sfx;
     CHECK(sfx.init(nullptr, nullptr, &log)); // succeeds; play does nothing
     sfx.registerPreset("sfx.gunfire", "", SfxKind::Gunfire);
@@ -107,7 +102,7 @@ TEST_CASE("SfxManager: a null IAudio is a harmless no-op (headless / CI)", "[sfx
 }
 
 TEST_CASE("SfxManager: builtin preset uploads once and plays; unknown preset is silent", "[sfx]") {
-    NullLoggerSfx log;
+    NullLogger log;
     TrackingAudio audio;
     SfxManager sfx;
     sfx.init(&audio, nullptr, &log);
@@ -125,7 +120,7 @@ TEST_CASE("SfxManager: builtin preset uploads once and plays; unknown preset is 
 }
 
 TEST_CASE("SfxManager: sources are placed CAMERA-RELATIVE and gain follows the sliders", "[sfx]") {
-    NullLoggerSfx log;
+    NullLogger log;
     TrackingAudio audio;
     SfxManager sfx;
     sfx.init(&audio, nullptr, &log);
@@ -146,7 +141,7 @@ TEST_CASE("SfxManager: sources are placed CAMERA-RELATIVE and gain follows the s
 }
 
 TEST_CASE("SfxManager: the listener sits at the origin (sources are already rebased)", "[sfx]") {
-    NullLoggerSfx log;
+    NullLogger log;
     TrackingAudio audio;
     SfxManager sfx;
     sfx.init(&audio, nullptr, &log);
@@ -157,7 +152,7 @@ TEST_CASE("SfxManager: the listener sits at the origin (sources are already reba
 }
 
 TEST_CASE("SfxManager: 16 voices round-robin (steal-oldest)", "[sfx]") {
-    NullLoggerSfx log;
+    NullLogger log;
     TrackingAudio audio;
     SfxManager sfx;
     sfx.init(&audio, nullptr, &log);
@@ -172,7 +167,7 @@ TEST_CASE("SfxManager: 16 voices round-robin (steal-oldest)", "[sfx]") {
 }
 
 TEST_CASE("registerBuiltinSfxPresets registers the named weapon SFX presets (#869)", "[sfx]") {
-    NullLoggerSfx log;
+    NullLogger log;
     TrackingAudio audio;
     SfxManager sfx;
     sfx.init(&audio, nullptr, &log);

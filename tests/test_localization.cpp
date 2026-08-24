@@ -7,6 +7,7 @@
 #include "ILogger.h"
 #include "i18n/Localization.h"
 #include "i18n/StringTable.h"
+#include "mock_log.h"
 
 using namespace fl;
 
@@ -20,27 +21,6 @@ using namespace fl;
 // ---------------------------------------------------------------------------
 // Mock types
 // ---------------------------------------------------------------------------
-
-struct MockLogger : public ILogger {
-    struct Entry {
-        LogLevel level;
-        std::string message;
-    };
-    std::vector<Entry> entries;
-
-    void log(LogLevel level, const char*, int, const char* message) override {
-        entries.push_back({level, message});
-    }
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-
-    bool hasMessage(LogLevel level, const std::string& substr) const {
-        for (auto& e : entries)
-            if (e.level == level && e.message.find(substr) != std::string::npos)
-                return true;
-        return false;
-    }
-};
 
 struct MockFilesystem : public IFilesystem {
     std::map<std::string, std::vector<uint8_t>> files;
@@ -154,7 +134,7 @@ static void addEnLocale(MockFilesystem& fs, const std::string& content) {
 
 TEST_CASE("StringTable: load flattens section.key into get()") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("locale/en/ui.toml", "[main_menu]\ncampaign = \"Campaign\"\n");
 
     StringTable st;
@@ -164,7 +144,7 @@ TEST_CASE("StringTable: load flattens section.key into get()") {
 
 TEST_CASE("StringTable: load returns false and logs Warn on missing file") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
 
     StringTable st;
     REQUIRE_FALSE(st.load(fs, logger, "locale/en/missing.toml"));
@@ -173,7 +153,7 @@ TEST_CASE("StringTable: load returns false and logs Warn on missing file") {
 
 TEST_CASE("StringTable: load returns false and logs Error on invalid TOML") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("locale/en/bad.toml", "not valid toml ===");
 
     StringTable st;
@@ -183,7 +163,7 @@ TEST_CASE("StringTable: load returns false and logs Error on invalid TOML") {
 
 TEST_CASE("StringTable: load handles depth > 2") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("t.toml", "[a]\n[a.b]\nkey = \"val\"\n");
 
     StringTable st;
@@ -193,7 +173,7 @@ TEST_CASE("StringTable: load handles depth > 2") {
 
 TEST_CASE("StringTable: load skips non-string leaves silently") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("t.toml", "[s]\nnum = 42\nflag = true\nname = \"ok\"\n");
 
     StringTable st;
@@ -205,7 +185,7 @@ TEST_CASE("StringTable: load skips non-string leaves silently") {
 
 TEST_CASE("StringTable: load skips empty-string values") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("t.toml", "[s]\ncampaign = \"\"\nother = \"ok\"\n");
 
     StringTable st;
@@ -216,7 +196,7 @@ TEST_CASE("StringTable: load skips empty-string values") {
 
 TEST_CASE("StringTable: merge overwrites existing and preserves absent keys") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("a.toml", "[s]\na = \"aval\"\nonly_a = \"only\"\n");
     fs.addFile("b.toml", "[s]\na = \"bval\"\n");
 
@@ -231,7 +211,7 @@ TEST_CASE("StringTable: merge overwrites existing and preserves absent keys") {
 
 TEST_CASE("StringTable: mergeWithPrefix prepends namespace to all keys") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("ui.toml", "[main_menu]\ncampaign = \"Campaign\"\n");
 
     StringTable ns, tmp;
@@ -244,7 +224,7 @@ TEST_CASE("StringTable: mergeWithPrefix prepends namespace to all keys") {
 
 TEST_CASE("StringTable: get returns nullptr for absent key") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("t.toml", "[s]\na = \"v\"\n");
 
     StringTable st;
@@ -254,7 +234,7 @@ TEST_CASE("StringTable: get returns nullptr for absent key") {
 
 TEST_CASE("StringTable: forEach visits all entries with correct values") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("t.toml", "[s]\na = \"1\"\nb = \"2\"\n");
 
     StringTable st;
@@ -277,7 +257,7 @@ TEST_CASE("StringTable: forEach visits all entries with correct values") {
 
 TEST_CASE("Localization: get resolves key in en") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     addEnLocale(fs, "[menu]\nstart = \"Start\"\n");
 
     Localization loc(fs, logger);
@@ -287,7 +267,7 @@ TEST_CASE("Localization: get resolves key in en") {
 
 TEST_CASE("Localization: load returns false and logs Warn when no TOML files found") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     // No locale files added
 
     Localization loc(fs, logger);
@@ -297,7 +277,7 @@ TEST_CASE("Localization: load returns false and logs Warn when no TOML files fou
 
 TEST_CASE("Localization: get logs Debug and returns key sentinel when not found") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     addEnLocale(fs, "[menu]\nstart = \"Start\"\n");
 
     Localization loc(fs, logger);
@@ -310,7 +290,7 @@ TEST_CASE("Localization: get logs Debug and returns key sentinel when not found"
 
 TEST_CASE("Localization: language() returns tag after load, empty before") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     addEnLocale(fs, "[s]\nk = \"v\"\n");
 
     Localization loc(fs, logger);
@@ -321,7 +301,7 @@ TEST_CASE("Localization: language() returns tag after load, empty before") {
 
 TEST_CASE("Localization: load merges multiple TOML files") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
     fs.addLocaleFile("locale/en/ui.toml", "[menu]\ncampaign = \"Campaign\"\n");
@@ -335,7 +315,7 @@ TEST_CASE("Localization: load merges multiple TOML files") {
 
 TEST_CASE("Localization: load ignores non-.toml files") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
     fs.addLocaleFile("locale/en/ui.toml", "[s]\nk = \"v\"\n");
@@ -351,7 +331,7 @@ TEST_CASE("Localization: load ignores non-.toml files") {
 
 TEST_CASE("Localization: load called twice switches language with no stale state") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
     fs.addLocaleFile("locale/en/ui.toml", "[s]\nk = \"english\"\n");
@@ -369,7 +349,7 @@ TEST_CASE("Localization: load called twice switches language with no stale state
 
 TEST_CASE("Localization: load with empty rootDirs is safe") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     addEnLocale(fs, "[s]\nk = \"v\"\n");
 
     Localization loc(fs, logger);
@@ -382,7 +362,7 @@ TEST_CASE("Localization: load with empty rootDirs is safe") {
 
 TEST_CASE("Localization: load('fr') sees en key and fr override") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
     fs.addLocaleFile("locale/en/ui.toml", "[menu]\ncampaign = \"Campaign\"\nextra = \"Extra\"\n");
@@ -397,7 +377,7 @@ TEST_CASE("Localization: load('fr') sees en key and fr override") {
 
 TEST_CASE("Localization: load('fr-CA') uses chain en->fr->fr-CA") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
     fs.addLocaleFile("locale/en/ui.toml", "[menu]\ncampaign = \"Campaign\"\nextra = \"Extra\"\nonly_en = \"en\"\n");
@@ -415,7 +395,7 @@ TEST_CASE("Localization: load('fr-CA') uses chain en->fr->fr-CA") {
 
 TEST_CASE("Localization: load('en') loads only en tier") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     addEnLocale(fs, "[s]\nk = \"v\"\n");
     // fr exists but should not be loaded for load("en")
     fs.addDirEntry("locale", "fr", true);
@@ -428,7 +408,7 @@ TEST_CASE("Localization: load('en') loads only en tier") {
 
 TEST_CASE("Localization: load('xx') warns and still serves en keys via chain") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     addEnLocale(fs, "[s]\nk = \"english\"\n");
 
     Localization loc(fs, logger);
@@ -447,7 +427,7 @@ TEST_CASE("Localization: load('xx') warns and still serves en keys via chain") {
 
 TEST_CASE("Localization: empty string in fr-CA does NOT overwrite fr value at merge time") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
     fs.addLocaleFile("locale/en/ui.toml", "[menu]\ncampaign = \"Campaign\"\n");
@@ -469,7 +449,7 @@ TEST_CASE("Localization: empty string in fr-CA does NOT overwrite fr value at me
 
 TEST_CASE("Localization: higher-priority mod wins over lower-priority mod and base") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     addEnLocale(fs, "[s]\nk = \"base\"\n");
 
     fs.addLocaleFile("mods/low/locale/en/strings.toml", "[s]\nk = \"low\"\n");
@@ -484,7 +464,7 @@ TEST_CASE("Localization: higher-priority mod wins over lower-priority mod and ba
 
 TEST_CASE("Localization: mod with no locale directory is silently skipped") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     addEnLocale(fs, "[s]\nk = \"base\"\n");
 
     // No locale dir added for "mods/nolocale" — scanDirectory returns empty → silently skipped
@@ -496,7 +476,7 @@ TEST_CASE("Localization: mod with no locale directory is silently skipped") {
 
 TEST_CASE("Localization: mod locale is loaded for all chain tiers") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
     fs.addLocaleFile("locale/en/ui.toml", "[s]\na = \"en_a\"\n");
@@ -520,7 +500,7 @@ TEST_CASE("Localization: mod locale is loaded for all chain tiers") {
 
 TEST_CASE("Localization: format replaces single placeholder") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     addEnLocale(fs, "[s]\nhello = \"Hello, {name}!\"\n");
 
     Localization loc(fs, logger);
@@ -530,7 +510,7 @@ TEST_CASE("Localization: format replaces single placeholder") {
 
 TEST_CASE("Localization: format replaces multiple placeholders") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     addEnLocale(fs, "[s]\nversion = \"{name} v{ver}\"\n");
 
     Localization loc(fs, logger);
@@ -540,7 +520,7 @@ TEST_CASE("Localization: format replaces multiple placeholders") {
 
 TEST_CASE("Localization: format {{ produces literal {") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     addEnLocale(fs, "[s]\nbrace = \"{{escaped}}\"\n");
 
     Localization loc(fs, logger);
@@ -550,7 +530,7 @@ TEST_CASE("Localization: format {{ produces literal {") {
 
 TEST_CASE("Localization: format }} produces literal }") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     addEnLocale(fs, "[s]\nbrace = \"end}}\"\n");
 
     Localization loc(fs, logger);
@@ -560,7 +540,7 @@ TEST_CASE("Localization: format }} produces literal }") {
 
 TEST_CASE("Localization: format leaves unknown placeholder as-is") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     addEnLocale(fs, "[s]\nmsg = \"Value: {unknown}\"\n");
 
     Localization loc(fs, logger);
@@ -570,7 +550,7 @@ TEST_CASE("Localization: format leaves unknown placeholder as-is") {
 
 TEST_CASE("Localization: format treats unclosed brace as literal (no crash)") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     addEnLocale(fs, "[s]\nmsg = \"unclosed {name\"\n");
 
     Localization loc(fs, logger);
@@ -582,7 +562,7 @@ TEST_CASE("Localization: format treats unclosed brace as literal (no crash)") {
 
 TEST_CASE("Localization: format on missing key sentinel is safe") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     addEnLocale(fs, "[s]\nk = \"v\"\n");
 
     Localization loc(fs, logger);
@@ -599,7 +579,7 @@ TEST_CASE("Localization: format on missing key sentinel is safe") {
 
 TEST_CASE("Localization: getPlural(key,1) uses .one and substitutes {n}") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     addEnLocale(fs, "[missile]\none = \"{n} missile\"\nother = \"{n} missiles\"\n");
 
     Localization loc(fs, logger);
@@ -609,7 +589,7 @@ TEST_CASE("Localization: getPlural(key,1) uses .one and substitutes {n}") {
 
 TEST_CASE("Localization: getPlural(key,2) uses .other and substitutes {n}") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     addEnLocale(fs, "[missile]\none = \"{n} missile\"\nother = \"{n} missiles\"\n");
 
     Localization loc(fs, logger);
@@ -619,7 +599,7 @@ TEST_CASE("Localization: getPlural(key,2) uses .other and substitutes {n}") {
 
 TEST_CASE("Localization: getPlural(key,0) with .zero defined uses .zero") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     addEnLocale(fs, "[missile]\nzero = \"No missiles\"\none = \"{n} missile\"\nother = \"{n} missiles\"\n");
 
     Localization loc(fs, logger);
@@ -629,7 +609,7 @@ TEST_CASE("Localization: getPlural(key,0) with .zero defined uses .zero") {
 
 TEST_CASE("Localization: getPlural(key,0) without .zero falls back to .other") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     addEnLocale(fs, "[missile]\none = \"{n} missile\"\nother = \"{n} missiles\"\n");
 
     Localization loc(fs, logger);
@@ -639,7 +619,7 @@ TEST_CASE("Localization: getPlural(key,0) without .zero falls back to .other") {
 
 TEST_CASE("Localization: getPlural(key,1) without .one falls back to .other") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     addEnLocale(fs, "[missile]\nother = \"{n} missiles\"\n");
 
     Localization loc(fs, logger);
@@ -649,7 +629,7 @@ TEST_CASE("Localization: getPlural(key,1) without .one falls back to .other") {
 
 TEST_CASE("Localization: getPlural(key,5) without .other falls back to .one") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     addEnLocale(fs, "[missile]\none = \"{n} missile\"\n");
 
     Localization loc(fs, logger);
@@ -659,7 +639,7 @@ TEST_CASE("Localization: getPlural(key,5) without .other falls back to .one") {
 
 TEST_CASE("Localization: getPlural with neither .one nor .other returns debug sentinel with count") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     addEnLocale(fs, "[missile]\nname = \"Missile\"\n");
 
     Localization loc(fs, logger);
@@ -678,7 +658,7 @@ TEST_CASE("Localization: getPlural with neither .one nor .other returns debug se
 
 TEST_CASE("Localization: listLocales returns sorted deduplicated tags") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "fr", true);
     fs.addDirEntry("locale", "en", true);
@@ -694,7 +674,7 @@ TEST_CASE("Localization: listLocales returns sorted deduplicated tags") {
 
 TEST_CASE("Localization: listLocales reads meta.toml for displayName and rtl") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "ar", true);
     fs.addLocaleFile("locale/ar/meta.toml", "name = \"العربية\"\nrtl = true\n");
@@ -709,7 +689,7 @@ TEST_CASE("Localization: listLocales reads meta.toml for displayName and rtl") {
 
 TEST_CASE("Localization: listLocales falls back to tag-as-name when meta.toml absent") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "xx", true);
     // No meta.toml for "xx"
@@ -724,7 +704,7 @@ TEST_CASE("Localization: listLocales falls back to tag-as-name when meta.toml ab
 
 TEST_CASE("Localization: isRTL() is true when meta.toml has rtl=true") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
     fs.addLocaleFile("locale/en/ui.toml", "[s]\nk = \"v\"\n");
@@ -739,7 +719,7 @@ TEST_CASE("Localization: isRTL() is true when meta.toml has rtl=true") {
 
 TEST_CASE("Localization: isRTL() is false before load() and for lang with no meta.toml") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     addEnLocale(fs, "[s]\nk = \"v\"\n");
 
     Localization loc(fs, logger);
@@ -754,7 +734,7 @@ TEST_CASE("Localization: isRTL() is false before load() and for lang with no met
 
 TEST_CASE("Localization: listMissingKeys returns sorted keys absent in lang") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
     fs.addLocaleFile("locale/en/ui.toml", "[menu]\ncampaign = \"Campaign\"\nskirmish = \"Skirmish\"\n");
@@ -769,7 +749,7 @@ TEST_CASE("Localization: listMissingKeys returns sorted keys absent in lang") {
 
 TEST_CASE("Localization: listMissingKeys returns empty for 'en'") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     addEnLocale(fs, "[s]\nk = \"v\"\n");
 
     Localization loc(fs, logger);
@@ -778,7 +758,7 @@ TEST_CASE("Localization: listMissingKeys returns empty for 'en'") {
 
 TEST_CASE("Localization: listMissingKeys treats empty-string entries as absent") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
     fs.addLocaleFile("locale/en/ui.toml", "[s]\na = \"A\"\nb = \"B\"\n");
@@ -795,7 +775,7 @@ TEST_CASE("Localization: listMissingKeys treats empty-string entries as absent")
 
 TEST_CASE("Localization: getCoverage('en') returns 1.0") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     addEnLocale(fs, "[s]\na = \"A\"\nb = \"B\"\n");
 
     Localization loc(fs, logger);
@@ -804,7 +784,7 @@ TEST_CASE("Localization: getCoverage('en') returns 1.0") {
 
 TEST_CASE("Localization: getCoverage returns fraction of translated keys") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
     fs.addLocaleFile("locale/en/ui.toml", "[s]\na = \"A\"\nb = \"B\"\nc = \"C\"\nd = \"D\"\n");
@@ -822,7 +802,7 @@ TEST_CASE("Localization: getCoverage returns fraction of translated keys") {
 
 TEST_CASE("Localization: watch() registers locale dirs loaded by load()") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     MockWatcher watcher;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
@@ -839,7 +819,7 @@ TEST_CASE("Localization: watch() registers locale dirs loaded by load()") {
 
 TEST_CASE("Localization: watch(nullptr) does not crash") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     addEnLocale(fs, "[s]\nk = \"v\"\n");
 
     Localization loc(fs, logger);
@@ -849,7 +829,7 @@ TEST_CASE("Localization: watch(nullptr) does not crash") {
 
 TEST_CASE("Localization: reload() re-runs last load(); before load() returns false") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     addEnLocale(fs, "[s]\nk = \"original\"\n");
 
     Localization loc(fs, logger);
@@ -870,7 +850,7 @@ TEST_CASE("Localization: reload() re-runs last load(); before load() returns fal
 
 TEST_CASE("Localization: loadLocaleDirImpl skips isDirectory entry inside locale dir") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
     fs.addLocaleFile("locale/en/ui.toml", "[s]\nk = \"v\"\n");
@@ -882,7 +862,7 @@ TEST_CASE("Localization: loadLocaleDirImpl skips isDirectory entry inside locale
 
 TEST_CASE("Localization: loadLocaleDirImpl skips file with name shorter than 6 chars") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
     fs.addLocaleFile("locale/en/ui.toml", "[s]\nk = \"v\"\n");
@@ -895,7 +875,7 @@ TEST_CASE("Localization: loadLocaleDirImpl skips file with name shorter than 6 c
 
 TEST_CASE("Localization: loadLocaleDirImpl skips locale file that fails TOML parse") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
     fs.addLocaleFile("locale/en/good.toml", "[s]\nk = \"v\"\n");
@@ -912,7 +892,7 @@ TEST_CASE("Localization: loadLocaleDirImpl skips locale file that fails TOML par
 
 TEST_CASE("Localization: isRTL is false when meta.toml has no rtl key") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
     fs.addLocaleFile("locale/en/ui.toml", "[s]\nk = \"v\"\n");
@@ -924,7 +904,7 @@ TEST_CASE("Localization: isRTL is false when meta.toml has no rtl key") {
 
 TEST_CASE("Localization: isRTL is false when meta.toml is empty") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
     fs.addLocaleFile("locale/en/ui.toml", "[s]\nk = \"v\"\n");
@@ -936,7 +916,7 @@ TEST_CASE("Localization: isRTL is false when meta.toml is empty") {
 
 TEST_CASE("Localization: isRTL is false when meta.toml has invalid TOML") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
     fs.addLocaleFile("locale/en/ui.toml", "[s]\nk = \"v\"\n");
@@ -952,7 +932,7 @@ TEST_CASE("Localization: isRTL is false when meta.toml has invalid TOML") {
 
 TEST_CASE("Localization: listLocales ignores file entries in base locale dir") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
     fs.addDirEntry("locale", "README.md", false); // not a directory → isDirectory FALSE
@@ -964,7 +944,7 @@ TEST_CASE("Localization: listLocales ignores file entries in base locale dir") {
 
 TEST_CASE("Localization: listLocales includes locales contributed by mods") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
 
@@ -986,7 +966,7 @@ TEST_CASE("Localization: listLocales includes locales contributed by mods") {
 
 TEST_CASE("Localization: listLocales with empty rootDirs is safe") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
 
@@ -998,7 +978,7 @@ TEST_CASE("Localization: listLocales with empty rootDirs is safe") {
 
 TEST_CASE("Localization: listLocales uses tag as displayName when meta.toml has no name key") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "fr", true);
     fs.addLocaleFile("locale/fr/meta.toml", "rtl = false\n"); // rtl present, name absent
@@ -1011,7 +991,7 @@ TEST_CASE("Localization: listLocales uses tag as displayName when meta.toml has 
 
 TEST_CASE("Localization: listLocales with invalid meta.toml is safe") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "xx", true);
     fs.addLocaleFile("locale/xx/meta.toml", "totally invalid {{ toml }{"); // catch branch
@@ -1023,7 +1003,7 @@ TEST_CASE("Localization: listLocales with invalid meta.toml is safe") {
 
 TEST_CASE("Localization: listLocales with empty meta.toml uses tag as displayName") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
     fs.addLocaleFile("locale/en/meta.toml", ""); // empty → sz==0 branch
@@ -1039,7 +1019,7 @@ TEST_CASE("Localization: listLocales with empty meta.toml uses tag as displayNam
 
 TEST_CASE("Localization: getCoverage returns 1.0 when en has no locale files") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     // No locale files at all → enTable is empty → returns 1.0f
     Localization loc(fs, logger);
     REQUIRE(loc.getCoverage("fr", {}) == Catch::Approx(1.0f));
@@ -1047,7 +1027,7 @@ TEST_CASE("Localization: getCoverage returns 1.0 when en has no locale files") {
 
 TEST_CASE("Localization: listMissingKeys returns empty when all keys are present in lang") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
     fs.addLocaleFile("locale/en/ui.toml", "[s]\na = \"A\"\nb = \"B\"\n");
@@ -1060,7 +1040,7 @@ TEST_CASE("Localization: listMissingKeys returns empty when all keys are present
 
 TEST_CASE("Localization: listMissingKeys with empty rootDirs is safe") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
     fs.addLocaleFile("locale/en/ui.toml", "[s]\na = \"A\"\n");
