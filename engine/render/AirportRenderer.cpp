@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "render/AirportRenderer.h"
 
+#include "render/GlbWriter.h" // the one GLB container writer (#1265)
+
 #include "IRenderer.h"
 
 #include <cstddef>
@@ -16,13 +18,6 @@ namespace {
 constexpr double kSlabLiftM = 0.06;     // sit a few cm above the flattened terrain
 constexpr int kSegments = 12;           // tessellation along the centerline (chords stay < 1 mm sag)
 constexpr double kCullRangeM = 60000.0; // draw runways within 60 km of the camera
-
-void writeLE32(uint8_t* p, uint32_t v) {
-    p[0] = static_cast<uint8_t>(v);
-    p[1] = static_cast<uint8_t>(v >> 8);
-    p[2] = static_cast<uint8_t>(v >> 16);
-    p[3] = static_cast<uint8_t>(v >> 24);
-}
 
 // Per-surface slab tint (baseColorFactor). Water runways emit no slab, so their entry is unused.
 glm::vec4 surfaceTint(RunwaySurface s) {
@@ -117,72 +112,28 @@ std::vector<uint8_t> buildRunwaySlabGlb(const ResolvedRunway& rw, double elevati
         indices.push_back(r1);
         indices.push_back(l1);
     }
-    const auto indexCount = static_cast<uint32_t>(indices.size());
 
-    const std::size_t posBytes = static_cast<std::size_t>(vertCount) * 3 * sizeof(float);
-    const std::size_t nrmBytes = posBytes;
-    const std::size_t texBytes = static_cast<std::size_t>(vertCount) * 2 * sizeof(float);
-    const std::size_t idxBytes = static_cast<std::size_t>(indexCount) * sizeof(uint16_t);
-    const std::size_t binBytes = posBytes + nrmBytes + texBytes + idxBytes;
-    const std::size_t binPadded = (binBytes + 3u) & ~std::size_t{3u};
-    const std::size_t posOff = 0, nrmOff = posBytes, texOff = nrmOff + nrmBytes, idxOff = texOff + texBytes;
-
-    std::vector<uint8_t> bin(binPadded, 0);
-    std::memcpy(bin.data() + posOff, positions.data(), posBytes);
-    std::memcpy(bin.data() + nrmOff, normals.data(), nrmBytes);
-    std::memcpy(bin.data() + texOff, texcoords.data(), texBytes);
-    std::memcpy(bin.data() + idxOff, indices.data(), idxBytes);
-
-    std::string json = "{";
-    json += R"("asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],)";
-    json +=
-        R"("meshes":[{"name":"runway","primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2},"indices":3,"mode":4}]}],)";
-    json += "\"accessors\":[";
-    json += "{\"bufferView\":0,\"byteOffset\":0,\"componentType\":5126,\"count\":" + std::to_string(vertCount) +
-            ",\"type\":\"VEC3\",\"min\":[" + std::to_string(relMin.x) + "," + std::to_string(relMin.y) + "," +
-            std::to_string(relMin.z) + "],\"max\":[" + std::to_string(relMax.x) + "," + std::to_string(relMax.y) + "," +
-            std::to_string(relMax.z) + "]},";
-    json += "{\"bufferView\":1,\"byteOffset\":0,\"componentType\":5126,\"count\":" + std::to_string(vertCount) +
-            ",\"type\":\"VEC3\"},";
-    json += "{\"bufferView\":2,\"byteOffset\":0,\"componentType\":5126,\"count\":" + std::to_string(vertCount) +
-            ",\"type\":\"VEC2\"},";
-    json += "{\"bufferView\":3,\"byteOffset\":0,\"componentType\":5123,\"count\":" + std::to_string(indexCount) +
-            ",\"type\":\"SCALAR\"}],";
-    json += "\"bufferViews\":[";
-    json += "{\"buffer\":0,\"byteOffset\":" + std::to_string(posOff) + ",\"byteLength\":" + std::to_string(posBytes) +
-            ",\"target\":34962},";
-    json += "{\"buffer\":0,\"byteOffset\":" + std::to_string(nrmOff) + ",\"byteLength\":" + std::to_string(nrmBytes) +
-            ",\"target\":34962},";
-    json += "{\"buffer\":0,\"byteOffset\":" + std::to_string(texOff) + ",\"byteLength\":" + std::to_string(texBytes) +
-            ",\"target\":34962},";
-    json += "{\"buffer\":0,\"byteOffset\":" + std::to_string(idxOff) + ",\"byteLength\":" + std::to_string(idxBytes) +
-            ",\"target\":34963}],";
-    json += "\"buffers\":[{\"byteLength\":" + std::to_string(binPadded) + "}]}";
-    while (json.size() % 4 != 0)
-        json += ' ';
-
-    static constexpr uint32_t kChunkJSON = 0x4E4F534Au, kChunkBIN = 0x004E4942u, kMagic = 0x46546C67u;
-    const std::size_t totalSize = 12 + (8 + json.size()) + (8 + binPadded);
-    std::vector<uint8_t> glb(totalSize, 0);
-    uint8_t* p = glb.data();
-    writeLE32(p, kMagic);
-    p += 4;
-    writeLE32(p, 2u);
-    p += 4;
-    writeLE32(p, static_cast<uint32_t>(totalSize));
-    p += 4;
-    writeLE32(p, static_cast<uint32_t>(json.size()));
-    p += 4;
-    writeLE32(p, kChunkJSON);
-    p += 4;
-    std::memcpy(p, json.data(), json.size());
-    p += json.size();
-    writeLE32(p, static_cast<uint32_t>(binPadded));
-    p += 4;
-    writeLE32(p, kChunkBIN);
-    p += 4;
-    std::memcpy(p, bin.data(), binPadded);
-    return glb;
+    // The fixed POSITION/NORMAL/TEXCOORD_0 case of the shared GLB writer (#1265): attribute order
+    // here IS the accessor and bufferView numbering, which is what the JSON used to spell out by
+    // hand as 0/1/2 with indices at 3.
+    GlbMesh mesh;
+    mesh.meshName = "runway";
+    mesh.vertexCount = vertCount;
+    mesh.attributes.push_back(
+        {"POSITION", "VEC3", positions.data(), static_cast<std::size_t>(vertCount) * 3 * sizeof(float)});
+    mesh.attributes.push_back(
+        {"NORMAL", "VEC3", normals.data(), static_cast<std::size_t>(vertCount) * 3 * sizeof(float)});
+    mesh.attributes.push_back(
+        {"TEXCOORD_0", "VEC2", texcoords.data(), static_cast<std::size_t>(vertCount) * 2 * sizeof(float)});
+    mesh.posMin[0] = relMin.x;
+    mesh.posMin[1] = relMin.y;
+    mesh.posMin[2] = relMin.z;
+    mesh.posMax[0] = relMax.x;
+    mesh.posMax[1] = relMax.y;
+    mesh.posMax[2] = relMax.z;
+    mesh.indices = indices.data();
+    mesh.indexCount = indices.size();
+    return buildGlb(mesh);
 }
 
 AirportRenderer::AirportRenderer(IRenderer& renderer) : m_renderer(renderer) {}

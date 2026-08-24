@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ReplaySelectScreen.h"
+#include "LocalTime.h" // localTimeBreakdown — the one portable localtime shim (#1265)
 #include "MenuNav.h"
 #include "render/HudBuilder.h" // hudFullscreenBg (#1261)
 
@@ -29,12 +30,7 @@ std::string formatStamp(uint64_t unixSeconds) {
     if (unixSeconds == 0)
         return "unknown date";
     const auto t = static_cast<std::time_t>(unixSeconds);
-    std::tm tmv{};
-#if defined(_WIN32)
-    localtime_s(&tmv, &t);
-#else
-    localtime_r(&t, &tmv);
-#endif
+    const std::tm tmv = localTimeBreakdown(t);
     char buf[32];
     std::strftime(buf, sizeof(buf), "%d %b %H:%M", &tmv);
     return buf;

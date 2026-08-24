@@ -37,6 +37,7 @@
 #include "net/SnapshotCompression.h"
 #include "net/WireCodec.h"
 #include "sensor/TrackPicture.h"
+#include "util/Str.h"      // trim — the one whitespace rule (#1244)
 #include "weapon/Turret.h" // crew turret slew servo + world-bore (#970/#969)
 #include "weather/Turbulence.h"
 #include "weather/WeatherController.h"
@@ -4456,10 +4457,10 @@ std::string WorldBroadcaster::sanitizeCallsign(const char* raw, uint32_t partici
             out.push_back(static_cast<char>(c));
         }
     }
-    // Trim leading/trailing spaces.
-    const std::size_t b = out.find_first_not_of(' ');
-    const std::size_t e = out.find_last_not_of(' ');
-    out = (b == std::string::npos) ? std::string{} : out.substr(b, e - b + 1);
+    // Trim leading/trailing whitespace with the shared rule (#1265). The loop above already dropped
+    // every byte below 0x20, so tabs and newlines are gone and "spaces" and "whitespace" mean the
+    // same thing here — which is what makes adopting the general trim a no-op rather than a widening.
+    out = std::string(trim(out));
     if (out.empty()) {
         char buf[32];
         std::snprintf(buf, sizeof(buf), "Pilot-%u", participantId);

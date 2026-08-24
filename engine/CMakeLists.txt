@@ -148,6 +148,7 @@ add_library(engine-render STATIC
     render/BuiltinBiomes.cpp
     render/TerrainChunkIO.cpp
     render/ProceduralTerrainChunk.cpp
+    render/GlbWriter.cpp
     render/TerrainMeshBuilder.cpp
     render/TerrainStreamer.cpp
     render/AirportRenderer.cpp

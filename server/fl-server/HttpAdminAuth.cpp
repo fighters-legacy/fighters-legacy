@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "HttpAdminServer.h"
+#include "util/Str.h" // the one ASCII case rule (#1265)
 
 #include <util/Json.h> // json::escape — the one escaper for every JSON this server emits
 
-#include <cctype>
 #include <cstdlib>
 #include <string>
 
@@ -59,9 +59,8 @@ std::string extractBearer(std::string_view authHeader) {
     constexpr std::string_view kScheme = "bearer";
     if (authHeader.size() <= kScheme.size())
         return {};
-    for (std::size_t i = 0; i < kScheme.size(); ++i)
-        if (std::tolower(static_cast<unsigned char>(authHeader[i])) != kScheme[i])
-            return {};
+    if (!istartsWith(authHeader, kScheme))
+        return {};
     std::size_t pos = kScheme.size();
     // Require at least one space, then skip any run of them.
     if (authHeader[pos] != ' ')

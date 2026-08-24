@@ -119,3 +119,46 @@ TEST_CASE("trim removes ASCII whitespace from both ends", "[parse]") {
     // Not std::isspace: a byte above 127 is not whitespace here, and must not be UB either.
     CHECK(fl::trim("\xC3\xA9") == "\xC3\xA9");
 }
+
+// ---------------------------------------------------------------------------
+// ASCII case folding (#1265)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("asciiLower folds letters and leaves everything else alone", "[parse]") {
+    CHECK(fl::asciiLower("MiXeD") == "mixed");
+    CHECK(fl::asciiLower("a/B_c-9.Ext") == "a/b_c-9.ext");
+    CHECK(fl::asciiLower("") == "");
+    CHECK(fl::asciiLower("already lower") == "already lower");
+    // Digits and punctuation are not letters and must survive byte-for-byte: these strings are
+    // asset ids and config values, not prose.
+    CHECK(fl::asciiLower("0123!@#") == "0123!@#");
+}
+
+TEST_CASE("asciiToLower is safe for bytes above 127", "[parse]") {
+    // std::tolower takes an int and is UB for a negative one, and plain char is signed here. A UTF-8
+    // continuation byte reaching this must come back unchanged rather than invoking that UB -- mod
+    // ids and chat lines carry them.
+    const char high = static_cast<char>(0xC3); // UTF-8 lead byte of 'Ã'
+    CHECK(fl::asciiToLower(high) == high);
+    CHECK(fl::asciiLower("caf\xC3\xA9") == "caf\xC3\xA9");
+}
+
+TEST_CASE("iequals compares without case and without surprises", "[parse]") {
+    CHECK(fl::iequals("Bearer", "bearer"));
+    CHECK(fl::iequals("", ""));
+    CHECK_FALSE(fl::iequals("bearer", "bearers")); // length first: a prefix is not a match
+    CHECK_FALSE(fl::iequals("bearer", "beare"));
+    CHECK_FALSE(fl::iequals("token", "bearer"));
+}
+
+TEST_CASE("istartsWith and iendsWith handle the boundary cases", "[parse]") {
+    CHECK(fl::istartsWith("Bearer abc123", "bearer"));
+    CHECK(fl::istartsWith("BEARER", "bearer"));     // the whole string IS the prefix
+    CHECK(fl::istartsWith("anything", ""));         // an empty prefix always matches
+    CHECK_FALSE(fl::istartsWith("Bear", "bearer")); // shorter than the prefix
+
+    CHECK(fl::iendsWith("model.GLB", ".glb"));
+    CHECK(fl::iendsWith(".glb", ".glb"));
+    CHECK(fl::iendsWith("anything", ""));
+    CHECK_FALSE(fl::iendsWith("glb", ".glb"));
+}

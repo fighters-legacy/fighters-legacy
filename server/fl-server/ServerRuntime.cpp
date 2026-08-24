@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ServerRuntime.h"
+#include "LocalTime.h" // localTimeBreakdown — the one portable localtime shim (#1265)
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -2834,12 +2835,7 @@ bool ServerRuntime::Impl::initSystems() {
         // builds the roster forward as it reads (see WorldBroadcaster::recordParticipant).
 
         const std::time_t now = std::time(nullptr);
-        std::tm tmv{};
-#if defined(_WIN32)
-        localtime_s(&tmv, &now);
-#else
-        localtime_r(&now, &tmv);
-#endif
+        const std::tm tmv = localTimeBreakdown(now);
         char stamp[32];
         std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &tmv);
 
