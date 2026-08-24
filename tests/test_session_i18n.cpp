@@ -5,6 +5,7 @@
 
 #include "Localize.h"
 #include "SessionStatus.h"
+#include "mock_log.h"
 
 #include "ILogger.h"
 #include "i18n/Localization.h"
@@ -19,12 +20,6 @@
 using namespace fl;
 
 namespace {
-struct NullLog : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
-
 // Every failure worth displaying (None is never shown).
 constexpr std::array<SessionFailure, 18> kAll{
     SessionFailure::ServerSpawnFailed,   SessionFailure::ServerBindFailed,    SessionFailure::ServerStartTimeout,
@@ -37,7 +32,7 @@ constexpr std::array<SessionFailure, 18> kAll{
 } // namespace
 
 TEST_CASE("SessionFailure keys resolve in en/ui.toml and tr falls back (#358)") {
-    NullLog log;
+    NullLogger log;
     // FL_REPO_ROOT is the assets root (contains locale/); userData is unused here.
     StdFilesystem fs(std::filesystem::path(FL_REPO_ROOT), std::filesystem::path(FL_REPO_ROOT));
     Localization loc(fs, log);

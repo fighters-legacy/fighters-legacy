@@ -17,7 +17,7 @@ using namespace fl;
 // ---------------------------------------------------------------------------
 
 TEST_CASE("WorldBroadcaster: a radio command with no ATC answers 'no ATC available' (#703)", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -34,7 +34,7 @@ TEST_CASE("WorldBroadcaster: a radio command with no ATC answers 'no ATC availab
 }
 
 TEST_CASE("WorldBroadcaster: an ATC radio command is dispatched and answered (#703)", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -79,7 +79,7 @@ TEST_CASE("WorldBroadcaster: an ATC radio command is dispatched and answered (#7
 }
 
 TEST_CASE("WorldBroadcaster: chat routing, mute, sanitize, rate limit, hook (#646)", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -188,7 +188,7 @@ TEST_CASE("WorldBroadcaster: chat routing, mute, sanitize, rate limit, hook (#64
 }
 
 TEST_CASE("WorldBroadcaster: no MOTD sent by default", "[world_broadcaster][motd]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -206,7 +206,7 @@ TEST_CASE("WorldBroadcaster: no MOTD sent by default", "[world_broadcaster][motd
 }
 
 TEST_CASE("WorldBroadcaster: MOTD sent as third send when non-empty", "[world_broadcaster][motd]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -224,7 +224,7 @@ TEST_CASE("WorldBroadcaster: MOTD sent as third send when non-empty", "[world_br
 }
 
 TEST_CASE("WorldBroadcaster: oversized MOTD capped at kMaxMotdBytes", "[world_broadcaster][motd]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -244,7 +244,7 @@ TEST_CASE("WorldBroadcaster: oversized MOTD capped at kMaxMotdBytes", "[world_br
 }
 
 TEST_CASE("WorldBroadcaster: setMotd with empty string suppresses MOTD send", "[world_broadcaster][motd]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -262,7 +262,7 @@ TEST_CASE("WorldBroadcaster: setMotd with empty string suppresses MOTD send", "[
 }
 
 TEST_CASE("WorldBroadcaster: MOTD displaySeconds is 0 by default", "[world_broadcaster][motd]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -283,7 +283,7 @@ TEST_CASE("WorldBroadcaster: MOTD displaySeconds is 0 by default", "[world_broad
 }
 
 TEST_CASE("WorldBroadcaster: MOTD packet displaySeconds matches setMotdDisplaySeconds", "[world_broadcaster][motd]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -305,7 +305,7 @@ TEST_CASE("WorldBroadcaster: MOTD packet displaySeconds matches setMotdDisplaySe
 }
 
 TEST_CASE("WorldBroadcaster: applyConfig wires MOTD and display seconds in one call", "[world_broadcaster][motd]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:1234";
     fl::EntityTypeRegistry registry;
@@ -330,7 +330,7 @@ TEST_CASE("WorldBroadcaster: applyConfig wires MOTD and display seconds in one c
 }
 
 TEST_CASE("WorldBroadcaster: a kill broadcasts credit and unicasts the killer's stats", "[world_broadcaster][combat]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -366,7 +366,7 @@ TEST_CASE("WorldBroadcaster: a kill broadcasts credit and unicasts the killer's 
 
 TEST_CASE("WorldBroadcaster: the scoreboard broadcast builds once and sends identical bytes (#1091)",
           "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -420,7 +420,7 @@ TEST_CASE("WorldBroadcaster: the scoreboard broadcast builds once and sends iden
 
 TEST_CASE("WorldBroadcaster: voice routing is unchanged at or below the talker cap (#1090)",
           "[world_broadcaster][voice]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -472,7 +472,7 @@ TEST_CASE("WorldBroadcaster: voice routing is unchanged at or below the talker c
 TEST_CASE("WorldBroadcaster: the voice frame limit sits below the codec rate (#1090)", "[world_broadcaster][voice]") {
     // The shipped limit was 60/s while the codec produces 50/s, so it capped nothing a well-behaved
     // client could even reach. 52 leaves jitter headroom and actually binds.
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());

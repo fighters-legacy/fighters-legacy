@@ -1079,6 +1079,10 @@ fl_add_test(test_terrain_mesh_builder LIBS engine-render INCLUDES ${CMAKE_CURREN
 
 fl_add_test(test_config_file LIBS engine-config)
 
+# The shared ILogger doubles in mock_log.h (#1273): the query semantics ~15 suites now rely on,
+# including the null-message guard the hand-rolled copies disagreed about.
+fl_add_test(test_mock_log LIBS platform-hal INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
+
 fl_add_test(test_network_utils LIBS engine-net)
 
 fl_add_test(test_subprocess LIBS platform-subprocess)

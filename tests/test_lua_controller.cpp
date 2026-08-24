@@ -5,6 +5,7 @@
 #include "entity/EntityManager.h"
 #include "entity/EntityState.h"
 #include "entity/EntityTypeRegistry.h"
+#include "mock_log.h"
 #include "script/BuiltinAiScripts.h"
 #include "script/LuaController.h"
 #include "script/WorldApi.h"
@@ -34,12 +35,6 @@ using namespace fl;
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-struct NullLoggerL : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 // The ONE ```lua block in docs/modding/ai.md containing `needle`, lifted at run time (#1180).
 //
@@ -376,7 +371,7 @@ TEST_CASE("LuaController: get_entity with null entityManager returns nil") {
 }
 
 TEST_CASE("LuaController: get_entity with real EntityManager returns state table") {
-    NullLoggerL log;
+    NullLogger log;
     fl::EntityTypeRegistry reg;
     fl::EntityDef def;
     def.id = "test:plane";
@@ -1219,7 +1214,7 @@ TEST_CASE("haptic bindings are present and safe no-ops without a host (#128)") {
 
 TEST_CASE("LuaController: atc.scramble triggers the spawn handler (#705)", "[lua][atc]") {
     // #673 criterion 3: a Lua AI script launches a flight from a named airport.
-    NullLoggerL log;
+    NullLogger log;
     fl::EntityTypeRegistry reg;
     fl::EntityDef d;
     d.id = "test:basic";
@@ -1265,7 +1260,7 @@ TEST_CASE("LuaController: atc.* is nil-safe with no ATC service (#705)", "[lua][
 }
 
 TEST_CASE("LuaController: atc.request_takeoff sequences the entity when a service is wired (#705)", "[lua][atc]") {
-    NullLoggerL log;
+    NullLogger log;
     fl::EntityTypeRegistry reg;
     fl::EntityDef d;
     d.id = "test:basic";

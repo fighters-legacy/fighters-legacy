@@ -12,6 +12,7 @@
 #include "entity/IEntityController.h"
 #include "entity/ISeatController.h"
 #include "job/JobSystem.h"
+#include "mock_log.h"
 #include "net/GameProtocol.h" // MsgClientInput (seat-scoped input #972)
 #include "net/SeatInput.h"    // seatInputRouting / clampSeatStation (#972)
 #include "net/WorldBroadcaster.h"
@@ -33,12 +34,6 @@ using namespace fl;
 using Catch::Approx;
 
 namespace {
-
-struct NullLog : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 // A pilot that flies straight and never fires (so every projectile in the test is the gunner's).
 struct NeutralPilot : IEntityController {
@@ -127,7 +122,7 @@ EntityDef makeBomberDef() {
 }
 
 struct CrewFixture {
-    NullLog logger;
+    NullLogger logger;
     TrackingNetwork net;
     EntityTypeRegistry registry;
     WeaponRegistry weapons;
@@ -224,7 +219,7 @@ TEST_CASE("Crewed frame: a bot gunner fires along the turret bore, not the airfr
 TEST_CASE("Crewed frame: an empty seat with no factory contributes no fire (#969)", "[crew]") {
     // With no seat-controller factory, the gunner seat has no bot -> it fires nothing, and the
     // neutral pilot fires nothing, so no projectile ever spawns. The frame still steps cleanly.
-    NullLog logger;
+    NullLogger logger;
     TrackingNetwork net;
     EntityTypeRegistry registry;
     WeaponRegistry weapons;
@@ -377,7 +372,7 @@ TEST_CASE("Crewed frame: knocking out the Fly seat silences the pilot's guns (#9
     // A bomber whose PILOT (Fly+Fire) seat is a damageable pool and fires station 0 forward. Flown by a
     // controller that holds the trigger; spawned high so the nose-fired rockets survive. Knocking out
     // the Fly seat must zero the pilot input — the guns fall silent.
-    NullLog logger;
+    NullLogger logger;
     TrackingNetwork net;
     EntityTypeRegistry registry;
     WeaponRegistry weapons;

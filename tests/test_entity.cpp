@@ -4,6 +4,7 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "ILogger.h"
+#include "mock_log.h"
 
 #include "entity/DamageApplication.h"
 #include "entity/DamageDef.h"
@@ -33,27 +34,6 @@ using namespace fl;
 // ---------------------------------------------------------------------------
 // Mock logger
 // ---------------------------------------------------------------------------
-
-struct MockLogger : public ILogger {
-    struct Entry {
-        LogLevel level;
-        std::string message;
-    };
-    std::vector<Entry> entries;
-
-    void log(LogLevel level, const char* /*file*/, int /*line*/, const char* message) override {
-        entries.push_back({level, message});
-    }
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-
-    bool hasMessage(LogLevel level, const std::string& substr) const {
-        for (const auto& e : entries)
-            if (e.level == level && e.message.find(substr) != std::string::npos)
-                return true;
-        return false;
-    }
-};
 
 // ---------------------------------------------------------------------------
 // Minimal TOML fixtures
@@ -905,7 +885,7 @@ TEST_CASE("EntityDefParser: invalid TOML syntax throws runtime_error", "[parser]
 // ---------------------------------------------------------------------------
 
 TEST_CASE("EntityManager: spawn with registered type returns valid ID", "[manager]") {
-    MockLogger logger;
+    RecordingLogger logger;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeAirVehicleDef("mgr:a"));
     fl::EntityManager mgr(logger, registry);
@@ -917,7 +897,7 @@ TEST_CASE("EntityManager: spawn with registered type returns valid ID", "[manage
 }
 
 TEST_CASE("EntityManager: spawn with unknown type returns null and logs Warn", "[manager]") {
-    MockLogger logger;
+    RecordingLogger logger;
     fl::EntityTypeRegistry registry;
     fl::EntityManager mgr(logger, registry);
 
@@ -928,7 +908,7 @@ TEST_CASE("EntityManager: spawn with unknown type returns null and logs Warn", "
 }
 
 TEST_CASE("EntityManager: liveCount updated after onTick", "[manager]") {
-    MockLogger logger;
+    RecordingLogger logger;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeAirVehicleDef("mgr:b"));
     fl::EntityManager mgr(logger, registry);
@@ -941,7 +921,7 @@ TEST_CASE("EntityManager: liveCount updated after onTick", "[manager]") {
 }
 
 TEST_CASE("EntityManager: kill fires Died event and reaps entity after tick", "[manager]") {
-    MockLogger logger;
+    RecordingLogger logger;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeAirVehicleDef("mgr:c"));
     fl::EntityManager mgr(logger, registry);
@@ -976,7 +956,7 @@ TEST_CASE("EntityManager: kill fires Died event and reaps entity after tick", "[
 }
 
 TEST_CASE("EntityManager: kill with valid instigator fires ScoreAwarded", "[manager]") {
-    MockLogger logger;
+    RecordingLogger logger;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeAirVehicleDef("mgr:d"));
     fl::EntityManager mgr(logger, registry);
@@ -1007,7 +987,7 @@ TEST_CASE("EntityManager: kill with valid instigator fires ScoreAwarded", "[mana
 }
 
 TEST_CASE("EntityManager: kill without instigator does not fire ScoreAwarded", "[manager]") {
-    MockLogger logger;
+    RecordingLogger logger;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeAirVehicleDef("mgr:e"));
     fl::EntityManager mgr(logger, registry);
@@ -1028,7 +1008,7 @@ TEST_CASE("EntityManager: kill without instigator does not fire ScoreAwarded", "
 }
 
 TEST_CASE("EntityManager: applyDamage reduces HP and transitions damage levels", "[manager]") {
-    MockLogger logger;
+    RecordingLogger logger;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDefWithDamage("mgr:f"));
     fl::EntityManager mgr(logger, registry);
@@ -1064,7 +1044,7 @@ TEST_CASE("EntityManager: applyDamage reduces HP and transitions damage levels",
 }
 
 TEST_CASE("EntityManager: applyDamage to zero HP kills entity", "[manager]") {
-    MockLogger logger;
+    RecordingLogger logger;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDefWithDamage("mgr:g"));
     fl::EntityManager mgr(logger, registry);
@@ -1088,7 +1068,7 @@ TEST_CASE("EntityManager: applyDamage to zero HP kills entity", "[manager]") {
 }
 
 TEST_CASE("EntityManager: applyDamage is no-op on dead entity", "[manager]") {
-    MockLogger logger;
+    RecordingLogger logger;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeAirVehicleDef("mgr:h"));
     fl::EntityManager mgr(logger, registry);
@@ -1110,7 +1090,7 @@ TEST_CASE("EntityManager: applyDamage is no-op on dead entity", "[manager]") {
 }
 
 TEST_CASE("EntityManager: setSoftCap prevents spawn beyond cap", "[manager]") {
-    MockLogger logger;
+    RecordingLogger logger;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeAirVehicleDef("mgr:i"));
     fl::EntityManager mgr(logger, registry);
@@ -1128,7 +1108,7 @@ TEST_CASE("EntityManager: setSoftCap prevents spawn beyond cap", "[manager]") {
 // #1049: the cap is only useful if its refusals are countable and reportable — a spawn that returns
 // null with no trace is undiagnosable from an operator's seat, which is how the unwired key survived.
 TEST_CASE("EntityManager: soft-cap refusals are counted and reported", "[manager]") {
-    MockLogger logger;
+    RecordingLogger logger;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeAirVehicleDef("mgr:cap"));
     fl::EntityManager mgr(logger, registry);
@@ -1164,7 +1144,7 @@ TEST_CASE("EntityManager: soft-cap refusals are counted and reported", "[manager
 }
 
 TEST_CASE("EntityManager: a player spawn draws on the reserve a world spawn cannot", "[manager]") {
-    MockLogger logger;
+    RecordingLogger logger;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeAirVehicleDef("mgr:reserve"));
     fl::EntityManager mgr(logger, registry);
@@ -1184,7 +1164,7 @@ TEST_CASE("EntityManager: a player spawn draws on the reserve a world spawn cann
 }
 
 TEST_CASE("EntityManager: removeEventHandler stops delivery", "[manager]") {
-    MockLogger logger;
+    RecordingLogger logger;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeAirVehicleDef("mgr:j"));
     fl::EntityManager mgr(logger, registry);
@@ -1211,7 +1191,7 @@ TEST_CASE("EntityManager: removeEventHandler stops delivery", "[manager]") {
 }
 
 TEST_CASE("EntityManager: reapDeadEntities does nothing when list is empty", "[manager]") {
-    MockLogger logger;
+    RecordingLogger logger;
     fl::EntityTypeRegistry registry;
     fl::EntityManager mgr(logger, registry);
 
@@ -1225,7 +1205,7 @@ TEST_CASE("EntityManager: reapDeadEntities does nothing when list is empty", "[m
 // ---------------------------------------------------------------------------
 
 TEST_CASE("EntityManager: setRenderBridge enables snapshot publish on tick", "[manager]") {
-    MockLogger logger;
+    RecordingLogger logger;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeAirVehicleDef("mgr:snap_a"));
     fl::EntityManager mgr(logger, registry);
@@ -1256,7 +1236,7 @@ TEST_CASE("EntityManager: setRenderBridge enables snapshot publish on tick", "[m
 }
 
 TEST_CASE("EntityManager: snapshot contains damageLevel and playerOwned", "[manager]") {
-    MockLogger logger;
+    RecordingLogger logger;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDefWithDamage("mgr:snap_b"));
     fl::EntityManager mgr(logger, registry);
@@ -1283,7 +1263,7 @@ TEST_CASE("EntityManager: snapshot contains damageLevel and playerOwned", "[mana
 }
 
 TEST_CASE("EntityManager: snapshot is empty when no entities are live", "[manager]") {
-    MockLogger logger;
+    RecordingLogger logger;
     fl::EntityTypeRegistry registry;
     fl::EntityManager mgr(logger, registry);
 
@@ -1297,7 +1277,7 @@ TEST_CASE("EntityManager: snapshot is empty when no entities are live", "[manage
 }
 
 TEST_CASE("EntityManager: dead entities are absent from snapshot", "[manager]") {
-    MockLogger logger;
+    RecordingLogger logger;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeAirVehicleDef("mgr:snap_c"));
     fl::EntityManager mgr(logger, registry);
@@ -1319,7 +1299,7 @@ TEST_CASE("EntityManager: dead entities are absent from snapshot", "[manager]") 
 }
 
 TEST_CASE("EntityManager: setRenderBridge nullptr suppresses publish", "[manager]") {
-    MockLogger logger;
+    RecordingLogger logger;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeAirVehicleDef("mgr:snap_d"));
     fl::EntityManager mgr(logger, registry);
@@ -1683,7 +1663,7 @@ TEST_CASE("EntityDefParser: malformed crew/turret tables throw", "[parser][crew]
 // ---------------------------------------------------------------------------
 
 TEST_CASE("applyPointDamage: the friendly-fire gate suppresses same-faction damage", "[damage-rules]") {
-    MockLogger logger;
+    RecordingLogger logger;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeAirVehicleDef("ff:a"));
     fl::EntityManager mgr(logger, registry);
@@ -1728,7 +1708,7 @@ TEST_CASE("applyPointDamage: the friendly-fire gate suppresses same-faction dama
 }
 
 TEST_CASE("applyPointDamage: instigator attribution flows through to the kill", "[damage-rules]") {
-    MockLogger logger;
+    RecordingLogger logger;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeAirVehicleDef("ff:b"));
     fl::EntityManager mgr(logger, registry);
@@ -1764,7 +1744,7 @@ TEST_CASE("applyPointDamage: instigator attribution flows through to the kill", 
 namespace {
 
 struct BlastWorld {
-    MockLogger logger;
+    RecordingLogger logger;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em;
     fl::SpatialIndex si;

@@ -14,6 +14,7 @@
 #include "entity/EntityTypeRegistry.h"
 #include "flight/Geodetic.h"
 #include "flight/LocalFrame.h"
+#include "mock_log.h"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -24,12 +25,6 @@
 using namespace fl;
 
 namespace {
-
-struct NullLogger : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 // World-space point on the sphere's surface at the equator (lon=0): planet centre is {0,-R,0}, so
 // this sits at {0,-R,R} where the local "up" is +Z (NOT world +Y). A far-from-origin test anchor

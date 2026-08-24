@@ -18,7 +18,7 @@ using namespace fl;
 // ---------------------------------------------------------------------------
 
 TEST_CASE("WorldBroadcaster: onTick broadcasts WorldSnapshot for N entities", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -134,7 +134,7 @@ TEST_CASE("WorldBroadcaster: compressed snapshots round-trip to the raw payload 
 
 TEST_CASE("WorldBroadcaster: tiny snapshots are sent raw even with compression enabled",
           "[world_broadcaster][compress]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -176,7 +176,7 @@ TEST_CASE("WorldBroadcaster: compressed snapshot build is serial-equivalent acro
 }
 
 TEST_CASE("WorldBroadcaster: a congested peer is decimated while a healthy peer keeps sending", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -204,7 +204,7 @@ TEST_CASE("WorldBroadcaster: a congested peer is decimated while a healthy peer 
 }
 
 TEST_CASE("WorldBroadcaster: overrun governor degrades under an over-budget clock", "[world_broadcaster][overrun]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -234,7 +234,7 @@ TEST_CASE("WorldBroadcaster: overrun governor degrades under an over-budget cloc
 
 TEST_CASE("WorldBroadcaster: overrun governor interest-radius lever shrinks the visible set",
           "[world_broadcaster][overrun]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -328,7 +328,7 @@ TEST_CASE("WorldBroadcaster: interest-radius lever is serial-equivalent across w
 }
 
 TEST_CASE("WorldBroadcaster: a dead pilot still sees the world instead of going black (#403)", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -367,7 +367,7 @@ TEST_CASE("WorldBroadcaster: a dead pilot still sees the world instead of going 
 }
 
 TEST_CASE("WorldBroadcaster: spectate delay defers a spectator's snapshot (#403)", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -388,7 +388,7 @@ TEST_CASE("WorldBroadcaster: spectate delay defers a spectator's snapshot (#403)
 }
 
 TEST_CASE("WorldBroadcaster: onTick snapshot carries correct protocolVersion", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -404,7 +404,7 @@ TEST_CASE("WorldBroadcaster: onTick snapshot carries correct protocolVersion", "
 }
 
 TEST_CASE("WorldBroadcaster: onTick populates throttle in WorldSnapshot from FlightState", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -442,7 +442,7 @@ TEST_CASE("WorldBroadcaster: onTick populates throttle in WorldSnapshot from Fli
 
 TEST_CASE("WorldBroadcaster: abEngaged is 0 in WorldSnapshot when model has no afterburner table",
           "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -478,7 +478,7 @@ TEST_CASE("WorldBroadcaster: abEngaged is 0 in WorldSnapshot when model has no a
 }
 
 TEST_CASE("WorldBroadcaster: an observer receives world snapshots (#857)", "[world_broadcaster][observer]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -502,7 +502,7 @@ TEST_CASE("WorldBroadcaster: an observer receives world snapshots (#857)", "[wor
 }
 
 TEST_CASE("WorldBroadcaster: entity within draw distance appears in peer snapshot", "[world_broadcaster][interest]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -525,7 +525,7 @@ TEST_CASE("WorldBroadcaster: entity within draw distance appears in peer snapsho
 
 TEST_CASE("WorldBroadcaster: entity beyond draw distance excluded from peer snapshot",
           "[world_broadcaster][interest]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -552,7 +552,7 @@ TEST_CASE("WorldBroadcaster: entity beyond draw distance excluded from peer snap
 }
 
 TEST_CASE("WorldBroadcaster: observer interest follows its camera eye (#858)", "[world_broadcaster][interest]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -596,7 +596,7 @@ TEST_CASE("WorldBroadcaster: observer interest follows its camera eye (#858)", "
 
 TEST_CASE("WorldBroadcaster: interest management correct at a non-default spatial cell size (#573)",
           "[world_broadcaster][interest]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -629,7 +629,7 @@ TEST_CASE("WorldBroadcaster: interest management correct at a non-default spatia
 }
 
 TEST_CASE("WorldBroadcaster: setDrawDistance(0) produces empty snapshots", "[world_broadcaster][interest]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -647,7 +647,7 @@ TEST_CASE("WorldBroadcaster: setDrawDistance(0) produces empty snapshots", "[wor
 }
 
 TEST_CASE("WorldBroadcaster: dead peer entity results in empty snapshot", "[world_broadcaster][interest]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -673,7 +673,7 @@ TEST_CASE("WorldBroadcaster: dead peer entity results in empty snapshot", "[worl
 
 TEST_CASE("WorldBroadcaster: a fresh peer is sent full records for all entities until first ack",
           "[world_broadcaster][delta]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -709,7 +709,7 @@ TEST_CASE("WorldBroadcaster: a fresh peer is sent full records for all entities 
 
 TEST_CASE("WorldBroadcaster: a heartbeat-only client still acks and downgrades to delta",
           "[world_broadcaster][delta]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -736,7 +736,7 @@ TEST_CASE("WorldBroadcaster: a heartbeat-only client still acks and downgrades t
 
 TEST_CASE("WorldBroadcaster: a future-tick ack is clamped to the present and cannot pre-confirm",
           "[world_broadcaster][delta]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -775,7 +775,7 @@ TEST_CASE("WorldBroadcaster: a future-tick ack is clamped to the present and can
 }
 
 TEST_CASE("WorldBroadcaster: a heartbeat carries the selective-ack mask", "[world_broadcaster][identity-ack]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -811,7 +811,7 @@ TEST_CASE("WorldBroadcaster: a heartbeat carries the selective-ack mask", "[worl
 
 TEST_CASE("WorldBroadcaster: a non-advancing ack does not clobber the stored mask",
           "[world_broadcaster][identity-ack]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -838,7 +838,7 @@ TEST_CASE("WorldBroadcaster: a non-advancing ack does not clobber the stored mas
 
 TEST_CASE("WorldBroadcaster: a full streak older than the ack window converges to delta with an empty mask",
           "[world_broadcaster][identity-ack]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -866,7 +866,7 @@ TEST_CASE("WorldBroadcaster: a full streak older than the ack window converges t
 
 TEST_CASE("WorldBroadcaster: a deferred entity acked-but-not-decoded stays full under selective-ack",
           "[world_broadcaster][delta][budget][identity-ack]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -929,7 +929,7 @@ TEST_CASE("WorldBroadcaster: a deferred entity acked-but-not-decoded stays full 
 
 TEST_CASE("WorldBroadcaster: SnapshotPeerLatency TLV present when estimatedDelayTicks > 0",
           "[world_broadcaster][latency]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -972,7 +972,7 @@ TEST_CASE("WorldBroadcaster: SnapshotPeerLatency TLV present when estimatedDelay
 
 TEST_CASE("WorldBroadcaster: SnapshotPeerLatency TLV absent when estimatedDelayTicks == 0",
           "[world_broadcaster][latency]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1017,7 +1017,7 @@ TEST_CASE("WorldBroadcaster: snapshot entity record carries omega field without 
     // The round-trip VALUE check (serialise → memcpy → verify exact values) is covered by
     // test_game_protocol.cpp.  Here we just confirm the field is present in the packet,
     // is finite (not NaN/inf), and that the packet has the correct size for the new struct.
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1057,7 +1057,7 @@ TEST_CASE("WorldBroadcaster: snapshot entity record carries omega field without 
 
 TEST_CASE("WorldBroadcaster: snapshot includes SnapshotPeerDelayTicks TLV when delay > 0",
           "[world_broadcaster][latency]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1098,7 +1098,7 @@ TEST_CASE("WorldBroadcaster: snapshot includes SnapshotPeerDelayTicks TLV when d
 
 TEST_CASE("WorldBroadcaster: snapshot budget caps records and always includes own entity",
           "[world_broadcaster][interest][budget]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1139,7 +1139,7 @@ TEST_CASE("WorldBroadcaster: snapshot budget caps records and always includes ow
 
 TEST_CASE("WorldBroadcaster: budget==0 sends every visible entity (legacy path)",
           "[world_broadcaster][interest][budget]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1164,7 +1164,7 @@ TEST_CASE("WorldBroadcaster: budget==0 sends every visible entity (legacy path)"
 
 TEST_CASE("WorldBroadcaster: starved entity eventually included under a tight budget",
           "[world_broadcaster][interest][budget]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1200,7 +1200,7 @@ TEST_CASE("WorldBroadcaster: starved entity eventually included under a tight bu
 
 TEST_CASE("WorldBroadcaster: killing a known entity emits a despawn TLV, interest-out does not",
           "[world_broadcaster][interest][budget]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1239,7 +1239,7 @@ TEST_CASE("WorldBroadcaster: killing a known entity emits a despawn TLV, interes
 }
 
 TEST_CASE("WorldBroadcaster: entity flown out of interest is not despawned", "[world_broadcaster][interest][budget]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1273,7 +1273,7 @@ TEST_CASE("WorldBroadcaster: entity flown out of interest is not despawned", "[w
 
 TEST_CASE("WorldBroadcaster: congested peer is decimated, healthy peer keeps full rate",
           "[world_broadcaster][congestion]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1298,7 +1298,7 @@ TEST_CASE("WorldBroadcaster: congested peer is decimated, healthy peer keeps ful
 
 TEST_CASE("WorldBroadcaster: congestion shrinks the effective byte budget (fewer records)",
           "[world_broadcaster][congestion]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1334,7 +1334,7 @@ TEST_CASE("WorldBroadcaster: congestion shrinks the effective byte budget (fewer
 }
 
 TEST_CASE("WorldBroadcaster: peer returns to full rate after congestion clears", "[world_broadcaster][congestion]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1358,7 +1358,7 @@ TEST_CASE("WorldBroadcaster: peer returns to full rate after congestion clears",
 }
 
 TEST_CASE("WorldBroadcaster: congestion disabled never decimates under loss", "[world_broadcaster][congestion]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1377,7 +1377,7 @@ TEST_CASE("WorldBroadcaster: congestion disabled never decimates under loss", "[
 
 TEST_CASE("WorldBroadcaster: congestion telemetry watermarks record engage then recovery",
           "[world_broadcaster][congestion]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1429,7 +1429,7 @@ TEST_CASE("WorldBroadcaster: congestion telemetry watermarks record engage then 
 TEST_CASE("WorldBroadcaster: a neutral world emits no articulation TLV (#843)", "[world_broadcaster][articulation]") {
     // An entity with all-default channels costs ZERO bytes — the snapshot is byte-identical to
     // pre-#843 for every world of unarticulated aircraft, which is nearly all of them.
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1455,7 +1455,7 @@ TEST_CASE("WorldBroadcaster: a neutral world emits no articulation TLV (#843)", 
 
 TEST_CASE("WorldBroadcaster: articulation TLV round-trips channel mask and values (#843)",
           "[world_broadcaster][articulation]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1541,7 +1541,7 @@ TEST_CASE("WorldBroadcaster: a variable-geometry wing reaches the articulation T
     // renderer, and no code anywhere wrote it: the server sent five of sixteen channels and sweep
     // was not among them, so a swing-wing aircraft rendered permanently at min_deg for every
     // observer while its flight model swept correctly the entire time.
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityDef def = makeDebugDef();
@@ -1582,7 +1582,7 @@ TEST_CASE("WorldBroadcaster: a fixed-geometry aircraft emits no sweep channel (#
     // The cost claim. Everything without a [wing_sweep] table must stay off the wire entirely: the
     // channel is neutral, so it is absent, so the snapshot is byte-identical to pre-#1195 for every
     // aircraft in the game but the swing-wings.
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef()); // no flightModelAsset -> the builtin, fixed-geometry model
@@ -1604,7 +1604,7 @@ TEST_CASE("WorldBroadcaster: steady-state articulation is not resent every tick 
           "[world_broadcaster][articulation]") {
     // Changed-only, plus a periodic refresh for drop tolerance. Without the change gate a settled
     // aircraft would spend bytes every tick saying nothing new.
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1636,7 +1636,7 @@ TEST_CASE("WorldBroadcaster: steady-state articulation is not resent every tick 
 }
 
 TEST_CASE("WorldBroadcaster: the replay tap records entities no peer can see (#643)", "[world_broadcaster][replay]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1688,7 +1688,7 @@ TEST_CASE("WorldBroadcaster: the replay tap does not change a single byte a peer
     // The cost-of-the-feature question, asserted rather than assumed: recording must not perturb the
     // snapshots, or turning it on would change what every client sees.
     auto run = [](bool withSink) {
-        MockLogger logger;
+        NullLogger logger;
         MockNetwork net;
         fl::EntityTypeRegistry registry;
         registry.registerType(makeDebugDef());
@@ -1721,7 +1721,7 @@ TEST_CASE("WorldBroadcaster: the replay tap does not change a single byte a peer
 
 TEST_CASE("WorldBroadcaster: the replay tap's state hash tracks the world, not the tick number (#643)",
           "[world_broadcaster][replay]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1761,7 +1761,7 @@ TEST_CASE("WorldBroadcaster: a healthy server emits no server-throttle TLV and i
     // THE regression this tag must not cause. A new TLV that appears on the healthy path would
     // change every snapshot on every server, for a condition almost none of them are in — the same
     // rule SnapshotCrew and SnapshotArticulation follow (zero cost in the degenerate case).
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1790,7 +1790,7 @@ TEST_CASE("WorldBroadcaster: a healthy server emits no server-throttle TLV and i
 
 TEST_CASE("WorldBroadcaster: an overrun server attributes the throttle to itself and says so on the wire",
           "[world_broadcaster][overrun]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1844,7 +1844,7 @@ TEST_CASE("WorldBroadcaster: an overrun server attributes the throttle to itself
 
 TEST_CASE("WorldBroadcaster: the server-throttle TLV reports a plausible load and interval",
           "[world_broadcaster][overrun]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);

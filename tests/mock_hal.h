@@ -13,6 +13,8 @@
 #include "IWindow.h"
 #include "NullAudio.h"
 
+#include "mock_log.h"
+
 #include <cstring>
 #include <map>
 #include <optional>
@@ -24,7 +26,9 @@
 // Shared HAL test doubles live here — define new ones here rather than re-declaring per test file.
 // Naming convention: Null* = no-op base, Tracking* = records calls, Fake* = limited real behaviour,
 // Mock* = configurable. Two interfaces are kept in dedicated headers to avoid forcing their deps on
-// every HAL-only test: INetwork doubles in mock_network.h, IContentPack doubles in mock_content.h.
+// every HAL-only test: INetwork doubles in mock_network.h, IContentPack doubles in mock_content.h,
+// ILogger doubles in mock_log.h, which this header includes — so MockLogger and NullLogger are
+// available to anything that includes mock_hal.h, as they always were.
 
 namespace fl {
 
@@ -126,26 +130,9 @@ struct MockInput : public IInput {
     void stopRumble(int) override {}
 };
 
-struct MockLogger : public ILogger {
-    struct Entry {
-        LogLevel level;
-        std::string message;
-    };
-    std::vector<Entry> entries;
-
-    void log(LogLevel level, const char*, int, const char* message) override {
-        entries.push_back({level, message});
-    }
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-
-    bool hasMessage(LogLevel level, const std::string& substr) const {
-        for (auto& e : entries)
-            if (e.level == level && e.message.find(substr) != std::string::npos)
-                return true;
-        return false;
-    }
-};
+// The recorder now lives in mock_log.h so suites that link no HAL can use it too; the name stays
+// for this header's ~30 existing users.
+using MockLogger = RecordingLogger;
 
 struct MockFilesystem : public IFilesystem {
     std::map<std::string, std::vector<uint8_t>> files;

@@ -31,12 +31,6 @@ using namespace fl;
 // ---------------------------------------------------------------------------
 // NullLogger — discards all messages.
 // ---------------------------------------------------------------------------
-struct NullLogger : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
-
 // NullContentPack (shared, mock_content.h) — returns nullopt/empty for every asset request.
 // Lets us construct a real AssetManager in tests without filesystem access. The audio fixtures
 // below derive from it and override only loadAudio.
@@ -791,17 +785,7 @@ TEST_CASE("VoiceCalloutManager subtitle push via Localization fallback", "[audio
 // Builtin procedural music (#865)
 // ---------------------------------------------------------------------------
 
-namespace {
-struct CapturingMusicLog : ILogger {
-    std::vector<std::string> warnings;
-    void log(LogLevel lvl, const char*, int, const char* msg) override {
-        if (lvl == LogLevel::Warn && msg)
-            warnings.emplace_back(msg);
-    }
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
-} // namespace
+namespace {} // namespace
 
 TEST_CASE("generateBuiltinMusic is deterministic and distinct per mood (#865)", "[audio][music]") {
     const DecodedPcm menuA = generateBuiltinMusic(MusicMood::Menu);
@@ -833,7 +817,7 @@ TEST_CASE("builtin music tracks + the default playlist wire the game states (#86
 
 TEST_CASE("MusicManager plays the builtin default playlist with no content pack (#865)", "[audio][music]") {
     NullAudio audio;
-    CapturingMusicLog log;
+    RecordingLogger log;
     MusicManager mm;
     // No AssetManager: the builtin tracks are resolved before AssetManager, so nullptr is fine.
     REQUIRE(mm.init(&audio, /*assets=*/nullptr, &log));
@@ -845,7 +829,7 @@ TEST_CASE("MusicManager plays the builtin default playlist with no content pack 
     mm.update(1.0f / 60.0f, 0.8f, 0.7f);
 
     // The builtin tracks resolve, so the "track not found" warning never fires.
-    for (const std::string& w : log.warnings)
+    for (const std::string& w : log.messages(LogLevel::Warn))
         CHECK(w.find("not found") == std::string::npos);
     mm.shutdown();
 }

@@ -16,6 +16,7 @@
 #include "entity/EntityManager.h"
 #include "entity/EntityState.h"
 #include "entity/EntityTypeRegistry.h"
+#include "mock_log.h"
 #include "spatial/SpatialIndex.h"
 
 #include <catch2/catch_approx.hpp>
@@ -28,12 +29,6 @@ using namespace fl;
 using fl::ai::WingmanCommand;
 
 namespace {
-
-struct NullLogger final : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 EntityDef makeDef() {
     EntityDef d{};

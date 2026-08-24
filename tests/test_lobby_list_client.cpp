@@ -11,6 +11,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "ILogger.h"
+#include "mock_log.h"
 #include "net/LobbyListClient.h"
 
 #include "mock_http.h"
@@ -22,16 +23,6 @@ using namespace fl;
 
 namespace {
 
-struct RecordingLog final : ILogger {
-    std::vector<std::string> warnings;
-    void log(LogLevel lvl, const char*, int, const char* msg) override {
-        if (lvl == LogLevel::Warn && msg)
-            warnings.emplace_back(msg);
-    }
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
-
 constexpr const char* kEndpoint = "https://lobby.example.com/v1/servers";
 
 constexpr const char* kTwoServers = R"([
@@ -42,7 +33,7 @@ constexpr const char* kTwoServers = R"([
 } // namespace
 
 TEST_CASE("LobbyListClient: a successful fetch populates the server list (#1145)", "[lobby][net]") {
-    RecordingLog log;
+    RecordingLogger log;
     TrackingHttpClient http;
     LobbyListClient client(http, log);
     http.setResponse(kEndpoint, kTwoServers, 200);
@@ -64,7 +55,7 @@ TEST_CASE("LobbyListClient: a successful fetch populates the server list (#1145)
 TEST_CASE("LobbyListClient: the endpoint path is appended exactly once (#1145)", "[lobby][net]") {
     // A trailing slash in an operator-configured URL is the most likely way to get "//v1/servers",
     // which some lobbies 404 on.
-    RecordingLog log;
+    RecordingLogger log;
     TrackingHttpClient http;
     LobbyListClient client(http, log);
     http.setResponse(kEndpoint, "[]", 200);
@@ -75,7 +66,7 @@ TEST_CASE("LobbyListClient: the endpoint path is appended exactly once (#1145)",
 }
 
 TEST_CASE("LobbyListClient: an empty URL is not a request (#1145)", "[lobby][net]") {
-    RecordingLog log;
+    RecordingLogger log;
     TrackingHttpClient http;
     LobbyListClient client(http, log);
 
@@ -87,7 +78,7 @@ TEST_CASE("LobbyListClient: an empty URL is not a request (#1145)", "[lobby][net
 TEST_CASE("LobbyListClient: a second refresh while one is in flight is refused (#1145)", "[lobby][net]") {
     // Otherwise a player mashing the refresh button queues N identical fetches and the last one to
     // land wins, which is neither what they asked for nor kind to the lobby.
-    RecordingLog log;
+    RecordingLogger log;
     TrackingHttpClient http;
     LobbyListClient client(http, log);
     http.setResponse(kEndpoint, kTwoServers, 200);
@@ -101,7 +92,7 @@ TEST_CASE("LobbyListClient: a second refresh while one is in flight is refused (
 }
 
 TEST_CASE("LobbyListClient: a transport error is reported and leaves the list alone (#1145)", "[lobby][net]") {
-    RecordingLog log;
+    RecordingLogger log;
     TrackingHttpClient http;
     LobbyListClient client(http, log);
 
@@ -118,13 +109,13 @@ TEST_CASE("LobbyListClient: a transport error is reported and leaves the list al
     CHECK(client.lastFetchFailed());
     CHECK_FALSE(client.inFlight());
     CHECK(client.servers().size() == 2); // the stale-but-real list survives a failed refresh
-    CHECK_FALSE(log.warnings.empty());
+    CHECK_FALSE(log.messages(LogLevel::Warn).empty());
 }
 
 TEST_CASE("LobbyListClient: a non-2xx response is a failure even with a body (#1145)", "[lobby][net]") {
     // A lobby behind a proxy returns 500 with an HTML error page. Parsing that as a server list
     // would yield an empty list and look like "no servers online" rather than "the lobby is down".
-    RecordingLog log;
+    RecordingLogger log;
     TrackingHttpClient http;
     LobbyListClient client(http, log);
     http.setResponse(kEndpoint, "<html>Internal Server Error</html>", 500);
@@ -137,7 +128,7 @@ TEST_CASE("LobbyListClient: a non-2xx response is a failure even with a body (#1
 }
 
 TEST_CASE("LobbyListClient: a 3xx redirect body is not treated as a list (#1145)", "[lobby][net]") {
-    RecordingLog log;
+    RecordingLogger log;
     TrackingHttpClient http;
     LobbyListClient client(http, log);
     http.setResponse(kEndpoint, "[]", 302);
@@ -150,7 +141,7 @@ TEST_CASE("LobbyListClient: a 3xx redirect body is not treated as a list (#1145)
 TEST_CASE("LobbyListClient: data for a stale request id is ignored (#1145)", "[lobby][net]") {
     // A cancelled or superseded request can still deliver a chunk; letting it into the buffer would
     // splice two responses together.
-    RecordingLog log;
+    RecordingLogger log;
     TrackingHttpClient http;
     LobbyListClient client(http, log);
     http.setResponse(kEndpoint, kTwoServers, 200);
@@ -164,7 +155,7 @@ TEST_CASE("LobbyListClient: data for a stale request id is ignored (#1145)", "[l
 }
 
 TEST_CASE("LobbyListClient: completion for a stale request id is ignored (#1145)", "[lobby][net]") {
-    RecordingLog log;
+    RecordingLogger log;
     TrackingHttpClient http;
     LobbyListClient client(http, log);
     http.setResponse(kEndpoint, kTwoServers, 200);
@@ -181,7 +172,7 @@ TEST_CASE("LobbyListClient: completion for a stale request id is ignored (#1145)
 TEST_CASE("LobbyListClient: a body split across chunks is accumulated before parsing (#1145)", "[lobby][net]") {
     // A JSON array arriving in 16-byte pieces must parse identically to one that arrives whole;
     // parsing per chunk would see truncated objects and drop every server.
-    RecordingLog log;
+    RecordingLogger log;
     TrackingHttpClient http;
     LobbyListClient client(http, log);
     http.setResponse(kEndpoint, kTwoServers, 200, /*chunkSize=*/16);
@@ -194,7 +185,7 @@ TEST_CASE("LobbyListClient: a body split across chunks is accumulated before par
 
 TEST_CASE("LobbyListClient: an empty successful body yields an empty list, not a failure (#1145)", "[lobby][net]") {
     // A lobby with nobody hosting is a legitimate answer and must not read as an error.
-    RecordingLog log;
+    RecordingLogger log;
     TrackingHttpClient http;
     LobbyListClient client(http, log);
     http.setResponse(kEndpoint, "[]", 200);
@@ -206,7 +197,7 @@ TEST_CASE("LobbyListClient: an empty successful body yields an empty list, not a
 }
 
 TEST_CASE("LobbyListClient: a refresh after a failure clears the failure flag (#1145)", "[lobby][net]") {
-    RecordingLog log;
+    RecordingLogger log;
     TrackingHttpClient http;
     LobbyListClient client(http, log);
 

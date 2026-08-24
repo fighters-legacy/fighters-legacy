@@ -17,13 +17,7 @@
 
 using namespace fl;
 
-namespace {
-struct NullLoggerER : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
-} // namespace
+namespace {} // namespace
 
 namespace {
 
@@ -131,7 +125,7 @@ TEST_CASE("EffectRouter: routeEffectsTlv decodes packed records and drops a trai
 // ---------------------------------------------------------------------------
 
 TEST_CASE("EffectRouter: wired to an SfxManager, effects play their SFX", "[effect_router][sfx]") {
-    NullLoggerER log;
+    NullLogger log;
     MockAudio audio;
     SfxManager sfx;
     sfx.init(&audio, nullptr, &log);

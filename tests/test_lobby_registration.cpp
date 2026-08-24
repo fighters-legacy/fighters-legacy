@@ -2,6 +2,7 @@
 // Unit tests for LobbyRegistration (#143): the dedicated-server lobby heartbeat client, driven against
 // the canned TrackingHttpClient + a manual clock (no sockets).
 
+#include "mock_log.h"
 #include "net/LobbyRegistration.h"
 
 #include "IClock.h"
@@ -15,12 +16,6 @@
 using namespace fl;
 
 namespace {
-struct NullLog : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
-
 LobbyRegistrationConfig makeCfg() {
     LobbyRegistrationConfig c;
     c.lobbyUrl = "https://lobby.example/";
@@ -36,7 +31,7 @@ LobbyRegistrationConfig makeCfg() {
 } // namespace
 
 TEST_CASE("LobbyRegistration: first tick POSTs a JSON heartbeat to /v1/servers (#143)", "[lobby_reg]") {
-    NullLog log;
+    NullLogger log;
     TrackingHttpClient http;
     http.setResponse("https://lobby.example/v1/servers", "", 200);
     ManualClock clock;
@@ -63,7 +58,7 @@ TEST_CASE("LobbyRegistration: the posted body is escaped by the engine's one esc
     // had no \b or \f. It produced valid JSON, so nothing broke -- but it was a second copy of the
     // one primitive #1080 centralised, and it had already drifted. Nothing pinned the bytes, which
     // is how the copy survived the #1161 sweep of the same directory.
-    NullLog log;
+    NullLogger log;
     TrackingHttpClient http;
     http.setResponse("https://lobby.example/v1/servers", "", 200);
     ManualClock clock;
@@ -88,7 +83,7 @@ TEST_CASE("LobbyRegistration: the posted body is escaped by the engine's one esc
 }
 
 TEST_CASE("LobbyRegistration: heartbeats on the configured interval, not every tick (#143)", "[lobby_reg]") {
-    NullLog log;
+    NullLogger log;
     TrackingHttpClient http;
     http.setResponse("https://lobby.example/v1/servers", "", 200);
     ManualClock clock;
@@ -106,7 +101,7 @@ TEST_CASE("LobbyRegistration: heartbeats on the configured interval, not every t
 }
 
 TEST_CASE("LobbyRegistration: disabled when private or lobby url empty (#143)", "[lobby_reg]") {
-    NullLog log;
+    NullLogger log;
     TrackingHttpClient http;
     ManualClock clock;
     LobbyRegistration reg(http, log);
@@ -128,7 +123,7 @@ TEST_CASE("LobbyRegistration: disabled when private or lobby url empty (#143)", 
 }
 
 TEST_CASE("LobbyRegistration: a failed POST backs off before retrying (#143)", "[lobby_reg]") {
-    NullLog log;
+    NullLogger log;
     TrackingHttpClient http;
     http.setResponse("https://lobby.example/v1/servers", "", 500); // server error
     ManualClock clock;
@@ -148,7 +143,7 @@ TEST_CASE("LobbyRegistration: a failed POST backs off before retrying (#143)", "
 }
 
 TEST_CASE("LobbyRegistration: deregister sends a DELETE (#143)", "[lobby_reg]") {
-    NullLog log;
+    NullLogger log;
     TrackingHttpClient http;
     ManualClock clock;
     LobbyRegistration reg(http, log);

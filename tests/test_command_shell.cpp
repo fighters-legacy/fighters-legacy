@@ -2,6 +2,7 @@
 #include "ILogger.h"
 #include "console/CommandRegistry.h"
 #include "console/CommandShell.h"
+#include "mock_log.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -12,21 +13,15 @@
 
 using namespace fl;
 
-struct NullShellLogger : public ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
-
 TEST_CASE("CommandShell outputLines empty on construction", "[shell]") {
-    NullShellLogger logger;
+    NullLogger logger;
     CommandRegistry reg;
     CommandShell shell(logger, reg);
     REQUIRE(shell.outputLines().empty());
 }
 
 TEST_CASE("CommandShell print appends in order", "[shell]") {
-    NullShellLogger logger;
+    NullLogger logger;
     CommandRegistry reg;
     CommandShell shell(logger, reg);
 
@@ -42,7 +37,7 @@ TEST_CASE("CommandShell print appends in order", "[shell]") {
 }
 
 TEST_CASE("CommandShell execute pushes echo and result to ring", "[shell]") {
-    NullShellLogger logger;
+    NullLogger logger;
     CommandRegistry reg;
     reg.registerCommand("cmd", "test", [](std::span<std::string_view>) { return std::string("ok"); });
     CommandShell shell(logger, reg);
@@ -63,7 +58,7 @@ TEST_CASE("CommandShell execute pushes echo and result to ring", "[shell]") {
 }
 
 TEST_CASE("CommandShell ring wraps after kMaxOutputLines", "[shell]") {
-    NullShellLogger logger;
+    NullLogger logger;
     CommandRegistry reg;
     CommandShell shell(logger, reg);
 
@@ -77,7 +72,7 @@ TEST_CASE("CommandShell ring wraps after kMaxOutputLines", "[shell]") {
 }
 
 TEST_CASE("CommandShell print thread safety", "[shell]") {
-    NullShellLogger logger;
+    NullLogger logger;
     CommandRegistry reg;
     CommandShell shell(logger, reg);
 
@@ -101,14 +96,14 @@ TEST_CASE("CommandShell print thread safety", "[shell]") {
 // ---------------------------------------------------------------------------
 
 TEST_CASE("CommandShell mark returns 0 on empty shell", "[shell][drain]") {
-    NullShellLogger logger;
+    NullLogger logger;
     CommandRegistry reg;
     CommandShell shell(logger, reg);
     CHECK(shell.mark() == 0);
 }
 
 TEST_CASE("CommandShell mark advances with each print", "[shell][drain]") {
-    NullShellLogger logger;
+    NullLogger logger;
     CommandRegistry reg;
     CommandShell shell(logger, reg);
 
@@ -119,7 +114,7 @@ TEST_CASE("CommandShell mark advances with each print", "[shell][drain]") {
 }
 
 TEST_CASE("CommandShell drainSince returns only new lines", "[shell][drain]") {
-    NullShellLogger logger;
+    NullLogger logger;
     CommandRegistry reg;
     CommandShell shell(logger, reg);
 
@@ -135,7 +130,7 @@ TEST_CASE("CommandShell drainSince returns only new lines", "[shell][drain]") {
 }
 
 TEST_CASE("CommandShell drainSince returns empty when nothing new", "[shell][drain]") {
-    NullShellLogger logger;
+    NullLogger logger;
     CommandRegistry reg;
     CommandShell shell(logger, reg);
 
@@ -146,7 +141,7 @@ TEST_CASE("CommandShell drainSince returns empty when nothing new", "[shell][dra
 }
 
 TEST_CASE("CommandShell drainSince successive calls with updated mark", "[shell][drain]") {
-    NullShellLogger logger;
+    NullLogger logger;
     CommandRegistry reg;
     CommandShell shell(logger, reg);
 
@@ -163,7 +158,7 @@ TEST_CASE("CommandShell drainSince successive calls with updated mark", "[shell]
 }
 
 TEST_CASE("CommandShell drainSince clamps at kMaxOutputLines on overflow", "[shell][drain]") {
-    NullShellLogger logger;
+    NullLogger logger;
     CommandRegistry reg;
     CommandShell shell(logger, reg);
 
@@ -183,7 +178,7 @@ TEST_CASE("CommandShell drainSince clamps at kMaxOutputLines on overflow", "[she
 }
 
 TEST_CASE("CommandShell drainSince after ring wrap returns only post-mark entries", "[shell][drain]") {
-    NullShellLogger logger;
+    NullLogger logger;
     CommandRegistry reg;
     CommandShell shell(logger, reg);
 
@@ -202,7 +197,7 @@ TEST_CASE("CommandShell drainSince after ring wrap returns only post-mark entrie
 }
 
 TEST_CASE("CommandShell drainSince is thread-safe under concurrent print", "[shell][drain]") {
-    NullShellLogger logger;
+    NullLogger logger;
     CommandRegistry reg;
     CommandShell shell(logger, reg);
 

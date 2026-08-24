@@ -8,6 +8,7 @@
 #include "mission/MissionParser.h"
 #include "mission/MissionRuntime.h"
 #include "mission/MissionSetup.h"
+#include "mock_log.h"
 
 #include "ILogger.h"
 #include "entity/EntityDef.h"
@@ -64,12 +65,6 @@ triggers:
   - on: timer(600)
     do: mission_failure
 )yaml";
-
-struct NullLogger final : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 EntityDef makeDef(const char* id) {
     EntityDef d{};

@@ -21,6 +21,7 @@
 #include "flight/EngineFailFlags.h"
 #include "flight/FlightIntegrator.h"
 #include "job/JobSystem.h"
+#include "mock_log.h"
 #include "net/AdminChannel.h"
 #include "net/BitStream.h"
 #include "net/GameProtocol.h"
@@ -66,23 +67,6 @@ using namespace fl;
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
-
-struct MockLogger : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
-
-// Records Warn-level messages so a test can assert the #872 required-pack warn-only policy fires.
-struct CapturingLogger : ILogger {
-    std::vector<std::string> warnings;
-    void log(LogLevel lvl, const char*, int, const char* msg) override {
-        if (lvl == LogLevel::Warn && msg)
-            warnings.emplace_back(msg);
-    }
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 // Records broadcasts/sends/disconnects + resolves configurable peer addresses (see mock_network.h).
 using MockNetwork = TrackingNetwork;
@@ -637,7 +621,7 @@ struct ConstantController : fl::IEntityController {
 
 std::map<uint32_t, std::vector<std::vector<uint8_t>>> runSnapshotScenario(fl::JobSystem* jobs, uint64_t killAtTick,
                                                                           bool compress = false) {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -722,7 +706,7 @@ class AutoAdvanceClock final : public fl::IClock {
 }
 
 inline InterestShedResult runInterestShedScenario(fl::JobSystem* jobs) {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);

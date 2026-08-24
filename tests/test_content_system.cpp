@@ -13,6 +13,7 @@
 #include "content/IContentPack.h"
 #include "content/ModLoader.h"
 #include "difficulty/DifficultyMultipliers.h"
+#include "mock_log.h"
 #include "sensor/SensorDefParser.h"
 
 #include "mock_content.h"
@@ -29,27 +30,6 @@ using namespace fl;
 // ---------------------------------------------------------------------------
 // Mock types (inline — no separate header until a second test file needs them)
 // ---------------------------------------------------------------------------
-
-struct MockLogger : public ILogger {
-    struct Entry {
-        LogLevel level;
-        std::string message;
-    };
-    std::vector<Entry> entries;
-
-    void log(LogLevel level, const char*, int, const char* message) override {
-        entries.push_back({level, message});
-    }
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-
-    bool hasMessage(LogLevel level, const std::string& substr) const {
-        for (auto& e : entries)
-            if (e.level == level && e.message.find(substr) != std::string::npos)
-                return true;
-        return false;
-    }
-};
 
 // In-memory filesystem: directories stored as sets of Entry, files as byte vectors.
 struct MockFilesystem : public IFilesystem {
@@ -258,7 +238,7 @@ static std::string makeManifest(const std::string& name = "Test Mod", const std:
 
 TEST_CASE("ModLoader returns empty stack when mods directory is absent") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     ModLoader loader(fs, logger);
 
     auto packs = loader.load();
@@ -269,7 +249,7 @@ TEST_CASE("ModLoader returns empty stack when mods directory is absent") {
 
 TEST_CASE("ModLoader skips subdirectory without manifest.toml") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("mods");
     fs.addDirEntry("mods", "empty-mod", true);
     fs.addDir("mods/empty-mod");
@@ -283,7 +263,7 @@ TEST_CASE("ModLoader skips subdirectory without manifest.toml") {
 
 TEST_CASE("ModLoader parses valid manifest and constructs one FolderContentPack") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("mods");
     fs.addDirEntry("mods", "test-mod", true);
     fs.addDir("mods/test-mod");
@@ -300,7 +280,7 @@ TEST_CASE("ModLoader parses valid manifest and constructs one FolderContentPack"
 
 TEST_CASE("ModLoader skips pack with mismatched engine-api major version") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("mods");
     fs.addDirEntry("mods", "old-mod", true);
     fs.addDir("mods/old-mod");
@@ -315,7 +295,7 @@ TEST_CASE("ModLoader skips pack with mismatched engine-api major version") {
 
 TEST_CASE("ModLoader sorts packs by priority descending") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("mods");
     fs.addDirEntry("mods", "low-mod", true);
     fs.addDirEntry("mods", "high-mod", true);
@@ -334,7 +314,7 @@ TEST_CASE("ModLoader sorts packs by priority descending") {
 
 TEST_CASE("ModLoader logs warning for declared dependency that is not present") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("mods");
     fs.addDirEntry("mods", "dependent-mod", true);
     fs.addDir("mods/dependent-mod");
@@ -444,7 +424,7 @@ TEST_CASE("AssetManager::packManifest reports each mounted pack's id and version
     MockContentPack pack;
     pack.packId = "fl-base";
     pack.packVersion = "0.3.1";
-    MockLogger logger;
+    RecordingLogger logger;
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
 
@@ -456,7 +436,7 @@ TEST_CASE("AssetManager::packManifest reports each mounted pack's id and version
 
 TEST_CASE("AssetManager::initialize keeps pack when init() returns Ready") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     pack.initStatus = IContentPack::Status::Ready;
 
     AssetManager am(makePacks(&pack), logger);
@@ -470,7 +450,7 @@ TEST_CASE("AssetManager::initialize keeps pack when init() returns Ready") {
 
 TEST_CASE("AssetManager::initialize calls configure() only when NeedsConfiguration") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     pack.initStatus = IContentPack::Status::NeedsConfiguration;
     pack.configureResult = true;
 
@@ -485,7 +465,7 @@ TEST_CASE("AssetManager::initialize calls configure() only when NeedsConfigurati
 
 TEST_CASE("AssetManager::initialize drops pack when configure() returns false") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     // Simulate a window-like non-null pointer for the test
     IWindow* fakeWindow = reinterpret_cast<IWindow*>(0x1);
     pack.initStatus = IContentPack::Status::NeedsConfiguration;
@@ -501,7 +481,7 @@ TEST_CASE("AssetManager::initialize drops pack when configure() returns false") 
 
 TEST_CASE("AssetManager returns nullptr when no pack has the asset") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
 
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
@@ -513,7 +493,7 @@ TEST_CASE("AssetManager returns nullptr when no pack has the asset") {
 
 TEST_CASE("AssetManager returns asset bytes from highest-priority pack") {
     MockContentPack packA, packB;
-    MockLogger logger;
+    RecordingLogger logger;
     packA.packId = "pack-a";
     packA.packPriority = 100;
     packB.packId = "pack-b";
@@ -539,7 +519,7 @@ TEST_CASE("AssetManager loads a sensor def, and a higher-priority pack overrides
     // The point of sensors being an asset type at all: a theater pack can re-tune the radar an
     // aircraft carries without shipping a fork of the aircraft.
     MockContentPack base, theater;
-    MockLogger logger;
+    RecordingLogger logger;
     base.packId = "base";
     base.packPriority = 10;
     theater.packId = "theater";
@@ -574,7 +554,7 @@ TEST_CASE("AssetManager loads a sensor def, and a higher-priority pack overrides
 
 TEST_CASE("AssetManager returns same shared_ptr on second request (cache hit)") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     pack.assets[{"f22", AssetType::Mesh}] = {'{', 0x02}; // valid JSON-glTF first byte
 
     AssetManager am(makePacks(&pack), logger);
@@ -588,7 +568,7 @@ TEST_CASE("AssetManager returns same shared_ptr on second request (cache hit)") 
 
 TEST_CASE("AssetManager lookup is case-insensitive") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     pack.assets[{"f22", AssetType::Mesh}] = {'{', 0x42}; // valid JSON-glTF first byte
 
     AssetManager am(makePacks(&pack), logger);
@@ -609,7 +589,7 @@ TEST_CASE("AssetManager passes normalized lowercase name to IContentPack methods
             return MockContentPack::loadMesh(n);
         }
     } pack;
-    MockLogger logger;
+    RecordingLogger logger;
     pack.assets[{"f22", AssetType::Mesh}] = {'{'}; // valid JSON-glTF first byte
 
     AssetManager am(makePacks(&pack), logger);
@@ -621,7 +601,7 @@ TEST_CASE("AssetManager passes normalized lowercase name to IContentPack methods
 
 TEST_CASE("AssetManager::enableHotReload watches asset SUBDIRS, not the pack root, and skips terrain") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     MockFilesystemWatcher watcher;
     pack.packRootDir = "mods/test-mod";
 
@@ -648,7 +628,7 @@ TEST_CASE("AssetManager::enableHotReload watches asset SUBDIRS, not the pack roo
 
 TEST_CASE("AssetManager::processHotReload fine-grained evicts the changed asset and reports it") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     MockFilesystemWatcher watcher;
     pack.packRootDir = "mods/test-mod";
     pack.assets[{"f22", AssetType::Mesh}] = {'{'}; // valid JSON-glTF first byte
@@ -683,7 +663,7 @@ TEST_CASE("AssetManager::processHotReload fine-grained evicts the changed asset 
 
 TEST_CASE("AssetManager::processHotReload disambiguates aircraft/ .glb (Mesh) vs .toml (FlightModel)") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     MockFilesystemWatcher watcher;
     pack.packRootDir = "mods/test-mod";
 
@@ -709,7 +689,7 @@ TEST_CASE("AssetManager::processHotReload disambiguates aircraft/ .glb (Mesh) vs
 
 TEST_CASE("AssetManager::processHotReload ignores editor temp files and reports foreign paths as unmatched") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     MockFilesystemWatcher watcher;
     pack.packRootDir = "mods/test-mod";
 
@@ -731,7 +711,7 @@ TEST_CASE("AssetManager::processHotReload ignores editor temp files and reports 
 
 TEST_CASE("AssetManager::processHotReload evicts on Deleted so a lower-priority pack can resolve") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     MockFilesystemWatcher watcher;
     pack.packRootDir = "mods/test-mod";
     pack.assets[{"f22", AssetType::Mesh}] = {'{'};
@@ -753,7 +733,7 @@ TEST_CASE("AssetManager::processHotReload evicts on Deleted so a lower-priority 
 
 TEST_CASE("AssetManager::loadTexture returns data from pack") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     pack.assets[{"sky", AssetType::Texture}] = {0x89, 0x50, 0x4E, 0x47, 0x10, 0x20}; // PNG magic
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
@@ -764,7 +744,7 @@ TEST_CASE("AssetManager::loadTexture returns data from pack") {
 
 TEST_CASE("AssetManager::loadTexture returns nullptr when missing") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
     CHECK(am.loadTexture("sky") == nullptr);
@@ -772,7 +752,7 @@ TEST_CASE("AssetManager::loadTexture returns nullptr when missing") {
 
 TEST_CASE("AssetManager::loadAudio returns data from pack") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     pack.assets[{"gun", AssetType::Audio}] = {0x4F, 0x67, 0x67, 0x53}; // OggS magic
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
@@ -781,7 +761,7 @@ TEST_CASE("AssetManager::loadAudio returns data from pack") {
 
 TEST_CASE("AssetManager::loadFlightModel returns data from pack") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     pack.assets[{"f22", AssetType::FlightModel}] = {0x40};
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
@@ -790,7 +770,7 @@ TEST_CASE("AssetManager::loadFlightModel returns data from pack") {
 
 TEST_CASE("AssetManager::loadMission returns data from pack") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     pack.assets[{"m1", AssetType::Mission}] = {0x50};
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
@@ -799,7 +779,7 @@ TEST_CASE("AssetManager::loadMission returns data from pack") {
 
 TEST_CASE("AssetManager::loadTerrain returns data from pack") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     pack.assets[{"iraq", AssetType::Terrain}] = {0x60};
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
@@ -808,7 +788,7 @@ TEST_CASE("AssetManager::loadTerrain returns data from pack") {
 
 TEST_CASE("AssetManager::loadAIScript returns data from pack") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     pack.assets[{"mig29_ai", AssetType::AIScript}] = {0x70};
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
@@ -817,7 +797,7 @@ TEST_CASE("AssetManager::loadAIScript returns data from pack") {
 
 TEST_CASE("AssetManager::enableHotReload skips pack with null rootDirectory") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     MockFilesystemWatcher watcher;
     pack.packRootDir = nullptr;
 
@@ -830,7 +810,7 @@ TEST_CASE("AssetManager::enableHotReload skips pack with null rootDirectory") {
 
 TEST_CASE("AssetManager::processHotReload with no watcher is a no-op") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     pack.assets[{"f22", AssetType::Mesh}] = {'{'}; // valid JSON-glTF first byte
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
@@ -840,7 +820,7 @@ TEST_CASE("AssetManager::processHotReload with no watcher is a no-op") {
 
 TEST_CASE("AssetManager::processHotReload with empty events does not clear cache") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     MockFilesystemWatcher watcher;
     pack.assets[{"f22", AssetType::Mesh}] = {'{'}; // valid JSON-glTF first byte
 
@@ -856,7 +836,7 @@ TEST_CASE("AssetManager::processHotReload with empty events does not clear cache
 
 TEST_CASE("AssetManager::initialize with configure() succeeds when window provided") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     IWindow* fakeWindow = reinterpret_cast<IWindow*>(0x1);
     pack.initStatus = IContentPack::Status::NeedsConfiguration;
     pack.configureResult = true;
@@ -874,7 +854,7 @@ TEST_CASE("AssetManager::initialize with configure() succeeds when window provid
 
 TEST_CASE("ModLoader skips file entries (non-directories) in mods directory") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("mods");
     fs.addDirEntry("mods", "readme.txt", false); // file, not a directory
     ModLoader loader(fs, logger);
@@ -884,7 +864,7 @@ TEST_CASE("ModLoader skips file entries (non-directories) in mods directory") {
 
 TEST_CASE("ModLoader parseManifest: invalid TOML logs error and returns empty") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("mods");
     fs.addDirEntry("mods", "bad-mod", true);
     fs.addDir("mods/bad-mod");
@@ -897,7 +877,7 @@ TEST_CASE("ModLoader parseManifest: invalid TOML logs error and returns empty") 
 
 TEST_CASE("ModLoader parseManifest: missing [mod] table logs error") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("mods");
     fs.addDirEntry("mods", "no-mod-table", true);
     fs.addDir("mods/no-mod-table");
@@ -910,7 +890,7 @@ TEST_CASE("ModLoader parseManifest: missing [mod] table logs error") {
 
 TEST_CASE("ModLoader parseManifest: missing required fields logs error") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("mods");
     fs.addDirEntry("mods", "incomplete-mod", true);
     fs.addDir("mods/incomplete-mod");
@@ -925,7 +905,7 @@ TEST_CASE("ModLoader parseManifest: missing required fields logs error") {
 
 TEST_CASE("ModLoader validateEngineApi: engine-api version without dot is compared as-is") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("mods");
     fs.addDirEntry("mods", "nodot-mod", true);
     fs.addDir("mods/nodot-mod");
@@ -940,7 +920,7 @@ TEST_CASE("ModLoader validateEngineApi: engine-api version without dot is compar
 
 TEST_CASE("ModLoader two mods with met dependency - no warning") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("mods");
     fs.addDirEntry("mods", "base-mod", true);
     fs.addDirEntry("mods", "dep-mod", true);
@@ -983,21 +963,21 @@ static FolderContentPack::Manifest makePackManifest(const char* name = "Test", c
 
 TEST_CASE("FolderContentPack::init returns Ready") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
     CHECK(pack.init() == IContentPack::Status::Ready);
 }
 
 TEST_CASE("FolderContentPack::configure returns true") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
     CHECK(pack.configure(nullptr));
 }
 
 TEST_CASE("FolderContentPack accessors reflect manifest values") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     auto m = makePackManifest("My Mod", "my-mod", "2.5", 42);
     FolderContentPack pack(fs, logger, "mods/my-mod", m);
     CHECK(std::string(pack.name()) == "My Mod");
@@ -1009,7 +989,7 @@ TEST_CASE("FolderContentPack accessors reflect manifest values") {
 
 TEST_CASE("FolderContentPack::hasAsset true when primary extension exists") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("mods/test/aircraft/f22.glb", "mesh");
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
     CHECK(pack.hasAsset("f22", AssetType::Mesh));
@@ -1017,7 +997,7 @@ TEST_CASE("FolderContentPack::hasAsset true when primary extension exists") {
 
 TEST_CASE("FolderContentPack::hasAsset true when fallback extension exists") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("mods/test/aircraft/f22.gltf", "mesh gltf");
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
     CHECK(pack.hasAsset("f22", AssetType::Mesh));
@@ -1025,14 +1005,14 @@ TEST_CASE("FolderContentPack::hasAsset true when fallback extension exists") {
 
 TEST_CASE("FolderContentPack::hasAsset false when neither extension exists") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
     CHECK(!pack.hasAsset("f22", AssetType::Mesh));
 }
 
 TEST_CASE("FolderContentPack::hasAsset with asset type that has no fallback") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
     CHECK(!pack.hasAsset("gun", AssetType::Audio));
     fs.addFile("mods/test/audio/gun.ogg", "audio");
@@ -1041,7 +1021,7 @@ TEST_CASE("FolderContentPack::hasAsset with asset type that has no fallback") {
 
 TEST_CASE("FolderContentPack::loadMesh success with primary extension") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("mods/test/aircraft/f22.glb", "mesh bytes");
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
     auto r = pack.loadMesh("f22");
@@ -1052,7 +1032,7 @@ TEST_CASE("FolderContentPack::loadMesh success with primary extension") {
 
 TEST_CASE("FolderContentPack::loadMesh success with fallback extension") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("mods/test/aircraft/f22.gltf", "gltf");
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
     auto r = pack.loadMesh("f22");
@@ -1061,14 +1041,14 @@ TEST_CASE("FolderContentPack::loadMesh success with fallback extension") {
 
 TEST_CASE("FolderContentPack::loadMesh returns nullopt when asset is absent") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
     CHECK(!pack.loadMesh("nonexistent").has_value());
 }
 
 TEST_CASE("FolderContentPack::loadMesh returns nullopt when openFile fails") {
     OpenFailFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("mods/test/aircraft/f22.glb", "data");
     fs.failPath = "mods/test/aircraft/f22.glb";
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
@@ -1078,7 +1058,7 @@ TEST_CASE("FolderContentPack::loadMesh returns nullopt when openFile fails") {
 
 TEST_CASE("FolderContentPack::loadTexture success with primary extension") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("mods/test/textures/sky.ktx2", "ktx2 data");
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
     REQUIRE(pack.loadTexture("sky").has_value());
@@ -1086,7 +1066,7 @@ TEST_CASE("FolderContentPack::loadTexture success with primary extension") {
 
 TEST_CASE("FolderContentPack::loadTexture success with fallback .png") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("mods/test/textures/sky.png", "png data");
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
     REQUIRE(pack.loadTexture("sky").has_value());
@@ -1094,7 +1074,7 @@ TEST_CASE("FolderContentPack::loadTexture success with fallback .png") {
 
 TEST_CASE("FolderContentPack::loadAudio success") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("mods/test/audio/engine.ogg", "ogg data");
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
     REQUIRE(pack.loadAudio("engine").has_value());
@@ -1102,7 +1082,7 @@ TEST_CASE("FolderContentPack::loadAudio success") {
 
 TEST_CASE("FolderContentPack::loadFlightModel success") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("mods/test/aircraft/f22.toml", "toml");
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
     REQUIRE(pack.loadFlightModel("f22").has_value());
@@ -1110,7 +1090,7 @@ TEST_CASE("FolderContentPack::loadFlightModel success") {
 
 TEST_CASE("FolderContentPack::loadMission success") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("mods/test/missions/op1.yaml", "yaml");
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
     REQUIRE(pack.loadMission("op1").has_value());
@@ -1118,7 +1098,7 @@ TEST_CASE("FolderContentPack::loadMission success") {
 
 TEST_CASE("FolderContentPack::loadTerrain success") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("mods/test/terrain/iraq.json", "json");
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
     REQUIRE(pack.loadTerrain("iraq").has_value());
@@ -1126,7 +1106,7 @@ TEST_CASE("FolderContentPack::loadTerrain success") {
 
 TEST_CASE("FolderContentPack::loadAIScript success") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("mods/test/ai/mig_ai.lua", "lua");
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
     REQUIRE(pack.loadAIScript("mig_ai").has_value());
@@ -1134,7 +1114,7 @@ TEST_CASE("FolderContentPack::loadAIScript success") {
 
 TEST_CASE("FolderContentPack::listAssets returns names stripped of primary extension") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("mods/test/aircraft");
     fs.addDirEntry("mods/test/aircraft", "f22.glb", false);
     fs.addDirEntry("mods/test/aircraft", "mig29.glb", false);
@@ -1147,7 +1127,7 @@ TEST_CASE("FolderContentPack::listAssets returns names stripped of primary exten
 
 TEST_CASE("FolderContentPack::listAssets skips subdirectories") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("mods/test/aircraft");
     fs.addDirEntry("mods/test/aircraft", "f22.glb", false);
     fs.addDirEntry("mods/test/aircraft", "subdir", true);
@@ -1159,7 +1139,7 @@ TEST_CASE("FolderContentPack::listAssets skips subdirectories") {
 
 TEST_CASE("FolderContentPack::listAssets includes files with fallback extension") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("mods/test/aircraft");
     fs.addDirEntry("mods/test/aircraft", "f22.glb", false);
     fs.addDirEntry("mods/test/aircraft", "mig29.gltf", false);
@@ -1170,7 +1150,7 @@ TEST_CASE("FolderContentPack::listAssets includes files with fallback extension"
 
 TEST_CASE("FolderContentPack::listAssets skips files with unrecognised extension") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("mods/test/aircraft");
     fs.addDirEntry("mods/test/aircraft", "f22.txt", false);
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
@@ -1179,14 +1159,14 @@ TEST_CASE("FolderContentPack::listAssets skips files with unrecognised extension
 
 TEST_CASE("FolderContentPack::listAssets returns empty for absent directory") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
     CHECK(pack.listAssets(AssetType::Mesh).empty());
 }
 
 TEST_CASE("FolderContentPack::listAssets for audio type (no fallback extension)") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("mods/test/audio");
     fs.addDirEntry("mods/test/audio", "gun.ogg", false);
     fs.addDirEntry("mods/test/audio", "engine.ogg", false);
@@ -1202,42 +1182,42 @@ TEST_CASE("FolderContentPack::listAssets for audio type (no fallback extension)"
 
 TEST_CASE("FolderContentPack::loadTexture returns nullopt when absent") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
     CHECK(!pack.loadTexture("sky").has_value());
 }
 
 TEST_CASE("FolderContentPack::loadAudio returns nullopt when absent") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
     CHECK(!pack.loadAudio("gun").has_value());
 }
 
 TEST_CASE("FolderContentPack::loadFlightModel returns nullopt when absent") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
     CHECK(!pack.loadFlightModel("f22").has_value());
 }
 
 TEST_CASE("FolderContentPack::loadMission returns nullopt when absent") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
     CHECK(!pack.loadMission("op1").has_value());
 }
 
 TEST_CASE("FolderContentPack::loadTerrain returns nullopt when absent") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
     CHECK(!pack.loadTerrain("iraq").has_value());
 }
 
 TEST_CASE("FolderContentPack::loadAIScript returns nullopt when absent") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
     CHECK(!pack.loadAIScript("mig_ai").has_value());
 }
@@ -1249,7 +1229,7 @@ TEST_CASE("FolderContentPack::loadAIScript returns nullopt when absent") {
 
 TEST_CASE("FolderContentPack::loadTexture returns nullopt when openFile fails") {
     OpenFailFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("mods/test/textures/sky.ktx2", "data");
     fs.failPath = "mods/test/textures/sky.ktx2";
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
@@ -1259,7 +1239,7 @@ TEST_CASE("FolderContentPack::loadTexture returns nullopt when openFile fails") 
 
 TEST_CASE("FolderContentPack::loadAudio returns nullopt when openFile fails") {
     OpenFailFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("mods/test/audio/gun.ogg", "data");
     fs.failPath = "mods/test/audio/gun.ogg";
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
@@ -1268,7 +1248,7 @@ TEST_CASE("FolderContentPack::loadAudio returns nullopt when openFile fails") {
 
 TEST_CASE("FolderContentPack::loadFlightModel returns nullopt when openFile fails") {
     OpenFailFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("mods/test/aircraft/f22.toml", "data");
     fs.failPath = "mods/test/aircraft/f22.toml";
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
@@ -1277,7 +1257,7 @@ TEST_CASE("FolderContentPack::loadFlightModel returns nullopt when openFile fail
 
 TEST_CASE("FolderContentPack::loadMission returns nullopt when openFile fails") {
     OpenFailFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("mods/test/missions/op1.yaml", "data");
     fs.failPath = "mods/test/missions/op1.yaml";
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
@@ -1286,7 +1266,7 @@ TEST_CASE("FolderContentPack::loadMission returns nullopt when openFile fails") 
 
 TEST_CASE("FolderContentPack::loadAIScript returns nullopt when openFile fails") {
     OpenFailFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("mods/test/ai/mig_ai.lua", "data");
     fs.failPath = "mods/test/ai/mig_ai.lua";
     FolderContentPack pack(fs, logger, "mods/test", makePackManifest());
@@ -1300,7 +1280,7 @@ TEST_CASE("FolderContentPack::loadAIScript returns nullopt when openFile fails")
 
 TEST_CASE("AssetManager::loadTexture cache hit returns same shared_ptr") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     pack.assets[{"sky", AssetType::Texture}] = {0x89, 0x50, 0x4E, 0x47}; // PNG magic
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
@@ -1312,7 +1292,7 @@ TEST_CASE("AssetManager::loadTexture cache hit returns same shared_ptr") {
 
 TEST_CASE("AssetManager::loadAudio cache hit returns same shared_ptr") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     pack.assets[{"gun", AssetType::Audio}] = {0x4F, 0x67, 0x67, 0x53}; // OggS magic
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
@@ -1324,7 +1304,7 @@ TEST_CASE("AssetManager::loadAudio cache hit returns same shared_ptr") {
 
 TEST_CASE("AssetManager::loadFlightModel cache hit returns same shared_ptr") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     pack.assets[{"f22", AssetType::FlightModel}] = {0x30};
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
@@ -1336,7 +1316,7 @@ TEST_CASE("AssetManager::loadFlightModel cache hit returns same shared_ptr") {
 
 TEST_CASE("AssetManager::loadMission cache hit returns same shared_ptr") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     pack.assets[{"m1", AssetType::Mission}] = {0x40};
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
@@ -1348,7 +1328,7 @@ TEST_CASE("AssetManager::loadMission cache hit returns same shared_ptr") {
 
 TEST_CASE("AssetManager::loadTerrain cache hit returns same shared_ptr") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     pack.assets[{"iraq", AssetType::Terrain}] = {0x50};
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
@@ -1360,7 +1340,7 @@ TEST_CASE("AssetManager::loadTerrain cache hit returns same shared_ptr") {
 
 TEST_CASE("AssetManager::loadAIScript cache hit returns same shared_ptr") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     pack.assets[{"mig_ai", AssetType::AIScript}] = {0x60};
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
@@ -1377,7 +1357,7 @@ TEST_CASE("AssetManager::loadAIScript cache hit returns same shared_ptr") {
 
 TEST_CASE("AssetManager::loadAudio returns nullptr when missing") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
     CHECK(am.loadAudio("gun") == nullptr);
@@ -1385,7 +1365,7 @@ TEST_CASE("AssetManager::loadAudio returns nullptr when missing") {
 
 TEST_CASE("AssetManager::loadFlightModel returns nullptr when missing") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
     CHECK(am.loadFlightModel("f22") == nullptr);
@@ -1393,7 +1373,7 @@ TEST_CASE("AssetManager::loadFlightModel returns nullptr when missing") {
 
 TEST_CASE("AssetManager::loadMission returns nullptr when missing") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
     CHECK(am.loadMission("op1") == nullptr);
@@ -1401,7 +1381,7 @@ TEST_CASE("AssetManager::loadMission returns nullptr when missing") {
 
 TEST_CASE("AssetManager::loadTerrain returns nullptr when missing") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
     CHECK(am.loadTerrain("iraq") == nullptr);
@@ -1409,7 +1389,7 @@ TEST_CASE("AssetManager::loadTerrain returns nullptr when missing") {
 
 TEST_CASE("AssetManager::loadAIScript returns nullptr when missing") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
     CHECK(am.loadAIScript("mig_ai") == nullptr);
@@ -1421,7 +1401,7 @@ TEST_CASE("AssetManager::loadAIScript returns nullptr when missing") {
 
 TEST_CASE("ModLoader loads manifest with no depends key (optional field absent)") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("mods");
     fs.addDirEntry("mods", "nodep-mod", true);
     fs.addDir("mods/nodep-mod");
@@ -1436,7 +1416,7 @@ TEST_CASE("ModLoader loads manifest with no depends key (optional field absent)"
 
 TEST_CASE("ModLoader skips non-string entries in depends array") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("mods");
     fs.addDirEntry("mods", "intdep-mod", true);
     fs.addDir("mods/intdep-mod");
@@ -1450,7 +1430,7 @@ TEST_CASE("ModLoader skips non-string entries in depends array") {
 
 TEST_CASE("ModLoader handles parseManifest openFile failure gracefully") {
     OpenFailFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("mods");
     fs.addDirEntry("mods", "fail-mod", true);
     fs.addDir("mods/fail-mod");
@@ -1468,7 +1448,7 @@ TEST_CASE("ModLoader handles parseManifest openFile failure gracefully") {
 
 TEST_CASE("ModLoader skips non-directory file entries in mods directory") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("mods");
     // Add a plain FILE in mods/ — should be skipped (if(!entry.isDirectory) continue)
     fs.addDirEntry("mods", "README.txt", false);
@@ -1479,7 +1459,7 @@ TEST_CASE("ModLoader skips non-directory file entries in mods directory") {
 
 TEST_CASE("ModLoader handles manifest with invalid TOML gracefully") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("mods");
     fs.addDirEntry("mods", "bad-mod", true);
     fs.addDir("mods/bad-mod");
@@ -1493,7 +1473,7 @@ TEST_CASE("ModLoader handles manifest with invalid TOML gracefully") {
 
 TEST_CASE("ModLoader handles manifest without [mod] table") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("mods");
     fs.addDirEntry("mods", "nomod-section", true);
     fs.addDir("mods/nomod-section");
@@ -1507,7 +1487,7 @@ TEST_CASE("ModLoader handles manifest without [mod] table") {
 
 TEST_CASE("ModLoader handles manifest with missing required fields") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("mods");
     fs.addDirEntry("mods", "partial-mod", true);
     fs.addDir("mods/partial-mod");
@@ -1521,7 +1501,7 @@ TEST_CASE("ModLoader handles manifest with missing required fields") {
 
 TEST_CASE("ModLoader validateEngineApi handles engine-api without dot separator") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addDir("mods");
     fs.addDirEntry("mods", "nodot-mod", true);
     fs.addDir("mods/nodot-mod");
@@ -1540,7 +1520,7 @@ TEST_CASE("ModLoader validateEngineApi handles engine-api without dot separator"
 
 TEST_CASE("AssetManager::initialize keeps pack when NeedsConfiguration and configure() returns true") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     IWindow* fakeWindow = reinterpret_cast<IWindow*>(0x1);
     pack.initStatus = IContentPack::Status::NeedsConfiguration;
     pack.configureResult = true;
@@ -1571,7 +1551,7 @@ static FolderContentPack::Manifest makeTestManifest() {
 
 TEST_CASE("FolderContentPack::loadConfig returns file content when present", "[content]") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("mods/test-mod/data/difficulty.toml", "[cadet]\nreaction_time_s = 1.5\n");
 
     FolderContentPack pack(fs, logger, "mods/test-mod", makeTestManifest());
@@ -1583,7 +1563,7 @@ TEST_CASE("FolderContentPack::loadConfig returns file content when present", "[c
 
 TEST_CASE("FolderContentPack::loadConfig returns nullopt when file absent", "[content]") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
 
     FolderContentPack pack(fs, logger, "mods/test-mod", makeTestManifest());
     auto result = pack.loadConfig("difficulty.toml");
@@ -1597,7 +1577,7 @@ TEST_CASE("FolderContentPack::loadConfig returns nullopt when file absent", "[co
 
 TEST_CASE("AssetManager::loadConfig returns content from pack that has the file", "[content]") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     pack.configs["difficulty.toml"] = "[cadet]\nreaction_time_s = 1.5\n";
 
     AssetManager am(makePacks(&pack), logger);
@@ -1610,7 +1590,7 @@ TEST_CASE("AssetManager::loadConfig returns content from pack that has the file"
 
 TEST_CASE("AssetManager::loadConfig returns nullopt when no pack has the file", "[content]") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
 
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
@@ -1620,7 +1600,7 @@ TEST_CASE("AssetManager::loadConfig returns nullopt when no pack has the file", 
 
 TEST_CASE("AssetManager::loadConfig returns higher-priority pack's config", "[content]") {
     MockContentPack highPack, lowPack;
-    MockLogger logger;
+    RecordingLogger logger;
     highPack.packPriority = 20;
     highPack.configs["difficulty.toml"] = "high-priority-content";
     lowPack.packPriority = 10;
@@ -1645,7 +1625,7 @@ TEST_CASE("AssetManager::loadConfig returns higher-priority pack's config", "[co
 
 TEST_CASE("FolderContentPack::resolveTilePath returns path when file present", "[content]") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("mods/test-mod/terrain/world/f2/l1/tile_1_2.png", "");
 
     FolderContentPack pack(fs, logger, "mods/test-mod", makeTestManifest());
@@ -1657,7 +1637,7 @@ TEST_CASE("FolderContentPack::resolveTilePath returns path when file present", "
 
 TEST_CASE("FolderContentPack::resolveTilePath land-cover and satellite layers use the right suffix", "[content]") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("mods/test-mod/terrain/world/f0/l3/tile_4_5_lc.png", "");
     fs.addFile("mods/test-mod/terrain/world/f0/l3/tile_4_5_sat.ktx2", "");
 
@@ -1672,7 +1652,7 @@ TEST_CASE("FolderContentPack::resolveTilePath land-cover and satellite layers us
 
 TEST_CASE("FolderContentPack::resolveTilePath returns nullopt when file absent", "[content]") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
 
     FolderContentPack pack(fs, logger, "mods/test-mod", makeTestManifest());
     auto result = pack.resolveTilePath("world", 2, 1, 1, 2, TileLayer::Height);
@@ -1686,7 +1666,7 @@ TEST_CASE("FolderContentPack::resolveTilePath returns nullopt when file absent",
 
 TEST_CASE("AssetManager::resolveTilePath returns path from first pack that provides it", "[content]") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     // key: terrainId:face:level:i:j:layer (layer 0 = Height)
     pack.tilePaths["world:4:1:3:7:0"] = "mods/test-mod/terrain/world/f4/l1/tile_3_7.png";
 
@@ -1700,7 +1680,7 @@ TEST_CASE("AssetManager::resolveTilePath returns path from first pack that provi
 
 TEST_CASE("AssetManager::resolveTilePath returns nullopt when no pack provides it", "[content]") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
 
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
@@ -1710,7 +1690,7 @@ TEST_CASE("AssetManager::resolveTilePath returns nullopt when no pack provides i
 
 TEST_CASE("AssetManager::resolveTilePath higher-priority pack overrides lower", "[content]") {
     MockContentPack highPack, lowPack;
-    MockLogger logger;
+    RecordingLogger logger;
     highPack.packPriority = 20;
     highPack.tilePaths["world:0:0:0:0:0"] = "theater-pack/terrain/world/f0/l0/tile_0_0.png";
     lowPack.packPriority = 10;
@@ -1731,7 +1711,7 @@ TEST_CASE("AssetManager::resolveTilePath higher-priority pack overrides lower", 
 TEST_CASE("AssetManager::resolveTilePath falls through to lower-priority pack when higher does not provide it",
           "[content]") {
     MockContentPack highPack, lowPack;
-    MockLogger logger;
+    RecordingLogger logger;
     highPack.packPriority = 20;
     lowPack.packPriority = 10;
     lowPack.tilePaths["world:5:2:5:3:0"] = "fl-base-pack/terrain/world/f5/l2/tile_5_3.png";
@@ -1754,14 +1734,14 @@ TEST_CASE("AssetManager::resolveTilePath falls through to lower-priority pack wh
 
 TEST_CASE("loadBundledBaseTerrain returns nullptr when no base is bundled", "[content]") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     // No sentinel tile present -> the procedural-only fast path is preserved.
     CHECK(loadBundledBaseTerrain(fs, logger, "base-terrain", "world") == nullptr);
 }
 
 TEST_CASE("loadBundledBaseTerrain mounts a lowest-priority base pack when the sentinel tile exists", "[content]") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     // Sentinel: the +X face (0) level-0 root height tile.
     fs.addFile("base-terrain/terrain/world/f0/l0/tile_0_0.png", "");
     fs.addFile("base-terrain/terrain/world/f2/l3/tile_1_2.png", "");
@@ -1786,7 +1766,7 @@ TEST_CASE("loadBundledBaseTerrain mounts a lowest-priority base pack when the se
 
 TEST_CASE("loadBundledBaseTerrain base pack is overridden by a higher-priority user pack", "[content]") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     fs.addFile("base-terrain/terrain/world/f0/l0/tile_0_0.png", "");
 
     auto base = loadBundledBaseTerrain(fs, logger, "base-terrain", "world");
@@ -1838,7 +1818,7 @@ static constexpr const char* kMinimalDifficultyToml =
 
 TEST_CASE("DifficultyMultipliers::load(AssetManager) uses pack config when available", "[content]") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     MockFilesystem fs;
     pack.configs["difficulty.toml"] = kMinimalDifficultyToml;
 
@@ -1853,7 +1833,7 @@ TEST_CASE("DifficultyMultipliers::load(AssetManager) uses pack config when avail
 
 TEST_CASE("DifficultyMultipliers::load(AssetManager) falls back to IFilesystem when no pack", "[content]") {
     MockContentPack pack;
-    MockLogger logger;
+    RecordingLogger logger;
     MockFilesystem fs;
     // pack has no config; fs has the file
     fs.addFile("data/difficulty.toml", kMinimalDifficultyToml);
@@ -1871,20 +1851,20 @@ TEST_CASE("DifficultyMultipliers::load(AssetManager) falls back to IFilesystem w
 // ---------------------------------------------------------------------------
 
 TEST_CASE("AssetManager::hasPacks returns false with no packs", "[content]") {
-    MockLogger logger;
+    RecordingLogger logger;
     AssetManager am({}, logger);
     CHECK(!am.hasPacks());
 }
 
 TEST_CASE("AssetManager::hasPacks returns true with one pack", "[content]") {
-    MockLogger logger;
+    RecordingLogger logger;
     MockContentPack pack;
     AssetManager am(makePacks(&pack), logger);
     CHECK(am.hasPacks());
 }
 
 TEST_CASE("AssetManager::listMissions returns empty when packs have no missions", "[content]") {
-    MockLogger logger;
+    RecordingLogger logger;
     MockContentPack pack;
     // default MockContentPack::listAssets returns {}
     AssetManager am(makePacks(&pack), logger);
@@ -1892,7 +1872,7 @@ TEST_CASE("AssetManager::listMissions returns empty when packs have no missions"
 }
 
 TEST_CASE("AssetManager::listMissions returns mission ids from pack", "[content]") {
-    MockLogger logger;
+    RecordingLogger logger;
 
     struct MissionPack : public MockContentPack {
         std::vector<std::string> listAssets(AssetType t) const override {
@@ -1915,7 +1895,7 @@ TEST_CASE("AssetManager::listMissions returns mission ids from pack", "[content]
 }
 
 TEST_CASE("AssetManager::listMissions deduplicates across packs", "[content]") {
-    MockLogger logger;
+    RecordingLogger logger;
 
     struct MissionPack : public MockContentPack {
         std::vector<std::string> missionList;
@@ -1940,7 +1920,7 @@ TEST_CASE("AssetManager::listMissions deduplicates across packs", "[content]") {
 }
 
 TEST_CASE("AssetManager::findPackRootForAsset returns root dir of owning pack", "[content]") {
-    MockLogger logger;
+    RecordingLogger logger;
 
     MockContentPack pack;
     pack.packRootDir = "/packs/fl-base";
@@ -1956,7 +1936,7 @@ TEST_CASE("AssetManager::findPackRootForAsset returns root dir of owning pack", 
 }
 
 TEST_CASE("AssetManager::findPackRootForAsset returns empty string when asset not found", "[content]") {
-    MockLogger logger;
+    RecordingLogger logger;
 
     MockContentPack pack;
     pack.packRootDir = "/packs/fl-base";
@@ -1986,7 +1966,7 @@ TEST_CASE("AssetManager::findPackRootForAsset returns empty string when asset no
 
 TEST_CASE("FolderContentPack: every AssetType resolves a path without crashing", "[content]") {
     MockFilesystem fs;
-    MockLogger logger;
+    RecordingLogger logger;
     FolderContentPack pack(fs, logger, "mods/test", makeTestManifest());
 
     for (uint8_t i = 0; i < static_cast<uint8_t>(AssetType::Count); ++i) {

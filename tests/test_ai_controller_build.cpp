@@ -16,6 +16,7 @@
 // is asserted to end with the departure ATC launched still flying.
 
 #include "AiControllerBuild.h"
+#include "mock_log.h"
 
 #include "ILogger.h"
 #include "atc/AtcService.h"
@@ -33,12 +34,6 @@ using namespace fl;
 
 namespace {
 
-struct QuietLog : public ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
-
 EntityState makeState() {
     EntityState s{};
     s.transform.quat[3] = 1.f;
@@ -55,7 +50,7 @@ const char* kAtcProbe = "scrambled = false\n"
 } // namespace
 
 TEST_CASE("buildAiController: a Lua script reaches the ATC service the caller passes (#1236)") {
-    QuietLog log;
+    NullLogger log;
     EntityTypeRegistry reg;
     EntityDef d;
     d.id = "test:basic";
@@ -88,7 +83,7 @@ TEST_CASE("buildAiController: with no ATC service the same script runs, atc.* be
     // The script must still LOAD and RUN: atc.* degrading to no-ops is the documented behaviour
     // (#705), and a script that failed to construct here would take the mission's aircraft down
     // with it.
-    QuietLog log;
+    NullLogger log;
     EntityTypeRegistry reg;
     EntityDef d;
     d.id = "test:basic";
@@ -110,7 +105,7 @@ TEST_CASE("buildAiController: with no ATC service the same script runs, atc.* be
 }
 
 TEST_CASE("buildAiController: a broken Lua script is a classified error carrying the parser's reason (#1236)") {
-    QuietLog log;
+    NullLogger log;
     EntityTypeRegistry reg;
     EntityManager em(log, reg);
 
@@ -126,7 +121,7 @@ TEST_CASE("buildAiController: a broken Lua script is a classified error carrying
 }
 
 TEST_CASE("buildAiController: the factory path reports an unknown behavior without a controller (#1236)") {
-    QuietLog log;
+    NullLogger log;
     EntityTypeRegistry reg;
     EntityManager em(log, reg);
 
@@ -140,7 +135,7 @@ TEST_CASE("buildAiController: the factory path reports an unknown behavior witho
 }
 
 TEST_CASE("buildAiController: a known behavior builds, and an empty request is neither (#1236)") {
-    QuietLog log;
+    NullLogger log;
     EntityTypeRegistry reg;
     EntityManager em(log, reg);
 

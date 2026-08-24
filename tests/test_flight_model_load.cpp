@@ -5,6 +5,7 @@
 // throws — the server used to call parseFlightModel uncaught and terminate on the first spawn of an
 // entity type whose pack shipped a bad flight-model TOML, while the client fell back gracefully.
 
+#include "mock_log.h"
 #include <ILogger.h>
 #include <content/AssetManager.h>
 #include <content/IContentPack.h>
@@ -22,12 +23,6 @@
 using namespace fl;
 
 namespace {
-
-struct QuietLog : public ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 // Serves whatever flight-model bytes the case puts in, byte-for-byte.
 struct BytesPack : public NullContentPack {
@@ -130,7 +125,7 @@ values = [60.0, 30.0,
 } // namespace
 
 TEST_CASE("loadAndParseFlightModel: a valid model parses to a non-null model and no error") {
-    QuietLog log;
+    NullLogger log;
     BytesPack pack;
     pack.flightModels["good"] = kMinimalToml;
     auto assets = makeAssets(std::move(pack), log);
@@ -142,7 +137,7 @@ TEST_CASE("loadAndParseFlightModel: a valid model parses to a non-null model and
 }
 
 TEST_CASE("loadAndParseFlightModel: missing asset is a null model with a reason, not a throw") {
-    QuietLog log;
+    NullLogger log;
     auto assets = makeAssets(BytesPack{}, log);
 
     FlightModelLoadResult res;
@@ -153,7 +148,7 @@ TEST_CASE("loadAndParseFlightModel: missing asset is a null model with a reason,
 }
 
 TEST_CASE("loadAndParseFlightModel: empty asset bytes are a null model, not a throw") {
-    QuietLog log;
+    NullLogger log;
     BytesPack pack;
     pack.flightModels["empty"] = "";
     auto assets = makeAssets(std::move(pack), log);
@@ -165,7 +160,7 @@ TEST_CASE("loadAndParseFlightModel: empty asset bytes are a null model, not a th
 }
 
 TEST_CASE("loadAndParseFlightModel: TOML syntax errors are a null model with the parser's reason") {
-    QuietLog log;
+    NullLogger log;
     BytesPack pack;
     pack.flightModels["broken"] = "[aircraft\nname = "; // unterminated table header
     auto assets = makeAssets(std::move(pack), log);
@@ -178,7 +173,7 @@ TEST_CASE("loadAndParseFlightModel: TOML syntax errors are a null model with the
 }
 
 TEST_CASE("loadAndParseFlightModel: valid TOML missing required fields is a null model, not a throw") {
-    QuietLog log;
+    NullLogger log;
     BytesPack pack;
     pack.flightModels["hollow"] = "[aircraft]\nname = \"Hollow\"\n"; // parses as TOML, fails the schema
     auto assets = makeAssets(std::move(pack), log);

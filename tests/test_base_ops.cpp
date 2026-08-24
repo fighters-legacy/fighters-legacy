@@ -9,6 +9,7 @@
 #include "content/ContentBootstrap.h"
 #include "entity/EntityManager.h"
 #include "entity/EntityTypeRegistry.h"
+#include "mock_log.h"
 #include "net/WorldBroadcaster.h"
 #include "weapon/WeaponRegistry.h"
 
@@ -23,14 +24,8 @@ using namespace fl;
 
 namespace {
 
-struct NullLog : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
-
 struct BaseOpsFixture {
-    NullLog logger;
+    NullLogger logger;
     TrackingNetwork net;
     EntityTypeRegistry registry;
     WeaponRegistry weapons;

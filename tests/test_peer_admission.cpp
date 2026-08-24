@@ -15,7 +15,7 @@ using namespace fl;
 
 TEST_CASE("WorldBroadcaster: onConnect sends ConnectAck with registered types and spawns entity",
           "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -42,7 +42,7 @@ TEST_CASE("WorldBroadcaster: onConnect sends ConnectAck with registered types an
 }
 
 TEST_CASE("WorldBroadcaster: join password gates admission (#998)", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -93,7 +93,7 @@ TEST_CASE("WorldBroadcaster: join password gates admission (#998)", "[world_broa
 }
 
 TEST_CASE("WorldBroadcaster: team assigner stamps faction, refuses when full (#522)", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -135,7 +135,7 @@ TEST_CASE("WorldBroadcaster: team assigner stamps faction, refuses when full (#5
 }
 
 TEST_CASE("WorldBroadcaster: a world at the entity soft cap refuses pilots (#1049)", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -207,7 +207,7 @@ TEST_CASE("WorldBroadcaster: a world at the entity soft cap refuses pilots (#104
 
 TEST_CASE("WorldBroadcaster: ConnectAck type defs carry category and projectileKind ordinals (#886)",
           "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -240,7 +240,7 @@ TEST_CASE("WorldBroadcaster: ConnectAck type defs carry category and projectileK
 }
 
 TEST_CASE("WorldBroadcaster: peer entity spawns at terrain height plus 500 m AGL", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:5000";
     fl::EntityTypeRegistry registry;
@@ -264,7 +264,7 @@ TEST_CASE("WorldBroadcaster: peer entity spawns at terrain height plus 500 m AGL
 }
 
 TEST_CASE("WorldBroadcaster: peer entity spawns at 500 m AGL when ground elevation is zero", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:5000";
     fl::EntityTypeRegistry registry;
@@ -288,7 +288,7 @@ TEST_CASE("WorldBroadcaster: peer entity spawns at 500 m AGL when ground elevati
 }
 
 TEST_CASE("WorldBroadcaster: peer entity spawns at configured spawn point XYZ", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:5000";
     fl::EntityTypeRegistry registry;
@@ -316,7 +316,7 @@ TEST_CASE("WorldBroadcaster: peer entity spawns at configured spawn point XYZ", 
 }
 
 TEST_CASE("WorldBroadcaster: spawn points assigned round-robin to peers", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:5000";
     net.peerAddresses[1] = "5.6.7.8:6000";
@@ -350,7 +350,7 @@ TEST_CASE("WorldBroadcaster: spawn points assigned round-robin to peers", "[worl
 }
 
 TEST_CASE("WorldBroadcaster: spawn point index wraps round-robin with three peers two points", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     net.peerAddresses[0] = "1.2.3.4:5000";
     net.peerAddresses[1] = "5.6.7.8:6000";
@@ -386,7 +386,7 @@ TEST_CASE("WorldBroadcaster: spawn point index wraps round-robin with three peer
 
 TEST_CASE("WorldBroadcaster: onConnect with empty registry sends typeCount=0 and assigns no entity",
           "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -415,7 +415,7 @@ TEST_CASE("WorldBroadcaster: onConnect with empty registry sends typeCount=0 and
 }
 
 TEST_CASE("WorldBroadcaster: onConnect without builtin type registered assigns no entity", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -443,7 +443,7 @@ TEST_CASE("WorldBroadcaster: onConnect without builtin type registered assigns n
 }
 
 TEST_CASE("WorldBroadcaster: onConnect sends MsgHello as first reliable packet", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -463,7 +463,7 @@ TEST_CASE("WorldBroadcaster: onConnect sends MsgHello as first reliable packet",
 }
 
 TEST_CASE("WorldBroadcaster: banAddress kicks connected peer with matching IPv4", "[world_broadcaster][admin]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -481,7 +481,7 @@ TEST_CASE("WorldBroadcaster: banAddress kicks connected peer with matching IPv4"
 }
 
 TEST_CASE("WorldBroadcaster: banAddress with no connected peers does not crash", "[world_broadcaster][admin]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -492,7 +492,7 @@ TEST_CASE("WorldBroadcaster: banAddress with no connected peers does not crash",
 }
 
 TEST_CASE("WorldBroadcaster: banAddress does not kick peer on different IP", "[world_broadcaster][admin]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -509,7 +509,7 @@ TEST_CASE("WorldBroadcaster: banAddress does not kick peer on different IP", "[w
 }
 
 TEST_CASE("WorldBroadcaster: banned IPv4 peer is rejected on onConnect", "[world_broadcaster][admin]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -529,7 +529,7 @@ TEST_CASE("WorldBroadcaster: banned IPv4 peer is rejected on onConnect", "[world
 }
 
 TEST_CASE("WorldBroadcaster: IPv4-mapped IPv6 peer is rejected when IPv4 is banned", "[world_broadcaster][admin]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -547,7 +547,7 @@ TEST_CASE("WorldBroadcaster: IPv4-mapped IPv6 peer is rejected when IPv4 is bann
 }
 
 TEST_CASE("WorldBroadcaster: peer on non-banned IP is allowed on onConnect", "[world_broadcaster][admin]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -563,7 +563,7 @@ TEST_CASE("WorldBroadcaster: peer on non-banned IP is allowed on onConnect", "[w
 }
 
 TEST_CASE("WorldBroadcaster: unbanAddress allows reconnect after ban", "[world_broadcaster][admin]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -581,7 +581,7 @@ TEST_CASE("WorldBroadcaster: unbanAddress allows reconnect after ban", "[world_b
 }
 
 TEST_CASE("WorldBroadcaster: IP under rate limit is not disconnected", "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -605,7 +605,7 @@ TEST_CASE("WorldBroadcaster: IP under rate limit is not disconnected", "[world_b
 }
 
 TEST_CASE("WorldBroadcaster: IP exceeding rate limit is disconnected", "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -634,7 +634,7 @@ TEST_CASE("WorldBroadcaster: IP exceeding rate limit is disconnected", "[world_b
 }
 
 TEST_CASE("WorldBroadcaster: rate limit resets after window expires", "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -665,7 +665,7 @@ TEST_CASE("WorldBroadcaster: rate limit resets after window expires", "[world_br
 }
 
 TEST_CASE("WorldBroadcaster: rate limit tracks different IPs independently", "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -697,7 +697,7 @@ TEST_CASE("WorldBroadcaster: rate limit tracks different IPs independently", "[w
 }
 
 TEST_CASE("WorldBroadcaster: null getPeerAddress does not crash rate limit", "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -712,7 +712,7 @@ TEST_CASE("WorldBroadcaster: null getPeerAddress does not crash rate limit", "[w
 }
 
 TEST_CASE("WorldBroadcaster: empty allowlist allows all IPs", "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -725,7 +725,7 @@ TEST_CASE("WorldBroadcaster: empty allowlist allows all IPs", "[world_broadcaste
 }
 
 TEST_CASE("WorldBroadcaster: IP on allowlist is permitted", "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -739,7 +739,7 @@ TEST_CASE("WorldBroadcaster: IP on allowlist is permitted", "[world_broadcaster]
 }
 
 TEST_CASE("WorldBroadcaster: IP not on allowlist is rejected", "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -757,7 +757,7 @@ TEST_CASE("WorldBroadcaster: IP not on allowlist is rejected", "[world_broadcast
 }
 
 TEST_CASE("WorldBroadcaster: setting empty allowlist re-enables all IPs", "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -773,7 +773,7 @@ TEST_CASE("WorldBroadcaster: setting empty allowlist re-enables all IPs", "[worl
 }
 
 TEST_CASE("WorldBroadcaster: banned IP rejected even if on allowlist", "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -788,7 +788,7 @@ TEST_CASE("WorldBroadcaster: banned IP rejected even if on allowlist", "[world_b
 }
 
 TEST_CASE("WorldBroadcaster: per-IP limit of zero allows unlimited connections", "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -806,7 +806,7 @@ TEST_CASE("WorldBroadcaster: per-IP limit of zero allows unlimited connections",
 }
 
 TEST_CASE("WorldBroadcaster: per-IP limit allows last connection at limit", "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -824,7 +824,7 @@ TEST_CASE("WorldBroadcaster: per-IP limit allows last connection at limit", "[wo
 }
 
 TEST_CASE("WorldBroadcaster: per-IP limit rejects connection over limit", "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -848,7 +848,7 @@ TEST_CASE("WorldBroadcaster: per-IP limit rejects connection over limit", "[worl
 }
 
 TEST_CASE("WorldBroadcaster: per-IP limit counts only matching-IP peers", "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -868,7 +868,7 @@ TEST_CASE("WorldBroadcaster: per-IP limit counts only matching-IP peers", "[worl
 }
 
 TEST_CASE("WorldBroadcaster: null getPeerAddress does not crash per-IP limit check", "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -883,7 +883,7 @@ TEST_CASE("WorldBroadcaster: null getPeerAddress does not crash per-IP limit che
 
 TEST_CASE("WorldBroadcaster: per-IP limit slot freed after disconnect allows reconnect",
           "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -902,7 +902,7 @@ TEST_CASE("WorldBroadcaster: per-IP limit slot freed after disconnect allows rec
 }
 
 TEST_CASE("WorldBroadcaster: per-IP limit counts IPv4-mapped IPv6 as same address", "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -925,7 +925,7 @@ TEST_CASE("WorldBroadcaster: per-IP limit counts IPv4-mapped IPv6 as same addres
 
 TEST_CASE("WorldBroadcaster: onConnect sends only MsgHello; admission waits for MsgConnectRequest (#853)",
           "[world_broadcaster][handshake]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -953,7 +953,7 @@ TEST_CASE("WorldBroadcaster: onConnect sends only MsgHello; admission waits for 
 
 TEST_CASE("WorldBroadcaster: a duplicate MsgConnectRequest is ignored (no re-spawn) (#853)",
           "[world_broadcaster][handshake]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -973,7 +973,7 @@ TEST_CASE("WorldBroadcaster: a duplicate MsgConnectRequest is ignored (no re-spa
 
 TEST_CASE("WorldBroadcaster: pilot flies the requested registered type, clamped to the allowlist (#834)",
           "[world_broadcaster][handshake]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -991,7 +991,7 @@ TEST_CASE("WorldBroadcaster: pilot flies the requested registered type, clamped 
 
 TEST_CASE("WorldBroadcaster: an unregistered requested type falls back to the server default (#834)",
           "[world_broadcaster][handshake]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     const uint32_t debugIdx = registry.registerType(makeDebugDef());
@@ -1008,7 +1008,7 @@ TEST_CASE("WorldBroadcaster: an unregistered requested type falls back to the se
 
 TEST_CASE("WorldBroadcaster: empty requested type uses the [world] player_entity_type default (#834)",
           "[world_broadcaster][handshake]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1030,7 +1030,7 @@ TEST_CASE("WorldBroadcaster: empty requested type uses the [world] player_entity
 
 TEST_CASE("WorldBroadcaster: a client missing a required pack is warned but still admitted (#872)",
           "[world_broadcaster][handshake][packs]") {
-    CapturingLogger logger;
+    RecordingLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1046,7 +1046,7 @@ TEST_CASE("WorldBroadcaster: a client missing a required pack is warned but stil
     auto ack = parseSendAck(net);
     CHECK(ack.assignedEntityGen != 0u); // warn-only: still admitted
     bool warned = false;
-    for (const std::string& w : logger.warnings)
+    for (const std::string& w : logger.messages(LogLevel::Warn))
         if (w.find("fl-base") != std::string::npos)
             warned = true;
     CHECK(warned);
@@ -1054,7 +1054,7 @@ TEST_CASE("WorldBroadcaster: a client missing a required pack is warned but stil
 
 TEST_CASE("WorldBroadcaster: a client with the required pack is admitted with no missing-pack warning (#872)",
           "[world_broadcaster][handshake][packs]") {
-    CapturingLogger logger;
+    RecordingLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1069,13 +1069,13 @@ TEST_CASE("WorldBroadcaster: a client with the required pack is admitted with no
 
     auto ack = parseSendAck(net);
     CHECK(ack.assignedEntityGen != 0u);
-    for (const std::string& w : logger.warnings)
+    for (const std::string& w : logger.messages(LogLevel::Warn))
         CHECK(w.find("missing required content pack") == std::string::npos);
 }
 
 TEST_CASE("WorldBroadcaster: warn policy notifies the admitted client of the missing packs (#872)",
           "[world_broadcaster][handshake][packs]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1105,7 +1105,7 @@ TEST_CASE("WorldBroadcaster: warn policy notifies the admitted client of the mis
 
 TEST_CASE("WorldBroadcaster: refuse policy disconnects a client missing a required pack (#872)",
           "[world_broadcaster][handshake][packs]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1131,7 +1131,7 @@ TEST_CASE("WorldBroadcaster: refuse policy disconnects a client missing a requir
 
 TEST_CASE("WorldBroadcaster: refuse policy enforces a pinned pack version (#872)",
           "[world_broadcaster][handshake][packs]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1157,7 +1157,7 @@ TEST_CASE("WorldBroadcaster: refuse policy enforces a pinned pack version (#872)
 
 TEST_CASE("WorldBroadcaster: allow-placeholder policy admits a client missing a pack without warning (#872)",
           "[world_broadcaster][handshake][packs]") {
-    CapturingLogger logger;
+    RecordingLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1172,14 +1172,14 @@ TEST_CASE("WorldBroadcaster: allow-placeholder policy admits a client missing a 
     connectPilotWithPacks(broadcaster, 0u, {"other-pack"});
 
     CHECK(parseSendAck(net).assignedEntityGen != 0u); // admitted
-    for (const std::string& w : logger.warnings)
+    for (const std::string& w : logger.messages(LogLevel::Warn))
         CHECK(w.find("missing required content pack") == std::string::npos); // no Warn under allow-placeholder
     CHECK(!anySentIs(net, fl::MsgId::ServerNotice));                         // and no client-facing notice
 }
 
 TEST_CASE("WorldBroadcaster: an observer connects with no entity and grantedRole=Observer (#857)",
           "[world_broadcaster][handshake][observer]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1200,7 +1200,7 @@ TEST_CASE("WorldBroadcaster: an observer connects with no entity and grantedRole
 
 TEST_CASE("WorldBroadcaster: an observer request is refused when observers are disabled (#857)",
           "[world_broadcaster][observer]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     net.peerAddresses[0u] = "1.2.3.4";
     fl::EntityTypeRegistry registry;
@@ -1225,7 +1225,7 @@ TEST_CASE("WorldBroadcaster: an observer request is refused when observers are d
 }
 
 TEST_CASE("WorldBroadcaster: setBannedAddresses replaces existing ban set", "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1248,7 +1248,7 @@ TEST_CASE("WorldBroadcaster: setBannedAddresses replaces existing ban set", "[wo
 }
 
 TEST_CASE("WorldBroadcaster: getBannedAddresses returns current set", "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1264,7 +1264,7 @@ TEST_CASE("WorldBroadcaster: getBannedAddresses returns current set", "[world_br
 
 TEST_CASE("WorldBroadcaster: onConnect null getPeerAddress skips allowlist and rate limit",
           "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1282,7 +1282,7 @@ TEST_CASE("WorldBroadcaster: onConnect null getPeerAddress skips allowlist and r
 
 TEST_CASE("WorldBroadcaster: rate limit prune preserves entries with unexpired timestamps",
           "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1310,7 +1310,7 @@ TEST_CASE("WorldBroadcaster: rate limit prune preserves entries with unexpired t
 }
 
 TEST_CASE("WorldBroadcaster: rate limit prune removes fully expired entries", "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1341,7 +1341,7 @@ TEST_CASE("WorldBroadcaster: rate limit prune removes fully expired entries", "[
 }
 
 TEST_CASE("WorldBroadcaster: MsgConnectAck planetRadiusKm is Earth radius by default", "[world_broadcaster][gravity]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1356,7 +1356,7 @@ TEST_CASE("WorldBroadcaster: MsgConnectAck planetRadiusKm is Earth radius by def
 
 TEST_CASE("WorldBroadcaster: setGravityField propagates planetRadiusKm to MsgConnectAck",
           "[world_broadcaster][gravity]") {
-    MockLogger log;
+    NullLogger log;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1372,7 +1372,7 @@ TEST_CASE("WorldBroadcaster: setGravityField propagates planetRadiusKm to MsgCon
 
 TEST_CASE("WorldBroadcaster: reconnect within the grace window restores team + score (#524)",
           "[world_broadcaster][combat]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1398,7 +1398,7 @@ TEST_CASE("WorldBroadcaster: reconnect within the grace window restores team + s
 }
 
 TEST_CASE("WorldBroadcaster: a pilot binds to a mission player slot (type/faction/spawn)", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1428,7 +1428,7 @@ TEST_CASE("WorldBroadcaster: a pilot binds to a mission player slot (type/factio
 }
 
 TEST_CASE("WorldBroadcaster: a mission slot frees on disconnect and rebinds the next pilot", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
@@ -1458,7 +1458,7 @@ TEST_CASE("WorldBroadcaster: a mission slot frees on disconnect and rebinds the 
 
 TEST_CASE("WorldBroadcaster: banning an IP disconnects observers and unadmitted peers too (#1069)",
           "[world_broadcaster][security]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1482,7 +1482,7 @@ TEST_CASE("WorldBroadcaster: banning an IP disconnects observers and unadmitted 
 }
 
 TEST_CASE("WorldBroadcaster: a re-ack omits the unchanged entity-type table (#1070)", "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());
@@ -1541,7 +1541,7 @@ TEST_CASE("WorldBroadcaster: a re-ack omits the unchanged entity-type table (#10
 
 TEST_CASE("WorldBroadcaster: a changed type table is re-sent even to a peer that had one (#1070)",
           "[world_broadcaster]") {
-    MockLogger logger;
+    NullLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     registry.registerType(makeDebugDef());

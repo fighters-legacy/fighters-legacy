@@ -3,6 +3,7 @@
 // Tests for registerPackEntityDefs (#683): loading content-pack entity definitions into the
 // server's EntityTypeRegistry. Uses a MockContentPack fixture (idiom from test_content_system.cpp).
 
+#include "mock_log.h"
 #include <content/ContentBootstrap.h>
 
 #include <ILogger.h>
@@ -29,37 +30,6 @@
 using namespace fl;
 
 namespace {
-
-struct NullLog : public ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
-
-struct RecordingLog : public ILogger {
-    struct Entry {
-        LogLevel level;
-        std::string msg;
-    };
-    std::vector<Entry> entries;
-
-    void log(LogLevel lvl, const char*, int, const char* msg) override {
-        entries.push_back({lvl, msg ? msg : ""});
-    }
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-
-    int count(LogLevel lvl, std::string_view needle) const {
-        int n = 0;
-        for (const auto& e : entries)
-            if (e.level == lvl && e.msg.find(needle) != std::string::npos)
-                ++n;
-        return n;
-    }
-    bool has(LogLevel lvl, std::string_view needle = "") const {
-        return count(lvl, needle) > 0;
-    }
-};
 
 constexpr AssetType kDefTypes[] = {AssetType::EntityDef, AssetType::SensorDef};
 
@@ -144,7 +114,7 @@ TEST_CASE("registerPackEntityDefs registers valid pack entity defs") {
     pack.defs["f15c"] = defToml("fl-base:f15c", "F-15C Eagle");
     pack.defs["mig29"] = defToml("fl-base:mig29", "MiG-29 Fulcrum");
 
-    NullLog log;
+    NullLogger log;
     AssetManager assets(packsFrom(std::move(pack)), log);
     assets.initialize(nullptr);
 
@@ -165,7 +135,7 @@ TEST_CASE("registerPackEntityDefs skips a malformed def and continues") {
     pack.defs["bad"] = "this is not valid toml = = =\n[entity\n";  // parse error
     pack.defs["missing"] = "[entity]\nid = \"fl-base:missing\"\n"; // missing required fields
 
-    NullLog log;
+    NullLogger log;
     AssetManager assets(packsFrom(std::move(pack)), log);
     assets.initialize(nullptr);
 
@@ -184,7 +154,7 @@ TEST_CASE("registerPackEntityDefs skips a duplicate id (first-wins)") {
     pack.defs["variant_a"] = defToml("fl-base:dupe", "Variant A");
     pack.defs["variant_b"] = defToml("fl-base:dupe", "Variant B");
 
-    NullLog log;
+    NullLogger log;
     AssetManager assets(packsFrom(std::move(pack)), log);
     assets.initialize(nullptr);
 
@@ -197,7 +167,7 @@ TEST_CASE("registerPackEntityDefs skips a duplicate id (first-wins)") {
 }
 
 TEST_CASE("registerPackEntityDefs returns zero with no packs") {
-    NullLog log;
+    NullLogger log;
     std::vector<std::unique_ptr<IContentPack>> none;
     AssetManager assets(std::move(none), log);
     assets.initialize(nullptr);
@@ -259,7 +229,7 @@ TEST_CASE("registerPackWeaponDefs registers pack weapons by id") {
     pack.weapons["aim9p"] = weaponToml("fl-base:aim9p", "AIM-9P Sidewinder");
     pack.weapons["aim120c"] = weaponToml("fl-base:aim120c", "AIM-120C AMRAAM");
 
-    NullLog log;
+    NullLogger log;
     AssetManager assets(weaponPacksFrom(std::move(pack)), log);
     assets.initialize(nullptr);
 
@@ -279,7 +249,7 @@ TEST_CASE("registerPackWeaponDefs skips a malformed weapon and keeps going") {
     pack.weapons["good"] = weaponToml("fl-base:aim9p", "AIM-9P");
     pack.weapons["bad"] = "[weapon]\nid = \"fl-base:broken\"\n"; // missing required tables
 
-    NullLog log;
+    NullLogger log;
     AssetManager assets(weaponPacksFrom(std::move(pack)), log);
     assets.initialize(nullptr);
 
@@ -291,7 +261,7 @@ TEST_CASE("registerPackWeaponDefs skips a malformed weapon and keeps going") {
 }
 
 TEST_CASE("registerPackWeaponDefs returns zero with no packs") {
-    NullLog log;
+    NullLogger log;
     std::vector<std::unique_ptr<IContentPack>> none;
     AssetManager assets(std::move(none), log);
     assets.initialize(nullptr);
@@ -313,7 +283,7 @@ TEST_CASE("makeSensorDefResolver resolves a namespaced sensor id to a real Senso
     pack.ns = "fl-base";
     pack.sensors["apq159"] = sensorToml("fl-base:apq159", "AN/APQ-159");
 
-    RecordingLog log;
+    RecordingLogger log;
     AssetManager assets(packsFrom(std::move(pack)), log);
     assets.initialize(nullptr);
 
@@ -327,7 +297,7 @@ TEST_CASE("makeSensorDefResolver resolves a namespaced sensor id to a real Senso
     REQUIRE(def != nullptr);
     CHECK(def->id == "fl-base:apq159");
     CHECK(def->type == sensor::SensorType::Radar);
-    CHECK_FALSE(log.has(LogLevel::Error));
+    CHECK_FALSE(log.hasMessage(LogLevel::Error));
 }
 
 TEST_CASE("makeSensorDefResolver logs an unknown sensor id at Error, not Warn") {
@@ -335,7 +305,7 @@ TEST_CASE("makeSensorDefResolver logs an unknown sensor id at Error, not Warn") 
     pack.ns = "fl-base";
     pack.sensors["apq159"] = sensorToml("fl-base:apq159", "AN/APQ-159");
 
-    RecordingLog log;
+    RecordingLogger log;
     AssetManager assets(packsFrom(std::move(pack)), log);
     assets.initialize(nullptr);
 
@@ -344,7 +314,7 @@ TEST_CASE("makeSensorDefResolver logs an unknown sensor id at Error, not Warn") 
 
     auto resolver = makeSensorDefResolver(assets, index, log);
     CHECK(resolver("fl-base:typo") == nullptr);
-    CHECK(log.has(LogLevel::Error, "unknown sensor def id 'fl-base:typo'"));
+    CHECK(log.hasMessage(LogLevel::Error, "unknown sensor def id 'fl-base:typo'"));
 }
 
 TEST_CASE("makeSensorDefResolver caches both hits and misses") {
@@ -352,7 +322,7 @@ TEST_CASE("makeSensorDefResolver caches both hits and misses") {
     pack.ns = "fl-base";
     pack.sensors["apq159"] = sensorToml("fl-base:apq159", "AN/APQ-159");
 
-    RecordingLog log;
+    RecordingLogger log;
     AssetManager assets(packsFrom(std::move(pack)), log);
     assets.initialize(nullptr);
 
@@ -489,7 +459,7 @@ TEST_CASE("flying builtin stores get projectile entity types; gun, drop tank, an
     WeaponRegistry weapons;
     registerBuiltinWeapons(weapons);
     EntityTypeRegistry registry;
-    NullLog log;
+    NullLogger log;
 
     // IR / radar / SARH missiles + bomb + rocket fly; the gun is hitscan and the tank/pod are inert.
     CHECK(registerProjectileEntityDefs(weapons, registry, log) == 5u);

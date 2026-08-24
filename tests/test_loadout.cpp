@@ -6,6 +6,7 @@
 // to {} at both integrator call sites. A loadout cost the airframe zero mass and zero drag: you
 // could hang six bombs off a jet and it would fly exactly as fast as a clean one.
 
+#include "mock_log.h"
 #include <ILogger.h>
 #include <entity/EntityDef.h>
 #include <weapon/Loadout.h>
@@ -23,29 +24,6 @@ using Catch::Approx;
 using namespace fl;
 
 namespace {
-
-struct RecordingLog : public ILogger {
-    std::vector<std::pair<LogLevel, std::string>> entries;
-    void log(LogLevel lvl, const char*, int, const char* msg) override {
-        entries.push_back({lvl, msg ? msg : ""});
-    }
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-
-    int count(LogLevel lvl) const {
-        int n = 0;
-        for (const auto& [l, m] : entries)
-            if (l == lvl)
-                ++n;
-        return n;
-    }
-    bool has(LogLevel lvl, std::string_view needle) const {
-        for (const auto& [l, m] : entries)
-            if (l == lvl && m.find(needle) != std::string::npos)
-                return true;
-        return false;
-    }
-};
 
 WeaponDef weapon(const std::string& id, WeaponType type, float massKg, float dragFactor) {
     WeaponDef w;
@@ -140,7 +118,7 @@ TEST_CASE("WeaponRegistry: clear empties it", "[weapon_registry]") {
 // ---------------------------------------------------------------------------
 
 TEST_CASE("defaultPayload sums an F-5E default loadout", "[loadout]") {
-    RecordingLog log;
+    RecordingLogger log;
     const WeaponRegistry reg = f5eWeapons();
 
     const PayloadEffect p = defaultPayload(f5e(), reg, log);
@@ -158,7 +136,7 @@ TEST_CASE("defaultPayload sums an F-5E default loadout", "[loadout]") {
 TEST_CASE("defaultPayload counts a Fuel drop-tank store (#862)", "[loadout]") {
     // A drop tank is a WeaponType::Fuel store now: inert (never fires) but it costs the airframe
     // mass + drag like any other store, so a tanked jet flies heavier than a clean one.
-    RecordingLog log;
+    RecordingLogger log;
     WeaponRegistry reg;
     reg.registerWeapon(weapon("fl-base:tank150", WeaponType::Fuel, 320.0f, 0.003f));
 
@@ -174,7 +152,7 @@ TEST_CASE("defaultPayload counts a Fuel drop-tank store (#862)", "[loadout]") {
 }
 
 TEST_CASE("defaultPayload: an unknown store id yields a clean airframe and ONE Error", "[loadout]") {
-    RecordingLog log;
+    RecordingLogger log;
     WeaponRegistry reg; // empty: nobody has ever heard of this missile
 
     EntityDef def;
@@ -188,11 +166,11 @@ TEST_CASE("defaultPayload: an unknown store id yields a clean airframe and ONE E
     CHECK(p.extra_mass_kg == Approx(0.f));
     CHECK(p.extra_cd0 == Approx(0.f));
     CHECK(log.count(LogLevel::Error) == 1);
-    CHECK(log.has(LogLevel::Error, "fl-base:typo"));
+    CHECK(log.hasMessage(LogLevel::Error, "fl-base:typo"));
 }
 
 TEST_CASE("defaultPayload rejects a default that is not in the station's allowed list", "[loadout]") {
-    RecordingLog log;
+    RecordingLogger log;
     WeaponRegistry reg = f5eWeapons();
     reg.registerWeapon(weapon("fl-base:aim120", WeaponType::Missile, 152.f, 0.002f));
 
@@ -205,14 +183,14 @@ TEST_CASE("defaultPayload rejects a default that is not in the station's allowed
     const PayloadEffect p = defaultPayload(def, reg, log);
 
     CHECK(p.extra_mass_kg == Approx(0.f));
-    CHECK(log.has(LogLevel::Error, "allowed list"));
+    CHECK(log.hasMessage(LogLevel::Error, "allowed list"));
 }
 
 TEST_CASE("defaultPayload: a multi-role station carries any allowed kind", "[loadout]") {
     // Stations have no kind of their own -- the allowed list is the whole compatibility contract.
     // A wet pylon that clears a bomb AND a drop tank is a real airframe (an F-16's stations 4/6),
     // and whichever allowed store is the default, its mass and drag count the same way.
-    RecordingLog log;
+    RecordingLogger log;
     WeaponRegistry reg;
     reg.registerWeapon(weapon("fl-base:mk82", WeaponType::Bomb, 227.f, 0.004f));
     reg.registerWeapon(weapon("fl-base:tank370", WeaponType::Fuel, 1160.f, 0.006f));
@@ -230,7 +208,7 @@ TEST_CASE("defaultPayload: a multi-role station carries any allowed kind", "[loa
 }
 
 TEST_CASE("defaultPayload: an empty station is a legitimate loadout", "[loadout]") {
-    RecordingLog log;
+    RecordingLogger log;
     const WeaponRegistry reg = f5eWeapons();
 
     EntityDef def;
@@ -244,7 +222,7 @@ TEST_CASE("defaultPayload: an empty station is a legitimate loadout", "[loadout]
 }
 
 TEST_CASE("defaultPayload: no hardpoints at all is a clean airframe", "[loadout]") {
-    RecordingLog log;
+    RecordingLogger log;
     const WeaponRegistry reg = f5eWeapons();
 
     EntityDef def;

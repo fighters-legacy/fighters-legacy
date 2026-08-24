@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ServerCommands.h"
+#include "mock_log.h"
 #include "temp_path.h"
 #include <console/CommandRegistry.h>
 #include <console/CommandShell.h>
@@ -36,12 +37,7 @@
 using namespace fl;
 
 // Fixtures used by the async-ack tests (need a real GameLoop so enqueueSimCallback is safe).
-// "2" suffix avoids name collisions with any mock in mock_hal.h.
-struct NullLogger2 : public ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
+// The "2" suffix on NoopSim2 avoids a name collision with any mock in mock_hal.h.
 struct NoopSim2 : public ISimUpdate {
     void onTick(double, uint64_t) override {}
 };
@@ -499,7 +495,7 @@ TEST_CASE("AdminConsole: shutdown --reason stops consuming at next double-dash f
 // Shared helper that builds a context with a real GameLoop and safe sentinel pointers.
 namespace {
 struct AsyncAckFixture {
-    NullLogger2 log;
+    NullLogger log;
     NoopSim2 noop;
     GameLoop loop{noop, log}; // do NOT call loop.start()
     static int bcast_sentinel;
@@ -683,7 +679,7 @@ TEST_CASE("AdminConsole async ack: shutdown --delay returns extension queued str
 // ---------------------------------------------------------------------------
 
 TEST_CASE("AdminConsole shell output: sync ack appears in outputLines", "[admin_console][shell]") {
-    NullLogger2 logger;
+    NullLogger logger;
     CommandRegistry reg;
     CommandShell shell(logger, reg);
 
@@ -705,7 +701,7 @@ TEST_CASE("AdminConsole shell output: sync ack appears in outputLines", "[admin_
 }
 
 TEST_CASE("AdminConsole shell drain: drainSince captures post-dispatch shell output", "[admin_console][shell][drain]") {
-    NullLogger2 logger;
+    NullLogger logger;
     CommandRegistry reg;
     CommandShell shell(logger, reg);
 
@@ -799,7 +795,7 @@ static void connectPilotWb(fl::WorldBroadcaster& b, uint32_t peerId = 0u) {
 }
 
 struct WbFixture {
-    NullLogger2 log;
+    NullLogger log;
     MockNetworkWb net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em{log, registry};
@@ -1252,7 +1248,7 @@ TEST_CASE("AdminConsole wb: status shows no lockout line after admin_unlock clea
 }
 
 TEST_CASE("WorldBroadcaster: default MsgConnectAck carries Earth planet radius", "[admin_console][wb]") {
-    NullLogger2 log;
+    NullLogger log;
     TrackingNetwork net;
     net.peerAddresses[0u] = "1.2.3.4";
     fl::EntityTypeRegistry registry;
@@ -1335,7 +1331,7 @@ TEST_CASE("Admin console: detonate validates and queues with a synchronous ack",
 
 namespace {
 struct AtcFixture {
-    NullLogger2 log;
+    NullLogger log;
     NoopSim2 noop;
     GameLoop loop{noop, log}; // do NOT start
     fl::EntityTypeRegistry reg;

@@ -7,6 +7,7 @@
 #include "entity/EntityManager.h"
 #include "entity/EntityTypeRegistry.h"
 #include "flight/CentralGravityField.h"
+#include "mock_log.h"
 #include "spatial/SpatialIndex.h"
 #include "weapon/FireControl.h"
 #include "weapon/ProjectileSystem.h"
@@ -19,12 +20,6 @@
 using namespace fl;
 
 namespace {
-
-struct NullLoggerFC : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 const char* kGunToml = R"toml(
 [weapon]
@@ -203,7 +198,7 @@ TEST_CASE("evaluateFire: absolute station selection is clamped, 255 keeps", "[fi
 TEST_CASE("ProjectileSystem: launch inherits shooter velocity, boosts, and self-destructs at overrange",
           "[fire_control][projectile]") {
     FireWorld w;
-    NullLoggerFC log;
+    NullLogger log;
     EntityTypeRegistry registry;
     EntityDef proj;
     proj.id = projectileTypeId(*w.weapons.byIndex(w.aimIdx));

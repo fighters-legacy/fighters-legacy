@@ -14,6 +14,7 @@
 #include "entity/EntityDef.h"
 #include "entity/EntityManager.h"
 #include "entity/EntityTypeRegistry.h"
+#include "mock_log.h"
 
 #include <array>
 #include <string>
@@ -23,12 +24,6 @@
 using namespace fl;
 
 namespace {
-
-struct NullLogger final : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 // A world with one live entity at pool index 0, which the target-taking behaviours resolve against.
 struct World {

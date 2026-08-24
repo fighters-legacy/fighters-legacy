@@ -11,6 +11,7 @@
 #include "entity/EntityManager.h"
 #include "entity/EntityTypeRegistry.h"
 #include "flight/CentralGravityField.h"
+#include "mock_log.h"
 #include "sensor/BuiltinSensors.h"
 #include "sensor/Detection.h"
 #include "sensor/SensorSystem.h" // ContactTable — the SARH/ARH support source (#628)
@@ -27,12 +28,6 @@
 using namespace fl;
 
 namespace {
-
-struct NullLoggerS : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 // A SARH variant of the builtin radar missile: supported the whole way, never radiates, no loft
 // (kept flat so the support tests read cleanly).
@@ -52,7 +47,7 @@ WeaponDef makeSarhMissile() {
 // shooter/target/projectile types, a ProjectileSystem resolving the builtin seeker heads, and a
 // test-controlled support table standing in for the shooter's SensorSystem contacts (#628).
 struct SeekerWorld {
-    NullLoggerS log;
+    NullLogger log;
     EntityTypeRegistry registry;
     WeaponRegistry weapons;
     uint32_t aimIdx{UINT32_MAX};

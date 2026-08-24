@@ -7,6 +7,7 @@
 // AssetManager, which builds "sensors/fl-base:apq159.toml" -- a path that cannot exist, and is not a
 // legal Windows filename. Every aircraft in every pack silently flew with no radar.
 
+#include "mock_log.h"
 #include <ILogger.h>
 #include <content/AssetManager.h>
 #include <content/ContentIndex.h>
@@ -23,27 +24,6 @@
 using namespace fl;
 
 namespace {
-
-struct RecordingLog : public ILogger {
-    struct Entry {
-        LogLevel level;
-        std::string msg;
-    };
-    std::vector<Entry> entries;
-
-    void log(LogLevel lvl, const char*, int, const char* msg) override {
-        entries.push_back({lvl, msg ? msg : ""});
-    }
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-
-    bool has(LogLevel lvl, std::string_view needle) const {
-        for (const auto& e : entries)
-            if (e.level == lvl && e.msg.find(needle) != std::string::npos)
-                return true;
-        return false;
-    }
-};
 
 // Serves def TOML blobs keyed by asset name, for both def asset types.
 struct DefPack : public NullContentPack {
@@ -122,7 +102,7 @@ TEST_CASE("ContentIndex resolves a namespaced id to its asset name", "[content_i
     pack.sensors["apq159"] = sensorToml("fl-base:apq159");
     pack.entities["f5e"] = entityToml("fl-base:f5e");
 
-    RecordingLog log;
+    RecordingLogger log;
     auto assets = managerOf({std::move(pack)}, log);
 
     ContentIndex index;
@@ -145,7 +125,7 @@ TEST_CASE("ContentIndex returns nullptr for an unknown id", "[content_index]") {
     pack.ns = "fl-base";
     pack.sensors["apq159"] = sensorToml("fl-base:apq159");
 
-    RecordingLog log;
+    RecordingLogger log;
     auto assets = managerOf({std::move(pack)}, log);
     ContentIndex index;
     index.build(*assets, kDefTypes, log);
@@ -162,7 +142,7 @@ TEST_CASE("ContentIndex id lookup is case-insensitive", "[content_index]") {
     pack.ns = "fl-base";
     pack.sensors["apq159"] = sensorToml("FL-Base:APQ159");
 
-    RecordingLog log;
+    RecordingLogger log;
     auto assets = managerOf({std::move(pack)}, log);
     ContentIndex index;
     index.build(*assets, kDefTypes, log);
@@ -182,7 +162,7 @@ TEST_CASE("ContentIndex duplicate id across packs: the higher-priority pack wins
     low.ns = "fl-base";
     low.sensors["apq159"] = sensorToml("fl-base:apq159");
 
-    RecordingLog log;
+    RecordingLogger log;
     auto assets = managerOf({std::move(high), std::move(low)}, log); // index 0 = highest priority
     ContentIndex index;
     index.build(*assets, kDefTypes, log);
@@ -190,7 +170,7 @@ TEST_CASE("ContentIndex duplicate id across packs: the higher-priority pack wins
     const std::string* name = index.assetNameFor(AssetType::SensorDef, "fl-base:apq159");
     REQUIRE(name != nullptr);
     CHECK(*name == "apq159_tuned");
-    CHECK(log.has(LogLevel::Warn, "duplicate def id"));
+    CHECK(log.hasMessage(LogLevel::Warn, "duplicate def id"));
 }
 
 TEST_CASE("ContentIndex refuses to index an id containing a path separator", "[content_index]") {
@@ -200,7 +180,7 @@ TEST_CASE("ContentIndex refuses to index an id containing a path separator", "[c
     pack.sensors["evil"] = sensorToml("fl-base:../../../etc/passwd");
     pack.sensors["evil2"] = sensorToml("fl-base:..\\..\\windows\\system32");
 
-    RecordingLog log;
+    RecordingLogger log;
     auto assets = managerOf({std::move(pack)}, log);
     ContentIndex index;
     index.build(*assets, kDefTypes, log);
@@ -208,7 +188,7 @@ TEST_CASE("ContentIndex refuses to index an id containing a path separator", "[c
     CHECK(index.assetNameFor(AssetType::SensorDef, "fl-base:../../../etc/passwd") == nullptr);
     CHECK(index.assetNameFor(AssetType::SensorDef, "fl-base:..\\..\\windows\\system32") == nullptr);
     CHECK(index.idsOfType(AssetType::SensorDef).empty());
-    CHECK(log.has(LogLevel::Error, "path separator"));
+    CHECK(log.hasMessage(LogLevel::Error, "path separator"));
 }
 
 TEST_CASE("ContentIndex warns when a def id does not match its pack's namespace", "[content_index]") {
@@ -217,14 +197,14 @@ TEST_CASE("ContentIndex warns when a def id does not match its pack's namespace"
     pack.ns = "fl-base";
     pack.sensors["apq159"] = sensorToml("some-other-pack:apq159");
 
-    RecordingLog log;
+    RecordingLogger log;
     auto assets = managerOf({std::move(pack)}, log);
     ContentIndex index;
     index.build(*assets, kDefTypes, log);
 
     // Still indexed -- a mis-prefixed def resolves; it just says so out loud.
     CHECK(index.assetNameFor(AssetType::SensorDef, "some-other-pack:apq159") != nullptr);
-    CHECK(log.has(LogLevel::Warn, "does not match its pack's declared namespace"));
+    CHECK(log.hasMessage(LogLevel::Warn, "does not match its pack's declared namespace"));
 }
 
 TEST_CASE("ContentIndex warns on an un-namespaced def id", "[content_index]") {
@@ -232,13 +212,13 @@ TEST_CASE("ContentIndex warns on an un-namespaced def id", "[content_index]") {
     pack.ns = "fl-base";
     pack.sensors["apq159"] = sensorToml("apq159"); // no "ns:" prefix
 
-    RecordingLog log;
+    RecordingLogger log;
     auto assets = managerOf({std::move(pack)}, log);
     ContentIndex index;
     index.build(*assets, kDefTypes, log);
 
     CHECK(index.assetNameFor(AssetType::SensorDef, "apq159") != nullptr); // indexed anyway
-    CHECK(log.has(LogLevel::Warn, "is not namespaced"));
+    CHECK(log.hasMessage(LogLevel::Warn, "is not namespaced"));
 }
 
 TEST_CASE("ContentIndex skips a def with no id and unparseable TOML", "[content_index]") {
@@ -247,26 +227,26 @@ TEST_CASE("ContentIndex skips a def with no id and unparseable TOML", "[content_
     pack.sensors["noid"] = "[sensor]\nname = \"Nameless\"\n";
     pack.sensors["broken"] = "[sensor\nid = ";
 
-    RecordingLog log;
+    RecordingLogger log;
     auto assets = managerOf({std::move(pack)}, log);
     ContentIndex index;
     index.build(*assets, kDefTypes, log);
 
     CHECK(index.idsOfType(AssetType::SensorDef).empty());
-    CHECK(log.has(LogLevel::Warn, "declares no [sensor] id"));
-    CHECK(log.has(LogLevel::Warn, "not parseable TOML"));
+    CHECK(log.hasMessage(LogLevel::Warn, "declares no [sensor] id"));
+    CHECK(log.hasMessage(LogLevel::Warn, "not parseable TOML"));
 }
 
 TEST_CASE("ContentIndex reports an asset type that has no def id", "[content_index]") {
     DefPack pack;
-    RecordingLog log;
+    RecordingLogger log;
     auto assets = managerOf({std::move(pack)}, log);
 
     ContentIndex index;
     constexpr AssetType kBogus[] = {AssetType::Mesh};
     index.build(*assets, kBogus, log);
 
-    CHECK(log.has(LogLevel::Error, "cannot be indexed"));
+    CHECK(log.hasMessage(LogLevel::Error, "cannot be indexed"));
 }
 
 TEST_CASE("ContentIndex idsOfType lists only that type's ids", "[content_index]") {
@@ -276,7 +256,7 @@ TEST_CASE("ContentIndex idsOfType lists only that type's ids", "[content_index]"
     pack.sensors["eyeball"] = sensorToml("fl-base:eyeball");
     pack.entities["f5e"] = entityToml("fl-base:f5e");
 
-    RecordingLog log;
+    RecordingLogger log;
     auto assets = managerOf({std::move(pack)}, log);
     ContentIndex index;
     index.build(*assets, kDefTypes, log);
