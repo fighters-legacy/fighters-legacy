@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "license_validator.h"
 
+#include "ValidatorCli.h"
+
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
 
 using namespace fl;
-
-static constexpr const char* kVersion = "0.0.1";
 
 static void printHelp() {
     std::printf("Usage: validate-licenses [--dir <path>] [--licenses-dir <path>] [--allow <id>] ...\n"
@@ -30,16 +30,9 @@ static void printHelp() {
 }
 
 int main(int argc, char* argv[]) {
-    if (argc >= 2) {
-        if (std::strcmp(argv[1], "--help") == 0 || std::strcmp(argv[1], "-h") == 0) {
-            printHelp();
-            return 0;
-        }
-        if (std::strcmp(argv[1], "--version") == 0 || std::strcmp(argv[1], "-v") == 0) {
-            std::printf("validate-licenses %s\n", kVersion);
-            return 0;
-        }
-    }
+    int exitCode = 0;
+    if (argc >= 2 && handledHelpOrVersion(argv[1], "validate-licenses", printHelp, exitCode))
+        return exitCode;
 
     std::string dir = ".";
     std::string licensesDir;
@@ -75,11 +68,8 @@ int main(int argc, char* argv[]) {
         allowedIds.push_back("CC-BY-4.0");
     }
 
-    auto result = validateLicenses(dir, allowedIds, licensesDir);
-    for (const auto& w : result.warnings)
-        std::fprintf(stderr, "WARN  %s\n", w.c_str());
-    for (const auto& e : result.errors)
-        std::fprintf(stderr, "ERROR %s\n", e.c_str());
-
-    return result.ok ? 0 : 1;
+    // No [file] label: this tool validates a directory tree, and each message already names its own
+    // path.
+    reportResult(validateLicenses(dir, allowedIds, licensesDir), nullptr, exitCode);
+    return exitCode;
 }

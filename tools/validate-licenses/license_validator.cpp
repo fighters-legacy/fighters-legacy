@@ -39,13 +39,10 @@ static bool isBinaryExt(const std::string& ext) {
     return false;
 }
 
+// TEXT mode on purpose -- SPDX tags are matched line by line, so CRLF must be normalised first.
+// That is why this is readFileToString and not the pack walkers' readFileBinary.
 static std::string readFile(const fs::path& p) {
-    std::ifstream f(p); // text mode: normalises CRLF on Windows
-    if (!f)
-        return {};
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    return ss.str();
+    return readFileToString(p.string().c_str()).value_or("");
 }
 
 // REUSE-IgnoreStart — comment below quotes the SPDX tag as documentation, not a declaration

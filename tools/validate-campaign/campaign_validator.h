@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "ValidatorCli.h"
+
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace fl {
 
-struct CampaignValidationResult {
-    bool ok{true};
-    std::vector<std::string> errors;
-    std::vector<std::string> warnings;
-};
+// The shared three-field shape (#1277); the name stays for every caller.
+using CampaignValidationResult = ToolValidationResult;
 
 // Schema-only validation: delegates to the engine's parseCampaign (#847) so the linter and the runtime
 // cannot drift, then reports its errors/warnings. All errors accumulated (never fail-fast).

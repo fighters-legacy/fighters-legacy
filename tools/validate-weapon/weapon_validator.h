@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "ValidatorCli.h"
+
 #include <string>
 #include <string_view>
 #include <vector>
@@ -9,11 +11,8 @@ namespace fl {
 
 struct WeaponDef;
 
-struct WeaponValidationResult {
-    bool ok{true};
-    std::vector<std::string> errors;
-    std::vector<std::string> warnings;
-};
+// The shared three-field shape (#1277); the name stays for every caller.
+using WeaponValidationResult = ToolValidationResult;
 
 // Runs the PLAUSIBILITY pass on an already-parsed weapon def (the same checks validateWeapon() applies
 // after parsing). Exposed so the compiled-in builtin stores (BuiltinWeapon) — which are C++ structs,

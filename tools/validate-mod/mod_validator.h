@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "ValidatorCli.h"
+
 #include <string>
 #include <vector>
 
 namespace fl {
 
-struct ModValidationResult {
-    bool ok{true};
-    std::vector<std::string> errors;
-    std::vector<std::string> warnings;
-};
+// The shared three-field shape (#1277); the name stays for every caller.
+using ModValidationResult = ToolValidationResult;
 
 struct ModValidateOptions {
     bool checkLicenses{true};             // run validate-licenses when REUSE.toml is present

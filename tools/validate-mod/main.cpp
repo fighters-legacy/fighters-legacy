@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "mod_validator.h"
 
+#include "ValidatorCli.h"
+
 #include <cstdio>
 #include <cstring>
 #include <string>
 
 namespace {
-constexpr const char* kVersion = "0.0.1";
 
 void printUsage() {
     std::printf("Usage: validate-mod [--no-licenses] [--allow <spdx-id>]... <pack-dir>\n"
@@ -37,7 +38,7 @@ int main(int argc, char* argv[]) {
             return 0;
         }
         if (std::strcmp(argv[i], "--version") == 0 || std::strcmp(argv[i], "-v") == 0) {
-            std::printf("validate-mod %s\n", kVersion);
+            std::printf("validate-mod %s\n", fl::kValidatorVersion);
             return 0;
         }
         if (std::strcmp(argv[i], "--no-licenses") == 0) {
@@ -60,10 +61,9 @@ int main(int argc, char* argv[]) {
         return 2;
     }
 
-    fl::ModValidationResult res = fl::validateMod(packDir, opts);
-    for (const std::string& w : res.warnings)
-        std::fprintf(stderr, "WARN  %s\n", w.c_str());
-    for (const std::string& e : res.errors)
-        std::fprintf(stderr, "ERROR %s\n", e.c_str());
-    return res.ok ? 0 : 1;
+    // No [file] label: a whole-pack run reports against the pack, and each message names its own
+    // asset.
+    int exitCode = 0;
+    fl::reportResult(fl::validateMod(packDir, opts), nullptr, exitCode);
+    return exitCode;
 }

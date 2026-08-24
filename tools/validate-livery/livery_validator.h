@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "ValidatorCli.h"
+
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace fl {
 
-struct LiveryValidationResult {
-    bool ok{true};
-    std::vector<std::string> errors;
-    std::vector<std::string> warnings;
-};
+// The shared three-field shape (#1277); the name stays for every caller.
+using LiveryValidationResult = ToolValidationResult;
 
 // Single-file validation of a livery TOML (#845). Delegates the schema to the engine's own
 // parseLiveryDef — a livery this tool passes is a livery the engine loads — then adds plausibility

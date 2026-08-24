@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "mesh_validator.h"
 
+#include "ValidatorCli.h"
+
 #include <cstdio>
 #include <cstring>
 #include <string>
 
 using namespace fl;
-
-static constexpr const char* kVersion = "0.0.1";
 
 static void printHelp() {
     std::printf("Usage: validate-mesh <file.glb> [file2.gltf ...]\n"
@@ -32,28 +32,12 @@ int main(int argc, char* argv[]) {
         printHelp();
         return 2;
     }
-    if (std::strcmp(argv[1], "--help") == 0 || std::strcmp(argv[1], "-h") == 0) {
-        printHelp();
-        return 0;
-    }
-    if (std::strcmp(argv[1], "--version") == 0 || std::strcmp(argv[1], "-v") == 0) {
-        std::printf("validate-mesh %s\n", kVersion);
-        return 0;
-    }
-
     int exitCode = 0;
-    for (int i = 1; i < argc; ++i) {
-        if (argv[i][0] == '-') {
-            std::fprintf(stderr, "error: unknown option %s\n", argv[i]);
-            return 2;
-        }
-        auto result = validateMesh(argv[i]);
-        for (const auto& w : result.warnings)
-            std::fprintf(stderr, "WARN  %s\n", w.c_str());
-        for (const auto& e : result.errors)
-            std::fprintf(stderr, "ERROR %s\n", e.c_str());
-        if (!result.ok)
-            exitCode = 1;
-    }
-    return exitCode;
+    if (handledHelpOrVersion(argv[1], "validate-mesh", printHelp, exitCode))
+        return exitCode;
+
+    // A .glb is binary and tinygltf opens it itself, so this one validates a PATH rather than
+    // contents -- and reports without a [file] label, as it always has.
+    return runFileList(argc, argv, 1,
+                       [](const char* path, int& code) { reportResult(validateMesh(path), nullptr, code); });
 }

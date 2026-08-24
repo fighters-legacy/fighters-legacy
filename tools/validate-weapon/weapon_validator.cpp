@@ -2,6 +2,7 @@
 #include "weapon_validator.h"
 
 #include "ILogger.h"
+#include "NullLogger.h"
 #include "content/AssetManager.h"
 #include "content/ContentIndex.h"
 #include "content/FolderContentPack.h"
@@ -88,18 +89,7 @@ WeaponValidationResult checkWeaponPlausibility(const WeaponDef& w) {
     return r;
 }
 
-namespace {
-
-[[nodiscard]] std::string readFile(const fs::path& p) {
-    std::ifstream f(p, std::ios::binary);
-    if (!f)
-        return {};
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    return ss.str();
-}
-
-} // namespace
+namespace {} // namespace
 
 WeaponValidationResult validateWeapon(std::string_view tomlContent) {
     WeaponValidationResult r;
@@ -117,17 +107,7 @@ WeaponValidationResult validateWeapon(std::string_view tomlContent) {
     return r;
 }
 
-namespace {
-
-// The content system's own log lines would duplicate the findings this tool reports itself.
-class SilentLoggerW final : public ILogger {
-  public:
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
-
-} // namespace
+namespace {} // namespace
 
 WeaponValidationResult validatePackWeapons(const std::string& packDir) {
     WeaponValidationResult r;
@@ -146,7 +126,9 @@ WeaponValidationResult validatePackWeapons(const std::string& packDir) {
     // A seeker's sensor_id is a def-id reference into the pack's sensors/ — resolved through the
     // REAL id index (the same rule validate-entity follows: never a private copy of the path or
     // id rules). The manifest is irrelevant to id resolution, so a synthesized one is fine.
-    static SilentLoggerW silent;
+    // Silent by design: the content system's own log lines would duplicate the findings this tool
+    // reports itself, and break the "clean validation prints nothing" contract CI relies on.
+    static NullLogger silent;
     StdFilesystem stdfs(root, root);
     FolderContentPack::Manifest manifest;
     manifest.id = "pack-under-validation";
@@ -168,7 +150,7 @@ WeaponValidationResult validatePackWeapons(const std::string& packDir) {
             continue;
 
         const std::string file = entry.path().filename().string();
-        const std::string src = readFile(entry.path());
+        const std::string src = readFileBinary(entry.path());
 
         WeaponDef w;
         try {

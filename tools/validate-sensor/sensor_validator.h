@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "ValidatorCli.h"
+
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace fl {
 
-struct SensorValidationResult {
-    bool ok{true};
-    std::vector<std::string> errors;
-    std::vector<std::string> warnings;
-};
+// The shared three-field shape (#1277); the name stays for every caller.
+using SensorValidationResult = ToolValidationResult;
 
 // Validates one sensor TOML file.
 //

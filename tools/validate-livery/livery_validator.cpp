@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "livery_validator.h"
+#include "NullLogger.h"
 
 #include "content/AssetManager.h"
 #include "content/ContentIndex.h"
@@ -22,12 +23,6 @@ namespace fl {
 namespace {
 
 namespace fs = std::filesystem;
-
-struct SilentLogger : ILogger {
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
 
 // The renderer only overrides these material maps (SceneRenderer::liveryKeyFromBaseAsset). A livery
 // key with any other map is legal TOML but is silently ignored at render time, so warn.
@@ -53,13 +48,6 @@ void checkPlausibility(const LiveryDef& def, const std::string& label, LiveryVal
     }
 }
 
-[[nodiscard]] std::string readFile(const fs::path& path) {
-    std::ifstream f(path, std::ios::binary);
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    return ss.str();
-}
-
 struct PackManifest {
     FolderContentPack::Manifest manifest;
     bool present{false};
@@ -78,7 +66,7 @@ struct PackManifest {
         return out;
     }
     try {
-        toml::table tbl = toml::parse(readFile(path));
+        toml::table tbl = toml::parse(readFileBinary(path));
         if (auto* mod = tbl["mod"].as_table()) {
             out.manifest.id = (*mod)["id"].value<std::string>().value_or(out.manifest.id);
             out.manifest.name = (*mod)["name"].value<std::string>().value_or(out.manifest.id);
@@ -124,7 +112,9 @@ LiveryValidationResult validateLiveryPack(const std::string& packDir) {
     // Resolve references through the REAL content system (same rule as validate-entity --pack): the
     // path rules live in FolderContentPack/AssetManager, so reimplementing them here would let the
     // tool and the engine drift, which is the failure a validator exists to prevent.
-    static SilentLogger silent;
+    // Silent by design: the content system's own log lines would duplicate the findings this tool
+    // reports itself, and break the "clean validation prints nothing" contract CI relies on.
+    static NullLogger silent;
     StdFilesystem stdfs(root, root);
     auto folderPack = std::make_unique<FolderContentPack>(stdfs, silent, ".", pm.manifest);
     FolderContentPack* pack = folderPack.get();

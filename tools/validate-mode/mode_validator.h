@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "ValidatorCli.h"
+
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace fl {
 
-struct GameModeValidationResult {
-    bool ok{true};
-    std::vector<std::string> errors;
-    std::vector<std::string> warnings;
-};
+// The shared three-field shape (#1277); the name stays for every caller.
+using GameModeValidationResult = ToolValidationResult;
 
 // Validate a game-mode TOML file (#521). Delegates the schema to the runtime parseGameModeToml (so the
 // validator and the engine cannot drift), then layers plausibility checks a mod author wants caught up

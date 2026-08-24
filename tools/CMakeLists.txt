@@ -31,14 +31,22 @@ if(TARGET platform-openal)
     )
 endif()
 
+# fl-validator-cli (#1277): the header-only scaffolding behind every validate-* CLI -- the shared
+# ValidationResult, the version constant, the --help/--version prefix, the file slurps and the
+# WARN/ERROR report loop. INTERFACE, so linking it adds an include directory and no link edge: a
+# validator that links it stays exactly as linked as it was. PUBLIC on each *-lib because the libs'
+# own public headers alias ValidationResult from it, so every consumer needs the include path too.
+add_library(fl-validator-cli INTERFACE)
+target_include_directories(fl-validator-cli INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/common")
+
 add_library(validate-playlist-lib STATIC
     validate-playlist/playlist_validator.cpp)
-target_link_libraries(validate-playlist-lib PUBLIC tomlplusplus::tomlplusplus)
+target_link_libraries(validate-playlist-lib PUBLIC tomlplusplus::tomlplusplus fl-validator-cli)
 target_include_directories(validate-playlist-lib PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/validate-playlist")
 
 add_executable(validate-playlist validate-playlist/main.cpp)
-target_link_libraries(validate-playlist PRIVATE validate-playlist-lib)
+target_link_libraries(validate-playlist PRIVATE validate-playlist-lib fl-validator-cli)
 
 # fl-viewer: standalone model preview on the game renderer (#836). Snapshot mode (#666) is windowless
 # (headless Vulkan); the interactive window (#838) adds SDL3 + IGui + the overlay gizmos + the
@@ -146,7 +154,7 @@ add_custom_target(locale-keys DEPENDS "${LOCALE_KEYS_HEADER}")
 
 add_library(validate-flight-model-lib STATIC
     validate-flight-model/flight_model_validator.cpp)
-target_link_libraries(validate-flight-model-lib PUBLIC tomlplusplus::tomlplusplus)
+target_link_libraries(validate-flight-model-lib PUBLIC tomlplusplus::tomlplusplus fl-validator-cli)
 target_include_directories(validate-flight-model-lib PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/validate-flight-model")
 # Header-only reach into engine/ for math/Units.h (#1246): the weight this validator computes has to
@@ -155,7 +163,7 @@ target_include_directories(validate-flight-model-lib PUBLIC
 target_include_directories(validate-flight-model-lib PRIVATE "${CMAKE_SOURCE_DIR}/engine")
 
 add_executable(validate-flight-model validate-flight-model/main.cpp)
-target_link_libraries(validate-flight-model PRIVATE validate-flight-model-lib)
+target_link_libraries(validate-flight-model PRIVATE validate-flight-model-lib fl-validator-cli)
 
 # fm-trim (#817): derives an aircraft's performance from its flight model, and gates it against the
 # numbers its flight manual publishes. Links engine-flight and calls computeForces DIRECTLY -- trim is
@@ -181,6 +189,7 @@ target_link_libraries(fm-trim PRIVATE fm-trim-lib)
 add_library(validate-weapon-lib STATIC
     validate-weapon/weapon_validator.cpp)
 target_link_libraries(validate-weapon-lib
+    PUBLIC fl-validator-cli
     PRIVATE engine-weapon
             engine-content   # --pack: seeker sensor_id resolves through the real id index (#676)
             engine-sensor
@@ -189,19 +198,20 @@ target_include_directories(validate-weapon-lib PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/validate-weapon")
 
 add_executable(validate-weapon validate-weapon/main.cpp)
-target_link_libraries(validate-weapon PRIVATE validate-weapon-lib)
+target_link_libraries(validate-weapon PRIVATE validate-weapon-lib fl-validator-cli)
 
 # Same shape as validate-weapon: the schema lives in engine-sensor's parser, and this tool only adds
 # the plausibility checks a runtime parser must not make.
 add_library(validate-sensor-lib STATIC
     validate-sensor/sensor_validator.cpp)
 target_link_libraries(validate-sensor-lib
+    PUBLIC fl-validator-cli
     PRIVATE engine-sensor)
 target_include_directories(validate-sensor-lib PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/validate-sensor")
 
 add_executable(validate-sensor validate-sensor/main.cpp)
-target_link_libraries(validate-sensor PRIVATE validate-sensor-lib)
+target_link_libraries(validate-sensor PRIVATE validate-sensor-lib fl-validator-cli)
 
 # The entity-def validator (#829). Same delegation rule as validate-weapon/-sensor — the schema is
 # parseEntityDef's — plus the check no validator made before it: --pack resolves every asset-name
@@ -211,6 +221,7 @@ target_link_libraries(validate-sensor PRIVATE validate-sensor-lib)
 add_library(validate-entity-lib STATIC
     validate-entity/entity_validator.cpp)
 target_link_libraries(validate-entity-lib
+    PUBLIC fl-validator-cli
     PRIVATE engine-entity
             engine-content
             engine-sensor
@@ -222,7 +233,7 @@ target_include_directories(validate-entity-lib PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/validate-entity")
 
 add_executable(validate-entity validate-entity/main.cpp)
-target_link_libraries(validate-entity PRIVATE validate-entity-lib)
+target_link_libraries(validate-entity PRIVATE validate-entity-lib fl-validator-cli)
 
 # The livery validator (#845). Same delegation rule — the schema is parseLiveryDef's — plus a --pack
 # cross-check that resolves each texture asset name (a file the livery pack must ship) and the
@@ -230,6 +241,7 @@ target_link_libraries(validate-entity PRIVATE validate-entity-lib)
 add_library(validate-livery-lib STATIC
     validate-livery/livery_validator.cpp)
 target_link_libraries(validate-livery-lib
+    PUBLIC fl-validator-cli
     PRIVATE engine-content
             platform-stdfs
             tomlplusplus::tomlplusplus)
@@ -237,7 +249,7 @@ target_include_directories(validate-livery-lib PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/validate-livery")
 
 add_executable(validate-livery validate-livery/main.cpp)
-target_link_libraries(validate-livery PRIVATE validate-livery-lib)
+target_link_libraries(validate-livery PRIVATE validate-livery-lib fl-validator-cli)
 
 # Same delegation rule as validate-weapon/-sensor/-entity: the mission schema lives in the engine's
 # own parser (engine-mission's parseMission), so the linter and the runtime cannot drift. engine-mission
@@ -245,32 +257,33 @@ target_link_libraries(validate-livery PRIVATE validate-livery-lib)
 add_library(validate-mission-lib STATIC validate-mission/mission_validator.cpp)
 # engine-mission is PUBLIC: mission_validator.h now includes mission/MissionValidator.h, where the
 # schema-only check moved (#601), so every consumer of this façade needs that include path.
-target_link_libraries(validate-mission-lib PUBLIC engine-mission PRIVATE engine-entity)
+target_link_libraries(validate-mission-lib PUBLIC engine-mission fl-validator-cli PRIVATE engine-entity)
 target_include_directories(validate-mission-lib PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/validate-mission")
 
 add_executable(validate-mission validate-mission/main.cpp)
-target_link_libraries(validate-mission PRIVATE validate-mission-lib)
+target_link_libraries(validate-mission PRIVATE validate-mission-lib fl-validator-cli)
 
 # validate-campaign (#847): campaign YAML + theater manifests + frontline PNG rasters. Shares the
 # engine's parseCampaign / parseTheaterManifest (anti-drift) and the FrontlinePng codec.
 add_library(validate-campaign-lib STATIC validate-campaign/campaign_validator.cpp)
 target_link_libraries(validate-campaign-lib
-    PUBLIC engine-campaign engine-campaign-png engine-content
+    PUBLIC fl-validator-cli engine-campaign engine-campaign-png engine-content
     PRIVATE platform-stdfs tomlplusplus::tomlplusplus)
 target_include_directories(validate-campaign-lib
     PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/validate-campaign"
     PRIVATE "${CMAKE_SOURCE_DIR}/platform/stdfs")
 
 add_executable(validate-campaign validate-campaign/main.cpp)
-target_link_libraries(validate-campaign PRIVATE validate-campaign-lib)
+target_link_libraries(validate-campaign PRIVATE validate-campaign-lib fl-validator-cli)
 
 # validate-mod (#651): the whole-pack validator. Composes every per-asset validator lib (linking,
 # never subprocessing) + the shared ModManifest parser + the sha256 hook + the airport/theater
 # runtime parsers.
 add_library(validate-mod-lib STATIC validate-mod/mod_validator.cpp)
 target_link_libraries(validate-mod-lib
-    PUBLIC  validate-entity-lib validate-weapon-lib validate-sensor-lib validate-livery-lib
+    PUBLIC  fl-validator-cli
+            validate-entity-lib validate-weapon-lib validate-sensor-lib validate-livery-lib
             validate-mission-lib validate-campaign-lib validate-mode-lib validate-flight-model-lib
             validate-mesh-lib validate-playlist-lib validate-licenses-lib fm-trim-lib
             engine-content engine-campaign engine-crypto engine-world
@@ -278,26 +291,27 @@ target_link_libraries(validate-mod-lib
 target_include_directories(validate-mod-lib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/validate-mod")
 
 add_executable(validate-mod validate-mod/main.cpp)
-target_link_libraries(validate-mod PRIVATE validate-mod-lib)
+target_link_libraries(validate-mod PRIVATE validate-mod-lib fl-validator-cli)
 
 # Game-mode validator (#521): shares the runtime parseGameModeToml so validator and engine agree.
 add_library(validate-mode-lib STATIC validate-mode/mode_validator.cpp)
-target_link_libraries(validate-mode-lib PRIVATE engine-match)
+target_link_libraries(validate-mode-lib PUBLIC fl-validator-cli PRIVATE engine-match)
 target_include_directories(validate-mode-lib PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/validate-mode")
 
 add_executable(validate-mode validate-mode/main.cpp)
-target_link_libraries(validate-mode PRIVATE validate-mode-lib)
+target_link_libraries(validate-mode PRIVATE validate-mode-lib fl-validator-cli)
 
 add_library(validate-licenses-lib STATIC validate-licenses/license_validator.cpp)
-target_link_libraries(validate-licenses-lib PUBLIC tomlplusplus::tomlplusplus)
+target_link_libraries(validate-licenses-lib PUBLIC tomlplusplus::tomlplusplus fl-validator-cli)
 target_include_directories(validate-licenses-lib PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/validate-licenses")
 
 add_executable(validate-licenses validate-licenses/main.cpp)
-target_link_libraries(validate-licenses PRIVATE validate-licenses-lib)
+target_link_libraries(validate-licenses PRIVATE validate-licenses-lib fl-validator-cli)
 
 add_library(validate-mesh-lib STATIC validate-mesh/mesh_validator.cpp)
+target_link_libraries(validate-mesh-lib PUBLIC fl-validator-cli)
 # #844: the articulation channel registry (engine/render/ArtChannel.h) is header-only and stdlib-only,
 # so the validator names the same channels the engine consumes without linking engine-render.
 target_include_directories(validate-mesh-lib PRIVATE "${CMAKE_SOURCE_DIR}/engine")
@@ -312,7 +326,7 @@ endif()
 target_link_libraries(validate-mesh-lib PUBLIC tinygltf-impl)
 
 add_executable(validate-mesh validate-mesh/main.cpp)
-target_link_libraries(validate-mesh PRIVATE validate-mesh-lib)
+target_link_libraries(validate-mesh PRIVATE validate-mesh-lib fl-validator-cli)
 
 add_library(tex-compress-lib STATIC tex-compress/tex_compress.cpp)
 target_include_directories(tex-compress-lib PUBLIC

@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "sensor_validator.h"
 
+#include "ValidatorCli.h"
+
 #include <cstdio>
 #include <cstring>
-#include <fstream>
-#include <sstream>
 #include <string>
 
 using namespace fl;
-
-static constexpr const char* kVersion = "0.0.1";
 
 static void printHelp() {
     std::printf("Usage: validate-sensor <file.toml> [file2.toml ...]\n"
@@ -28,45 +26,16 @@ static void printHelp() {
                 "  --version, -v  Show version and exit\n");
 }
 
-static void report(const SensorValidationResult& result, const char* label, int& exitCode) {
-    for (const auto& w : result.warnings)
-        std::fprintf(stderr, "WARN  [%s] %s\n", label, w.c_str());
-    for (const auto& e : result.errors)
-        std::fprintf(stderr, "ERROR [%s] %s\n", label, e.c_str());
-    if (!result.ok)
-        exitCode = 1;
-}
-
 int main(int argc, char* argv[]) {
     if (argc < 2) {
         std::fprintf(stderr, "error: no input files\n");
         printHelp();
         return 2;
     }
-    if (std::strcmp(argv[1], "--help") == 0 || std::strcmp(argv[1], "-h") == 0) {
-        printHelp();
-        return 0;
-    }
-    if (std::strcmp(argv[1], "--version") == 0 || std::strcmp(argv[1], "-v") == 0) {
-        std::printf("validate-sensor %s\n", kVersion);
-        return 0;
-    }
-
     int exitCode = 0;
-    for (int i = 1; i < argc; ++i) {
-        if (argv[i][0] == '-') {
-            std::fprintf(stderr, "error: unknown option %s\n", argv[i]);
-            return 2;
-        }
-        std::ifstream f(argv[i]);
-        if (!f) {
-            std::fprintf(stderr, "error: cannot open %s\n", argv[i]);
-            exitCode = 1;
-            continue;
-        }
-        std::ostringstream ss;
-        ss << f.rdbuf();
-        report(validateSensor(ss.str()), argv[i], exitCode);
-    }
-    return exitCode;
+    if (handledHelpOrVersion(argv[1], "validate-sensor", printHelp, exitCode))
+        return exitCode;
+
+    return runFileList(argc, argv, 1,
+                       validateFileContents([](const std::string& contents) { return validateSensor(contents); }));
 }
