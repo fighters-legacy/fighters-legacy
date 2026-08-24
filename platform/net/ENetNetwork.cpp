@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ENetNetwork.h"
 
+#include "GlobalLibRef.h" // one ref-counted process-global library init (#1265)
+
+#include "NetBackendCommon.h" // classifyBindAddress — one meaning per bind address (#1265)
+
 // boundPort() calls getsockname() directly rather than going through enet6 — see the comment there.
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -15,7 +19,6 @@
 #include <chrono>
 #include <cstring>
 #include <enet6/enet.h>
-#include <mutex>
 
 namespace fl {
 
@@ -96,19 +99,16 @@ ENetNetwork::~ENetNetwork() {
 // instance's shutdown must not deinitialize ENet out from under the others. A mutex-guarded
 // refcount initializes ENet on the first init() and deinitializes only on the last shutdown().
 namespace {
-std::mutex g_enetInitMutex;
-int g_enetRefCount = 0;
+GlobalLibRef g_enetRef;
 } // namespace
 
 bool ENetNetwork::init() {
     if (m_initialized)
         return true;
-    std::lock_guard<std::mutex> lock(g_enetInitMutex);
-    if (g_enetRefCount == 0 && enet_initialize() != 0) {
+    if (!g_enetRef.acquire([] { return enet_initialize() == 0; })) {
         m_lastError = "enet_initialize() failed";
         return false;
     }
-    ++g_enetRefCount;
     m_initialized = true;
     return true;
 }
@@ -121,9 +121,7 @@ void ENetNetwork::shutdown() {
         m_host = nullptr;
     }
     if (m_initialized) {
-        std::lock_guard<std::mutex> lock(g_enetInitMutex);
-        if (--g_enetRefCount == 0)
-            enet_deinitialize();
+        g_enetRef.release([] { enet_deinitialize(); });
         m_initialized = false;
     }
     m_isServer = false;
@@ -145,17 +143,19 @@ bool ENetNetwork::bind(const char* address, uint16_t port, int maxClients) {
     }
     ENetAddress addr{};
     addr.port = port;
-    if (!address || address[0] == '\0' || std::strcmp(address, "0.0.0.0") == 0) {
-        addr.type = ENET_ADDRESS_TYPE_IPV4;
-        // v4 union zeroed = INADDR_ANY
-    } else if (std::strcmp(address, "::") == 0) {
-        addr.type = ENET_ADDRESS_TYPE_IPV6;
-        // v6 union zeroed = IN6ADDR_ANY; dual-stack on Linux, IPv6-only on Windows
-    } else {
+    switch (classifyBindAddress(address)) {
+    case BindAddrKind::AnyV4:
+        addr.type = ENET_ADDRESS_TYPE_IPV4; // v4 union zeroed = INADDR_ANY
+        break;
+    case BindAddrKind::AnyV6:
+        addr.type = ENET_ADDRESS_TYPE_IPV6; // v6 union zeroed = IN6ADDR_ANY
+        break;
+    case BindAddrKind::Literal:
         if (enet_address_set_host_ip(&addr, address) != 0) {
             m_lastError = "enet_address_set_host_ip() failed — invalid bind address";
             return false;
         }
+        break;
     }
     m_host = enet_host_create(addr.type, &addr, static_cast<size_t>(maxClients), kChannelCount, 0, 0);
     if (!m_host) {

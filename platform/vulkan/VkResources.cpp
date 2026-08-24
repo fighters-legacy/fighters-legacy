@@ -12,6 +12,7 @@
 #define VMA_IMPLEMENTATION
 #define VMA_STATIC_VULKAN_FUNCTIONS 0
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
+#include "VkUtil.h" // the one image barrier (#1265)
 #include <vk_mem_alloc.h>
 
 // ---------------------------------------------------------------------------
@@ -51,23 +52,6 @@ namespace fl {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-static void imageBarrierSimple(VkCommandBuffer cmd, VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
-                               VkAccessFlags srcAccess, VkAccessFlags dstAccess, VkPipelineStageFlags srcStage,
-                               VkPipelineStageFlags dstStage, VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT,
-                               uint32_t mipLevels = 1, uint32_t layerCount = 1) {
-    VkImageMemoryBarrier b{};
-    b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    b.oldLayout = oldLayout;
-    b.newLayout = newLayout;
-    b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b.image = image;
-    b.subresourceRange = {aspect, 0, mipLevels, 0, layerCount};
-    b.srcAccessMask = srcAccess;
-    b.dstAccessMask = dstAccess;
-    vkCmdPipelineBarrier(cmd, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &b);
-}
 
 static bool checkFormat(VkPhysicalDevice physDevice, VkFormat format) {
     VkFormatProperties props{};
@@ -339,9 +323,9 @@ bool VkResourceManager::createGpuImage(const uint8_t* pixels, uint32_t width, ui
 
     VkCommandBuffer cmd = beginOneShot();
 
-    imageBarrierSimple(cmd, tex.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
-                       VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                       VK_IMAGE_ASPECT_COLOR_BIT, mipLevels, arrayLayers);
+    imageBarrier(cmd, tex.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+                 VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                 VK_IMAGE_ASPECT_COLOR_BIT, mipLevels, arrayLayers);
 
     // One region covering all layers: the buffer is layer-major tightly packed, so a single copy
     // with layerCount = arrayLayers uploads every layer (mip 0 only; array mip generation is not used
@@ -354,9 +338,9 @@ bool VkResourceManager::createGpuImage(const uint8_t* pixels, uint32_t width, ui
     region.imageExtent = {width, height, 1};
     vkCmdCopyBufferToImage(cmd, staging, tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-    imageBarrierSimple(cmd, tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                       VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels, arrayLayers);
+    imageBarrier(cmd, tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                 VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels, arrayLayers);
 
     endOneShot(cmd);
     vmaDestroyBuffer(m_allocator, staging, stagingAlloc);
@@ -462,9 +446,9 @@ bool VkResourceManager::createGpuImageCompressed(const uint8_t* data, VkDeviceSi
 
     VkCommandBuffer cmd = beginOneShot();
 
-    imageBarrierSimple(cmd, tex.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
-                       VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                       VK_IMAGE_ASPECT_COLOR_BIT, numMips);
+    imageBarrier(cmd, tex.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+                 VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                 VK_IMAGE_ASPECT_COLOR_BIT, numMips);
 
     // One copy region per mip level; offsets come from the KTX2 container.
     std::vector<VkBufferImageCopy> regions(numMips);
@@ -487,9 +471,9 @@ bool VkResourceManager::createGpuImageCompressed(const uint8_t* data, VkDeviceSi
     vkCmdCopyBufferToImage(cmd, staging, tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                            static_cast<uint32_t>(regions.size()), regions.data());
 
-    imageBarrierSimple(cmd, tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                       VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_IMAGE_ASPECT_COLOR_BIT, numMips);
+    imageBarrier(cmd, tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                 VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_IMAGE_ASPECT_COLOR_BIT, numMips);
 
     endOneShot(cmd);
     vmaDestroyBuffer(m_allocator, staging, stagingAlloc);

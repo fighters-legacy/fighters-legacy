@@ -9,6 +9,7 @@
 #include "MeshOrient.h" // contentForwardToBody — the content->body conjugation for node poses (#839)
 #include "UnifontBitmap.h"
 #include "Utf8Decode.h"
+#include "VkUtil.h" // the one image barrier (#1265)
 #include "VkWindow.h"
 #include "backends/imgui_impl_vulkan.h" // #156
 #include "imgui.h"                      // #156: Dear ImGui backend bridge (draw-data recording)
@@ -64,23 +65,6 @@ static VkShaderModule createShaderModule(VkDevice device, const std::vector<uint
     VkShaderModule mod = VK_NULL_HANDLE;
     vkCreateShaderModule(device, &ci, nullptr, &mod);
     return mod;
-}
-
-static void imageBarrier(VkCommandBuffer cmd, VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
-                         VkAccessFlags srcAccess, VkAccessFlags dstAccess, VkPipelineStageFlags srcStage,
-                         VkPipelineStageFlags dstStage, VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT,
-                         uint32_t layerCount = 1) {
-    VkImageMemoryBarrier b{};
-    b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    b.oldLayout = oldLayout;
-    b.newLayout = newLayout;
-    b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b.image = image;
-    b.subresourceRange = {aspect, 0, 1, 0, layerCount};
-    b.srcAccessMask = srcAccess;
-    b.dstAccessMask = dstAccess;
-    vkCmdPipelineBarrier(cmd, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &b);
 }
 
 #if defined(FL_VK_VALIDATION)
@@ -144,22 +128,13 @@ static bool createHostBuffer(VkDevice device, VkPhysicalDevice physDevice, VkDev
     VkMemoryRequirements req{};
     vkGetBufferMemoryRequirements(device, buf, &req);
 
-    VkPhysicalDeviceMemoryProperties memProps{};
-    vkGetPhysicalDeviceMemoryProperties(physDevice, &memProps);
-
-    const VkMemoryPropertyFlags flags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-    uint32_t memTypeIdx = 0;
-    for (uint32_t i = 0; i < memProps.memoryTypeCount; ++i) {
-        if ((req.memoryTypeBits & (1u << i)) && (memProps.memoryTypes[i].propertyFlags & flags) == flags) {
-            memTypeIdx = i;
-            break;
-        }
-    }
-
     VkMemoryAllocateInfo allocCI{};
     allocCI.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     allocCI.allocationSize = req.size;
-    allocCI.memoryTypeIndex = memTypeIdx;
+    // The memory-type search is VkRenderer::findMemoryType (#1265); this had re-inlined the same
+    // loop, down to the same fall-back-to-index-0 when nothing matches.
+    allocCI.memoryTypeIndex = findMemoryType(
+        physDevice, req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     if (vkAllocateMemory(device, &allocCI, nullptr, &mem) != VK_SUCCESS)
         return false;
 
@@ -963,47 +938,18 @@ bool VkRenderer::readbackImageRgba(VkImage srcImage, VkImageLayout srcLayout, Vk
     vkBindBufferMemory(m_device, buf, mem, 0);
 
     // One-shot command buffer: srcLayout -> TRANSFER_SRC, copy, TRANSFER_SRC -> restoreLayout.
-    VkCommandBufferAllocateInfo cbai{};
-    cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    cbai.commandPool = m_commandPool;
-    cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    cbai.commandBufferCount = 1;
-    VkCommandBuffer cmd = VK_NULL_HANDLE;
-    vkAllocateCommandBuffers(m_device, &cbai, &cmd);
-    VkCommandBufferBeginInfo cbbi{};
-    cbbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    cbbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(cmd, &cbbi);
-
-    auto barrier = [&](VkImageLayout from, VkImageLayout to, VkAccessFlags srcA, VkAccessFlags dstA) {
-        VkImageMemoryBarrier b{};
-        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        b.oldLayout = from;
-        b.newLayout = to;
-        b.srcAccessMask = srcA;
-        b.dstAccessMask = dstA;
-        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        b.image = srcImage;
-        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
-                             nullptr, 1, &b);
-    };
-    barrier(srcLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 0, VK_ACCESS_TRANSFER_READ_BIT);
+    // m_resources was initialised against this same pool and queue, so its begin/endOneShot pair is
+    // the block that used to be open-coded here (#1265).
+    VkCommandBuffer cmd = m_resources.beginOneShot();
+    imageBarrier(cmd, srcImage, srcLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 0, VK_ACCESS_TRANSFER_READ_BIT,
+                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
     VkBufferImageCopy region{};
     region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     region.imageExtent = {w, h, 1};
     vkCmdCopyImageToBuffer(cmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf, 1, &region);
-    barrier(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, restoreLayout, VK_ACCESS_TRANSFER_READ_BIT, 0);
-    vkEndCommandBuffer(cmd);
-
-    VkSubmitInfo si{};
-    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    si.commandBufferCount = 1;
-    si.pCommandBuffers = &cmd;
-    vkQueueSubmit(m_graphicsQueue, 1, &si, VK_NULL_HANDLE);
-    vkQueueWaitIdle(m_graphicsQueue);
-    vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
+    imageBarrier(cmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, restoreLayout, VK_ACCESS_TRANSFER_READ_BIT, 0,
+                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+    m_resources.endOneShot(cmd);
 
     bool ok = false;
     void* mapped = nullptr;
@@ -1686,15 +1632,6 @@ bool VkRenderer::createImageViews() {
 // ---------------------------------------------------------------------------
 // Attachments
 // ---------------------------------------------------------------------------
-uint32_t VkRenderer::findMemoryType(VkPhysicalDevice physDevice, uint32_t filter, VkMemoryPropertyFlags props) {
-    VkPhysicalDeviceMemoryProperties memProps{};
-    vkGetPhysicalDeviceMemoryProperties(physDevice, &memProps);
-    for (uint32_t i = 0; i < memProps.memoryTypeCount; ++i)
-        if ((filter & (1u << i)) && (memProps.memoryTypes[i].propertyFlags & props) == props)
-            return i;
-    return 0;
-}
-
 bool VkRenderer::createAttachmentImage(uint32_t width, uint32_t height, VkFormat format, VkImageUsageFlags usage,
                                        VkImageAspectFlags aspect, VkImage& image, VkDeviceMemory& memory,
                                        VkImageView& view) {
@@ -4218,7 +4155,7 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
                  m_numCascades > 0u
                      ? (VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT)
                      : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                 VK_IMAGE_ASPECT_DEPTH_BIT, shadowLayers);
+                 VK_IMAGE_ASPECT_DEPTH_BIT, /*mipLevels=*/1, shadowLayers);
 
     // ── Shadow passes — one per active cascade ────────────────────────────
     for (uint32_t c = 0; c < m_numCascades; ++c) {
@@ -4275,7 +4212,7 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         imageBarrier(cmd, m_shadowImage, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                      VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_IMAGE_ASPECT_DEPTH_BIT, shadowLayers);
+                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_IMAGE_ASPECT_DEPTH_BIT, /*mipLevels=*/1, shadowLayers);
     }
 
     // ── HDR → COLOR_ATTACHMENT_OPTIMAL ───────────────────────────────────
@@ -4877,19 +4814,10 @@ bool VkRenderer::createOverlayPipeline() {
             vkBindImageMemory(m_device, m_fontImage, m_fontImageMemory, 0);
         }
 
-        // One-time command buffer: transition → copy → transition.
+        // One-time command buffer: transition → copy → transition. Same pool and queue m_resources
+        // was initialised with, so its begin/endOneShot pair is this block (#1265).
         {
-            VkCommandBufferAllocateInfo cbai{};
-            cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-            cbai.commandPool = m_commandPool;
-            cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-            cbai.commandBufferCount = 1;
-            VkCommandBuffer cmd{VK_NULL_HANDLE};
-            vkAllocateCommandBuffers(m_device, &cbai, &cmd);
-            VkCommandBufferBeginInfo cbbi{};
-            cbbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-            cbbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-            vkBeginCommandBuffer(cmd, &cbbi);
+            VkCommandBuffer cmd = m_resources.beginOneShot();
 
             imageBarrier(cmd, m_fontImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
                          VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
@@ -4905,14 +4833,7 @@ bool VkRenderer::createOverlayPipeline() {
                          VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
 
-            vkEndCommandBuffer(cmd);
-            VkSubmitInfo si{};
-            si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-            si.commandBufferCount = 1;
-            si.pCommandBuffers = &cmd;
-            vkQueueSubmit(m_graphicsQueue, 1, &si, VK_NULL_HANDLE);
-            vkQueueWaitIdle(m_graphicsQueue);
-            vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
+            m_resources.endOneShot(cmd);
         }
 
         vkDestroyBuffer(m_device, stagingBuf, nullptr);
