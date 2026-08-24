@@ -2,6 +2,7 @@
 #include "match/GameModeParser.h"
 
 #include "config/TomlNumeric.h"
+#include "util/Str.h" // the one ASCII case rule (#1265)
 
 #include <toml++/toml.hpp>
 
@@ -115,8 +116,7 @@ GameModeParseResult parseGameModeToml(std::string_view tomlContent) {
 
     if (const toml::node_view rules = tbl["rules"]) {
         if (auto ff = rules["friendly_fire"].value<std::string>()) {
-            std::string v = *ff;
-            std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c) { return std::tolower(c); });
+            const std::string v = asciiLower(*ff);
             if (v == "server")
                 m.friendlyFire = ModeFriendlyFire::Server;
             else if (v == "on" || v == "true")

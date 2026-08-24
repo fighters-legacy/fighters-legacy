@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <cctype>
+#include <string>
 #include <string_view>
 
 namespace fl {
@@ -25,6 +27,49 @@ namespace fl {
     while (e > b && isWs(s[e - 1]))
         --e;
     return s.substr(b, e - b);
+}
+
+// ASCII case folding, in one place (#1265). Seven sites hand-rolled it in four shapes: a
+// std::transform, a per-char helper, an inline loop inside a key builder, and a character-by-
+// character case-insensitive compare.
+//
+// They agreed only because nothing in this program calls setlocale — which is a property of the
+// WHOLE PROGRAM, not of any of those functions, and therefore not something any of them could rely
+// on locally. std::tolower is kept rather than rewritten to arithmetic folding so adopting these is
+// provably behaviour-preserving for bytes 0x80-0xFF as well.
+//
+// ⚠ std::tolower takes an int and is UB for a negative one, so the cast through unsigned char is
+// load-bearing, not decoration — plain `char` is signed on x86 and mod ids and chat carry bytes
+// above 127.
+[[nodiscard]] inline char asciiToLower(char c) noexcept {
+    return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+}
+
+[[nodiscard]] inline std::string asciiLower(std::string_view s) {
+    std::string out(s);
+    for (char& c : out)
+        c = asciiToLower(c);
+    return out;
+}
+
+// Case-insensitive equality and prefix test. `istartsWith` exists because the sites that needed it
+// were comparing against a lowercase literal one character at a time, which reads as a loop rather
+// than as the question it is asking.
+[[nodiscard]] inline bool iequals(std::string_view a, std::string_view b) noexcept {
+    if (a.size() != b.size())
+        return false;
+    for (std::size_t i = 0; i < a.size(); ++i)
+        if (asciiToLower(a[i]) != asciiToLower(b[i]))
+            return false;
+    return true;
+}
+
+[[nodiscard]] inline bool istartsWith(std::string_view s, std::string_view prefix) noexcept {
+    return s.size() >= prefix.size() && iequals(s.substr(0, prefix.size()), prefix);
+}
+
+[[nodiscard]] inline bool iendsWith(std::string_view s, std::string_view suffix) noexcept {
+    return s.size() >= suffix.size() && iequals(s.substr(s.size() - suffix.size()), suffix);
 }
 
 } // namespace fl

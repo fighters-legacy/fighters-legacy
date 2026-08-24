@@ -7,8 +7,10 @@
 #endif
 
 #include "CrashReporter.h"
+
 #include "FileLogger.h"
 #include "IWindow.h"
+#include "LocalTime.h" // localTimeBreakdown — the one portable localtime shim (#1265)
 #include "Version.h"
 
 #include <algorithm>
@@ -97,12 +99,7 @@ void CrashInfo::populateOS() {
 static std::string currentTimestampCompact() {
     using clock = std::chrono::system_clock;
     std::time_t t = clock::to_time_t(clock::now());
-    std::tm tm{};
-#if defined(_WIN32)
-    localtime_s(&tm, &t);
-#else
-    localtime_r(&t, &tm);
-#endif
+    const std::tm tm = localTimeBreakdown(t);
     char buf[64]; // 64 bytes: actual output is ~19 chars; larger buf silences GCC format-truncation
     std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d_%02d-%02d-%02d", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
                   tm.tm_hour, tm.tm_min, tm.tm_sec);

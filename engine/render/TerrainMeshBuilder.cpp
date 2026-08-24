@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "render/TerrainMeshBuilder.h"
 
+#include "render/GlbWriter.h" // the one GLB container writer (#1265)
+
 #include <glm/common.hpp>    // min, max (component-wise)
 #include <glm/geometric.hpp> // cross, normalize, dot, length
 
@@ -14,18 +16,6 @@
 #include <vector>
 
 namespace fl {
-
-namespace {
-
-// ---------------------------------------------------------------------------
-// Little-endian write helpers (host is always LE on our targets)
-// ---------------------------------------------------------------------------
-
-void writeLE32(uint8_t* p, uint32_t v) {
-    std::memcpy(p, &v, 4);
-}
-
-} // namespace
 
 std::vector<uint8_t> buildTileMeshGlb(const std::vector<uint16_t>& heights, int heightmapSize, int meshGrid,
                                       const TileKey& key, double R, glm::dvec3 tileOriginWorld,
@@ -248,134 +238,40 @@ std::vector<uint8_t> buildTileMeshGlb(const std::vector<uint16_t>& heights, int 
         }
     }
 
-    // ---------------------------------------------------------------------------
-    // Assemble BIN buffer (non-interleaved): POSITION, NORMAL, [TEXCOORD_0], [TANGENT], INDICES.
-    // TANGENT (VEC4 f32) carries the packed terrain data (#475), not a real tangent — see the fill
-    // loop. All attribute blocks are multiples of 4 bytes, so bufferView offsets stay 4-aligned.
-    // ---------------------------------------------------------------------------
+    // Attribute block sizes (non-interleaved). GlbWriter lays them out in the order they are pushed
+    // below and pads the BIN chunk to 4 bytes.
     const std::size_t posBytes = static_cast<std::size_t>(vertCount) * 3 * sizeof(float);
     const std::size_t nrmBytes = posBytes;
     const std::size_t texBytes = emitTexcoord ? static_cast<std::size_t>(vertCount) * 2 * sizeof(float) : 0;
     const std::size_t tanBytes = emitTerrainTangent ? static_cast<std::size_t>(vertCount) * 4 * sizeof(float) : 0;
-    const std::size_t idxBytes = static_cast<std::size_t>(indexCount) * sizeof(uint16_t);
-    const std::size_t binBytes = posBytes + nrmBytes + texBytes + tanBytes + idxBytes;
-    const std::size_t binPadded = (binBytes + 3u) & ~std::size_t{3u};
-
-    const std::size_t posOff = 0;
-    const std::size_t nrmOff = posOff + posBytes;
-    const std::size_t texOff = nrmOff + nrmBytes;
-    const std::size_t tanOff = texOff + texBytes;
-    const std::size_t idxOff = tanOff + tanBytes;
-
-    std::vector<uint8_t> bin(binPadded, 0);
-    std::memcpy(bin.data() + posOff, positions.data(), posBytes);
-    std::memcpy(bin.data() + nrmOff, normals.data(), nrmBytes);
-    if (texBytes)
-        std::memcpy(bin.data() + texOff, texcoords.data(), texBytes);
-    if (tanBytes)
-        std::memcpy(bin.data() + tanOff, tangents.data(), tanBytes);
-    std::memcpy(bin.data() + idxOff, indices.data(), idxBytes);
 
     // ---------------------------------------------------------------------------
-    // Build JSON (glTF 2.0) with dynamically ordered accessors / bufferViews.
-    // Accessor order: 0=POSITION, 1=NORMAL, [TEXCOORD_0], [TANGENT], last=INDICES.
-    // ---------------------------------------------------------------------------
-    int accPos = 0, accNrm = 1, accNext = 2;
-    int accTex = -1, accTan = -1;
+    // Emit the GLB. Attribute ORDER is the contract: POSITION, NORMAL, then the optional
+    // TEXCOORD_0 and TANGENT, with the index accessor last. GlbWriter numbers accessors and
+    // bufferViews in exactly this order, which is the numbering this builder always produced and
+    // tests/test_terrain_mesh_builder.cpp's parseGlb walks (#1265).
+    //
+    // TANGENT is a VEC4 float carrying the packed terrain data (#475), not a real tangent — see the
+    // fill loop above. It rides an ordinary attribute slot because that is all the container needs
+    // it to be.
+    GlbMesh mesh;
+    mesh.meshName = "tile";
+    mesh.vertexCount = vertCount;
+    mesh.attributes.push_back({"POSITION", "VEC3", positions.data(), posBytes});
+    mesh.attributes.push_back({"NORMAL", "VEC3", normals.data(), nrmBytes});
     if (emitTexcoord)
-        accTex = accNext++;
+        mesh.attributes.push_back({"TEXCOORD_0", "VEC2", texcoords.data(), texBytes});
     if (emitTerrainTangent)
-        accTan = accNext++;
-    const int accIdx = accNext;
-    const int bvTex = emitTexcoord ? 2 : -1;
-    const int bvTan = emitTerrainTangent ? (emitTexcoord ? 3 : 2) : -1;
-    const int bvIdx = accIdx;
-
-    std::string attrs = "\"POSITION\":" + std::to_string(accPos) + ",\"NORMAL\":" + std::to_string(accNrm);
-    if (emitTexcoord)
-        attrs += ",\"TEXCOORD_0\":" + std::to_string(accTex);
-    if (emitTerrainTangent)
-        attrs += ",\"TANGENT\":" + std::to_string(accTan);
-
-    std::string json = "{";
-    json += R"("asset":{"version":"2.0"},)";
-    json += R"("scene":0,)";
-    json += R"("scenes":[{"nodes":[0]}],)";
-    json += R"("nodes":[{"mesh":0}],)";
-    json += "\"meshes\":[{\"name\":\"tile\",\"primitives\":[{\"attributes\":{" + attrs +
-            "},\"indices\":" + std::to_string(accIdx) + ",\"mode\":4}]}],";
-
-    // accessors
-    json += "\"accessors\":[";
-    json += "{\"bufferView\":0,\"byteOffset\":0,\"componentType\":5126,\"count\":" + std::to_string(vertCount) +
-            ",\"type\":\"VEC3\",\"min\":[" + std::to_string(relMin.x) + "," + std::to_string(relMin.y) + "," +
-            std::to_string(relMin.z) + "],\"max\":[" + std::to_string(relMax.x) + "," + std::to_string(relMax.y) + "," +
-            std::to_string(relMax.z) + "]},";
-    json += "{\"bufferView\":1,\"byteOffset\":0,\"componentType\":5126,\"count\":" + std::to_string(vertCount) +
-            ",\"type\":\"VEC3\"}";
-    if (emitTexcoord)
-        json += ",{\"bufferView\":" + std::to_string(bvTex) +
-                ",\"byteOffset\":0,\"componentType\":5126,\"count\":" + std::to_string(vertCount) +
-                ",\"type\":\"VEC2\"}";
-    if (emitTerrainTangent)
-        json += ",{\"bufferView\":" + std::to_string(bvTan) +
-                ",\"byteOffset\":0,\"componentType\":5126,\"count\":" + std::to_string(vertCount) +
-                ",\"type\":\"VEC4\"}";
-    json += ",{\"bufferView\":" + std::to_string(bvIdx) +
-            ",\"byteOffset\":0,\"componentType\":5123,\"count\":" + std::to_string(indexCount) +
-            ",\"type\":\"SCALAR\"}";
-    json += "],";
-
-    // bufferViews (same order as accessors, indices last)
-    json += "\"bufferViews\":[";
-    json += "{\"buffer\":0,\"byteOffset\":" + std::to_string(posOff) + ",\"byteLength\":" + std::to_string(posBytes) +
-            ",\"target\":34962},";
-    json += "{\"buffer\":0,\"byteOffset\":" + std::to_string(nrmOff) + ",\"byteLength\":" + std::to_string(nrmBytes) +
-            ",\"target\":34962}";
-    if (emitTexcoord)
-        json += ",{\"buffer\":0,\"byteOffset\":" + std::to_string(texOff) +
-                ",\"byteLength\":" + std::to_string(texBytes) + ",\"target\":34962}";
-    if (emitTerrainTangent)
-        json += ",{\"buffer\":0,\"byteOffset\":" + std::to_string(tanOff) +
-                ",\"byteLength\":" + std::to_string(tanBytes) + ",\"target\":34962}";
-    json += ",{\"buffer\":0,\"byteOffset\":" + std::to_string(idxOff) + ",\"byteLength\":" + std::to_string(idxBytes) +
-            ",\"target\":34963}],";
-
-    json += "\"buffers\":[{\"byteLength\":" + std::to_string(binPadded) + "}]";
-    json += "}";
-
-    while (json.size() % 4 != 0)
-        json += ' ';
-
-    static constexpr uint32_t kChunkJSON = 0x4E4F534Au;
-    static constexpr uint32_t kChunkBIN = 0x004E4942u;
-    static constexpr uint32_t kMagic = 0x46546C67u;
-
-    const std::size_t jsonChunkSize = 8 + json.size();
-    const std::size_t binChunkSize = 8 + binPadded;
-    const std::size_t totalSize = 12 + jsonChunkSize + binChunkSize;
-
-    std::vector<uint8_t> glb(totalSize, 0);
-    uint8_t* p = glb.data();
-    writeLE32(p, kMagic);
-    p += 4;
-    writeLE32(p, 2u);
-    p += 4;
-    writeLE32(p, static_cast<uint32_t>(totalSize));
-    p += 4;
-    writeLE32(p, static_cast<uint32_t>(json.size()));
-    p += 4;
-    writeLE32(p, kChunkJSON);
-    p += 4;
-    std::memcpy(p, json.data(), json.size());
-    p += json.size();
-    writeLE32(p, static_cast<uint32_t>(binPadded));
-    p += 4;
-    writeLE32(p, kChunkBIN);
-    p += 4;
-    std::memcpy(p, bin.data(), binPadded);
-
-    return glb;
+        mesh.attributes.push_back({"TANGENT", "VEC4", tangents.data(), tanBytes});
+    mesh.posMin[0] = relMin.x;
+    mesh.posMin[1] = relMin.y;
+    mesh.posMin[2] = relMin.z;
+    mesh.posMax[0] = relMax.x;
+    mesh.posMax[1] = relMax.y;
+    mesh.posMax[2] = relMax.z;
+    mesh.indices = indices.data();
+    mesh.indexCount = indices.size();
+    return buildGlb(mesh);
 }
 
 } // namespace fl

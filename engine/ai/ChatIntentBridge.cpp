@@ -3,7 +3,6 @@
 #include "util/Str.h"
 
 #include <algorithm>
-#include <cctype>
 
 namespace fl::ai {
 
@@ -26,10 +25,6 @@ std::string_view intentRejectionName(IntentRejection r) noexcept {
 }
 
 namespace {
-
-[[nodiscard]] char lower(char c) noexcept {
-    return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-}
 
 // The decline sentinel. It lives here rather than in WingmanCommand.h precisely because it must not
 // be parseable as a command — putting it in the grammar table would make parseWingmanCommand accept
@@ -156,8 +151,7 @@ IntentResult validateIntentResponse(std::string_view response) {
     }
 
     // Normalise the two variations a model produces without meaning anything by them.
-    candidate = std::string(trim(candidate));
-    std::transform(candidate.begin(), candidate.end(), candidate.begin(), lower);
+    candidate = asciiLower(trim(candidate));
     if (candidate.empty()) {
         out.rejection = IntentRejection::NotJson;
         return out;
@@ -189,7 +183,7 @@ bool looksLikeWingmanAddress(std::string_view text) {
     std::string lowered;
     lowered.reserve(t.size());
     for (char c : t)
-        lowered += lower(c);
+        lowered += asciiToLower(c);
 
     // Callsign-ish forms of address, plus the imperative verbs the six commands cover. Cheap and
     // deliberately conservative: a model call per chat line would turn the team channel into a

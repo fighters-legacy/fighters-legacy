@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "content/AssetPaths.h"
+#include "util/Str.h" // asciiLower — the one ASCII case rule (#1265)
 
 #include <array>
-#include <cctype>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -53,25 +53,12 @@ const AssetPathInfo& assetPathInfo(AssetType type) noexcept {
     return kAssetPaths[static_cast<uint8_t>(type)];
 }
 
-namespace {
-bool ciEndsWith(std::string_view s, std::string_view suffix) {
-    if (s.size() < suffix.size())
-        return false;
-    for (size_t i = 0; i < suffix.size(); ++i) {
-        const char a = static_cast<char>(std::tolower(static_cast<unsigned char>(s[s.size() - suffix.size() + i])));
-        const char b = static_cast<char>(std::tolower(static_cast<unsigned char>(suffix[i])));
-        if (a != b)
-            return false;
-    }
-    return true;
-}
-} // namespace
+namespace {} // namespace
 
 std::string asciiLowered(std::string_view s) {
-    std::string out(s);
-    for (char& c : out)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return out;
+    // The body is engine/util/Str.h's (#1265). This name stays because assetKey and the reverse
+    // path mapper read better with it, and every content caller already says it.
+    return asciiLower(s);
 }
 
 std::string assetKey(AssetType type, std::string_view id) {
@@ -94,9 +81,9 @@ std::optional<std::pair<AssetType, std::string>> assetFromPackRelativePath(std::
         if (subdir != info.subdir)
             continue;
         std::string_view ext;
-        if (ciEndsWith(rest, info.ext))
+        if (iendsWith(rest, info.ext))
             ext = info.ext;
-        else if (info.extFallback[0] != '\0' && ciEndsWith(rest, info.extFallback))
+        else if (info.extFallback[0] != '\0' && iendsWith(rest, info.extFallback))
             ext = info.extFallback;
         else
             continue; // wrong extension for this subdir — try the next matching type

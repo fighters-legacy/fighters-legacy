@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ai/WingmanPhraseMatch.h"
+#include "util/Str.h" // the one ASCII case rule (#1265)
 
 #include <array>
 #include <cctype>
@@ -99,7 +100,7 @@ constexpr std::array<Cue, 8> kReturnToBase{{
     for (char c : s) {
         const auto u = static_cast<unsigned char>(c);
         if (std::isalnum(u)) {
-            out += static_cast<char>(std::tolower(u));
+            out += asciiToLower(c);
             lastWasSpace = false;
         } else if (!lastWasSpace) {
             out += ' ';

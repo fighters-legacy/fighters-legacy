@@ -6,6 +6,7 @@
 #endif
 
 #include "FileLogger.h"
+#include "LocalTime.h" // localTimeBreakdown — the one portable localtime shim (#1265)
 
 #include <algorithm>
 #include <chrono>
@@ -45,12 +46,7 @@ static std::string currentTimestamp() {
     auto now = clock::now();
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
     std::time_t t = clock::to_time_t(now);
-    std::tm tm{};
-#if defined(_WIN32)
-    localtime_s(&tm, &t);
-#else
-    localtime_r(&t, &tm);
-#endif
+    const std::tm tm = localTimeBreakdown(t);
     char buf[64]; // 64 bytes: actual output is 23 chars; larger buf silences GCC format-truncation
     std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d.%03d", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
                   tm.tm_hour, tm.tm_min, tm.tm_sec, static_cast<int>(ms.count()));
@@ -64,12 +60,7 @@ static std::string currentTimestamp() {
 std::string FileLogger::makeFilename(const std::string& logDir) {
     using clock = std::chrono::system_clock;
     std::time_t t = clock::to_time_t(clock::now());
-    std::tm tm{};
-#if defined(_WIN32)
-    localtime_s(&tm, &t);
-#else
-    localtime_r(&t, &tm);
-#endif
+    const std::tm tm = localTimeBreakdown(t);
     char buf[128]; // 128 bytes: actual output is ~38 chars; larger buf silences GCC format-truncation
     std::snprintf(buf, sizeof(buf), "engine_%04d-%02d-%02d_%02d-%02d-%02d.log", tm.tm_year + 1900, tm.tm_mon + 1,
                   tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
