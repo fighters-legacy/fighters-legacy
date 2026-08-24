@@ -17,6 +17,7 @@
 #include "sensor/SensorDefParser.h"
 
 #include "mock_content.h"
+#include "mock_hal.h"
 
 #include <cstring>
 #include <limits>
@@ -28,101 +29,11 @@
 using namespace fl;
 
 // ---------------------------------------------------------------------------
-// Mock types (inline — no separate header until a second test file needs them)
+// Mock types
 // ---------------------------------------------------------------------------
-
-// In-memory filesystem: directories stored as sets of Entry, files as byte vectors.
-struct MockFilesystem : public IFilesystem {
-    // path → file bytes  (PathDomain ignored for simplicity in tests)
-    std::map<std::string, std::vector<uint8_t>> files;
-    // paths that are directories
-    std::map<std::string, std::vector<Entry>> dirs;
-
-    void addFile(const std::string& path, const std::string& content) {
-        files[path] = std::vector<uint8_t>(content.begin(), content.end());
-    }
-    void addDir(const std::string& path) {
-        if (dirs.find(path) == dirs.end())
-            dirs[path] = {};
-    }
-    void addDirEntry(const std::string& parentDir, const std::string& name, bool isDirectory) {
-        dirs[parentDir].push_back({name, isDirectory});
-    }
-
-    int openFile(PathDomain, const char* path, bool) override {
-        auto it = files.find(path);
-        if (it == files.end())
-            return -1;
-        openHandles[nextHandle] = path;
-        return nextHandle++;
-    }
-    void closeFile(int handle) override {
-        openHandles.erase(handle);
-    }
-
-    std::size_t readFile(int handle, void* buffer, std::size_t size) override {
-        auto hit = openHandles.find(handle);
-        if (hit == openHandles.end())
-            return 0;
-        auto& data = files[hit->second];
-        std::size_t n = std::min(size, data.size());
-        std::memcpy(buffer, data.data(), n);
-        return n;
-    }
-    std::size_t writeFile(int, const void*, std::size_t) override {
-        return 0;
-    }
-    bool seek(int, std::size_t, SeekOrigin) override {
-        return false;
-    }
-    std::size_t getFileSize(int handle) const override {
-        auto hit = openHandles.find(handle);
-        if (hit == openHandles.end())
-            return 0;
-        auto fit = files.find(hit->second);
-        return (fit != files.end()) ? fit->second.size() : 0;
-    }
-    bool fileExists(PathDomain, const char* path) const override {
-        return files.find(path) != files.end();
-    }
-    bool createDirectory(PathDomain, const char*) override {
-        return true;
-    }
-    bool renameFile(PathDomain, const char*, const char*) override {
-        return false;
-    }
-    std::vector<Entry> scanDirectory(PathDomain, const char* path) const override {
-        auto it = dirs.find(path);
-        if (it == dirs.end())
-            return {};
-        return it->second;
-    }
-
-  private:
-    int nextHandle = 1;
-    std::map<int, std::string> openHandles;
-};
-
-struct MockFilesystemWatcher : public IFilesystemWatcher {
-    struct WatchCall {
-        std::string path;
-        bool recursive;
-    };
-    std::vector<WatchCall> watchCalls;
-    std::vector<std::string> unwatchCalls;
-    std::vector<Event> pendingEvents;
-
-    bool watch(PathDomain, const char* path, bool recursive) override {
-        watchCalls.push_back({path, recursive});
-        return true;
-    }
-    void unwatch(PathDomain, const char* path) override {
-        unwatchCalls.push_back(path);
-    }
-    std::vector<Event> pollEvents() override {
-        return std::exchange(pendingEvents, {});
-    }
-};
+// The filesystem, watcher and logger doubles moved to mock_hal.h (#1276) once test_localization.cpp
+// became the second file needing them -- which is the condition the note that used to sit here set
+// for itself. What is left below is genuinely local to this suite.
 
 struct MockContentPack : public NullContentPack {
     std::string packName = "mock";
@@ -226,11 +137,6 @@ struct MockContentPack : public NullContentPack {
 };
 
 // Helper: build a valid manifest TOML string
-static std::string makeManifest(const std::string& name = "Test Mod", const std::string& id = "test-mod", int prio = 10,
-                                const std::string& api = "1.0") {
-    return "[mod]\nname = \"" + name + "\"\nid = \"" + id + "\"\nversion = \"1.0.0\"\n\"engine-api\" = \"" + api +
-           "\"\npriority = " + std::to_string(prio) + "\ndepends = []\n";
-}
 
 // ---------------------------------------------------------------------------
 // ModLoader tests

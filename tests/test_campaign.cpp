@@ -13,7 +13,9 @@
 #include "flight/Geodetic.h"       // geodeticAltitude: the honest check on an airborne template spawn
 #include "mission/MissionParser.h" // a generated sortie must round-trip through the real mission parser
 
+#include "campaign_fixture.h"
 #include <catch2/catch_approx.hpp>
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <string>
@@ -30,23 +32,6 @@ std::vector<uint8_t> splitRaster(int cols, int rows) {
         for (int c = 0; c < cols; ++c)
             px[static_cast<std::size_t>(r) * cols + c] = (c < cols / 2) ? 60 : 200;
     return px;
-}
-
-// A loader that hands out a synthetic raster keyed by path, so the engine never needs a real PNG.
-CampaignEngine::FrontlineLoader syntheticLoader() {
-    return [](const std::string& path, Frontline& out) -> bool {
-        const int cols = out.cols() > 0 ? out.cols() : 8;
-        const int rows = out.rows() > 0 ? out.rows() : 4;
-        Frontline f(cols, rows, out.bounds());
-        std::vector<uint8_t> px;
-        if (path.find("after") != std::string::npos)
-            px.assign(static_cast<std::size_t>(cols) * rows, 60); // all side A after the story win
-        else
-            px = splitRaster(cols, rows);
-        (void)f.setPixels(std::move(px));
-        out = std::move(f);
-        return true;
-    };
 }
 
 } // namespace

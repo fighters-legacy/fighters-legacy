@@ -4,6 +4,7 @@
 #include "FileLogger.h"
 #include "IWindow.h"
 #include "crash/CrashReporter.h"
+#include "mock_hal.h"
 #include "temp_path.h"
 
 #include <csignal>
@@ -20,71 +21,6 @@
 namespace fs = std::filesystem;
 
 using namespace fl;
-
-// ---------------------------------------------------------------------------
-// MockWindow
-// ---------------------------------------------------------------------------
-
-namespace fl {
-
-struct MockWindow : IWindow {
-    int buttonToReturn{2}; // default: Dismiss
-    std::string lastUrl;
-    std::string lastTitle;
-    std::string lastMessage;
-
-    bool init(const char*, int, int) override {
-        return true;
-    }
-    void shutdown() override {}
-    void pollEvents() override {}
-    void setEventHandler(IWindowEventHandler*) override {}
-    int width() const override {
-        return 1280;
-    }
-    int height() const override {
-        return 720;
-    }
-    int logicalWidth() const override {
-        return 1280;
-    }
-    int logicalHeight() const override {
-        return 720;
-    }
-    bool shouldClose() const override {
-        return false;
-    }
-    void* nativeHandle() const override {
-        return nullptr;
-    }
-    const char* getLastError() const override {
-        return nullptr;
-    }
-
-    int showMessageBox(MessageBoxType, const char* title, const char* message, const MessageBoxButton*, int) override {
-        lastTitle = title ? title : "";
-        lastMessage = message ? message : "";
-        return buttonToReturn;
-    }
-    void openURL(const char* url) override {
-        lastUrl = url ? url : "";
-    }
-    void setTitle(const char*) override {}
-    bool setSize(int, int) override {
-        return false;
-    }
-    bool setFullscreen(bool) override {
-        return false;
-    }
-    bool setDisplayMode(const IDisplay::DisplayMode&) override {
-        return false;
-    }
-    int getCurrentMonitorId() const override {
-        return -1;
-    }
-};
-
-} // namespace fl
 
 // ---------------------------------------------------------------------------
 // Helper: write a sentinel file with a given PID
@@ -113,12 +49,14 @@ static void writeCrashLog(const fs::path& userDataDir, const std::string& name) 
 TEST_CASE("CrashReporter: checkPreviousCrash returns false when no sentinel", "[crash]") {
     fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
+    win.buttonToReturn = 2; // Dismiss — the shared mock defaults to 0
     CHECK_FALSE(CrashReporter::checkPreviousCrash(tmp.str(), &win, nullptr, "https://example.com"));
 }
 
 TEST_CASE("CrashReporter: checkPreviousCrash returns false when process still alive", "[crash]") {
     fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
+    win.buttonToReturn = 2; // Dismiss — the shared mock defaults to 0
 #if defined(_WIN32)
     int myPid = static_cast<int>(GetCurrentProcessId());
 #else
@@ -132,6 +70,7 @@ TEST_CASE("CrashReporter: checkPreviousCrash returns false when process still al
 TEST_CASE("CrashReporter: checkPreviousCrash returns true with dead PID sentinel", "[crash]") {
     fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
+    win.buttonToReturn = 2;              // Dismiss — the shared mock defaults to 0
     win.buttonToReturn = 2;              // Dismiss
     writeSentinel(tmp.path(), 99999999); // almost certainly dead
     writeCrashLog(tmp.path(), "crash_2026-01-01_00-00-00.log");
@@ -142,6 +81,7 @@ TEST_CASE("CrashReporter: checkPreviousCrash returns true with dead PID sentinel
 TEST_CASE("CrashReporter: checkPreviousCrash View Log opens file:// URL", "[crash]") {
     fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
+    win.buttonToReturn = 2; // Dismiss — the shared mock defaults to 0
     win.buttonToReturn = 0; // View Log
     writeSentinel(tmp.path(), 99999999);
     writeCrashLog(tmp.path(), "crash_2026-01-01_00-00-01.log");
@@ -152,6 +92,7 @@ TEST_CASE("CrashReporter: checkPreviousCrash View Log opens file:// URL", "[cras
 TEST_CASE("CrashReporter: checkPreviousCrash Report opens github URL", "[crash]") {
     fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
+    win.buttonToReturn = 2; // Dismiss — the shared mock defaults to 0
     win.buttonToReturn = 1; // Report
     writeSentinel(tmp.path(), 99999999);
     writeCrashLog(tmp.path(), "crash_2026-01-01_00-00-02.log");
@@ -162,6 +103,7 @@ TEST_CASE("CrashReporter: checkPreviousCrash Report opens github URL", "[crash]"
 TEST_CASE("CrashReporter: checkPreviousCrash Dismiss sets no URL", "[crash]") {
     fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
+    win.buttonToReturn = 2; // Dismiss — the shared mock defaults to 0
     win.buttonToReturn = 2; // Dismiss
     writeSentinel(tmp.path(), 99999999);
     writeCrashLog(tmp.path(), "crash_2026-01-01_00-00-03.log");
@@ -172,6 +114,7 @@ TEST_CASE("CrashReporter: checkPreviousCrash Dismiss sets no URL", "[crash]") {
 TEST_CASE("CrashReporter: sentinel deleted after checkPreviousCrash", "[crash]") {
     fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
+    win.buttonToReturn = 2; // Dismiss — the shared mock defaults to 0
     win.buttonToReturn = 2;
     writeSentinel(tmp.path(), 99999999);
     CrashReporter::checkPreviousCrash(tmp.str(), &win, nullptr, "https://example.com");
@@ -181,6 +124,7 @@ TEST_CASE("CrashReporter: sentinel deleted after checkPreviousCrash", "[crash]")
 TEST_CASE("CrashReporter: init creates sentinel file", "[crash]") {
     fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
+    win.buttonToReturn = 2; // Dismiss — the shared mock defaults to 0
     fl::test::TempDirGuard logTmp{"fl_test"};
     FileLogger logger;
     logger.open(logTmp.str(), 5);
@@ -196,6 +140,7 @@ TEST_CASE("CrashReporter: init creates sentinel file", "[crash]") {
 TEST_CASE("CrashReporter: shutdown deletes sentinel file", "[crash]") {
     fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
+    win.buttonToReturn = 2; // Dismiss — the shared mock defaults to 0
     fl::test::TempDirGuard logTmp{"fl_test"};
     FileLogger logger;
     logger.open(logTmp.str(), 5);
@@ -216,6 +161,7 @@ TEST_CASE("CrashReporter: shutdown with no init does not crash", "[crash]") {
 TEST_CASE("CrashReporter: formatCrashHeader contains version and OS", "[crash]") {
     fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
+    win.buttonToReturn = 2; // Dismiss — the shared mock defaults to 0
     fl::test::TempDirGuard logTmp{"fl_test"};
     FileLogger logger;
     logger.open(logTmp.str(), 5);
@@ -238,6 +184,7 @@ TEST_CASE("CrashReporter: formatCrashHeader contains version and OS", "[crash]")
 TEST_CASE("CrashReporter: formatCrashHeader contains session log path", "[crash]") {
     fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
+    win.buttonToReturn = 2; // Dismiss — the shared mock defaults to 0
     fl::test::TempDirGuard logTmp{"fl_test"};
     FileLogger logger;
     logger.open(logTmp.str(), 5);
@@ -255,6 +202,7 @@ TEST_CASE("CrashReporter: formatCrashHeader contains session log path", "[crash]
 TEST_CASE("CrashReporter: setGpuInfo reflected in formatCrashHeader", "[crash]") {
     fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
+    win.buttonToReturn = 2; // Dismiss — the shared mock defaults to 0
     fl::test::TempDirGuard logTmp{"fl_test"};
     FileLogger logger;
     logger.open(logTmp.str(), 5);
@@ -286,6 +234,7 @@ TEST_CASE("CrashReporter: init with null window does not crash", "[crash]") {
 TEST_CASE("CrashReporter: crash log rotation keeps at most 5", "[crash]") {
     fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
+    win.buttonToReturn = 2; // Dismiss — the shared mock defaults to 0
     fl::test::TempDirGuard logTmp{"fl_test"};
     FileLogger logger;
     logger.open(logTmp.str(), 5);
@@ -330,6 +279,7 @@ TEST_CASE("CrashInfo::populateOS fills osInfo with non-empty string", "[crash]")
 TEST_CASE("CrashReporter: setMods stores mod entries", "[crash]") {
     fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
+    win.buttonToReturn = 2; // Dismiss — the shared mock defaults to 0
     fl::test::TempDirGuard logTmp{"fl_test"};
     FileLogger logger;
     logger.open(logTmp.str(), 5);
@@ -406,6 +356,7 @@ TEST_CASE("CrashReporter: checkPreviousCrash returns true with null window (head
 TEST_CASE("CrashReporter: checkPreviousCrash with dead PID and no crash log uses 2-button dialog", "[crash]") {
     fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
+    win.buttonToReturn = 2; // Dismiss — the shared mock defaults to 0
     win.buttonToReturn = 2; // Dismiss
     writeSentinel(tmp.path(), 99999999);
     // No crash logs written → crashLogPath is empty → 2-button dialog
@@ -417,6 +368,7 @@ TEST_CASE("CrashReporter: checkPreviousCrash with dead PID and no crash log uses
 TEST_CASE("CrashReporter: checkPreviousCrash Report with logger includes GitHub URL", "[crash]") {
     fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
+    win.buttonToReturn = 2; // Dismiss — the shared mock defaults to 0
     win.buttonToReturn = 1; // Report
     fl::test::TempDirGuard logTmp{"fl_test"};
     FileLogger logger;
@@ -471,6 +423,7 @@ TEST_CASE("CrashReporter: formatCrashHeader with null engineVersion shows ?", "[
 TEST_CASE("CrashReporter: checkPreviousCrash Report with null logger builds URL", "[crash]") {
     fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
+    win.buttonToReturn = 2; // Dismiss — the shared mock defaults to 0
     win.buttonToReturn = 1; // Report
     writeSentinel(tmp.path(), 99999999);
     writeCrashLog(tmp.path(), "crash_2026-01-01_12-00-02.log");
@@ -482,6 +435,7 @@ TEST_CASE("CrashReporter: checkPreviousCrash Report with null logger builds URL"
 TEST_CASE("CrashReporter: checkPreviousCrash Report with logger that has no entries", "[crash]") {
     fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
+    win.buttonToReturn = 2; // Dismiss — the shared mock defaults to 0
     win.buttonToReturn = 1; // Report
     fl::test::TempDirGuard logTmp{"fl_test"};
     FileLogger logger;

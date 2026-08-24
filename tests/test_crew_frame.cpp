@@ -37,12 +37,6 @@ using Catch::Approx;
 namespace {
 
 // A pilot that flies straight and never fires (so every projectile in the test is the gunner's).
-struct NeutralPilot : IEntityController {
-    ControlInput sample(const EntityState&, uint64_t, double, const AiTickContext&) override {
-        return ControlInput{}; // throttle 0, no trigger/release -> parked + no pilot fire
-    }
-};
-
 // A stub tail gunner (the real one is #971): always aims WORLD +Y (straight up — the airframe nose is
 // +X, so this is unmistakably NOT nose fire, and firing upward keeps the rockets clear of the ground
 // so they survive to be inspected). Opens fire only after `fireAfter` ticks, so the turret is fully
@@ -143,7 +137,7 @@ struct CrewFixture {
         t.pos[1] = 0.1; // parked on the ground (in-contact -> the parking hold pins it static, nose +X)
         t.quat[3] = 1.f;
         const EntityId id = em->spawn("test:bomber", t);
-        wb->registerController(id, std::make_unique<NeutralPilot>(), nullptr, /*initialAirspeed=*/0.f);
+        wb->registerController(id, std::make_unique<StillCtl>(), nullptr, /*initialAirspeed=*/0.f);
         return id;
     }
 
@@ -270,7 +264,7 @@ TEST_CASE("Crewed frame: an empty seat with no factory contributes no fire (#969
     t.pos[1] = 1.0;
     t.quat[3] = 1.f;
     const EntityId id = em.spawn("test:bomber", t);
-    wb.registerController(id, std::make_unique<NeutralPilot>(), nullptr, 0.f);
+    wb.registerController(id, std::make_unique<StillCtl>(), nullptr, 0.f);
 
     uint64_t tick = 0;
     for (int i = 0; i < 120; ++i)

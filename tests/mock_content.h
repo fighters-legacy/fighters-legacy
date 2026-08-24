@@ -95,4 +95,18 @@ struct NullContentPack : IContentPack {
     }
 };
 
+// ---------------------------------------------------------------------------
+// Pack-manifest fixture (#1276)
+// ---------------------------------------------------------------------------
+//
+// A mod manifest as TOML text. Two suites built this string independently and had already forked:
+// one emitted `depends = []` and took priority/api arguments, the other did neither. They agree on
+// every field they share, so this is the union with defaults, and `depends = []` is now always
+// emitted -- an absent `depends` and an empty one mean the same thing to ModLoader.
+[[nodiscard]] inline std::string makeManifest(const std::string& name = "Test Mod", const std::string& id = "test-mod",
+                                              int prio = 10, const std::string& api = "1.0") {
+    return "[mod]\nname = \"" + name + "\"\nid = \"" + id + "\"\nversion = \"1.0.0\"\n\"engine-api\" = \"" + api +
+           "\"\npriority = " + std::to_string(prio) + "\ndepends = []\n";
+}
+
 } // namespace fl

@@ -7,6 +7,7 @@
 #include "ILogger.h"
 #include "i18n/Localization.h"
 #include "i18n/StringTable.h"
+#include "mock_hal.h"
 #include "mock_log.h"
 
 using namespace fl;
@@ -22,110 +23,25 @@ using namespace fl;
 // Mock types
 // ---------------------------------------------------------------------------
 
-struct MockFilesystem : public IFilesystem {
-    std::map<std::string, std::vector<uint8_t>> files;
-    std::map<std::string, std::vector<Entry>> dirs;
-
-    void addFile(const std::string& path, const std::string& content) {
-        files[path] = std::vector<uint8_t>(content.begin(), content.end());
-    }
-    void addDir(const std::string& path) {
-        if (dirs.find(path) == dirs.end())
-            dirs[path] = {};
-    }
-    void addDirEntry(const std::string& parentDir, const std::string& name, bool isDirectory) {
-        dirs[parentDir].push_back({name, isDirectory});
-    }
-
-    // Helper: add a locale file and register it in its parent directory
-    void addLocaleFile(const std::string& path, const std::string& content) {
-        addFile(path, content);
-        // Extract parent dir and filename
-        auto slash = path.rfind('/');
-        if (slash != std::string::npos) {
-            std::string dir = path.substr(0, slash);
-            std::string name = path.substr(slash + 1);
-            addDir(dir);
-            addDirEntry(dir, name, false);
-        }
-    }
-
-    int openFile(PathDomain, const char* path, bool) override {
-        auto it = files.find(path);
-        if (it == files.end())
-            return -1;
-        openHandles[nextHandle] = path;
-        return nextHandle++;
-    }
-    void closeFile(int handle) override {
-        openHandles.erase(handle);
-    }
-    std::size_t readFile(int handle, void* buffer, std::size_t size) override {
-        auto hit = openHandles.find(handle);
-        if (hit == openHandles.end())
-            return 0;
-        auto& data = files[hit->second];
-        std::size_t n = std::min(size, data.size());
-        std::memcpy(buffer, data.data(), n);
-        return n;
-    }
-    std::size_t writeFile(int, const void*, std::size_t) override {
-        return 0;
-    }
-    bool seek(int, std::size_t, SeekOrigin) override {
-        return false;
-    }
-    std::size_t getFileSize(int handle) const override {
-        auto hit = openHandles.find(handle);
-        if (hit == openHandles.end())
-            return 0;
-        auto fit = files.find(hit->second);
-        return (fit != files.end()) ? fit->second.size() : 0;
-    }
-    bool fileExists(PathDomain, const char* path) const override {
-        return files.find(path) != files.end();
-    }
-    bool createDirectory(PathDomain, const char*) override {
-        return true;
-    }
-    bool renameFile(PathDomain, const char*, const char*) override {
-        return false;
-    }
-    std::vector<Entry> scanDirectory(PathDomain, const char* path) const override {
-        auto it = dirs.find(path);
-        if (it == dirs.end())
-            return {};
-        return it->second;
-    }
-
-  private:
-    int nextHandle = 1;
-    std::map<int, std::string> openHandles;
-};
-
-struct MockWatcher : public IFilesystemWatcher {
-    struct WatchCall {
-        std::string path;
-        bool recursive;
-    };
-    std::vector<WatchCall> watchCalls;
-    std::vector<Event> pendingEvents;
-
-    bool watch(PathDomain, const char* path, bool recursive) override {
-        watchCalls.push_back({path, recursive});
-        return true;
-    }
-    void unwatch(PathDomain, const char*) override {}
-    std::vector<Event> pollEvents() override {
-        return std::exchange(pendingEvents, {});
-    }
-};
+// The locale layout convenience the shared MockFilesystem does not need to know about: add a file
+// AND register it in its parent directory, so scanDirectory finds it. A free function rather than a
+// derived mock, because it is a fixture-building step, not filesystem behaviour (#1276).
+inline void addLocaleFile(MockFilesystem& fs, const std::string& path, const std::string& content) {
+    fs.addFile(path, content);
+    const auto slash = path.rfind('/');
+    if (slash == std::string::npos)
+        return;
+    const std::string dir = path.substr(0, slash);
+    const std::string name = path.substr(slash + 1);
+    fs.addDir(dir);
+    fs.addDirEntry(dir, name, /*isDirectory=*/false);
+}
 
 // Populate an fs with the minimal locale/en directory structure
 static void addEnLocale(MockFilesystem& fs, const std::string& content) {
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
-    fs.addLocaleFile("locale/en/strings.toml", content);
+    addLocaleFile(fs, "locale/en/strings.toml", content);
 }
 
 // ---------------------------------------------------------------------------
@@ -304,8 +220,8 @@ TEST_CASE("Localization: load merges multiple TOML files") {
     RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
-    fs.addLocaleFile("locale/en/ui.toml", "[menu]\ncampaign = \"Campaign\"\n");
-    fs.addLocaleFile("locale/en/hud.toml", "[rwr]\nlock = \"LOCK\"\n");
+    addLocaleFile(fs, "locale/en/ui.toml", "[menu]\ncampaign = \"Campaign\"\n");
+    addLocaleFile(fs, "locale/en/hud.toml", "[rwr]\nlock = \"LOCK\"\n");
 
     Localization loc(fs, logger);
     REQUIRE(loc.load("en", {}));
@@ -318,7 +234,7 @@ TEST_CASE("Localization: load ignores non-.toml files") {
     RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
-    fs.addLocaleFile("locale/en/ui.toml", "[s]\nk = \"v\"\n");
+    addLocaleFile(fs, "locale/en/ui.toml", "[s]\nk = \"v\"\n");
     // Add a non-toml file — should be silently ignored
     fs.addFile("locale/en/README.md", "not toml");
     fs.addDirEntry("locale/en", "README.md", false);
@@ -334,9 +250,9 @@ TEST_CASE("Localization: load called twice switches language with no stale state
     RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
-    fs.addLocaleFile("locale/en/ui.toml", "[s]\nk = \"english\"\n");
+    addLocaleFile(fs, "locale/en/ui.toml", "[s]\nk = \"english\"\n");
     fs.addDirEntry("locale", "fr", true);
-    fs.addLocaleFile("locale/fr/ui.toml", "[s]\nk = \"french\"\n");
+    addLocaleFile(fs, "locale/fr/ui.toml", "[s]\nk = \"french\"\n");
 
     Localization loc(fs, logger);
     loc.load("en", {});
@@ -365,9 +281,9 @@ TEST_CASE("Localization: load('fr') sees en key and fr override") {
     RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
-    fs.addLocaleFile("locale/en/ui.toml", "[menu]\ncampaign = \"Campaign\"\nextra = \"Extra\"\n");
+    addLocaleFile(fs, "locale/en/ui.toml", "[menu]\ncampaign = \"Campaign\"\nextra = \"Extra\"\n");
     fs.addDirEntry("locale", "fr", true);
-    fs.addLocaleFile("locale/fr/ui.toml", "[menu]\ncampaign = \"Campagne\"\n");
+    addLocaleFile(fs, "locale/fr/ui.toml", "[menu]\ncampaign = \"Campagne\"\n");
 
     Localization loc(fs, logger);
     REQUIRE(loc.load("fr", {}));
@@ -380,11 +296,11 @@ TEST_CASE("Localization: load('fr-CA') uses chain en->fr->fr-CA") {
     RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
-    fs.addLocaleFile("locale/en/ui.toml", "[menu]\ncampaign = \"Campaign\"\nextra = \"Extra\"\nonly_en = \"en\"\n");
+    addLocaleFile(fs, "locale/en/ui.toml", "[menu]\ncampaign = \"Campaign\"\nextra = \"Extra\"\nonly_en = \"en\"\n");
     fs.addDirEntry("locale", "fr", true);
-    fs.addLocaleFile("locale/fr/ui.toml", "[menu]\ncampaign = \"Campagne\"\nextra = \"Supplémentaire\"\n");
+    addLocaleFile(fs, "locale/fr/ui.toml", "[menu]\ncampaign = \"Campagne\"\nextra = \"Supplémentaire\"\n");
     fs.addDirEntry("locale", "fr-CA", true);
-    fs.addLocaleFile("locale/fr-CA/ui.toml", "[menu]\ncampaign = \"Campagne CA\"\n");
+    addLocaleFile(fs, "locale/fr-CA/ui.toml", "[menu]\ncampaign = \"Campagne CA\"\n");
 
     Localization loc(fs, logger);
     REQUIRE(loc.load("fr-CA", {}));
@@ -399,7 +315,7 @@ TEST_CASE("Localization: load('en') loads only en tier") {
     addEnLocale(fs, "[s]\nk = \"v\"\n");
     // fr exists but should not be loaded for load("en")
     fs.addDirEntry("locale", "fr", true);
-    fs.addLocaleFile("locale/fr/strings.toml", "[s]\nk = \"wrong\"\n");
+    addLocaleFile(fs, "locale/fr/strings.toml", "[s]\nk = \"wrong\"\n");
 
     Localization loc(fs, logger);
     REQUIRE(loc.load("en", {}));
@@ -430,12 +346,12 @@ TEST_CASE("Localization: empty string in fr-CA does NOT overwrite fr value at me
     RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
-    fs.addLocaleFile("locale/en/ui.toml", "[menu]\ncampaign = \"Campaign\"\n");
+    addLocaleFile(fs, "locale/en/ui.toml", "[menu]\ncampaign = \"Campaign\"\n");
     fs.addDirEntry("locale", "fr", true);
-    fs.addLocaleFile("locale/fr/ui.toml", "[menu]\ncampaign = \"Campagne\"\n");
+    addLocaleFile(fs, "locale/fr/ui.toml", "[menu]\ncampaign = \"Campagne\"\n");
     fs.addDirEntry("locale", "fr-CA", true);
     // fr-CA has empty string for campaign — should NOT erase fr's translation
-    fs.addLocaleFile("locale/fr-CA/ui.toml", "[menu]\ncampaign = \"\"\n");
+    addLocaleFile(fs, "locale/fr-CA/ui.toml", "[menu]\ncampaign = \"\"\n");
 
     Localization loc(fs, logger);
     REQUIRE(loc.load("fr-CA", {}));
@@ -452,8 +368,8 @@ TEST_CASE("Localization: higher-priority mod wins over lower-priority mod and ba
     RecordingLogger logger;
     addEnLocale(fs, "[s]\nk = \"base\"\n");
 
-    fs.addLocaleFile("mods/low/locale/en/strings.toml", "[s]\nk = \"low\"\n");
-    fs.addLocaleFile("mods/high/locale/en/strings.toml", "[s]\nk = \"high\"\n");
+    addLocaleFile(fs, "mods/low/locale/en/strings.toml", "[s]\nk = \"low\"\n");
+    addLocaleFile(fs, "mods/high/locale/en/strings.toml", "[s]\nk = \"high\"\n");
 
     // rootDirs sorted highest-first, as ModLoader would produce
     const std::vector<std::string> rootDirs = {"mods/high", "mods/low"};
@@ -479,13 +395,13 @@ TEST_CASE("Localization: mod locale is loaded for all chain tiers") {
     RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
-    fs.addLocaleFile("locale/en/ui.toml", "[s]\na = \"en_a\"\n");
+    addLocaleFile(fs, "locale/en/ui.toml", "[s]\na = \"en_a\"\n");
 
     // Mod provides en and fr translations
-    fs.addLocaleFile("mods/testmod/locale/en/ui.toml", "[s]\nb = \"mod_en_b\"\n");
-    fs.addLocaleFile("mods/testmod/locale/fr/ui.toml", "[s]\nb = \"mod_fr_b\"\n");
+    addLocaleFile(fs, "mods/testmod/locale/en/ui.toml", "[s]\nb = \"mod_en_b\"\n");
+    addLocaleFile(fs, "mods/testmod/locale/fr/ui.toml", "[s]\nb = \"mod_fr_b\"\n");
     fs.addDirEntry("locale", "fr", true);
-    fs.addLocaleFile("locale/fr/ui.toml", "[s]\na = \"fr_a\"\n");
+    addLocaleFile(fs, "locale/fr/ui.toml", "[s]\na = \"fr_a\"\n");
 
     const std::vector<std::string> rootDirs = {"mods/testmod"};
     Localization loc(fs, logger);
@@ -677,7 +593,7 @@ TEST_CASE("Localization: listLocales reads meta.toml for displayName and rtl") {
     RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "ar", true);
-    fs.addLocaleFile("locale/ar/meta.toml", "name = \"العربية\"\nrtl = true\n");
+    addLocaleFile(fs, "locale/ar/meta.toml", "name = \"العربية\"\nrtl = true\n");
 
     Localization loc(fs, logger);
     auto locales = loc.listLocales({});
@@ -707,10 +623,10 @@ TEST_CASE("Localization: isRTL() is true when meta.toml has rtl=true") {
     RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
-    fs.addLocaleFile("locale/en/ui.toml", "[s]\nk = \"v\"\n");
+    addLocaleFile(fs, "locale/en/ui.toml", "[s]\nk = \"v\"\n");
     fs.addDirEntry("locale", "ar", true);
-    fs.addLocaleFile("locale/ar/ui.toml", "[s]\nk = \"v_ar\"\n");
-    fs.addLocaleFile("locale/ar/meta.toml", "name = \"Arabic\"\nrtl = true\n");
+    addLocaleFile(fs, "locale/ar/ui.toml", "[s]\nk = \"v_ar\"\n");
+    addLocaleFile(fs, "locale/ar/meta.toml", "name = \"Arabic\"\nrtl = true\n");
 
     Localization loc(fs, logger);
     REQUIRE(loc.load("ar", {}));
@@ -737,9 +653,9 @@ TEST_CASE("Localization: listMissingKeys returns sorted keys absent in lang") {
     RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
-    fs.addLocaleFile("locale/en/ui.toml", "[menu]\ncampaign = \"Campaign\"\nskirmish = \"Skirmish\"\n");
+    addLocaleFile(fs, "locale/en/ui.toml", "[menu]\ncampaign = \"Campaign\"\nskirmish = \"Skirmish\"\n");
     fs.addDirEntry("locale", "fr", true);
-    fs.addLocaleFile("locale/fr/ui.toml", "[menu]\ncampaign = \"Campagne\"\n");
+    addLocaleFile(fs, "locale/fr/ui.toml", "[menu]\ncampaign = \"Campagne\"\n");
 
     Localization loc(fs, logger);
     auto missing = loc.listMissingKeys("fr", {});
@@ -761,10 +677,10 @@ TEST_CASE("Localization: listMissingKeys treats empty-string entries as absent")
     RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
-    fs.addLocaleFile("locale/en/ui.toml", "[s]\na = \"A\"\nb = \"B\"\n");
+    addLocaleFile(fs, "locale/en/ui.toml", "[s]\na = \"A\"\nb = \"B\"\n");
     fs.addDirEntry("locale", "fr", true);
     // fr has both keys but b is empty (untranslated) — should count as missing
-    fs.addLocaleFile("locale/fr/ui.toml", "[s]\na = \"A_fr\"\nb = \"\"\n");
+    addLocaleFile(fs, "locale/fr/ui.toml", "[s]\na = \"A_fr\"\nb = \"\"\n");
 
     Localization loc(fs, logger);
     auto missing = loc.listMissingKeys("fr", {});
@@ -787,9 +703,9 @@ TEST_CASE("Localization: getCoverage returns fraction of translated keys") {
     RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
-    fs.addLocaleFile("locale/en/ui.toml", "[s]\na = \"A\"\nb = \"B\"\nc = \"C\"\nd = \"D\"\n");
+    addLocaleFile(fs, "locale/en/ui.toml", "[s]\na = \"A\"\nb = \"B\"\nc = \"C\"\nd = \"D\"\n");
     fs.addDirEntry("locale", "fr", true);
-    fs.addLocaleFile("locale/fr/ui.toml", "[s]\na = \"A_fr\"\nb = \"B_fr\"\n");
+    addLocaleFile(fs, "locale/fr/ui.toml", "[s]\na = \"A_fr\"\nb = \"B_fr\"\n");
 
     Localization loc(fs, logger);
     float cov = loc.getCoverage("fr", {});
@@ -803,10 +719,10 @@ TEST_CASE("Localization: getCoverage returns fraction of translated keys") {
 TEST_CASE("Localization: watch() registers locale dirs loaded by load()") {
     MockFilesystem fs;
     RecordingLogger logger;
-    MockWatcher watcher;
+    MockFilesystemWatcher watcher;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
-    fs.addLocaleFile("locale/en/ui.toml", "[s]\nk = \"v\"\n");
+    addLocaleFile(fs, "locale/en/ui.toml", "[s]\nk = \"v\"\n");
 
     Localization loc(fs, logger);
     loc.load("en", {});
@@ -853,7 +769,7 @@ TEST_CASE("Localization: loadLocaleDirImpl skips isDirectory entry inside locale
     RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
-    fs.addLocaleFile("locale/en/ui.toml", "[s]\nk = \"v\"\n");
+    addLocaleFile(fs, "locale/en/ui.toml", "[s]\nk = \"v\"\n");
     fs.addDirEntry("locale/en", "subdir", true); // isDirectory=true → continue
     Localization loc(fs, logger);
     REQUIRE(loc.load("en", {}));
@@ -865,7 +781,7 @@ TEST_CASE("Localization: loadLocaleDirImpl skips file with name shorter than 6 c
     RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
-    fs.addLocaleFile("locale/en/ui.toml", "[s]\nk = \"v\"\n");
+    addLocaleFile(fs, "locale/en/ui.toml", "[s]\nk = \"v\"\n");
     fs.addFile("locale/en/ab.md", "short"); // name "ab.md" has size 5 < 6
     fs.addDirEntry("locale/en", "ab.md", false);
     Localization loc(fs, logger);
@@ -878,8 +794,8 @@ TEST_CASE("Localization: loadLocaleDirImpl skips locale file that fails TOML par
     RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
-    fs.addLocaleFile("locale/en/good.toml", "[s]\nk = \"v\"\n");
-    fs.addLocaleFile("locale/en/bad.toml", "this is {{{ invalid toml");
+    addLocaleFile(fs, "locale/en/good.toml", "[s]\nk = \"v\"\n");
+    addLocaleFile(fs, "locale/en/bad.toml", "this is {{{ invalid toml");
     Localization loc(fs, logger);
     // good.toml loads successfully; bad.toml fails → if(tmp.load()) FALSE branch
     REQUIRE(loc.load("en", {}));
@@ -895,8 +811,8 @@ TEST_CASE("Localization: isRTL is false when meta.toml has no rtl key") {
     RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
-    fs.addLocaleFile("locale/en/ui.toml", "[s]\nk = \"v\"\n");
-    fs.addLocaleFile("locale/en/meta.toml", "name = \"English\"\n"); // no rtl key
+    addLocaleFile(fs, "locale/en/ui.toml", "[s]\nk = \"v\"\n");
+    addLocaleFile(fs, "locale/en/meta.toml", "name = \"English\"\n"); // no rtl key
     Localization loc(fs, logger);
     loc.load("en", {});
     REQUIRE(loc.isRTL() == false); // readMetaRTL returns false (no rtl key)
@@ -907,8 +823,8 @@ TEST_CASE("Localization: isRTL is false when meta.toml is empty") {
     RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
-    fs.addLocaleFile("locale/en/ui.toml", "[s]\nk = \"v\"\n");
-    fs.addLocaleFile("locale/en/meta.toml", ""); // empty file → sz==0 branch
+    addLocaleFile(fs, "locale/en/ui.toml", "[s]\nk = \"v\"\n");
+    addLocaleFile(fs, "locale/en/meta.toml", ""); // empty file → sz==0 branch
     Localization loc(fs, logger);
     loc.load("en", {});
     REQUIRE(loc.isRTL() == false);
@@ -919,8 +835,8 @@ TEST_CASE("Localization: isRTL is false when meta.toml has invalid TOML") {
     RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
-    fs.addLocaleFile("locale/en/ui.toml", "[s]\nk = \"v\"\n");
-    fs.addLocaleFile("locale/en/meta.toml", "invalid {{ toml }{"); // parse throws → catch branch
+    addLocaleFile(fs, "locale/en/ui.toml", "[s]\nk = \"v\"\n");
+    addLocaleFile(fs, "locale/en/meta.toml", "invalid {{ toml }{"); // parse throws → catch branch
     Localization loc(fs, logger);
     loc.load("en", {});
     REQUIRE(loc.isRTL() == false);
@@ -981,7 +897,7 @@ TEST_CASE("Localization: listLocales uses tag as displayName when meta.toml has 
     RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "fr", true);
-    fs.addLocaleFile("locale/fr/meta.toml", "rtl = false\n"); // rtl present, name absent
+    addLocaleFile(fs, "locale/fr/meta.toml", "rtl = false\n"); // rtl present, name absent
     Localization loc(fs, logger);
     auto locales = loc.listLocales({});
     REQUIRE(locales.size() == 1);
@@ -994,7 +910,7 @@ TEST_CASE("Localization: listLocales with invalid meta.toml is safe") {
     RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "xx", true);
-    fs.addLocaleFile("locale/xx/meta.toml", "totally invalid {{ toml }{"); // catch branch
+    addLocaleFile(fs, "locale/xx/meta.toml", "totally invalid {{ toml }{"); // catch branch
     Localization loc(fs, logger);
     auto locales = loc.listLocales({});
     REQUIRE(locales.size() == 1);
@@ -1006,7 +922,7 @@ TEST_CASE("Localization: listLocales with empty meta.toml uses tag as displayNam
     RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
-    fs.addLocaleFile("locale/en/meta.toml", ""); // empty → sz==0 branch
+    addLocaleFile(fs, "locale/en/meta.toml", ""); // empty → sz==0 branch
     Localization loc(fs, logger);
     auto locales = loc.listLocales({});
     REQUIRE(locales.size() == 1);
@@ -1030,9 +946,9 @@ TEST_CASE("Localization: listMissingKeys returns empty when all keys are present
     RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
-    fs.addLocaleFile("locale/en/ui.toml", "[s]\na = \"A\"\nb = \"B\"\n");
+    addLocaleFile(fs, "locale/en/ui.toml", "[s]\na = \"A\"\nb = \"B\"\n");
     fs.addDirEntry("locale", "fr", true);
-    fs.addLocaleFile("locale/fr/ui.toml", "[s]\na = \"A_fr\"\nb = \"B_fr\"\n");
+    addLocaleFile(fs, "locale/fr/ui.toml", "[s]\na = \"A_fr\"\nb = \"B_fr\"\n");
     Localization loc(fs, logger);
     auto missing = loc.listMissingKeys("fr", {});
     REQUIRE(missing.empty());
@@ -1043,9 +959,9 @@ TEST_CASE("Localization: listMissingKeys with empty rootDirs is safe") {
     RecordingLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
-    fs.addLocaleFile("locale/en/ui.toml", "[s]\na = \"A\"\n");
+    addLocaleFile(fs, "locale/en/ui.toml", "[s]\na = \"A\"\n");
     fs.addDirEntry("locale", "fr", true);
-    fs.addLocaleFile("locale/fr/ui.toml", "[s]\na = \"A_fr\"\n");
+    addLocaleFile(fs, "locale/fr/ui.toml", "[s]\na = \"A_fr\"\n");
 
     Localization loc(fs, logger);
     REQUIRE_NOTHROW(loc.listMissingKeys("fr", std::vector<std::string>{}));

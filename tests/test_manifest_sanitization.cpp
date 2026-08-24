@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "content/ModLoader.h"
+#include "mock_content.h"
 #include "mock_hal.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -12,11 +13,6 @@ static void addModDir(MockFilesystem& fs, const std::string& modId, const std::s
     fs.addDirEntry("mods", modId, true);
     fs.addDir("mods/" + modId);
     fs.addFile("mods/" + modId + "/manifest.toml", manifestContent);
-}
-
-static std::string makeManifest(const std::string& name, const std::string& id) {
-    return "[mod]\nname = \"" + name + "\"\nid = \"" + id +
-           "\"\nversion = \"1.0.0\"\n\"engine-api\" = \"1.0\"\npriority = 10\n";
 }
 
 // ---------------------------------------------------------------------------

@@ -154,6 +154,13 @@ struct StillCtl : fl::IEntityController {
 struct ConstantController : fl::IEntityController {
     float throttle{1.0f};
     int sampleCount{0};
+
+    // Default 1.0 is the snapshot scenario's "engines up"; the carrier-deck cases want an explicit
+    // throttle, often 0, because the catapult and not the engine has to supply the launch energy
+    // (#1276 folded their ConstCtl in here).
+    ConstantController() = default;
+    explicit ConstantController(float t) : throttle(t) {}
+
     fl::ControlInput sample(const fl::EntityState&, uint64_t, double, const fl::AiTickContext&) override {
         ++sampleCount;
         fl::ControlInput ctrl{};

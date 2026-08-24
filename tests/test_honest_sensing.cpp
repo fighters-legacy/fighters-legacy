@@ -6,7 +6,9 @@
 // no single piece can prove on its own — the ones that answer "is the AI actually honest now?"
 // rather than "does this function return the right number?".
 
+#include "entity_fixture.h"
 #include <catch2/catch_approx.hpp>
+
 #include <catch2/catch_test_macros.hpp>
 
 #include "ai/StateMachineController.h"
@@ -56,16 +58,6 @@ std::shared_ptr<const sensor::SensorDef> makeEye() {
     return std::make_shared<const sensor::SensorDef>(s);
 }
 
-EntityDef makeDef(const char* id, std::vector<std::string> sensors) {
-    EntityDef d;
-    d.id = id;
-    d.name = "T";
-    d.category = ObjectCategory::AirVehicle;
-    d.maxHp = 100.f;
-    d.sensorIds = std::move(sensors);
-    return d;
-}
-
 // A WorldBroadcaster wired the way fl-server wires it: a sensor-def resolver, a registry of types
 // that carry sensors, and (optionally) weather.
 struct SensingFixture {
@@ -77,9 +69,9 @@ struct SensingFixture {
     std::unique_ptr<WorldBroadcaster> wb;
 
     explicit SensingFixture(bool withWeather = false) {
-        registry.registerType(makeDef("t:radar-unit", {"t:radar"}));
-        registry.registerType(makeDef("t:eye-unit", {"t:eye"}));
-        registry.registerType(makeDef("t:target", {})); // a target that carries nothing
+        registry.registerType(makeSensorCarrierDef("t:radar-unit", {"t:radar"}));
+        registry.registerType(makeSensorCarrierDef("t:eye-unit", {"t:eye"}));
+        registry.registerType(makeSensorCarrierDef("t:target", {})); // a target that carries nothing
 
         fl::WorldQueries q_wb;
         q_wb.sensorDefs = [](const std::string& id) -> std::shared_ptr<const sensor::SensorDef> {

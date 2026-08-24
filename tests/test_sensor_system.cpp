@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "entity_fixture.h"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include "entity/EntityDef.h"
@@ -36,16 +38,6 @@ std::shared_ptr<const SensorDef> makeRadar(float lockHoldS = 4.f) {
     return std::make_shared<const SensorDef>(s);
 }
 
-EntityDef makeDef(std::string id, std::vector<std::string> sensors = {}) {
-    EntityDef d;
-    d.id = std::move(id);
-    d.name = "T";
-    d.category = ObjectCategory::AirVehicle;
-    d.maxHp = 100.f;
-    d.sensorIds = std::move(sensors);
-    return d;
-}
-
 // A fixture holding a live EntityManager + registry + a SensorSystem whose resolver returns one
 // radar for any id.
 struct Fixture {
@@ -56,7 +48,7 @@ struct Fixture {
     SpatialIndex si;
 
     Fixture() {
-        registry.registerType(makeDef("t:fighter", {"t:radar"}));
+        registry.registerType(makeSensorCarrierDef("t:fighter", {"t:radar"}));
         sys.setResolver([](const std::string&) { return makeRadar(); });
         sys.recomputeSignatureScale();
     }
