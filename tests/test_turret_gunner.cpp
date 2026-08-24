@@ -13,6 +13,7 @@
 #include "entity/IEntityController.h"
 #include "mock_log.h"
 #include "net/WorldBroadcaster.h"
+#include "wb_fixture.h"
 #include "weapon/WeaponRegistry.h"
 
 #include "mock_network.h"
@@ -217,12 +218,7 @@ TEST_CASE("Human gunner: masked-input gun fire lands on the target via the gunne
     // A human gunner is an ADMITTED peer: onConnect then its MsgConnectRequest (#853). Since #1069
     // the dispatch preamble drops client->server messages from a peer that never completed the
     // handshake, so binding a seat to a peer id that never connected no longer feeds it input.
-    fx.wb->onConnect(kGunnerPeer);
-    {
-        fl::MsgConnectRequest req{};
-        req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Observer); // spawns no aircraft of its own
-        fx.wb->onReceive(kGunnerPeer, &req, sizeof(req));
-    }
+    connectObserverPeer(*fx.wb, fx.net, kGunnerPeer); // an observer spawns no aircraft of its own
     REQUIRE(fx.wb->setSeatOccupant(fx.bomberId, /*seat=*/1, kGunnerPeer));
 
     fl::MsgClientInput inp{};

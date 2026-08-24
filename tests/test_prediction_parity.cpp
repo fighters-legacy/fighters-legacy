@@ -14,6 +14,7 @@
 
 #include "ClientFlightModelResolver.h"
 #include "mock_log.h"
+#include "wb_fixture.h"
 
 #include <ILogger.h>
 #include <content/AssetManager.h>
@@ -194,24 +195,16 @@ void registerFromWire(const std::vector<uint8_t>& pkt, EntityTypeRegistry& regis
 }
 
 // The ConnectAck is the first reliable packet whose msgId says so.
+// The type these fixtures actually register. The server default is builtin:debug-entity, which is
+// absent here, and since #1049 a pilot the server cannot give an aircraft is REFUSED rather than
+// acked with a null entity — so without naming it there is no MsgConnectAck to read.
+constexpr const char* kParityJet = "fl-base:testjet";
+
 const std::vector<uint8_t>* findConnectAck(const TrackingNetwork& net) {
     for (const auto& pkt : net.sends)
         if (!pkt.empty() && pkt[0] == static_cast<uint8_t>(MsgId::ConnectAck))
             return &pkt;
     return nullptr;
-}
-
-// Drive the #853 connect handshake for a pilot: onConnect (MsgHello) + the client's MsgConnectRequest,
-// which is what now triggers the spawn + ConnectAck the parity tests parse.
-void connectPilot(WorldBroadcaster& b, uint32_t peerId) {
-    b.onConnect(peerId);
-    MsgConnectRequest req{};
-    req.requestedRole = static_cast<uint8_t>(PeerRole::Pilot);
-    // Ask for the type these fixtures actually register. The server default is builtin:debug-entity,
-    // which is absent here, and since #1049 a pilot the server cannot give an aircraft is REFUSED
-    // rather than acked with a null entity — so without this there is no MsgConnectAck to read.
-    std::snprintf(req.requestedEntityType, sizeof(req.requestedEntityType), "fl-base:testjet");
-    b.onReceive(peerId, &req, sizeof(req));
 }
 
 } // namespace
@@ -226,7 +219,7 @@ TEST_CASE("MsgEntityTypeDef carries the flight model asset name to the client", 
     serverRegistry.registerType(def);
 
     WorldBroadcaster broadcaster(em, serverRegistry, net, log);
-    connectPilot(broadcaster, 0u);
+    connectPilotPeer(broadcaster, net, 0u, kParityJet);
 
     const std::vector<uint8_t>* ack = findConnectAck(net);
     REQUIRE(ack != nullptr);
@@ -249,7 +242,7 @@ TEST_CASE("client and server resolve the same flight model for the same entity t
     auto assets = makeAssets(log);
 
     WorldBroadcaster broadcaster(em, serverRegistry, net, log);
-    connectPilot(broadcaster, 0u);
+    connectPilotPeer(broadcaster, net, 0u, kParityJet);
     const std::vector<uint8_t>* ack = findConnectAck(net);
     REQUIRE(ack != nullptr);
 
@@ -293,7 +286,7 @@ TEST_CASE("client and server integrators do not diverge over 600 ticks", "[predi
     auto assets = makeAssets(log);
 
     WorldBroadcaster broadcaster(em, serverRegistry, net, log);
-    connectPilot(broadcaster, 0u);
+    connectPilotPeer(broadcaster, net, 0u, kParityJet);
     const std::vector<uint8_t>* ack = findConnectAck(net);
     REQUIRE(ack != nullptr);
 
@@ -365,7 +358,7 @@ TEST_CASE("gear and flap cycling keeps the two integrators in parity", "[predict
     auto assets = makeAssets(log);
 
     WorldBroadcaster broadcaster(em, serverRegistry, net, log);
-    connectPilot(broadcaster, 0u);
+    connectPilotPeer(broadcaster, net, 0u, kParityJet);
     const std::vector<uint8_t>* ack = findConnectAck(net);
     REQUIRE(ack != nullptr);
 
@@ -464,7 +457,7 @@ TEST_CASE("a non-zero payload reaches BOTH integrators and they still agree", "[
         return defaultPayload(d, weapons, log);
     };
     WorldBroadcaster broadcaster(em, serverRegistry, net, log, nullptr, std::move(q_broadcaster));
-    connectPilot(broadcaster, 0u);
+    connectPilotPeer(broadcaster, net, 0u, kParityJet);
 
     const std::vector<uint8_t>* ack = findConnectAck(net);
     REQUIRE(ack != nullptr);

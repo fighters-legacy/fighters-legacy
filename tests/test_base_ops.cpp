@@ -11,6 +11,7 @@
 #include "entity/EntityTypeRegistry.h"
 #include "mock_log.h"
 #include "net/WorldBroadcaster.h"
+#include "wb_fixture.h"
 #include "weapon/WeaponRegistry.h"
 
 #include "mock_network.h"
@@ -49,11 +50,7 @@ struct BaseOpsFixture {
         if (spawnOnGround)
             wb->setSpawnPoints({{0.0, 0.4, 0.0}}); // on the ramp; default is 500 m AGL (airborne)
 
-        // #853 handshake: connect, then the pilot's ConnectRequest spawns the aircraft.
-        wb->onConnect(7u);
-        MsgConnectRequest req{};
-        req.requestedRole = static_cast<uint8_t>(PeerRole::Pilot);
-        wb->onReceive(7u, &req, sizeof(req));
+        connectPilotPeer(*wb, net, 7u);
         tick(30); // settle (parking hold latches a grounded spawn fully static)
     }
 
