@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "audio/VoiceCalloutManager.h"
 
+#include "audio/PcmSynth.h" // toI16 / noise / makeMonoPcm / uploadPcm (#1265)
+
 #include "ILogger.h"
 #include "audio/OggDecoder.h"
 #include "audio/SubtitleQueue.h"
@@ -55,8 +57,7 @@ AudioBufferId VoiceCalloutManager::getOrUploadBuffer(const char* assetName) {
         return 0;
     }
 
-    AudioBufferId id =
-        m_audio->uploadBuffer(pcm.samples.data(), pcm.samples.size() * sizeof(int16_t), pcm.sampleRate, pcm.channels);
+    AudioBufferId id = uploadPcm(*m_audio, pcm);
 
     if (id)
         m_bufferCache.emplace(assetName, id);
@@ -78,8 +79,7 @@ void VoiceCalloutManager::play(const VoiceCallout& callout, const AudioSettings&
     if (!subtitleText.empty() && m_synth) {
         SynthesisedAudio synth;
         if (m_synth->synthesise(subtitleText, synth) && synth.valid()) {
-            bufId = m_audio->uploadBuffer(synth.samples.data(), synth.samples.size() * sizeof(int16_t),
-                                          synth.sampleRate, synth.channels);
+            bufId = uploadPcm(*m_audio, synth);
             // TTS output is not cached — each call may produce different audio.
         }
     }
@@ -156,8 +156,7 @@ void VoiceCalloutManager::playText(std::string_view text, const char* audioAsset
                 pcm.channels = synth.channels;
                 if (radio)
                     pcm = applyRadioTreatment(pcm, *radio);
-                bufId = m_audio->uploadBuffer(pcm.samples.data(), pcm.samples.size() * sizeof(int16_t), pcm.sampleRate,
-                                              pcm.channels);
+                bufId = uploadPcm(*m_audio, pcm);
                 // TTS output is not cached — each call may produce different audio.
             }
         }
@@ -197,8 +196,7 @@ AudioBufferId VoiceCalloutManager::getOrUploadRadioBuffer(const char* assetName,
         return 0;
     }
     pcm = applyRadioTreatment(pcm, profile);
-    const AudioBufferId id =
-        m_audio->uploadBuffer(pcm.samples.data(), pcm.samples.size() * sizeof(int16_t), pcm.sampleRate, pcm.channels);
+    const AudioBufferId id = uploadPcm(*m_audio, pcm);
     if (id)
         m_bufferCache.emplace(key, id);
     return id;

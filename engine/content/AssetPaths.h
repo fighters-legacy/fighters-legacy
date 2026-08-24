@@ -31,4 +31,18 @@ struct AssetPathInfo {
 // serves both Mesh (.glb/.gltf) and FlightModel (.toml), disambiguated by extension.
 [[nodiscard]] std::optional<std::pair<AssetType, std::string>> assetFromPackRelativePath(std::string_view relPath);
 
+// The module's ONE casing rule (#1265). Three copies existed — AssetManager::cacheKey's inline loop,
+// ContentIndex's lowered(), AssetPaths.cpp's own lowered() — and they agreed only because nothing in
+// this codebase ever calls setlocale, which is a property of the whole program rather than of these
+// functions. `std::tolower` is kept verbatim rather than rewritten to arithmetic ASCII lowering, so
+// the promotion is provably behaviour-preserving even for bytes 0x80-0xFF.
+[[nodiscard]] std::string asciiLowered(std::string_view s);
+
+// The asset cache/index key: "<type ordinal>:<lowercased id>".
+//
+// The CACHE (AssetManager) and the INDEX (ContentIndex) must agree on this byte for byte, or a def
+// registered under one spelling is unreachable under another and the asset silently resolves to
+// nothing. They built the same string in two places; now they call the same function.
+[[nodiscard]] std::string assetKey(AssetType type, std::string_view id);
+
 } // namespace fl

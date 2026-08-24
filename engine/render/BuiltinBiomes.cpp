@@ -16,22 +16,6 @@ float hash01(int x, int y, uint32_t seed) {
     return static_cast<float>(h & 0xFFFFFFu) / static_cast<float>(0x1000000u);
 }
 
-BuiltinRgbaTexture make() {
-    BuiltinRgbaTexture t;
-    t.width = kBuiltinTexSize;
-    t.height = kBuiltinTexSize;
-    t.pixels.resize(static_cast<std::size_t>(kBuiltinTexSize) * kBuiltinTexSize * 4u);
-    return t;
-}
-
-void put(BuiltinRgbaTexture& t, int x, int y, uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
-    const std::size_t i = (static_cast<std::size_t>(y) * t.width + x) * 4u;
-    t.pixels[i] = r;
-    t.pixels[i + 1] = g;
-    t.pixels[i + 2] = b;
-    t.pixels[i + 3] = a;
-}
-
 [[nodiscard]] uint8_t clamp8(int v) {
     return static_cast<uint8_t>(v < 0 ? 0 : (v > 255 ? 255 : v));
 }
@@ -58,13 +42,13 @@ std::array<BuiltinRgbaTexture, kBiomeLayerCount> builtinBiomeBaseColorLayers() {
     std::array<BuiltinRgbaTexture, kBiomeLayerCount> out;
     for (int layer = 0; layer < kBiomeLayerCount; ++layer) {
         const BiomeStyle& s = kStyles[layer];
-        BuiltinRgbaTexture t = make();
+        BuiltinRgbaTexture t = makeBuiltinRgba();
         const auto seed = static_cast<uint32_t>(layer * 101 + 7);
         for (int y = 0; y < t.height; ++y)
             for (int x = 0; x < t.width; ++x) {
                 const float n = hash01(x, y, seed) - 0.5f; // [-0.5, 0.5]
                 const int d = static_cast<int>(n * 2.f * static_cast<float>(s.grain));
-                put(t, x, y, clamp8(s.r + d), clamp8(s.g + d), clamp8(s.b + d), 255);
+                putPixel(t, x, y, clamp8(s.r + d), clamp8(s.g + d), clamp8(s.b + d), 255);
             }
         out[static_cast<std::size_t>(layer)] = std::move(t);
     }
@@ -75,7 +59,7 @@ std::array<BuiltinRgbaTexture, kBiomeLayerCount> builtinBiomeNormalOrmLayers() {
     std::array<BuiltinRgbaTexture, kBiomeLayerCount> out;
     for (int layer = 0; layer < kBiomeLayerCount; ++layer) {
         const BiomeStyle& s = kStyles[layer];
-        BuiltinRgbaTexture t = make();
+        BuiltinRgbaTexture t = makeBuiltinRgba();
         const auto seed = static_cast<uint32_t>(layer * 211 + 31);
         for (int y = 0; y < t.height; ++y)
             for (int x = 0; x < t.width; ++x) {
@@ -86,7 +70,7 @@ std::array<BuiltinRgbaTexture, kBiomeLayerCount> builtinBiomeNormalOrmLayers() {
                 const uint8_t nx = clamp8(128 - static_cast<int>(hx * amp));
                 const uint8_t ny = clamp8(128 - static_cast<int>(hy * amp));
                 const int roughVar = static_cast<int>((hash01(x, y, seed + 9u) - 0.5f) * 40.f);
-                put(t, x, y, nx, ny, clamp8(s.rough + roughVar), 255); // B=roughness, A=occlusion(full)
+                putPixel(t, x, y, nx, ny, clamp8(s.rough + roughVar), 255); // B=roughness, A=occlusion(full)
             }
         out[static_cast<std::size_t>(layer)] = std::move(t);
     }

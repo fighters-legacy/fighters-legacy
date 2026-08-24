@@ -56,10 +56,7 @@ void AssetManager::initialize(IWindow* window) {
 }
 
 std::string AssetManager::cacheKey(AssetType type, const char* name) {
-    std::string key = std::to_string(static_cast<uint8_t>(type)) + ':';
-    for (const char* p = name; *p; ++p)
-        key += static_cast<char>(std::tolower(static_cast<unsigned char>(*p)));
-    return key;
+    return assetKey(type, name);
 }
 
 template <typename T>

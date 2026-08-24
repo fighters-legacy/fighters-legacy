@@ -85,18 +85,13 @@ MaterialHandle PreviewScene::ensureFallbackMaterial() {
     // (#867) so the albedo/normal/ORM sampling path runs — a material with only scalar factors leaves
     // its texture slots on the renderer defaults, and a material-less mesh must preview as the game
     // draws it, not as flat-black.
-    auto up = [this](const BuiltinRgbaTexture& t, bool srgb) -> TextureHandle {
-        TextureUploadDesc td{};
-        td.name = "builtin:preview-fallback-tex";
-        td.bytes = t.pixels;
-        td.srgb = srgb;
-        td.rawWidth = static_cast<uint32_t>(t.width);
-        td.rawHeight = static_cast<uint32_t>(t.height);
-        return m_renderer.createTexture(td);
-    };
-    m_fallbackBaseTex = up(builtinBaseColorTexture(), /*srgb=*/true);
-    m_fallbackNormalTex = up(builtinNormalTexture(), /*srgb=*/false);
-    m_fallbackOrmTex = up(builtinOrmTexture(), /*srgb=*/false);
+    // One shared name for all three, as before -- the preview's textures are not distinguished in
+    // captures the way the scene renderer's are.
+    const BuiltinPbrMaps maps = uploadBuiltinPbrMaps(m_renderer, "builtin:preview-fallback-tex",
+                                                     "builtin:preview-fallback-tex", "builtin:preview-fallback-tex");
+    m_fallbackBaseTex = maps.baseColor;
+    m_fallbackNormalTex = maps.normal;
+    m_fallbackOrmTex = maps.orm;
 
     MaterialDesc gm{};
     gm.baseColorTexture = m_fallbackBaseTex;

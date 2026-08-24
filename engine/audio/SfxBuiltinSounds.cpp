@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "audio/SfxBuiltinSounds.h"
 
+#include "audio/PcmSynth.h" // toI16 / noise / makeMonoPcm / uploadPcm (#1265)
+
 #include <cmath>
 #include <cstdint>
 
@@ -8,30 +10,9 @@ namespace fl {
 
 namespace {
 
-// Deterministic white noise in [-1, 1] from a sample index — a fixed hash, never rand()/time, so
-// the waveform is byte-stable everywhere.
-float noise(uint32_t i) {
-    uint32_t h = i * 0x9E3779B1u + 0x27D4EB2Fu;
-    h ^= h >> 15;
-    h *= 0x2C1B3C6Du;
-    h ^= h >> 12;
-    return (static_cast<float>(h & 0xFFFFu) / 32768.f) - 1.f;
-}
-
-int16_t toI16(float v) {
-    if (v > 1.f)
-        v = 1.f;
-    if (v < -1.f)
-        v = -1.f;
-    return static_cast<int16_t>(v * 32767.f);
-}
-
 DecodedPcm make(int durationMs) {
-    DecodedPcm pcm;
-    pcm.sampleRate = kSfxSampleRate;
-    pcm.channels = 1;
-    pcm.samples.resize(static_cast<std::size_t>(kSfxSampleRate) * static_cast<std::size_t>(durationMs) / 1000u);
-    return pcm;
+    return makeMonoPcm(kSfxSampleRate,
+                       static_cast<std::size_t>(kSfxSampleRate) * static_cast<std::size_t>(durationMs) / 1000u);
 }
 
 // A low decaying sine — the "body" of a clunk or a rumble.

@@ -6,6 +6,7 @@
 #include "IFilesystemWatcher.h"
 #include "ILogger.h"
 #include "content/AssetManager.h"
+#include "content/AssetPaths.h"
 #include "content/AssetTypes.h"
 #include "content/BundledBaseTerrain.h"
 #include "content/FolderContentPack.h"
@@ -1997,4 +1998,36 @@ TEST_CASE("FolderContentPack: every AssetType resolves a path without crashing",
         CHECK_NOTHROW(pack.hasAsset("anything", type));
         CHECK_NOTHROW(pack.listAssets(type));
     }
+}
+
+// ---------------------------------------------------------------------------
+// The asset key (#1265)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("assetKey: the cache and the index share one casing rule", "[content][assetkey]") {
+    // AssetManager::cacheKey and ContentIndex::indexKey both build this string, and they MUST agree
+    // byte for byte: a def registered by the index under one spelling and looked up by the cache
+    // under another resolves to nothing, silently, with the asset simply missing from the world.
+    // They now call one function; this pins what that function promises.
+    CHECK(assetKey(AssetType::Mesh, "NaMe") == assetKey(AssetType::Mesh, "name"));
+    CHECK(assetKey(AssetType::Mesh, "F5E/F5E") == assetKey(AssetType::Mesh, "f5e/f5e"));
+    CHECK(assetKey(AssetType::Mesh, "MIXED_case-99") == assetKey(AssetType::Mesh, "mixed_case-99"));
+
+    // The type is part of the key, so two types can carry the same id without colliding -- an
+    // aircraft's mesh and its flight model are both "f5e".
+    CHECK(assetKey(AssetType::Mesh, "f5e") != assetKey(AssetType::FlightModel, "f5e"));
+
+    // The format itself: "<type ordinal>:<lowercased id>". Pinned because it is a persisted-shape
+    // agreement between two subsystems, not an implementation detail either one owns.
+    CHECK(assetKey(AssetType::Mesh, "Ab") == std::to_string(static_cast<int>(AssetType::Mesh)) + ":ab");
+
+    // An empty id still yields the type prefix rather than an empty string, so a lookup for nothing
+    // cannot alias a lookup for something.
+    CHECK(assetKey(AssetType::Texture, "") == std::to_string(static_cast<int>(AssetType::Texture)) + ":");
+}
+
+TEST_CASE("asciiLowered leaves non-letters alone", "[content][assetkey]") {
+    CHECK(asciiLowered("A/B_c-9.Ext") == "a/b_c-9.ext");
+    CHECK(asciiLowered("") == "");
+    CHECK(asciiLowered("already lower") == "already lower");
 }
