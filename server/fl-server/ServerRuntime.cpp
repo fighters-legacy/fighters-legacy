@@ -916,9 +916,11 @@ bool ServerRuntime::Impl::initWorld() {
     [[maybe_unused]] auto& entityRegistry = m_entityRegistry;
     [[maybe_unused]] auto& fmCache = m_fmCache;
     [[maybe_unused]] auto& log = m_log;
+    [[maybe_unused]] auto& atcService = m_atcService;
     [[maybe_unused]] auto& nearSideSurface = m_nearSideSurface;
     [[maybe_unused]] auto& net = m_net;
     [[maybe_unused]] auto& p = m_p;
+    [[maybe_unused]] auto& planetR = m_planetR;
     [[maybe_unused]] auto& primeSpawnHeight = m_primeSpawnHeight;
     [[maybe_unused]] auto& resolveAiScaling = m_resolveAiScaling;
     [[maybe_unused]] auto& terrainStreamer = *m_terrainStreamer;
@@ -1171,6 +1173,24 @@ bool ServerRuntime::Impl::initWorld() {
     m_broadcaster = std::make_unique<fl::WorldBroadcaster>(entityManager, entityRegistry, *net, *log,
                                                            &weatherController, std::move(queries), std::move(hooks));
     [[maybe_unused]] auto& broadcaster = *m_broadcaster;
+
+    // ---- Air-traffic control: CONSTRUCTION (#706, split out here by #1288) ----
+    // The service needs only (entityManager, airportRegistry, planetR) -- planetR is set and the
+    // airports are loaded in initContent -- and the broadcaster, which ticks it, exists as of the
+    // line above. Only the outbound scramble callback needs the GameLoop, so that half stays in
+    // initSystems and the whole block no longer has to wait for it.
+    //
+    // Building it HERE is what lets initMission hand the live service to a mission-attached Lua
+    // script, so `atc.*` means the same thing whether a script was attached by a mission or by the
+    // admin `spawn --ai lua` command. Between here and setSpawnHandler the API fails closed
+    // (AtcService::scramble returns false with no handler) and nothing can call it anyway: scripts
+    // only run once mainLoop starts the sim, after every init phase.
+    if (cfg.atc.enabled) {
+        atcService = std::make_unique<fl::atc::AtcService>(entityManager, airportRegistry, planetR);
+        broadcaster.setAtcService(atcService.get());
+        log->log(LogLevel::Info, __FILE__, __LINE__, "ATC service enabled");
+    }
+
     broadcaster.setParachuteType("builtin:parachute"); // spawn a chute on pilot ejection (#672)
     broadcaster.setAiAutoEject(true);                  // AI pilots punch out when critically hit (#672)
     fl::WorldBroadcasterConfig wbConfig;
@@ -1386,6 +1406,7 @@ bool ServerRuntime::Impl::initMission() {
     [[maybe_unused]] auto& adminRegistry = m_adminRegistry;
     [[maybe_unused]] auto& aiScriptCache = m_aiScriptCache;
     [[maybe_unused]] auto& assets = *m_assets;
+    [[maybe_unused]] auto& atcService = m_atcService;
     [[maybe_unused]] auto& botRoster = m_botRoster;
     [[maybe_unused]] auto& broadcaster = *m_broadcaster;
     [[maybe_unused]] auto& campaignMissionId = m_campaignMissionId;
@@ -1721,14 +1742,16 @@ bool ServerRuntime::Impl::initMission() {
                                               name.c_str(), obj.id.c_str());
                                 log->log(LogLevel::Warn, __FILE__, __LINE__, m);
                             } else {
-                                // The shared ladder (#1236). No ATC service here — see the
-                                // atcService note in AiControllerBuild.h for why the mission path
-                                // structurally cannot have one at spawn time.
+                                // The shared ladder (#1236), now with the same ATC surface the
+                                // admin path has (#1288): the service is constructed in initWorld,
+                                // which runs before this phase. Null when [atc] enabled = false,
+                                // exactly as before, and atc.* falls back to safe no-ops.
                                 fl::AiControllerRequest req;
                                 req.luaSource = cacheIt->second.first;
                                 req.luaPack = packSourceFor(cacheIt->second.second);
                                 req.entityManager = &entityManager;
                                 req.worldApi = &worldApi;
+                                req.atcService = atcService.get();
                                 auto built = fl::buildAiController(req);
                                 ctrl = std::move(built.controller);
                                 if (built.error == fl::AiBuildError::LuaScriptError) {
@@ -1767,6 +1790,7 @@ bool ServerRuntime::Impl::initMission() {
                                 req.luaPack = packSourceFor(cacheIt->second.second);
                                 req.entityManager = &entityManager;
                                 req.worldApi = &worldApi;
+                                req.atcService = atcService.get(); // #1288: same surface as `ai: lua`
                                 auto built = fl::buildAiController(req);
                                 ctrl = std::move(built.controller);
                                 if (built.error == fl::AiBuildError::LuaScriptError) {
@@ -2437,14 +2461,13 @@ bool ServerRuntime::Impl::initSystems() {
     [[maybe_unused]] auto& serverUptime = m_serverUptime;
     [[maybe_unused]] auto& weatherController = *m_weatherController;
     [[maybe_unused]] auto& worldApi = m_worldApi;
-    // ---- Air-traffic control (#706) ----
-    // Build the ATC service from the airport registry and wire the scramble spawn path. The spawn
-    // handler ENQUEUES onto the sim thread (a scramble may originate from a Lua worker thread), spawns
-    // a hold-short aircraft oriented down the runway, registers a departure composition that takes off
-    // when ATC clears it, and files a takeoff request. Disabled ([atc] enabled=false) = no facilities,
-    // and radio commands answer "no ATC available".
-    if (cfg.atc.enabled) {
-        atcService = std::make_unique<fl::atc::AtcService>(entityManager, airportRegistry, planetR);
+    // ---- Air-traffic control: WIRING (#706) ----
+    // The service itself is constructed in initWorld (#1288); this is the half that needs the
+    // GameLoop. The spawn handler ENQUEUES onto the sim thread (a scramble may originate from a Lua
+    // worker thread), spawns a hold-short aircraft oriented down the runway, registers a departure
+    // composition that takes off when ATC clears it, and files a takeoff request. Disabled
+    // ([atc] enabled=false) = no service at all, and radio commands answer "no ATC available".
+    if (atcService) {
         atcService->setSpawnHandler([&](const fl::atc::AtcService::DepartureSpawn& spawn) {
             gameLoop.enqueueSimCallback([&, spawn]() {
                 // Orient the airframe along the runway heading at the hold-short point.
@@ -2484,8 +2507,6 @@ bool ServerRuntime::Impl::initSystems() {
                 atcService->requestTakeoff(id, spawn.facilityId);
             });
         });
-        broadcaster.setAtcService(atcService.get());
-        log->log(LogLevel::Info, __FILE__, __LINE__, "ATC service enabled");
     }
 
     // ---- Load-test affordance (#573): pre-spawn N server-side AI entities to stress the entity pool

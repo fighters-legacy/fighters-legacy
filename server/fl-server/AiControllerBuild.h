@@ -45,15 +45,20 @@ struct AiControllerRequest {
 
     const EntityManager* entityManager{nullptr};
     const WorldApi* worldApi{nullptr};
-    // ⚠ Null on the MISSION path, and structurally so — not an oversight (#1236). Mission objects
-    // spawn from applyMission inside ServerRuntime::initMission, while the ATC service is
-    // constructed in initSystems because its scramble handler needs the GameLoop, which initAdmin
-    // builds after initMission has already run. So at mission-spawn time no service exists to pass.
-    // Consequence, stated plainly: a Lua script attached by a mission (`ai: lua ...` or a type's
-    // default script) gets atc.* as safe no-ops, while the same script attached by the admin
-    // `spawn` command reaches the live service. Closing that gap means moving ATC/GameLoop
-    // construction ahead of initMission — a phase reordering with its own teardown-order rules,
-    // deliberately not smuggled into a consolidation change.
+    // Every caller that HAS a service passes it, and all of them do when [atc] enabled = true
+    // (#1288). It used to be null on the mission path — mission objects spawn from applyMission
+    // inside initMission, and the service was built in initSystems because the block that built it
+    // also wired the scramble handler onto the GameLoop, which does not exist until initAdmin. So
+    // the same Lua script reached the live atc.* module (#705) or got safe no-ops depending only on
+    // which code path constructed its controller.
+    //
+    // The fix was to split construction from wiring rather than reorder the phases: AtcService needs
+    // only (entityManager, airportRegistry, planetR), all ready by initWorld, so it is built there
+    // and only setSpawnHandler still waits for the GameLoop in initSystems. Between the two the API
+    // fails closed — AtcService::scramble returns false with no handler — and nothing can call it
+    // anyway, because scripts do not run until mainLoop starts the sim.
+    //
+    // Still null when [atc] enabled = false, on both paths, and atc.* is safe no-ops.
     atc::AtcService* atcService{nullptr};
 };
 

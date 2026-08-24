@@ -345,6 +345,21 @@ if(TARGET fl-server AND Python3_Interpreter_FOUND)
     # v0.3.16 (#1178). This leg spawns the fixture pack's one flight-model-bearing entity; the
     # survivor floor asserts the aircraft is still flying at mission end, not just that we didn't
     # crash getting it into the air.
+    # A mission-attached Lua script reaching the live ATC service (#1288). Before the
+    # construction/wiring split the mission path was handed a null AtcService, so atc.scramble was a
+    # silent no-op and this run ended with ONE aircraft. The survivor floor of 2 is the whole test:
+    # the second aircraft exists only because ATC actually launched a departure.
+    add_test(NAME mission_harness_atc_scramble
+        COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_SOURCE_DIR}/tools/mission_test/mission_test.py"
+                --server $<TARGET_FILE:fl-server>
+                --assets "${CMAKE_SOURCE_DIR}/tests/fixtures/mission_root"
+                --mission ci_atc_scramble
+                --expect-outcome success
+                --min-spawned 1
+                --min-survivors 2
+    )
+
     add_test(NAME mission_harness_pack_flight_model
         COMMAND ${Python3_EXECUTABLE}
                 "${CMAKE_SOURCE_DIR}/tools/mission_test/mission_test.py"
