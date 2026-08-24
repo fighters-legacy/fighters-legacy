@@ -19,297 +19,220 @@
 
 namespace fl {
 
-LogLevel parseLogLevel(const char* s) {
-    if (!s)
-        return LogLevel::Info;
-    if (std::strcmp(s, "trace") == 0)
-        return LogLevel::Trace;
-    if (std::strcmp(s, "debug") == 0)
-        return LogLevel::Debug;
-    if (std::strcmp(s, "info") == 0)
-        return LogLevel::Info;
-    if (std::strcmp(s, "warn") == 0)
-        return LogLevel::Warn;
-    if (std::strcmp(s, "error") == 0)
-        return LogLevel::Error;
-    return LogLevel::Info;
+// ---------------------------------------------------------------------------
+// Enum <-> string, in one place (#1265)
+// ---------------------------------------------------------------------------
+//
+// Nineteen settings enums each carried a `switch` naming its values and a `strcmp` chain parsing
+// them back -- ~550 lines between them, and two halves that had to be edited together forever. A
+// value added to one and forgotten in the other silently round-trips to the default, which reaches
+// the player as "the game keeps resetting my setting" with nothing in the log.
+//
+// The names now live in ONE table per enum and both directions read it, so the halves cannot drift.
+// tests/test_userconfig_enums.cpp (#1145) drives every value of every enum through save+reload and
+// proves that end to end; this makes the property structural rather than only tested for.
+//
+// A plain table plus two function templates, deliberately NOT an X-macro: no macro precedent exists
+// anywhere in engine/, game/ or server/, and the tables stay file-local, so a header would be
+// scaffolding for nobody.
+
+template <class E> struct EnumName {
+    E value;
+    const char* name;
+};
+
+// The canonical spelling of a value, and what save() writes. An unlisted value falls back to the
+// enum's own default row -- the same behaviour the `switch` forms had after their final `return`.
+template <class E, std::size_t N> const char* enumName(E v, const EnumName<E> (&names)[N], E fallback) {
+    for (const auto& n : names)
+        if (n.value == v)
+            return n.name;
+    for (const auto& n : names)
+        if (n.value == fallback)
+            return n.name;
+    return names[0].name;
 }
 
-static const char* logLevelString(LogLevel l) {
-    switch (l) {
-    case LogLevel::Trace:
-        return "trace";
-    case LogLevel::Debug:
-        return "debug";
-    case LogLevel::Info:
-        return "info";
-    case LogLevel::Warn:
-        return "warn";
-    case LogLevel::Error:
-        return "error";
-    }
-    return "info";
+// Parse one value, warning when the string is not in the vocabulary. The FIRST row naming a value is
+// canonical, so later rows can be legacy input aliases that parse but are never written back.
+//
+// `log` may be null for the silent path (parseLogLevel is public API and predates the warning). The
+// message names the setting and the default it fell back to, because a player who cannot see WHICH
+// key was ignored just sees a setting that does not work.
+template <class E, std::size_t N>
+E parseEnum(const char* s, const EnumName<E> (&names)[N], E fallback, const char* label, ILogger* log) {
+    if (!s)
+        return fallback;
+    for (const auto& n : names)
+        if (std::strcmp(s, n.name) == 0)
+            return n.value;
+    if (log)
+        log->log(LogLevel::Warn, __FILE__, __LINE__,
+                 (std::string("user config: unknown ") + label + " '" + s + "', defaulting to " +
+                  enumName(fallback, names, fallback))
+                     .c_str());
+    return fallback;
+}
+
+constexpr EnumName<LogLevel> kLogLevelNames[] = {
+    {LogLevel::Trace, "trace"}, {LogLevel::Debug, "debug"}, {LogLevel::Info, "info"},
+    {LogLevel::Warn, "warn"},   {LogLevel::Error, "error"},
+};
+constexpr LogLevel kLogLevelFallback = LogLevel::Info;
+
+static const char* logLevelString(LogLevel v) {
+    return enumName(v, kLogLevelNames, kLogLevelFallback);
+}
+
+LogLevel parseLogLevel(const char* s) {
+    // Public API (Game.cpp's --log-level): silent, so an unknown value on the command line
+    // is not reported as a user-config problem. UserConfig::load passes its own logger.
+    return parseEnum(s, kLogLevelNames, kLogLevelFallback, "log_level", nullptr);
 }
 
 // ---------------------------------------------------------------------------
 // Graphics enum helpers
 // ---------------------------------------------------------------------------
 
+constexpr EnumName<VsyncMode> kVsyncNames[] = {
+    {VsyncMode::Off, "off"},
+    {VsyncMode::On, "on"},
+    {VsyncMode::Adaptive, "adaptive"},
+};
+constexpr VsyncMode kVsyncFallback = VsyncMode::On;
+
 static const char* vsyncModeString(VsyncMode v) {
-    switch (v) {
-    case VsyncMode::Off:
-        return "off";
-    case VsyncMode::On:
-        return "on";
-    case VsyncMode::Adaptive:
-        return "adaptive";
-    }
-    return "on";
+    return enumName(v, kVsyncNames, kVsyncFallback);
 }
 
-static VsyncMode parseVsyncMode(const char* s) {
-    if (!s)
-        return VsyncMode::On;
-    if (std::strcmp(s, "off") == 0)
-        return VsyncMode::Off;
-    if (std::strcmp(s, "on") == 0)
-        return VsyncMode::On;
-    if (std::strcmp(s, "adaptive") == 0)
-        return VsyncMode::Adaptive;
-    return VsyncMode::On;
+static VsyncMode parseVsyncMode(const char* s, ILogger* log) {
+    return parseEnum(s, kVsyncNames, kVsyncFallback, "vsync", log);
 }
 
-static const char* frameRateCapString(FrameRateCap c) {
-    switch (c) {
-    case FrameRateCap::Off:
-        return "off";
-    case FrameRateCap::Cap30:
-        return "30";
-    case FrameRateCap::Cap60:
-        return "60";
-    case FrameRateCap::Cap120:
-        return "120";
-    case FrameRateCap::Cap144:
-        return "144";
-    case FrameRateCap::Cap240:
-        return "240";
-    }
-    return "off";
+constexpr EnumName<FrameRateCap> kFrameRateCapNames[] = {
+    {FrameRateCap::Off, "off"},    {FrameRateCap::Cap30, "30"},   {FrameRateCap::Cap60, "60"},
+    {FrameRateCap::Cap120, "120"}, {FrameRateCap::Cap144, "144"}, {FrameRateCap::Cap240, "240"},
+};
+constexpr FrameRateCap kFrameRateCapFallback = FrameRateCap::Off;
+
+static const char* frameRateCapString(FrameRateCap v) {
+    return enumName(v, kFrameRateCapNames, kFrameRateCapFallback);
 }
 
-static FrameRateCap parseFrameRateCap(const char* s) {
-    if (!s)
-        return FrameRateCap::Off;
-    if (std::strcmp(s, "off") == 0)
-        return FrameRateCap::Off;
-    if (std::strcmp(s, "30") == 0)
-        return FrameRateCap::Cap30;
-    if (std::strcmp(s, "60") == 0)
-        return FrameRateCap::Cap60;
-    if (std::strcmp(s, "120") == 0)
-        return FrameRateCap::Cap120;
-    if (std::strcmp(s, "144") == 0)
-        return FrameRateCap::Cap144;
-    if (std::strcmp(s, "240") == 0)
-        return FrameRateCap::Cap240;
-    return FrameRateCap::Off;
+static FrameRateCap parseFrameRateCap(const char* s, ILogger* log) {
+    return parseEnum(s, kFrameRateCapNames, kFrameRateCapFallback, "frame_rate_cap", log);
 }
 
-static const char* qualityLevelString(QualityLevel q) {
-    switch (q) {
-    case QualityLevel::Low:
-        return "low";
-    case QualityLevel::Medium:
-        return "medium";
-    case QualityLevel::High:
-        return "high";
-    case QualityLevel::Ultra:
-        return "ultra";
-    }
-    return "high";
+constexpr EnumName<QualityLevel> kQualityNames[] = {
+    {QualityLevel::Low, "low"},
+    {QualityLevel::Medium, "medium"},
+    {QualityLevel::High, "high"},
+    {QualityLevel::Ultra, "ultra"},
+};
+constexpr QualityLevel kQualityFallback = QualityLevel::High;
+
+static const char* qualityLevelString(QualityLevel v) {
+    return enumName(v, kQualityNames, kQualityFallback);
 }
 
-static QualityLevel parseQualityLevel(const char* s) {
-    if (!s)
-        return QualityLevel::High;
-    if (std::strcmp(s, "low") == 0)
-        return QualityLevel::Low;
-    if (std::strcmp(s, "medium") == 0)
-        return QualityLevel::Medium;
-    if (std::strcmp(s, "high") == 0)
-        return QualityLevel::High;
-    if (std::strcmp(s, "ultra") == 0)
-        return QualityLevel::Ultra;
-    return QualityLevel::High;
+static QualityLevel parseQualityLevel(const char* s, ILogger* log) {
+    return parseEnum(s, kQualityNames, kQualityFallback, "quality_preset", log);
 }
 
-static const char* aaModeString(AntiAliasingMode m) {
-    switch (m) {
-    case AntiAliasingMode::Off:
-        return "off";
-    case AntiAliasingMode::FXAA:
-        return "fxaa";
-    case AntiAliasingMode::TAA:
-        return "taa";
-    }
-    return "taa";
+constexpr EnumName<AntiAliasingMode> kAaNames[] = {
+    {AntiAliasingMode::Off, "off"},
+    {AntiAliasingMode::FXAA, "fxaa"},
+    {AntiAliasingMode::TAA, "taa"},
+    // Legacy INPUT aliases, after the canonical rows so they are never written back: MSAA was
+    // removed in favour of TAA, and warning a player about a setting this build deleted would be
+    // blaming them for our change. Parsing them here is what makes that migration silent.
+    {AntiAliasingMode::TAA, "msaa2x"},
+    {AntiAliasingMode::TAA, "msaa4x"},
+    {AntiAliasingMode::TAA, "msaa8x"},
+};
+constexpr AntiAliasingMode kAaFallback = AntiAliasingMode::TAA;
+
+static const char* aaModeString(AntiAliasingMode v) {
+    return enumName(v, kAaNames, kAaFallback);
 }
 
-static AntiAliasingMode parseAaMode(const char* s, ILogger& log) {
-    if (!s)
-        return AntiAliasingMode::TAA;
-    if (std::strcmp(s, "off") == 0)
-        return AntiAliasingMode::Off;
-    if (std::strcmp(s, "fxaa") == 0)
-        return AntiAliasingMode::FXAA;
-    if (std::strcmp(s, "taa") == 0)
-        return AntiAliasingMode::TAA;
-    // Legacy upgrade: MSAA was removed in favour of TAA — migrate silently.
-    if (std::strcmp(s, "msaa2x") == 0 || std::strcmp(s, "msaa4x") == 0 || std::strcmp(s, "msaa8x") == 0)
-        return AntiAliasingMode::TAA;
-    log.log(LogLevel::Warn, __FILE__, __LINE__,
-            (std::string("user config: unknown aa_mode '") + s + "', defaulting to taa").c_str());
-    return AntiAliasingMode::TAA;
+static AntiAliasingMode parseAaMode(const char* s, ILogger* log) {
+    return parseEnum(s, kAaNames, kAaFallback, "aa_mode", log);
 }
 
-static const char* aoModeString(AmbientOcclusion m) {
-    switch (m) {
-    case AmbientOcclusion::Off:
-        return "off";
-    case AmbientOcclusion::Low:
-        return "low";
-    case AmbientOcclusion::High:
-        return "high";
-    }
-    return "high";
+constexpr EnumName<AmbientOcclusion> kAoNames[] = {
+    {AmbientOcclusion::Off, "off"},
+    {AmbientOcclusion::Low, "low"},
+    {AmbientOcclusion::High, "high"},
+};
+constexpr AmbientOcclusion kAoFallback = AmbientOcclusion::High;
+
+static const char* aoModeString(AmbientOcclusion v) {
+    return enumName(v, kAoNames, kAoFallback);
 }
 
-static AmbientOcclusion parseAoMode(const char* s, ILogger& log) {
-    if (!s)
-        return AmbientOcclusion::High;
-    if (std::strcmp(s, "off") == 0)
-        return AmbientOcclusion::Off;
-    if (std::strcmp(s, "low") == 0)
-        return AmbientOcclusion::Low;
-    if (std::strcmp(s, "high") == 0)
-        return AmbientOcclusion::High;
-    log.log(LogLevel::Warn, __FILE__, __LINE__,
-            (std::string("user config: unknown ao_mode '") + s + "', defaulting to high").c_str());
-    return AmbientOcclusion::High;
+static AmbientOcclusion parseAoMode(const char* s, ILogger* log) {
+    return parseEnum(s, kAoNames, kAoFallback, "ao_mode", log);
 }
 
-static const char* skyQualityString(SkyQuality q) {
-    switch (q) {
-    case SkyQuality::Procedural:
-        return "procedural";
-    case SkyQuality::LUT:
-        return "lut";
-    }
-    return "lut";
+constexpr EnumName<SkyQuality> kSkyNames[] = {
+    {SkyQuality::Procedural, "procedural"},
+    {SkyQuality::LUT, "lut"},
+};
+constexpr SkyQuality kSkyFallback = SkyQuality::LUT;
+
+static const char* skyQualityString(SkyQuality v) {
+    return enumName(v, kSkyNames, kSkyFallback);
 }
 
-static SkyQuality parseSkyQuality(const char* s, ILogger& log) {
-    if (!s)
-        return SkyQuality::LUT;
-    if (std::strcmp(s, "procedural") == 0)
-        return SkyQuality::Procedural;
-    if (std::strcmp(s, "lut") == 0)
-        return SkyQuality::LUT;
-    log.log(LogLevel::Warn, __FILE__, __LINE__,
-            (std::string("user config: unknown sky_quality '") + s + "', defaulting to lut").c_str());
-    return SkyQuality::LUT;
+static SkyQuality parseSkyQuality(const char* s, ILogger* log) {
+    return parseEnum(s, kSkyNames, kSkyFallback, "sky_quality", log);
 }
 
-static const char* shadowQualityString(ShadowQuality q) {
-    switch (q) {
-    case ShadowQuality::Off:
-        return "off";
-    case ShadowQuality::Low:
-        return "low";
-    case ShadowQuality::Medium:
-        return "medium";
-    case ShadowQuality::High:
-        return "high";
-    case ShadowQuality::Ultra:
-        return "ultra";
-    }
-    return "high";
+constexpr EnumName<ShadowQuality> kShadowNames[] = {
+    {ShadowQuality::Off, "off"},   {ShadowQuality::Low, "low"},     {ShadowQuality::Medium, "medium"},
+    {ShadowQuality::High, "high"}, {ShadowQuality::Ultra, "ultra"},
+};
+constexpr ShadowQuality kShadowFallback = ShadowQuality::High;
+
+static const char* shadowQualityString(ShadowQuality v) {
+    return enumName(v, kShadowNames, kShadowFallback);
 }
 
-static ShadowQuality parseShadowQuality(const char* s, ILogger& log) {
-    if (!s)
-        return ShadowQuality::High;
-    if (std::strcmp(s, "off") == 0)
-        return ShadowQuality::Off;
-    if (std::strcmp(s, "low") == 0)
-        return ShadowQuality::Low;
-    if (std::strcmp(s, "medium") == 0)
-        return ShadowQuality::Medium;
-    if (std::strcmp(s, "high") == 0)
-        return ShadowQuality::High;
-    if (std::strcmp(s, "ultra") == 0)
-        return ShadowQuality::Ultra;
-    log.log(LogLevel::Warn, __FILE__, __LINE__,
-            (std::string("user config: unknown shadow_quality '") + s + "', defaulting to high").c_str());
-    return ShadowQuality::High;
+static ShadowQuality parseShadowQuality(const char* s, ILogger* log) {
+    return parseEnum(s, kShadowNames, kShadowFallback, "shadow_quality", log);
 }
 
-static const char* particleDensityString(ParticleDensity d) {
-    switch (d) {
-    case ParticleDensity::Low:
-        return "low";
-    case ParticleDensity::Medium:
-        return "medium";
-    case ParticleDensity::High:
-        return "high";
-    case ParticleDensity::Ultra:
-        return "ultra";
-    }
-    return "high";
+constexpr EnumName<ParticleDensity> kParticleNames[] = {
+    {ParticleDensity::Low, "low"},
+    {ParticleDensity::Medium, "medium"},
+    {ParticleDensity::High, "high"},
+    {ParticleDensity::Ultra, "ultra"},
+};
+constexpr ParticleDensity kParticleFallback = ParticleDensity::High;
+
+static const char* particleDensityString(ParticleDensity v) {
+    return enumName(v, kParticleNames, kParticleFallback);
 }
 
-static ParticleDensity parseParticleDensity(const char* s, ILogger& log) {
-    if (!s)
-        return ParticleDensity::High;
-    if (std::strcmp(s, "low") == 0)
-        return ParticleDensity::Low;
-    if (std::strcmp(s, "medium") == 0)
-        return ParticleDensity::Medium;
-    if (std::strcmp(s, "high") == 0)
-        return ParticleDensity::High;
-    if (std::strcmp(s, "ultra") == 0)
-        return ParticleDensity::Ultra;
-    log.log(LogLevel::Warn, __FILE__, __LINE__,
-            (std::string("user config: unknown particle_density '") + s + "', defaulting to high").c_str());
-    return ParticleDensity::High;
+static ParticleDensity parseParticleDensity(const char* s, ILogger* log) {
+    return parseEnum(s, kParticleNames, kParticleFallback, "particle_density", log);
 }
 
-static const char* drawDistanceString(DrawDistance d) {
-    switch (d) {
-    case DrawDistance::Low:
-        return "low";
-    case DrawDistance::Medium:
-        return "medium";
-    case DrawDistance::High:
-        return "high";
-    case DrawDistance::Ultra:
-        return "ultra";
-    }
-    return "high";
+constexpr EnumName<DrawDistance> kDrawDistanceNames[] = {
+    {DrawDistance::Low, "low"},
+    {DrawDistance::Medium, "medium"},
+    {DrawDistance::High, "high"},
+    {DrawDistance::Ultra, "ultra"},
+};
+constexpr DrawDistance kDrawDistanceFallback = DrawDistance::High;
+
+static const char* drawDistanceString(DrawDistance v) {
+    return enumName(v, kDrawDistanceNames, kDrawDistanceFallback);
 }
 
-static DrawDistance parseDrawDistance(const char* s) {
-    if (!s)
-        return DrawDistance::High;
-    if (std::strcmp(s, "low") == 0)
-        return DrawDistance::Low;
-    if (std::strcmp(s, "medium") == 0)
-        return DrawDistance::Medium;
-    if (std::strcmp(s, "high") == 0)
-        return DrawDistance::High;
-    if (std::strcmp(s, "ultra") == 0)
-        return DrawDistance::Ultra;
-    return DrawDistance::High;
+static DrawDistance parseDrawDistance(const char* s, ILogger* log) {
+    return parseEnum(s, kDrawDistanceNames, kDrawDistanceFallback, "draw_distance", log);
 }
 
 static int uiScaleInt(UiScale u) {
@@ -345,242 +268,140 @@ static UiScale parseUiScale(int v) {
 // Difficulty enum helpers
 // ---------------------------------------------------------------------------
 
-static const char* difficultyPresetString(DifficultyPreset p) {
-    switch (p) {
-    case DifficultyPreset::Cadet:
-        return "cadet";
-    case DifficultyPreset::Pilot:
-        return "pilot";
-    case DifficultyPreset::Ace:
-        return "ace";
-    case DifficultyPreset::Custom:
-        return "custom";
-    }
-    return "cadet";
+constexpr EnumName<DifficultyPreset> kDifficultyNames[] = {
+    {DifficultyPreset::Cadet, "cadet"},
+    {DifficultyPreset::Pilot, "pilot"},
+    {DifficultyPreset::Ace, "ace"},
+    {DifficultyPreset::Custom, "custom"},
+};
+constexpr DifficultyPreset kDifficultyFallback = DifficultyPreset::Cadet;
+
+static const char* difficultyPresetString(DifficultyPreset v) {
+    return enumName(v, kDifficultyNames, kDifficultyFallback);
 }
 
-static DifficultyPreset parseDifficultyPreset(const char* s, ILogger& log) {
-    if (!s)
-        return DifficultyPreset::Cadet;
-    if (std::strcmp(s, "cadet") == 0)
-        return DifficultyPreset::Cadet;
-    if (std::strcmp(s, "pilot") == 0)
-        return DifficultyPreset::Pilot;
-    if (std::strcmp(s, "ace") == 0)
-        return DifficultyPreset::Ace;
-    if (std::strcmp(s, "custom") == 0)
-        return DifficultyPreset::Custom; // valid, no Warn
-    log.log(LogLevel::Warn, __FILE__, __LINE__,
-            (std::string("user config: unknown difficulty preset '") + s + "', defaulting to cadet").c_str());
-    return DifficultyPreset::Cadet;
+static DifficultyPreset parseDifficultyPreset(const char* s, ILogger* log) {
+    return parseEnum(s, kDifficultyNames, kDifficultyFallback, "difficulty preset", log);
 }
+
+constexpr EnumName<FlightAssists> kFlightAssistsNames[] = {
+    {FlightAssists::AllOn, "all_on"},
+    {FlightAssists::GLimiterOnly, "g_limiter_only"},
+    {FlightAssists::AllOff, "all_off"},
+};
+constexpr FlightAssists kFlightAssistsFallback = FlightAssists::AllOn;
 
 static const char* flightAssistsString(FlightAssists v) {
-    switch (v) {
-    case FlightAssists::AllOn:
-        return "all_on";
-    case FlightAssists::GLimiterOnly:
-        return "g_limiter_only";
-    case FlightAssists::AllOff:
-        return "all_off";
-    }
-    return "all_on";
+    return enumName(v, kFlightAssistsNames, kFlightAssistsFallback);
 }
 
-static FlightAssists parseFlightAssists(const char* s, ILogger& log) {
-    if (!s)
-        return FlightAssists::AllOn;
-    if (std::strcmp(s, "all_on") == 0)
-        return FlightAssists::AllOn;
-    if (std::strcmp(s, "g_limiter_only") == 0)
-        return FlightAssists::GLimiterOnly;
-    if (std::strcmp(s, "all_off") == 0)
-        return FlightAssists::AllOff;
-    log.log(LogLevel::Warn, __FILE__, __LINE__,
-            (std::string("user config: unknown flight_assists '") + s + "', defaulting to all_on").c_str());
-    return FlightAssists::AllOn;
+static FlightAssists parseFlightAssists(const char* s, ILogger* log) {
+    return parseEnum(s, kFlightAssistsNames, kFlightAssistsFallback, "flight_assists", log);
 }
+
+constexpr EnumName<EnemyLabels> kEnemyLabelsNames[] = {
+    {EnemyLabels::Always, "always"},
+    {EnemyLabels::OnLock, "on_lock"},
+    {EnemyLabels::Off, "off"},
+};
+constexpr EnemyLabels kEnemyLabelsFallback = EnemyLabels::Always;
 
 static const char* enemyLabelsString(EnemyLabels v) {
-    switch (v) {
-    case EnemyLabels::Always:
-        return "always";
-    case EnemyLabels::OnLock:
-        return "on_lock";
-    case EnemyLabels::Off:
-        return "off";
-    }
-    return "always";
+    return enumName(v, kEnemyLabelsNames, kEnemyLabelsFallback);
 }
 
-static EnemyLabels parseEnemyLabels(const char* s, ILogger& log) {
-    if (!s)
-        return EnemyLabels::Always;
-    if (std::strcmp(s, "always") == 0)
-        return EnemyLabels::Always;
-    if (std::strcmp(s, "on_lock") == 0)
-        return EnemyLabels::OnLock;
-    if (std::strcmp(s, "off") == 0)
-        return EnemyLabels::Off;
-    log.log(LogLevel::Warn, __FILE__, __LINE__,
-            (std::string("user config: unknown enemy_labels '") + s + "', defaulting to always").c_str());
-    return EnemyLabels::Always;
+static EnemyLabels parseEnemyLabels(const char* s, ILogger* log) {
+    return parseEnum(s, kEnemyLabelsNames, kEnemyLabelsFallback, "enemy_labels", log);
 }
+
+constexpr EnumName<RadarRealism> kRadarRealismNames[] = {
+    {RadarRealism::Simple, "simple"},
+    {RadarRealism::Standard, "standard"},
+    {RadarRealism::Full, "full"},
+};
+constexpr RadarRealism kRadarRealismFallback = RadarRealism::Simple;
 
 static const char* radarRealismString(RadarRealism v) {
-    switch (v) {
-    case RadarRealism::Simple:
-        return "simple";
-    case RadarRealism::Standard:
-        return "standard";
-    case RadarRealism::Full:
-        return "full";
-    }
-    return "simple";
+    return enumName(v, kRadarRealismNames, kRadarRealismFallback);
 }
 
-static RadarRealism parseRadarRealism(const char* s, ILogger& log) {
-    if (!s)
-        return RadarRealism::Simple;
-    if (std::strcmp(s, "simple") == 0)
-        return RadarRealism::Simple;
-    if (std::strcmp(s, "standard") == 0)
-        return RadarRealism::Standard;
-    if (std::strcmp(s, "full") == 0)
-        return RadarRealism::Full;
-    log.log(LogLevel::Warn, __FILE__, __LINE__,
-            (std::string("user config: unknown radar_realism '") + s + "', defaulting to simple").c_str());
-    return RadarRealism::Simple;
+static RadarRealism parseRadarRealism(const char* s, ILogger* log) {
+    return parseEnum(s, kRadarRealismNames, kRadarRealismFallback, "radar_realism", log);
 }
+
+constexpr EnumName<RefuelingMode> kRefuelingNames[] = {
+    {RefuelingMode::Auto, "auto"},
+    {RefuelingMode::Simplified, "simplified"},
+    {RefuelingMode::Manual, "manual"},
+};
+constexpr RefuelingMode kRefuelingFallback = RefuelingMode::Auto;
 
 static const char* refuelingModeString(RefuelingMode v) {
-    switch (v) {
-    case RefuelingMode::Auto:
-        return "auto";
-    case RefuelingMode::Simplified:
-        return "simplified";
-    case RefuelingMode::Manual:
-        return "manual";
-    }
-    return "auto";
+    return enumName(v, kRefuelingNames, kRefuelingFallback);
 }
 
-static RefuelingMode parseRefuelingMode(const char* s, ILogger& log) {
-    if (!s)
-        return RefuelingMode::Auto;
-    if (std::strcmp(s, "auto") == 0)
-        return RefuelingMode::Auto;
-    if (std::strcmp(s, "simplified") == 0)
-        return RefuelingMode::Simplified;
-    if (std::strcmp(s, "manual") == 0)
-        return RefuelingMode::Manual;
-    log.log(LogLevel::Warn, __FILE__, __LINE__,
-            (std::string("user config: unknown in_flight_refueling '") + s + "', defaulting to auto").c_str());
-    return RefuelingMode::Auto;
+static RefuelingMode parseRefuelingMode(const char* s, ILogger* log) {
+    return parseEnum(s, kRefuelingNames, kRefuelingFallback, "in_flight_refueling", log);
 }
+
+constexpr EnumName<RearmMode> kRearmNames[] = {
+    {RearmMode::Instantaneous, "instantaneous"},
+    {RearmMode::Timed, "timed"},
+    {RearmMode::SupplyLimited, "supply_limited"},
+};
+constexpr RearmMode kRearmFallback = RearmMode::Instantaneous;
 
 static const char* rearmModeString(RearmMode v) {
-    switch (v) {
-    case RearmMode::Instantaneous:
-        return "instantaneous";
-    case RearmMode::Timed:
-        return "timed";
-    case RearmMode::SupplyLimited:
-        return "supply_limited";
-    }
-    return "instantaneous";
+    return enumName(v, kRearmNames, kRearmFallback);
 }
 
-static RearmMode parseRearmMode(const char* s, ILogger& log) {
-    if (!s)
-        return RearmMode::Instantaneous;
-    if (std::strcmp(s, "instantaneous") == 0)
-        return RearmMode::Instantaneous;
-    if (std::strcmp(s, "timed") == 0)
-        return RearmMode::Timed;
-    if (std::strcmp(s, "supply_limited") == 0)
-        return RearmMode::SupplyLimited;
-    log.log(LogLevel::Warn, __FILE__, __LINE__,
-            (std::string("user config: unknown rearm_mode '") + s + "', defaulting to instantaneous").c_str());
-    return RearmMode::Instantaneous;
+static RearmMode parseRearmMode(const char* s, ILogger* log) {
+    return parseEnum(s, kRearmNames, kRearmFallback, "rearm_mode", log);
 }
+
+constexpr EnumName<CountermeasureUse> kCountermeasureNames[] = {
+    {CountermeasureUse::Never, "never"},
+    {CountermeasureUse::Reactive, "reactive"},
+    {CountermeasureUse::Proactive, "proactive"},
+};
+constexpr CountermeasureUse kCountermeasureFallback = CountermeasureUse::Never;
 
 static const char* countermeasureUseString(CountermeasureUse v) {
-    switch (v) {
-    case CountermeasureUse::Never:
-        return "never";
-    case CountermeasureUse::Reactive:
-        return "reactive";
-    case CountermeasureUse::Proactive:
-        return "proactive";
-    }
-    return "never";
+    return enumName(v, kCountermeasureNames, kCountermeasureFallback);
 }
 
-static CountermeasureUse parseCountermeasureUse(const char* s, ILogger& log) {
-    if (!s)
-        return CountermeasureUse::Never;
-    if (std::strcmp(s, "never") == 0)
-        return CountermeasureUse::Never;
-    if (std::strcmp(s, "reactive") == 0)
-        return CountermeasureUse::Reactive;
-    if (std::strcmp(s, "proactive") == 0)
-        return CountermeasureUse::Proactive;
-    log.log(LogLevel::Warn, __FILE__, __LINE__,
-            (std::string("user config: unknown countermeasure_use '") + s + "', defaulting to never").c_str());
-    return CountermeasureUse::Never;
+static CountermeasureUse parseCountermeasureUse(const char* s, ILogger* log) {
+    return parseEnum(s, kCountermeasureNames, kCountermeasureFallback, "countermeasure_use", log);
 }
+
+constexpr EnumName<EnergyManagement> kEnergyNames[] = {
+    {EnergyManagement::Passive, "passive"},
+    {EnergyManagement::Standard, "standard"},
+    {EnergyManagement::AggressiveBfm, "aggressive_bfm"},
+};
+constexpr EnergyManagement kEnergyFallback = EnergyManagement::Passive;
 
 static const char* energyManagementString(EnergyManagement v) {
-    switch (v) {
-    case EnergyManagement::Passive:
-        return "passive";
-    case EnergyManagement::Standard:
-        return "standard";
-    case EnergyManagement::AggressiveBfm:
-        return "aggressive_bfm";
-    }
-    return "passive";
+    return enumName(v, kEnergyNames, kEnergyFallback);
 }
 
-static EnergyManagement parseEnergyManagement(const char* s, ILogger& log) {
-    if (!s)
-        return EnergyManagement::Passive;
-    if (std::strcmp(s, "passive") == 0)
-        return EnergyManagement::Passive;
-    if (std::strcmp(s, "standard") == 0)
-        return EnergyManagement::Standard;
-    if (std::strcmp(s, "aggressive_bfm") == 0)
-        return EnergyManagement::AggressiveBfm;
-    log.log(LogLevel::Warn, __FILE__, __LINE__,
-            (std::string("user config: unknown energy_management '") + s + "', defaulting to passive").c_str());
-    return EnergyManagement::Passive;
+static EnergyManagement parseEnergyManagement(const char* s, ILogger* log) {
+    return parseEnum(s, kEnergyNames, kEnergyFallback, "energy_management", log);
 }
+
+constexpr EnumName<SamRadarShutdown> kSamRadarNames[] = {
+    {SamRadarShutdown::Never, "never"},
+    {SamRadarShutdown::Sometimes, "sometimes"},
+    {SamRadarShutdown::Always, "always"},
+};
+constexpr SamRadarShutdown kSamRadarFallback = SamRadarShutdown::Never;
 
 static const char* samRadarShutdownString(SamRadarShutdown v) {
-    switch (v) {
-    case SamRadarShutdown::Never:
-        return "never";
-    case SamRadarShutdown::Sometimes:
-        return "sometimes";
-    case SamRadarShutdown::Always:
-        return "always";
-    }
-    return "never";
+    return enumName(v, kSamRadarNames, kSamRadarFallback);
 }
 
-static SamRadarShutdown parseSamRadarShutdown(const char* s, ILogger& log) {
-    if (!s)
-        return SamRadarShutdown::Never;
-    if (std::strcmp(s, "never") == 0)
-        return SamRadarShutdown::Never;
-    if (std::strcmp(s, "sometimes") == 0)
-        return SamRadarShutdown::Sometimes;
-    if (std::strcmp(s, "always") == 0)
-        return SamRadarShutdown::Always;
-    log.log(LogLevel::Warn, __FILE__, __LINE__,
-            (std::string("user config: unknown sam_radar_shutdown '") + s + "', defaulting to never").c_str());
-    return SamRadarShutdown::Never;
+static SamRadarShutdown parseSamRadarShutdown(const char* s, ILogger* log) {
+    return parseEnum(s, kSamRadarNames, kSamRadarFallback, "sam_radar_shutdown", log);
 }
 
 // ---------------------------------------------------------------------------
@@ -618,14 +439,8 @@ bool UserConfig::load() {
 
     m_firstRunCompleted = tbl["first_run"]["completed"].value_or(false);
 
-    if (auto lvl = tbl["engine"]["log_level"].value<std::string>()) {
-        LogLevel parsed = parseLogLevel(lvl->c_str());
-        if (parsed == LogLevel::Info && *lvl != "info") {
-            m_logger.log(LogLevel::Warn, __FILE__, __LINE__,
-                         ("user config: unknown log_level '" + *lvl + "', defaulting to info").c_str());
-        }
-        m_logLevel = parsed;
-    }
+    if (auto lvl = tbl["engine"]["log_level"].value<std::string>())
+        m_logLevel = parseEnum(lvl->c_str(), kLogLevelNames, kLogLevelFallback, "log_level", &m_logger);
 
     // [graphics]
     m_graphics.resolutionWidth = std::max(0, static_cast<int>(tbl["graphics"]["resolution_width"].value_or(0LL)));
@@ -638,56 +453,36 @@ bool UserConfig::load() {
         m_graphics.resolutionHeight = 0;
     }
 
-    if (auto v = tbl["graphics"]["vsync"].value<std::string>()) {
-        VsyncMode parsed = parseVsyncMode(v->c_str());
-        if (parsed == VsyncMode::On && *v != "on")
-            m_logger.log(LogLevel::Warn, __FILE__, __LINE__,
-                         ("user config: unknown vsync '" + *v + "', defaulting to on").c_str());
-        m_graphics.vsync = parsed;
-    }
+    if (auto v = tbl["graphics"]["vsync"].value<std::string>())
+        m_graphics.vsync = parseVsyncMode(v->c_str(), &m_logger);
 
-    if (auto v = tbl["graphics"]["frame_rate_cap"].value<std::string>()) {
-        FrameRateCap parsed = parseFrameRateCap(v->c_str());
-        if (parsed == FrameRateCap::Off && *v != "off")
-            m_logger.log(LogLevel::Warn, __FILE__, __LINE__,
-                         ("user config: unknown frame_rate_cap '" + *v + "', defaulting to off").c_str());
-        m_graphics.frameRateCap = parsed;
-    }
+    if (auto v = tbl["graphics"]["frame_rate_cap"].value<std::string>())
+        m_graphics.frameRateCap = parseFrameRateCap(v->c_str(), &m_logger);
 
-    if (auto v = tbl["graphics"]["quality_preset"].value<std::string>()) {
-        QualityLevel parsed = parseQualityLevel(v->c_str());
-        if (parsed == QualityLevel::High && *v != "high")
-            m_logger.log(LogLevel::Warn, __FILE__, __LINE__,
-                         ("user config: unknown quality_preset '" + *v + "', defaulting to high").c_str());
-        m_graphics.qualityPreset = parsed;
-    }
+    if (auto v = tbl["graphics"]["quality_preset"].value<std::string>())
+        m_graphics.qualityPreset = parseQualityLevel(v->c_str(), &m_logger);
 
-    if (auto v = tbl["graphics"]["draw_distance"].value<std::string>()) {
-        DrawDistance parsed = parseDrawDistance(v->c_str());
-        if (parsed == DrawDistance::High && *v != "high")
-            m_logger.log(LogLevel::Warn, __FILE__, __LINE__,
-                         ("user config: unknown draw_distance '" + *v + "', defaulting to high").c_str());
-        m_graphics.drawDistance = parsed;
-    }
+    if (auto v = tbl["graphics"]["draw_distance"].value<std::string>())
+        m_graphics.drawDistance = parseDrawDistance(v->c_str(), &m_logger);
 
     if (auto v = tbl["graphics"]["aa_mode"].value<std::string>()) {
-        m_graphics.aaMode = parseAaMode(v->c_str(), m_logger);
+        m_graphics.aaMode = parseAaMode(v->c_str(), &m_logger);
     } else if (auto b = tbl["graphics"]["anti_aliasing"].value<bool>()) {
         // Migrate old bool: true → FXAA, false → Off
         m_graphics.aaMode = *b ? AntiAliasingMode::FXAA : AntiAliasingMode::Off;
     }
 
     if (auto v = tbl["graphics"]["shadow_quality"].value<std::string>())
-        m_graphics.shadowQuality = parseShadowQuality(v->c_str(), m_logger);
+        m_graphics.shadowQuality = parseShadowQuality(v->c_str(), &m_logger);
 
     if (auto v = tbl["graphics"]["particle_density"].value<std::string>())
-        m_graphics.particleDensity = parseParticleDensity(v->c_str(), m_logger);
+        m_graphics.particleDensity = parseParticleDensity(v->c_str(), &m_logger);
 
     if (auto v = tbl["graphics"]["ao_mode"].value<std::string>())
-        m_graphics.ambientOcclusion = parseAoMode(v->c_str(), m_logger);
+        m_graphics.ambientOcclusion = parseAoMode(v->c_str(), &m_logger);
 
     if (auto v = tbl["graphics"]["sky_quality"].value<std::string>())
-        m_graphics.skyQuality = parseSkyQuality(v->c_str(), m_logger);
+        m_graphics.skyQuality = parseSkyQuality(v->c_str(), &m_logger);
 
     if (auto v = tomlInt(tbl["graphics"]["ui_scale"])) {
         UiScale parsed = parseUiScale(static_cast<int>(*v));
@@ -718,27 +513,27 @@ bool UserConfig::load() {
 
     // [difficulty] — missing section is normal on first run; defaults are already set
     if (auto v = tbl["difficulty"]["preset"].value<std::string>())
-        m_difficulty.preset = parseDifficultyPreset(v->c_str(), m_logger);
+        m_difficulty.preset = parseDifficultyPreset(v->c_str(), &m_logger);
 
     if (auto v = tbl["difficulty"]["flight_assists"].value<std::string>())
-        m_difficulty.toggles.flightAssists = parseFlightAssists(v->c_str(), m_logger);
+        m_difficulty.toggles.flightAssists = parseFlightAssists(v->c_str(), &m_logger);
     m_difficulty.toggles.aimAssist = tbl["difficulty"]["aim_assist"].value_or(m_difficulty.toggles.aimAssist);
     m_difficulty.toggles.invulnerability = tbl["difficulty"]["invulnerability"].value_or(false);
     m_difficulty.toggles.unlimitedWeapons = tbl["difficulty"]["unlimited_weapons"].value_or(false);
     if (auto v = tbl["difficulty"]["enemy_labels"].value<std::string>())
-        m_difficulty.toggles.enemyLabels = parseEnemyLabels(v->c_str(), m_logger);
+        m_difficulty.toggles.enemyLabels = parseEnemyLabels(v->c_str(), &m_logger);
     if (auto v = tbl["difficulty"]["radar_realism"].value<std::string>())
-        m_difficulty.toggles.radarRealism = parseRadarRealism(v->c_str(), m_logger);
+        m_difficulty.toggles.radarRealism = parseRadarRealism(v->c_str(), &m_logger);
     m_difficulty.toggles.blackoutRedout =
         tbl["difficulty"]["blackout_redout"].value_or(m_difficulty.toggles.blackoutRedout);
     m_difficulty.toggles.fuelConsumption =
         tbl["difficulty"]["fuel_consumption"].value_or(m_difficulty.toggles.fuelConsumption);
     if (auto v = tbl["difficulty"]["in_flight_refueling"].value<std::string>())
-        m_difficulty.toggles.inFlightRefueling = parseRefuelingMode(v->c_str(), m_logger);
+        m_difficulty.toggles.inFlightRefueling = parseRefuelingMode(v->c_str(), &m_logger);
     m_difficulty.toggles.friendlyFire = tbl["difficulty"]["friendly_fire"].value_or(m_difficulty.toggles.friendlyFire);
     m_difficulty.toggles.crashDamage = tbl["difficulty"]["crash_damage"].value_or(m_difficulty.toggles.crashDamage);
     if (auto v = tbl["difficulty"]["rearm_mode"].value<std::string>())
-        m_difficulty.toggles.rearmMode = parseRearmMode(v->c_str(), m_logger);
+        m_difficulty.toggles.rearmMode = parseRearmMode(v->c_str(), &m_logger);
 
     if (auto v = tbl["difficulty"]["reaction_time_s"].value<double>())
         m_difficulty.ai.reactionTimeS = static_cast<float>(std::clamp(*v, 0.0, 10.0));
@@ -747,13 +542,13 @@ bool UserConfig::load() {
     if (auto v = tbl["difficulty"]["radar_sensor_range"].value<double>())
         m_difficulty.ai.radarSensorRange = static_cast<float>(std::clamp(*v, 0.0, 1.0));
     if (auto v = tbl["difficulty"]["countermeasure_use"].value<std::string>())
-        m_difficulty.ai.countermeasureUse = parseCountermeasureUse(v->c_str(), m_logger);
+        m_difficulty.ai.countermeasureUse = parseCountermeasureUse(v->c_str(), &m_logger);
     if (auto v = tbl["difficulty"]["energy_management"].value<std::string>())
-        m_difficulty.ai.energyManagement = parseEnergyManagement(v->c_str(), m_logger);
+        m_difficulty.ai.energyManagement = parseEnergyManagement(v->c_str(), &m_logger);
     if (auto v = tbl["difficulty"]["sam_engagement_range"].value<double>())
         m_difficulty.ai.samEngagementRange = static_cast<float>(std::clamp(*v, 0.0, 1.0));
     if (auto v = tbl["difficulty"]["sam_radar_shutdown"].value<std::string>())
-        m_difficulty.ai.samRadarShutdown = parseSamRadarShutdown(v->c_str(), m_logger);
+        m_difficulty.ai.samRadarShutdown = parseSamRadarShutdown(v->c_str(), &m_logger);
 
     // [accessibility]
     m_accessibility.subtitlesEnabled = tbl["accessibility"]["subtitles"].value_or(true);
