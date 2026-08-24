@@ -4,21 +4,17 @@
 
 from __future__ import annotations
 
-import importlib.util
 import math
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from conftest import load_tool
+
 # Load the module without installing it as a package. The guarded GDAL import means this
 # succeeds even when GDAL is absent (gdal=None, _HAS_GDAL=False).
-_spec = importlib.util.spec_from_file_location(
-    "gen_terrain_tiles",
-    Path(__file__).parent.parent / "tools" / "gen_terrain_tiles.py",
-)
-_mod = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_mod)
+_mod = load_tool("gen_terrain_tiles", "tools", "gen_terrain_tiles.py")
 
 face_uv_to_direction = _mod.face_uv_to_direction
 direction_to_latlon = _mod.direction_to_latlon

@@ -8,20 +8,17 @@ that the extractors are not silently over- or under-matching: a drift gate that 
 finding names reports the documentation as perfect forever, which is worse than no gate.
 """
 
-import importlib.util
 import sys
 from pathlib import Path
 
 import pytest
 
+from conftest import load_tool
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
-_MODULE_PATH = REPO_ROOT / "tools" / "docs_drift.py"
-_spec = importlib.util.spec_from_file_location("docs_drift", _MODULE_PATH)
-dd = importlib.util.module_from_spec(_spec)
-# Registered before exec: @dataclass resolves annotations through sys.modules, so a module
-# loaded by path alone cannot define one.
-sys.modules["docs_drift"] = dd
-_spec.loader.exec_module(dd)
+# load_tool registers before exec: @dataclass resolves annotations through sys.modules, so a module
+# loaded by path alone cannot define one — and docs_drift does.
+dd = load_tool("docs_drift", "tools", "docs_drift.py")
 
 
 # ---- floor_check -------------------------------------------------------------------------------

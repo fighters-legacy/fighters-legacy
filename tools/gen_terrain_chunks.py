@@ -46,6 +46,11 @@ from pathlib import Path
 
 import numpy as np
 
+# Reuse the shared encode + PNG writer (they guard their own GDAL import), the same cross-import the
+# colour generator uses (#1107/#1265).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from gen_terrain_tiles import encode_heights, write_png_u16  # noqa: E402
+
 # Guard GDAL import so --help and pytest unit tests work without GDAL installed.
 try:
     from osgeo import gdal, osr
@@ -218,26 +223,15 @@ def _process_chunk(src_ds: "gdal.Dataset", tgt_srs_wkt: str,
     if warped is None:
         raise RuntimeError(f"gdal.Warp returned None for chunk ({cx}, {cy})")
 
-    arr = warped.GetRasterBand(1).ReadAsArray().astype(np.float64)
-    arr[np.isnan(arr)] = 0.0          # nodata / out-of-bounds → sea level before encode
-    arr = arr * height_scale + height_offset
-    np.clip(arr, 0, 65535, out=arr)
-    return arr.astype(np.uint16)
+    # encode_heights copies its input, so the extra array here is the price of one shared encode
+    # rule rather than two that must agree about NaN and clamping (#1265).
+    return encode_heights(warped.GetRasterBand(1).ReadAsArray(), height_scale, height_offset)
 
 
 def _downsample(arr_u16: "np.ndarray", stride: int) -> "np.ndarray":
     """Return arr[::stride, ::stride] — strided subsampling for LOD generation."""
     return arr_u16[::stride, ::stride]
 
-
-def _write_png(path: Path, data_u16: "np.ndarray") -> None:
-    """Write a 2-D uint16 numpy array as a 16-bit grayscale PNG via GDAL."""
-    h, w = data_u16.shape
-    mem_ds = gdal.GetDriverByName("MEM").Create("", w, h, 1, gdal.GDT_UInt16)
-    mem_ds.GetRasterBand(1).WriteArray(data_u16)
-    # GDAL expects forward-slash paths on all platforms including Windows.
-    gdal.GetDriverByName("PNG").CreateCopy(str(path).replace("\\", "/"), mem_ds)
-    mem_ds = None
 
 # ---------------------------------------------------------------------------
 # Directory and manifest helpers
@@ -311,7 +305,7 @@ def _worker_chunk(cx_cy: tuple[int, int]) -> tuple[int, int, bool]:
         arr = _downsample(arr_lod0, LOD_STRIDES[lod])
         path = (Path(output_dir_str) / "terrain" / terrain_id
                 / f"lod{lod}" / f"chunk_{cx:04d}_{cy:04d}.png")
-        _write_png(path, arr)
+        write_png_u16(path, arr)
 
     return cx, cy, ok
 

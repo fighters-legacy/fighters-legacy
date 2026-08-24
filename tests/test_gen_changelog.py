@@ -14,19 +14,13 @@ are about what happens to its output afterwards. The real invocation is covered 
 """
 
 import datetime
-import importlib.util
-import sys
 from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-_spec = importlib.util.spec_from_file_location(
-    "gen_changelog", REPO_ROOT / "scripts" / "gen_changelog.py"
-)
-gc = importlib.util.module_from_spec(_spec)
-sys.modules["gen_changelog"] = gc
-_spec.loader.exec_module(gc)
+from conftest import load_tool
+
+gc = load_tool("gen_changelog", "scripts", "gen_changelog.py")
 
 TODAY = datetime.date.today().isoformat()
 

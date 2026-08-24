@@ -4,15 +4,10 @@
 
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
 
-_spec = importlib.util.spec_from_file_location(
-    "mission_test",
-    Path(__file__).parent.parent / "tools" / "mission_test" / "mission_test.py",
-)
-_mod = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_mod)
+from conftest import load_tool
+
+_mod = load_tool("mission_test", "tools", "mission_test", "mission_test.py")
 evaluate_report = _mod.evaluate_report
 
 _OK = {"outcome": "success", "triggers_fired": 2, "live_entities": 2, "spawned_objects": 2}

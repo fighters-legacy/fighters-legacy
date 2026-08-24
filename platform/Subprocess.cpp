@@ -2,8 +2,9 @@
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
-#include <fcntl.h> // _O_RDONLY
-#include <io.h>    // _open_osfhandle, _fdopen
+#include <fcntl.h>   // _O_RDONLY
+#include <io.h>      // _open_osfhandle, _fdopen
+#include <process.h> // _spawnvp (runAndWait)
 #include <windows.h>
 #else
 #include <signal.h>
@@ -408,6 +409,33 @@ Subprocess Subprocess::spawn(const std::string& binaryPath, const std::vector<st
         impl.startReaderThread();
 
     return sub;
+}
+
+int Subprocess::runAndWait(const std::vector<std::string>& argv) {
+    if (argv.empty())
+        return -1;
+#if defined(_WIN32)
+    std::vector<const char*> c;
+    c.reserve(argv.size() + 1);
+    for (const std::string& a : argv)
+        c.push_back(a.c_str());
+    c.push_back(nullptr);
+    const intptr_t rc = _spawnvp(_P_WAIT, c[0], c.data());
+    return rc < 0 ? -1 : static_cast<int>(rc);
+#else
+    std::vector<char*> c;
+    c.reserve(argv.size() + 1);
+    for (const std::string& a : argv)
+        c.push_back(const_cast<char*>(a.c_str()));
+    c.push_back(nullptr);
+    pid_t pid = 0;
+    if (posix_spawnp(&pid, c[0], nullptr, nullptr, c.data(), environ) != 0)
+        return -1;
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0)
+        return -1;
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+#endif
 }
 
 } // namespace fl

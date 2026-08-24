@@ -11,20 +11,16 @@ gcovr is stubbed with a script so the measurement-failure paths (parse abort, no
 summary, empty report) are exercised for real, through subprocess, without needing gcov data.
 """
 
-import importlib.util
 import json
 import os
 import stat
-import sys
 from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-_spec = importlib.util.spec_from_file_location("coverage_gate", REPO_ROOT / "tools" / "coverage_gate.py")
-cg = importlib.util.module_from_spec(_spec)
-sys.modules["coverage_gate"] = cg
-_spec.loader.exec_module(cg)
+from conftest import load_tool
+
+cg = load_tool("coverage_gate", "tools", "coverage_gate.py")
 
 
 def _pct(covered, total):

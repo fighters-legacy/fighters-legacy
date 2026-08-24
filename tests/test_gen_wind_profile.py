@@ -1,17 +1,13 @@
 # SPDX-FileCopyrightText: 2026 Fighters Legacy contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Pure-logic tests for tools/gen_wind_profile.py (#489). No NetCDF, no network."""
-import importlib.util
 import math
-import os
 
 import pytest
 
-_SPEC = importlib.util.spec_from_file_location(
-    "gen_wind_profile", os.path.join(os.path.dirname(__file__), "..", "tools", "gen_wind_profile.py")
-)
-gwp = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(gwp)
+from conftest import load_tool
+
+gwp = load_tool("gen_wind_profile", "tools", "gen_wind_profile.py")
 
 
 def test_season_months():

@@ -1,17 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "tex_compress.h"
 
+#include "Subprocess.h" // runAndWait — the one argv spawner (#1265)
+
 #include <filesystem>
 #include <string>
 #include <vector>
-
-#if defined(_WIN32)
-#include <process.h>
-#else
-#include <spawn.h>
-#include <sys/wait.h>
-extern char** environ;
-#endif
 
 namespace fs = std::filesystem;
 
@@ -68,33 +62,6 @@ std::vector<std::string> buildToktxArgv(const std::vector<std::string>& inputPng
     return argv;
 }
 
-// Run a program by argv and wait, returning its exit code (or -1 if it could not be spawned). No
-// shell is involved on any platform, so no argument can be interpreted as a command.
-int spawnAndWait(const std::vector<std::string>& argv) {
-#if defined(_WIN32)
-    std::vector<const char*> c;
-    c.reserve(argv.size() + 1);
-    for (const std::string& a : argv)
-        c.push_back(a.c_str());
-    c.push_back(nullptr);
-    const intptr_t rc = _spawnvp(_P_WAIT, c[0], c.data());
-    return rc < 0 ? -1 : static_cast<int>(rc);
-#else
-    std::vector<char*> c;
-    c.reserve(argv.size() + 1);
-    for (const std::string& a : argv)
-        c.push_back(const_cast<char*>(a.c_str()));
-    c.push_back(nullptr);
-    pid_t pid = 0;
-    if (posix_spawnp(&pid, c[0], nullptr, nullptr, c.data(), environ) != 0)
-        return -1;
-    int status = 0;
-    if (waitpid(pid, &status, 0) < 0)
-        return -1;
-    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-#endif
-}
-
 } // namespace
 
 std::string buildToktxCommand(const std::string& inputPng, const std::string& outputKtx2,
@@ -140,7 +107,7 @@ std::string defaultOutputPath(const std::string& inputPng) {
 TexCompressResult compressTexture(const std::string& inputPng, const std::string& outputKtx2,
                                   const TexCompressOptions& opts) {
     TexCompressResult result;
-    const int rc = spawnAndWait(buildToktxArgv({inputPng}, outputKtx2, opts));
+    const int rc = Subprocess::runAndWait(buildToktxArgv({inputPng}, outputKtx2, opts));
     if (rc != 0) {
         result.errors.push_back("toktx exited with code " + std::to_string(rc) +
                                 " — is toktx installed? (apt install ktx-tools / brew install ktx-tools)");
@@ -157,7 +124,7 @@ TexCompressResult compressTextureLayers(const std::vector<std::string>& inputPng
         result.ok = false;
         return result;
     }
-    const int rc = spawnAndWait(buildToktxArgv(inputPngs, outputKtx2, opts));
+    const int rc = Subprocess::runAndWait(buildToktxArgv(inputPngs, outputKtx2, opts));
     if (rc != 0) {
         result.errors.push_back("toktx exited with code " + std::to_string(rc) +
                                 " — is toktx installed (v4.3+ for --layers)? (apt install ktx-tools)");
