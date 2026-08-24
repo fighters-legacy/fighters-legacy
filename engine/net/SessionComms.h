@@ -124,7 +124,6 @@ class SessionComms {
         m_voiceFrameRateLimit = framesPerSecond < 1 ? 1 : framesPerSecond;
     }
     bool setPeerVoiceMuted(uint32_t peerId, bool muted);
-    [[nodiscard]] bool isPeerVoiceMuted(uint32_t peerId) const;
     [[nodiscard]] std::vector<uint32_t> voiceMutedPeers() const;
     [[nodiscard]] VoicePeerView voicePeerView(uint32_t peerId) const;
     void buildVoicePeerViews(std::vector<VoicePeerView>& out) const;

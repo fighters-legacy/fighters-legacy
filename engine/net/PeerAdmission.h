@@ -136,17 +136,11 @@ class PeerAdmission {
     void setMaxConnectionsPerIp(int max) noexcept;
     void setSpawnPoints(std::vector<std::array<double, 3>> points) noexcept;
     void setPlayerFaction(uint16_t faction) noexcept;
-    [[nodiscard]] uint16_t playerFaction() const noexcept {
-        return m_playerFaction;
-    }
     void setPlayerEntityType(std::string type);
     void setAllowObservers(bool allow) noexcept;
     void setRequiredPacks(std::vector<RequiredPack> packs);
     void setRequiredPackPolicy(RequiredPackPolicy policy) noexcept;
     void setJoinPassword(std::string password);
-    [[nodiscard]] bool hasJoinPassword() const noexcept {
-        return !m_joinPassword.empty();
-    }
     void setReconnectGraceTicks(uint64_t ticks) noexcept;
     void setClock(const IClock& clock) noexcept;
 

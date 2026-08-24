@@ -440,6 +440,11 @@ target_link_libraries(test_math_constants PRIVATE Catch2::Catch2WithMain)
 target_include_directories(test_math_constants PRIVATE "${CMAKE_SOURCE_DIR}/engine")
 catch_discover_tests(test_math_constants)
 
+add_executable(test_rate_window test_rate_window.cpp)
+target_link_libraries(test_rate_window PRIVATE Catch2::Catch2WithMain)
+target_include_directories(test_rate_window PRIVATE "${CMAKE_SOURCE_DIR}/engine")
+catch_discover_tests(test_rate_window)
+
 add_executable(test_toml_numeric test_toml_numeric.cpp)
 target_link_libraries(test_toml_numeric PRIVATE Catch2::Catch2WithMain tomlplusplus::tomlplusplus)
 target_include_directories(test_toml_numeric PRIVATE "${CMAKE_SOURCE_DIR}/engine")
