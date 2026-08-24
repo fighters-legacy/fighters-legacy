@@ -45,10 +45,10 @@ namespace fl {
 // thread, long after dispatch() returned its ack, so their real result has to reach the operator
 // through stdout and (when RCON is configured) the shell ring that RconServer drains. Every existing
 // mutating command open-codes exactly this; new ones should not add another copy.
-static void printAdmin(const ServerCommandContext& ctx, const char* line) {
-    std::printf("%s\n", line);
+static void printAdmin(const ServerCommandContext& ctx, std::string_view line) {
+    std::printf("%.*s\n", static_cast<int>(line.size()), line.data());
     if (ctx.rcon.shell)
-        ctx.rcon.shell->print(line);
+        ctx.rcon.shell->print(std::string(line));
     std::fflush(stdout);
 }
 
@@ -320,17 +320,11 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                                              (pi.delayTicks * 1000u + 30u) / 60u, pi.ewmaDelayTicks, pi.ewmaJitterTicks,
                                              pi.queueDepth, pi.bufferMaxDepth, static_cast<double>(pi.sendRateHz),
                                              static_cast<double>(pi.packetLoss) * 100.0, roleCol, throttleCol);
-                                         std::printf("%s\n", m);
-                                         if (ctx->rcon.shell)
-                                             ctx->rcon.shell->print(m);
+                                         printAdmin(*ctx, m);
                                          ++count;
                                      });
-                                     if (count == 0) {
-                                         std::printf("[admin] peers: no connected peers\n");
-                                         if (ctx->rcon.shell)
-                                             ctx->rcon.shell->print("[admin] peers: no connected peers");
-                                     }
-                                     std::fflush(stdout);
+                                     if (count == 0)
+                                         printAdmin(*ctx, "[admin] peers: no connected peers");
                                  });
                                  int count = ctx->sim.broadcaster->getPeerCount();
                                  char peerBuf[64];
@@ -355,10 +349,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                                          ctx->sim.broadcaster->kickPeer(peerId);
                                          char m[64];
                                          std::snprintf(m, sizeof(m), "[admin] kicked peer %u", peerId);
-                                         std::printf("%s\n", m);
-                                         if (ctx->rcon.shell)
-                                             ctx->rcon.shell->print(m);
-                                         std::fflush(stdout);
+                                         printAdmin(*ctx, m);
                                      });
                                      char kickBuf[64];
                                      std::snprintf(kickBuf, sizeof(kickBuf), "kick: queued peer %u", peerId);
@@ -376,10 +367,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                                          char m[128];
                                          std::snprintf(m, sizeof(m), "[admin] kicked %d peer(s) from IP %s", kicked,
                                                        ip.c_str());
-                                         std::printf("%s\n", m);
-                                         if (ctx->rcon.shell)
-                                             ctx->rcon.shell->print(m);
-                                         std::fflush(stdout);
+                                         printAdmin(*ctx, m);
                                      });
                                      return "kick: queued peers from IP " + ip;
                                  }
@@ -408,10 +396,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                                          char m[80];
                                          std::snprintf(m, sizeof(m), "[admin] %s peer %u%s", name, peerId,
                                                        ok ? "" : " (unknown peer)");
-                                         std::printf("%s\n", m);
-                                         if (ctx->rcon.shell)
-                                             ctx->rcon.shell->print(m);
-                                         std::fflush(stdout);
+                                         printAdmin(*ctx, m);
                                      });
                                      char buf[64];
                                      std::snprintf(buf, sizeof(buf), "%s: queued peer %u", name, peerId);
@@ -432,10 +417,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                                      else
                                          for (std::size_t i = 0; i < ids.size(); ++i)
                                              line += (i ? ", " : "") + std::to_string(ids[i]);
-                                     std::printf("%s\n", line.c_str());
-                                     if (ctx->rcon.shell)
-                                         ctx->rcon.shell->print(line);
-                                     std::fflush(stdout);
+                                     printAdmin(*ctx, line);
                                  });
                                  return "mutes: queued";
                              });
@@ -465,10 +447,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                                          char m[80];
                                          std::snprintf(m, sizeof(m), "[admin] %s peer %u%s", name, peerId,
                                                        ok ? "" : " (unknown peer)");
-                                         std::printf("%s\n", m);
-                                         if (ctx->rcon.shell)
-                                             ctx->rcon.shell->print(m);
-                                         std::fflush(stdout);
+                                         printAdmin(*ctx, m);
                                      });
                                      char buf[80];
                                      std::snprintf(buf, sizeof(buf), "%s: queued peer %u", name, peerId);
@@ -505,10 +484,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                 else
                     for (std::size_t i = 0; i < muted.size(); ++i)
                         out += (i ? ", " : "") + std::to_string(muted[i]);
-                std::printf("%s\n", out.c_str());
-                if (ctx->rcon.shell)
-                    ctx->rcon.shell->print(out);
-                std::fflush(stdout);
+                printAdmin(*ctx, out);
             });
             return "voice: queued";
         });
@@ -548,10 +524,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                 else
                     std::snprintf(m, sizeof(m), "[admin] set peer %u role to %s", peerId,
                                   role == fl::PeerRole::Observer ? "observer" : "pilot");
-                std::printf("%s\n", m);
-                if (ctx->rcon.shell)
-                    ctx->rcon.shell->print(m);
-                std::fflush(stdout);
+                printAdmin(*ctx, m);
             });
             char buf[80];
             std::snprintf(buf, sizeof(buf), "set_role: queued peer %u -> %s", peerId,
@@ -598,10 +571,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                     std::snprintf(m, sizeof(m), "[admin] granted peer %u role %s", peerId, roleName.c_str());
                 else
                     std::snprintf(m, sizeof(m), "[admin] grant failed: peer %u not found", peerId);
-                std::printf("%s\n", m);
-                if (ctx->rcon.shell)
-                    ctx->rcon.shell->print(m);
-                std::fflush(stdout);
+                printAdmin(*ctx, m);
             });
             char buf[96];
             std::snprintf(buf, sizeof(buf), "grant: queued peer %u -> %s", peerId, roleName.c_str());
@@ -629,10 +599,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                     std::snprintf(m, sizeof(m), "[admin] revoked peer %u authority", peerId);
                 else
                     std::snprintf(m, sizeof(m), "[admin] revoke failed: peer %u not found", peerId);
-                std::printf("%s\n", m);
-                if (ctx->rcon.shell)
-                    ctx->rcon.shell->print(m);
-                std::fflush(stdout);
+                printAdmin(*ctx, m);
             });
             char buf[64];
             std::snprintf(buf, sizeof(buf), "revoke: queued peer %u", peerId);
@@ -663,10 +630,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                 ctx->sim.broadcaster->setPeerFaction(peerId, f);
                 char m[80];
                 std::snprintf(m, sizeof(m), "[admin] moved peer %u to team %u", peerId, f);
-                std::printf("%s\n", m);
-                if (ctx->rcon.shell)
-                    ctx->rcon.shell->print(m);
-                std::fflush(stdout);
+                printAdmin(*ctx, m);
             });
             char buf[80];
             std::snprintf(buf, sizeof(buf), "team: queued peer %u -> team %u", peerId, f);
@@ -691,10 +655,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                                      ctx->sim.broadcaster->respawnParticipant(peerId);
                                      char m[64];
                                      std::snprintf(m, sizeof(m), "[admin] respawned peer %u", peerId);
-                                     std::printf("%s\n", m);
-                                     if (ctx->rcon.shell)
-                                         ctx->rcon.shell->print(m);
-                                     std::fflush(stdout);
+                                     printAdmin(*ctx, m);
                                  });
                                  char buf[64];
                                  std::snprintf(buf, sizeof(buf), "respawn: queued peer %u", peerId);
@@ -731,10 +692,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                 else
                     std::snprintf(m, sizeof(m), "[admin] peer %u spectating entity %u%s", peerId, target,
                                   ok ? "" : " (unknown)");
-                std::printf("%s\n", m);
-                if (ctx->rcon.shell)
-                    ctx->rcon.shell->print(m);
-                std::fflush(stdout);
+                printAdmin(*ctx, m);
             });
             char buf[64];
             std::snprintf(buf, sizeof(buf), "spectate: queued peer %u", peerId);
@@ -803,10 +761,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                                                                   : "empty");
                 else
                     std::snprintf(m, sizeof(m), "[admin] %s", err.c_str());
-                std::printf("%s\n", m);
-                if (ctx->rcon.shell)
-                    ctx->rcon.shell->print(m);
-                std::fflush(stdout);
+                printAdmin(*ctx, m);
             });
             char buf[96];
             std::snprintf(buf, sizeof(buf), "set_seat: queued entity %u seat %u", entityIdx, seat8);
@@ -842,10 +797,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                                              std::snprintf(m, sizeof(m), "[admin] banned IP %s (peer %u)",
                                                            foundIp.c_str(), peerId);
                                          }
-                                         std::printf("%s\n", m);
-                                         if (ctx->rcon.shell)
-                                             ctx->rcon.shell->print(m);
-                                         std::fflush(stdout);
+                                         printAdmin(*ctx, m);
                                      });
                                      char banBuf[64];
                                      std::snprintf(banBuf, sizeof(banBuf), "ban: queued for peer %u", peerId);
@@ -858,10 +810,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                                              ctx->bans.saveBanlist(ctx->sim.broadcaster->getBannedAddresses());
                                          char m[128];
                                          std::snprintf(m, sizeof(m), "[admin] banned IP %s", ip.c_str());
-                                         std::printf("%s\n", m);
-                                         if (ctx->rcon.shell)
-                                             ctx->rcon.shell->print(m);
-                                         std::fflush(stdout);
+                                         printAdmin(*ctx, m);
                                      });
                                      return "ban: banning IP " + ip;
                                  }
@@ -881,10 +830,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                                          ctx->bans.saveBanlist(ctx->sim.broadcaster->getBannedAddresses());
                                      char m[128];
                                      std::snprintf(m, sizeof(m), "[admin] unbanned IP %s", ip.c_str());
-                                     std::printf("%s\n", m);
-                                     if (ctx->rcon.shell)
-                                         ctx->rcon.shell->print(m);
-                                     std::fflush(stdout);
+                                     printAdmin(*ctx, m);
                                  });
                                  return "unban: unbanning IP " + ip;
                              });
@@ -917,10 +863,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                 } else {
                     std::snprintf(m, sizeof(m), "[admin] admin_unlock: %s was not locked on any channel", ip.c_str());
                 }
-                std::printf("%s\n", m);
-                if (ctx->rcon.shell)
-                    ctx->rcon.shell->print(m);
-                std::fflush(stdout);
+                printAdmin(*ctx, m);
             });
             return "admin_unlock: queued for " + ip;
         });
@@ -1152,9 +1095,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                     }
                     std::snprintf(m, sizeof(m), "[admin] spawned %s entity=%u/%u", typeId.c_str(), id.index,
                                   id.generation);
-                    std::printf("%s\n", m);
-                    if (ctx->rcon.shell)
-                        ctx->rcon.shell->print(m);
+                    printAdmin(*ctx, m);
 
                     if (ctx->sim.broadcaster) {
                         // The shared construction ladder (#1236); this path has the ATC service, so
@@ -1173,16 +1114,12 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                         if (built.error == fl::AiBuildError::LuaScriptError) {
                             char em[192];
                             std::snprintf(em, sizeof(em), "[admin] spawn: Lua script error: %s", built.detail.c_str());
-                            std::printf("%s\n", em);
-                            if (ctx->rcon.shell)
-                                ctx->rcon.shell->print(em);
+                            printAdmin(*ctx, em);
                         } else if (built.error == fl::AiBuildError::UnknownBehavior) {
                             char wm[128];
                             std::snprintf(wm, sizeof(wm), "[admin] spawn: unknown AI behavior '%s' or bad args",
                                           behavior.c_str());
-                            std::printf("%s\n", wm);
-                            if (ctx->rcon.shell)
-                                ctx->rcon.shell->print(wm);
+                            printAdmin(*ctx, wm);
                         }
 
                         if (ctrl) {
@@ -1190,18 +1127,13 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                             char am[128];
                             std::snprintf(am, sizeof(am), "[admin] attached AI '%s' to entity=%u",
                                           behavior.empty() ? "lua(auto)" : behavior.c_str(), id.index);
-                            std::printf("%s\n", am);
-                            if (ctx->rcon.shell)
-                                ctx->rcon.shell->print(am);
+                            printAdmin(*ctx, am);
                         }
                     }
                 } else {
                     std::snprintf(m, sizeof(m), "[admin] spawn: type '%s' unknown or cap reached", typeId.c_str());
-                    std::printf("%s\n", m);
-                    if (ctx->rcon.shell)
-                        ctx->rcon.shell->print(m);
+                    printAdmin(*ctx, m);
                 }
-                std::fflush(stdout);
             });
 
             char spawnBuf[160];
@@ -1241,10 +1173,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                 } else {
                     std::snprintf(m, sizeof(m), "[admin] kill: no live entity with index %u", targetIdx);
                 }
-                std::printf("%s\n", m);
-                if (ctx->rcon.shell)
-                    ctx->rcon.shell->print(m);
-                std::fflush(stdout);
+                printAdmin(*ctx, m);
             });
             char killBuf[64];
             std::snprintf(killBuf, sizeof(killBuf), "kill: queued index %u", targetIdx);
@@ -1280,10 +1209,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                         std::snprintf(m, sizeof(m), "[admin] teleported entity %u/%u to X:%+.1f Y:%+.1f Z:%+.1f",
                                       state.id.index, state.id.generation, static_cast<float>(x), static_cast<float>(y),
                                       static_cast<float>(z));
-                        std::printf("%s\n", m);
-                        if (ctx->rcon.shell)
-                            ctx->rcon.shell->print(m);
-                        std::fflush(stdout);
+                        printAdmin(*ctx, m);
                     }
                 });
             });
@@ -1324,10 +1250,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                               "[admin] detonated %.0f dmg / %.0f m%s at X:%+.1f Y:%+.1f Z:%+.1f — "
                               "%d damaged, %d EMPed",
                               damage, radius, nuclear ? " (nuclear)" : "", x, y, z, r.damaged, r.emped);
-                std::printf("%s\n", m);
-                if (ctx->rcon.shell)
-                    ctx->rcon.shell->print(m);
-                std::fflush(stdout);
+                printAdmin(*ctx, m);
             });
             char buf[96];
             std::snprintf(buf, sizeof(buf), "detonate: queued %.0f dmg / %.0f m%s", damage, radius,
@@ -1416,10 +1339,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                                      return "reload_content: not available";
                                  ctx->sim.gameLoop->enqueueSimCallback([ctx]() {
                                      ctx->env.reloadContent();
-                                     std::printf("[admin] reload_content: applied\n");
-                                     if (ctx->rcon.shell)
-                                         ctx->rcon.shell->print("[admin] reload_content: applied");
-                                     std::fflush(stdout);
+                                     printAdmin(*ctx, "[admin] reload_content: applied");
                                  });
                                  return "reload_content: queued";
                              });
@@ -1435,10 +1355,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                                  auto count = banned.size();
                                  ctx->sim.gameLoop->enqueueSimCallback([ctx, b = std::move(banned)]() mutable {
                                      ctx->sim.broadcaster->setBannedAddresses(std::move(b));
-                                     std::printf("[admin] reload_banlist: applied\n");
-                                     if (ctx->rcon.shell)
-                                         ctx->rcon.shell->print("[admin] reload_banlist: applied");
-                                     std::fflush(stdout);
+                                     printAdmin(*ctx, "[admin] reload_banlist: applied");
                                  });
                                  char buf[128];
                                  std::snprintf(buf, sizeof(buf), "reload_banlist: loading %zu IPs from %s", count,
@@ -1458,10 +1375,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                                  auto count = allowed.size();
                                  ctx->sim.gameLoop->enqueueSimCallback([ctx, a = std::move(allowed)]() mutable {
                                      ctx->sim.broadcaster->setAllowedAddresses(std::move(a));
-                                     std::printf("[admin] reload_allowlist: applied\n");
-                                     if (ctx->rcon.shell)
-                                         ctx->rcon.shell->print("[admin] reload_allowlist: applied");
-                                     std::fflush(stdout);
+                                     printAdmin(*ctx, "[admin] reload_allowlist: applied");
                                  });
                                  char buf[128];
                                  std::snprintf(buf, sizeof(buf), "reload_allowlist: loading %zu IPs from %s", count,
@@ -1487,10 +1401,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                 ctx->sim.broadcaster->setInputTraceDir(dir);
                 char m[256];
                 std::snprintf(m, sizeof(m), "[admin] trace_start: recording peer inputs to %s", dir.c_str());
-                std::printf("%s\n", m);
-                if (ctx->rcon.shell)
-                    ctx->rcon.shell->print(m);
-                std::fflush(stdout);
+                printAdmin(*ctx, m);
             });
             char buf[256];
             std::snprintf(buf, sizeof(buf), "trace_start: recording peer inputs to %s", dir.c_str());
@@ -1503,10 +1414,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                                      return "trace_stop: not available";
                                  ctx->sim.gameLoop->enqueueSimCallback([ctx]() {
                                      ctx->sim.broadcaster->setInputTraceDir("");
-                                     std::printf("[admin] trace_stop: input tracing stopped\n");
-                                     if (ctx->rcon.shell)
-                                         ctx->rcon.shell->print("[admin] trace_stop: input tracing stopped");
-                                     std::fflush(stdout);
+                                     printAdmin(*ctx, "[admin] trace_stop: input tracing stopped");
                                  });
                                  return "trace_stop: input tracing stopped";
                              });
@@ -1580,10 +1488,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                     } else {
                         std::snprintf(m, sizeof(m), "[admin] no shutdown scheduled");
                     }
-                    std::printf("%s\n", m);
-                    if (ctx->rcon.shell)
-                        ctx->rcon.shell->print(m);
-                    std::fflush(stdout);
+                    printAdmin(*ctx, m);
                 });
                 return "shutdown: status queued";
             }
@@ -1603,10 +1508,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                         std::snprintf(m, sizeof(m), "[admin] shutdown --delay: no active shutdown");
                     else
                         std::snprintf(m, sizeof(m), "[admin] shutdown delayed by %u seconds", extra);
-                    std::printf("%s\n", m);
-                    if (ctx->rcon.shell)
-                        ctx->rcon.shell->print(m);
-                    std::fflush(stdout);
+                    printAdmin(*ctx, m);
                 });
                 return "shutdown: extension queued";
             }

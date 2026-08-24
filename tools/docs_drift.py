@@ -131,8 +131,14 @@ def check_config_keys() -> CheckResult:
         code.add(f"{sec}.{sub}.{key}")
     for sec, key in re.findall(r'tbl\["([a-z_]+)"\]\["([a-z_]+)"\]', src):
         code.add(f"{sec}.{key}")
-    # The clampDouble helper reads through a variable subscript, so it is invisible above.
-    for sec, key in re.findall(r'clampDouble\(tbl,\s*"([a-z_]+)",\s*"([a-z_]+)"', src):
+    # The clampDouble / clampInt helpers read through a variable subscript, so every key that has
+    # adopted them is invisible to the tbl[...] patterns above (#1265 migrated ~70 keys onto them).
+    # Three-level first, for the same shadowing reason as above.
+    for sec, sub, key in re.findall(
+        r'clamp(?:Double|Int)\(tbl,\s*"([a-z_]+)",\s*"([a-z_]+)",\s*"([a-z_]+)"', src
+    ):
+        code.add(f"{sec}.{sub}.{key}")
+    for sec, key in re.findall(r'clamp(?:Double|Int)\(tbl,\s*"([a-z_]+)",\s*"([a-z_]+)"[,)]', src):
         code.add(f"{sec}.{key}")
 
     def is_array_row_field(key: str) -> bool:

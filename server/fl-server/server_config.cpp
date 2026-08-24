@@ -441,21 +441,111 @@ struct NullLogSink final : ILogger {
     void flush() override {}
 };
 
-// Read a double key, accept it only inside [lo, hi], and Warn + keep the existing default otherwise.
-// This is the range-validated-default contract every key in this file follows; it is spelled out by
-// hand dozens of times above, and new sections should not add a dozen more.
-void clampDouble(const toml::table& tbl, const char* section, const char* key, double lo, double hi, double& out,
-                 ILogger* log) {
+// The RANGE-VALIDATED-DEFAULT contract, in one place (#1265).
+//
+// Nearly every numeric key in this file follows the same rule: read it, accept it only inside
+// [lo, hi], and otherwise Warn and keep the default that is already in the struct. It was written
+// out by hand ~70 times, in four interchangeable spellings (`< lo || > hi` with braces and without,
+// the inverted `>= lo && <= hi`, and the int64_t{...} bound form), and each copy is a place the
+// bound and the message it prints can drift apart -- which is not hypothetical, since the bound
+// lives in the code and the message repeats it as a string literal.
+//
+// `note` is an optional operator-facing gloss on what the default MEANS ("disabled", "auto"): a few
+// keys carry one and it is worth keeping, because "using default 0" and "using default 0 (disabled)"
+// answer different questions.
+//
+// The message keeps the "<section>.<key> out of range" prefix every existing test matches on.
+
+void warnOutOfRange(ILogger* log, const char* section, const char* key, const char* range, const char* value,
+                    const char* note) {
+    char buf[224];
+    std::snprintf(buf, sizeof(buf), "%s.%s out of range %s; using default %s%s%s", section, key, range, value,
+                  note ? " (" : "", note ? note : "");
+    // The closing parenthesis rides on the note so an absent note adds nothing at all.
+    if (note) {
+        const std::size_t n = std::strlen(buf);
+        if (n + 2 < sizeof(buf)) {
+            buf[n] = ')';
+            buf[n + 1] = '\0';
+        }
+    }
+    log->log(LogLevel::Warn, __FILE__, __LINE__, buf);
+}
+
+template <class T>
+void clampDouble(const toml::table& tbl, const char* section, const char* key, double lo, double hi, T& out,
+                 ILogger* log, const char* note = nullptr) {
     auto v = tbl[section][key].template value<double>();
     if (!v)
         return;
     if (*v >= lo && *v <= hi) {
-        out = *v;
+        out = static_cast<T>(*v);
         return;
     }
-    char buf[192];
-    std::snprintf(buf, sizeof(buf), "%s.%s out of range [%g, %g]; using default %g", section, key, lo, hi, out);
-    log->log(LogLevel::Warn, __FILE__, __LINE__, buf);
+    char range[80];
+    char value[48];
+    std::snprintf(range, sizeof(range), "[%g, %g]", lo, hi);
+    std::snprintf(value, sizeof(value), "%g", static_cast<double>(out));
+    warnOutOfRange(log, section, key, range, value, note);
+}
+
+// [sec.sub] form, for the dotted sections ([ai.mcp], [ai.chat_intent]).
+template <class T>
+void clampDouble(const toml::table& tbl, const char* section, const char* sub, const char* key, double lo, double hi,
+                 T& out, ILogger* log, const char* note = nullptr) {
+    auto v = tbl[section][sub][key].template value<double>();
+    if (!v)
+        return;
+    if (*v >= lo && *v <= hi) {
+        out = static_cast<T>(*v);
+        return;
+    }
+    char qualified[64];
+    char range[80];
+    char value[48];
+    std::snprintf(qualified, sizeof(qualified), "%s.%s", section, sub);
+    std::snprintf(range, sizeof(range), "[%g, %g]", lo, hi);
+    std::snprintf(value, sizeof(value), "%g", static_cast<double>(out));
+    warnOutOfRange(log, qualified, key, range, value, note);
+}
+
+// The integer sibling. Templated on the DESTINATION type so the narrowing cast stays at the one
+// place that has already checked the value fits; the bounds themselves are int64_t, which is the
+// width fl::tomlInt reads and the only width that can express every destination's range safely.
+template <class T>
+void clampInt(const toml::table& tbl, const char* section, const char* key, int64_t lo, int64_t hi, T& out,
+              ILogger* log, const char* note = nullptr) {
+    auto v = fl::tomlInt(tbl[section][key]);
+    if (!v)
+        return;
+    if (*v >= lo && *v <= hi) {
+        out = static_cast<T>(*v);
+        return;
+    }
+    char range[64];
+    char value[32];
+    std::snprintf(range, sizeof(range), "[%lld,%lld]", static_cast<long long>(lo), static_cast<long long>(hi));
+    std::snprintf(value, sizeof(value), "%lld", static_cast<long long>(out));
+    warnOutOfRange(log, section, key, range, value, note);
+}
+
+template <class T>
+void clampInt(const toml::table& tbl, const char* section, const char* sub, const char* key, int64_t lo, int64_t hi,
+              T& out, ILogger* log, const char* note = nullptr) {
+    auto v = fl::tomlInt(tbl[section][sub][key]);
+    if (!v)
+        return;
+    if (*v >= lo && *v <= hi) {
+        out = static_cast<T>(*v);
+        return;
+    }
+    char qualified[64];
+    char range[64];
+    char value[32];
+    std::snprintf(qualified, sizeof(qualified), "%s.%s", section, sub);
+    std::snprintf(range, sizeof(range), "[%lld,%lld]", static_cast<long long>(lo), static_cast<long long>(hi));
+    std::snprintf(value, sizeof(value), "%lld", static_cast<long long>(out));
+    warnOutOfRange(log, qualified, key, range, value, note);
 }
 } // namespace
 
@@ -473,22 +563,10 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log, bool* par
         // [server]
         if (auto v = tbl["server"]["name"].value<std::string>())
             cfg.server.name = std::move(*v);
-        if (auto v = tomlInt(tbl["server"]["port"])) {
-            if (*v < 1 || *v > 65535) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__, "server.port out of range [1,65535]; using default");
-            } else {
-                cfg.server.port = static_cast<uint16_t>(*v);
-            }
-        }
+        clampInt(tbl, "server", "port", 1, 65535, cfg.server.port, log);
         if (auto v = tbl["server"]["bind_address"].value<std::string>())
             cfg.server.bindAddress = std::move(*v);
-        if (auto v = tomlInt(tbl["server"]["max_peers"])) {
-            if (*v < 1 || *v > 1024) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__, "server.max_peers out of range [1,1024]; using default");
-            } else {
-                cfg.server.maxPeers = static_cast<int>(*v);
-            }
-        }
+        clampInt(tbl, "server", "max_peers", 1, 1024, cfg.server.maxPeers, log);
         if (auto* arr = tbl["server"]["game_modes"].as_array()) {
             std::vector<std::string> modes;
             for (auto& elem : *arr) {
@@ -538,33 +616,12 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log, bool* par
         // [match] (#521/#523)
         if (auto v = tbl["match"]["mode"].value<std::string>())
             cfg.match.mode = std::move(*v);
-        if (auto v = tomlInt(tbl["match"]["end_screen_s"])) {
-            if (*v >= 0 && *v <= 120)
-                cfg.match.endScreenS = static_cast<int>(*v);
-            else
-                log->log(LogLevel::Warn, __FILE__, __LINE__, "match.end_screen_s out of range [0,120]; using default");
-        }
-        if (auto v = tomlInt(tbl["match"]["reconnect_grace_s"])) {
-            if (*v >= 0 && *v <= 3600)
-                cfg.match.reconnectGraceS = static_cast<int>(*v);
-            else
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "match.reconnect_grace_s out of range [0,3600]; using default");
-        }
+        clampInt(tbl, "match", "end_screen_s", 0, 120, cfg.match.endScreenS, log);
+        clampInt(tbl, "match", "reconnect_grace_s", 0, 3600, cfg.match.reconnectGraceS, log);
 
         // [bots] (#87)
-        if (auto v = tomlInt(tbl["bots"]["fill"])) {
-            if (*v >= 0 && *v <= 128)
-                cfg.bots.fill = static_cast<int>(*v);
-            else
-                log->log(LogLevel::Warn, __FILE__, __LINE__, "bots.fill out of range [0,128]; using default");
-        }
-        if (auto v = tomlInt(tbl["bots"]["max_bots"])) {
-            if (*v >= 0 && *v <= 127)
-                cfg.bots.max = static_cast<int>(*v);
-            else
-                log->log(LogLevel::Warn, __FILE__, __LINE__, "bots.max_bots out of range [0,127]; using default");
-        }
+        clampInt(tbl, "bots", "fill", 0, 128, cfg.bots.fill, log);
+        clampInt(tbl, "bots", "max_bots", 0, 127, cfg.bots.max, log);
         if (auto v = tbl["bots"]["entity_type"].value<std::string>())
             cfg.bots.entityType = std::move(*v);
         if (auto v = tbl["bots"]["ai_script"].value<std::string>())
@@ -626,156 +683,31 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log, bool* par
                 cfg.world.timeScale = *v;
             }
         }
-        if (auto v = tomlInt(tbl["world"]["player_faction"])) {
-            if (*v >= 0 && *v <= 65535) {
-                cfg.world.playerFaction = static_cast<uint16_t>(*v);
-            } else {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.player_faction out of range [0, 65535]; using default 1");
-            }
-        }
-        if (auto v = tbl["world"]["planet_radius_m"].value<double>()) {
-            if (*v < 1000.0 || *v > 1e9) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.planet_radius_m out of range [1000, 1e9]; using default 6371000.0");
-            } else {
-                cfg.world.planetRadiusM = *v;
-            }
-        }
+        clampInt(tbl, "world", "player_faction", 0, 65535, cfg.world.playerFaction, log);
+        clampDouble(tbl, "world", "planet_radius_m", 1000.0, 1e9, cfg.world.planetRadiusM, log);
         if (auto v = tbl["world"]["earth_rotation"].value<bool>()) {
             cfg.world.earthRotation = *v;
         }
-        if (auto v = tbl["world"]["draw_distance_km"].value<double>()) {
-            if (*v < 1.0 || *v > 100'000.0) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.draw_distance_km out of range [1, 100000]; using default 100.0");
-            } else {
-                cfg.world.drawDistanceKm = *v;
-            }
-        }
-        if (auto v = tomlInt(tbl["world"]["spectate_delay_s"])) {
-            if (*v >= 0 && *v <= 300)
-                cfg.world.spectateDelayS = static_cast<int>(*v);
-            else
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.spectate_delay_s out of range [0, 300]; using default 0");
-        }
-        if (auto v = tbl["world"]["sensor_check_hz"].value<double>()) {
-            if (*v < 1.0 || *v > 60.0) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.sensor_check_hz out of range [1, 60]; using default 10.0");
-            } else {
-                cfg.world.sensorCheckHz = *v;
-            }
-        }
-        if (auto v = tbl["world"]["spatial_cell_size_km"].value<double>()) {
-            if (*v < 0.0 || *v > 1'000.0) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.spatial_cell_size_km out of range [0, 1000]; using default 0.0 (auto)");
-            } else {
-                cfg.world.spatialCellSizeKm = *v;
-            }
-        }
-        if (auto v = tomlInt(tbl["world"]["snapshot_budget_bytes"])) {
-            if (*v < int64_t{0} || *v > int64_t{65535}) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.snapshot_budget_bytes out of range [0, 65535]; using default 1200");
-            } else {
-                cfg.world.snapshotBudgetBytes = static_cast<uint32_t>(*v);
-            }
-        }
-        if (auto v = tomlInt(tbl["world"]["jitter_buffer_depth"])) {
-            if (*v < int64_t{1} || *v > int64_t{32}) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.jitter_buffer_depth out of range [1, 32]; using default 4");
-            } else {
-                cfg.world.jitterBufferDepth = static_cast<uint32_t>(*v);
-            }
-        }
-        if (auto v = tomlInt(tbl["world"]["jitter_buffer_adapt_window"])) {
-            if (*v < int64_t{10} || *v > int64_t{3600}) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.jitter_buffer_adapt_window out of range [10, 3600]; using default 60");
-            } else {
-                cfg.world.jitterAdaptWindow = static_cast<uint32_t>(*v);
-            }
-        }
-        if (auto v = tomlInt(tbl["world"]["jitter_buffer_hysteresis"])) {
-            if (*v < int64_t{0} || *v > int64_t{8}) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.jitter_buffer_hysteresis out of range [0, 8]; using default 2");
-            } else {
-                cfg.world.jitterHysteresis = static_cast<uint32_t>(*v);
-            }
-        }
-        if (auto v = tbl["world"]["jitter_buffer_jitter_multiplier"].value<double>()) {
-            if (*v < 0.0 || *v > 8.0) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.jitter_buffer_jitter_multiplier out of range [0.0, 8.0]; using default 2.0");
-            } else {
-                cfg.world.jitterMultiplier = static_cast<float>(*v);
-            }
-        }
+        clampDouble(tbl, "world", "draw_distance_km", 1.0, 100000.0, cfg.world.drawDistanceKm, log);
+        clampInt(tbl, "world", "spectate_delay_s", 0, 300, cfg.world.spectateDelayS, log);
+        clampDouble(tbl, "world", "sensor_check_hz", 1.0, 60.0, cfg.world.sensorCheckHz, log);
+        clampDouble(tbl, "world", "spatial_cell_size_km", 0.0, 1000.0, cfg.world.spatialCellSizeKm, log, "auto");
+        clampInt(tbl, "world", "snapshot_budget_bytes", 0, 65535, cfg.world.snapshotBudgetBytes, log);
+        clampInt(tbl, "world", "jitter_buffer_depth", 1, 32, cfg.world.jitterBufferDepth, log);
+        clampInt(tbl, "world", "jitter_buffer_adapt_window", 10, 3600, cfg.world.jitterAdaptWindow, log);
+        clampInt(tbl, "world", "jitter_buffer_hysteresis", 0, 8, cfg.world.jitterHysteresis, log);
+        clampDouble(tbl, "world", "jitter_buffer_jitter_multiplier", 0.0, 8.0, cfg.world.jitterMultiplier, log);
         if (auto v = tbl["world"]["congestion_enabled"].value<bool>()) {
             cfg.world.congestionEnabled = *v;
         }
-        if (auto v = tbl["world"]["congestion_min_send_hz"].value<double>()) {
-            if (*v < 1.0 || *v > 60.0) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.congestion_min_send_hz out of range [1, 60]; using default 10.0");
-            } else {
-                cfg.world.congestionMinSendHz = static_cast<float>(*v);
-            }
-        }
-        if (auto v = tbl["world"]["congestion_loss_threshold"].value<double>()) {
-            if (*v < 0.0 || *v > 1.0) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.congestion_loss_threshold out of range [0, 1]; using default 0.02");
-            } else {
-                cfg.world.congestionLossThreshold = static_cast<float>(*v);
-            }
-        }
-        if (auto v = tomlInt(tbl["world"]["congestion_budget_floor_bytes"])) {
-            if (*v < int64_t{0} || *v > int64_t{65535}) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.congestion_budget_floor_bytes out of range [0, 65535]; using default 400");
-            } else {
-                cfg.world.congestionBudgetFloorBytes = static_cast<uint32_t>(*v);
-            }
-        }
-        if (auto v = tomlInt(tbl["world"]["sim_worker_threads"])) {
-            if (*v < int64_t{0} || *v > int64_t{256}) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.sim_worker_threads out of range [0, 256]; using default 0 (auto)");
-            } else {
-                cfg.world.simWorkerThreads = static_cast<uint32_t>(*v);
-            }
-        }
+        clampDouble(tbl, "world", "congestion_min_send_hz", 1.0, 60.0, cfg.world.congestionMinSendHz, log);
+        clampDouble(tbl, "world", "congestion_loss_threshold", 0.0, 1.0, cfg.world.congestionLossThreshold, log);
+        clampInt(tbl, "world", "congestion_budget_floor_bytes", 0, 65535, cfg.world.congestionBudgetFloorBytes, log);
+        clampInt(tbl, "world", "sim_worker_threads", 0, 256, cfg.world.simWorkerThreads, log, "auto");
         // Load-test affordance (#573): pre-spawn N server-side AI entities.
-        if (auto v = tomlInt(tbl["world"]["test_spawn_ai_count"])) {
-            if (*v < int64_t{0} || *v > int64_t{1'000'000}) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.test_spawn_ai_count out of range [0, 1000000]; using default 0 (disabled)");
-            } else {
-                cfg.world.testSpawnAiCount = static_cast<uint32_t>(*v);
-            }
-        }
-        if (auto v = tbl["world"]["test_spawn_spread_km"].value<double>()) {
-            if (*v < 0.0 || *v > 100'000.0) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.test_spawn_spread_km out of range [0, 100000]; using default 50.0");
-            } else {
-                cfg.world.testSpawnSpreadKm = *v;
-            }
-        }
-        if (auto v = tbl["world"]["test_spawn_agl_m"].value<double>()) {
-            if (*v < 0.0 || *v > 50'000.0) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.test_spawn_agl_m out of range [0, 50000]; using default 500.0");
-            } else {
-                cfg.world.testSpawnAglM = *v;
-            }
-        }
+        clampInt(tbl, "world", "test_spawn_ai_count", 0, 1000000, cfg.world.testSpawnAiCount, log, "disabled");
+        clampDouble(tbl, "world", "test_spawn_spread_km", 0.0, 100000.0, cfg.world.testSpawnSpreadKm, log);
+        clampDouble(tbl, "world", "test_spawn_agl_m", 0.0, 50000.0, cfg.world.testSpawnAglM, log);
         // #580: controller mix + projectile churn for the load-spawn.
         if (auto v = tbl["world"]["test_spawn_ai_mix"].value<std::string>()) {
             std::vector<TestSpawnMixEntry> mix;
@@ -789,34 +721,13 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log, bool* par
         }
         if (auto v = tbl["world"]["test_spawn_entity_type"].value<std::string>())
             cfg.world.testSpawnEntityType = std::move(*v); // #980: e.g. builtin:bomber for crewed-AI load
-        if (auto v = tbl["world"]["test_projectile_rate"].value<double>()) {
-            if (*v < 0.0 || *v > 100'000.0) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.test_projectile_rate out of range [0, 100000]; using default 0 (disabled)");
-            } else {
-                cfg.world.testProjectileRate = *v;
-            }
-        }
-        if (auto v = tbl["world"]["test_projectile_ttl_s"].value<double>()) {
-            if (*v < 0.05 || *v > 600.0) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.test_projectile_ttl_s out of range [0.05, 600]; using default 3.0");
-            } else {
-                cfg.world.testProjectileTtlS = *v;
-            }
-        }
+        clampDouble(tbl, "world", "test_projectile_rate", 0.0, 100000.0, cfg.world.testProjectileRate, log, "disabled");
+        clampDouble(tbl, "world", "test_projectile_ttl_s", 0.05, 600.0, cfg.world.testProjectileTtlS, log);
         // Graceful tick-overrun governor (#514).
         if (auto v = tbl["world"]["overrun_governor_enabled"].value<bool>()) {
             cfg.world.overrunGovernorEnabled = *v;
         }
-        if (auto v = tbl["world"]["overrun_high_watermark"].value<double>()) {
-            if (*v < 0.1 || *v > 1.0) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.overrun_high_watermark out of range [0.1, 1.0]; using default 0.90");
-            } else {
-                cfg.world.overrunHighWatermark = static_cast<float>(*v);
-            }
-        }
+        clampDouble(tbl, "world", "overrun_high_watermark", 0.1, 1.0, cfg.world.overrunHighWatermark, log);
         if (auto v = tbl["world"]["overrun_low_watermark"].value<double>()) {
             if (*v < 0.0 || *v >= cfg.world.overrunHighWatermark) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
@@ -825,46 +736,11 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log, bool* par
                 cfg.world.overrunLowWatermark = static_cast<float>(*v);
             }
         }
-        if (auto v = tbl["world"]["overrun_min_snapshot_hz"].value<double>()) {
-            if (*v < 1.0 || *v > 60.0) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.overrun_min_snapshot_hz out of range [1, 60]; using default 15.0");
-            } else {
-                cfg.world.overrunMinSnapshotHz = static_cast<float>(*v);
-            }
-        }
-        if (auto v = tomlInt(tbl["world"]["overrun_max_ai_stride"])) {
-            if (*v < int64_t{1} || *v > int64_t{32}) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.overrun_max_ai_stride out of range [1, 32]; using default 4");
-            } else {
-                cfg.world.overrunMaxAiStride = static_cast<uint32_t>(*v);
-            }
-        }
-        if (auto v = tomlInt(tbl["world"]["overrun_budget_floor_bytes"])) {
-            if (*v < int64_t{0} || *v > int64_t{65535}) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.overrun_budget_floor_bytes out of range [0, 65535]; using default 400");
-            } else {
-                cfg.world.overrunBudgetFloorBytes = static_cast<uint32_t>(*v);
-            }
-        }
-        if (auto v = tbl["world"]["overrun_min_interest_fraction"].value<double>()) {
-            if (*v < 0.1 || *v > 1.0) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.overrun_min_interest_fraction out of range [0.1, 1.0]; using default 0.5");
-            } else {
-                cfg.world.overrunMinInterestFraction = static_cast<float>(*v);
-            }
-        }
-        if (auto v = tomlInt(tbl["world"]["max_catchup_ticks"])) {
-            if (*v < int64_t{1} || *v > int64_t{64}) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "world.max_catchup_ticks out of range [1, 64]; using default 8");
-            } else {
-                cfg.world.maxCatchupTicks = static_cast<int>(*v);
-            }
-        }
+        clampDouble(tbl, "world", "overrun_min_snapshot_hz", 1.0, 60.0, cfg.world.overrunMinSnapshotHz, log);
+        clampInt(tbl, "world", "overrun_max_ai_stride", 1, 32, cfg.world.overrunMaxAiStride, log);
+        clampInt(tbl, "world", "overrun_budget_floor_bytes", 0, 65535, cfg.world.overrunBudgetFloorBytes, log);
+        clampDouble(tbl, "world", "overrun_min_interest_fraction", 0.1, 1.0, cfg.world.overrunMinInterestFraction, log);
+        clampInt(tbl, "world", "max_catchup_ticks", 1, 64, cfg.world.maxCatchupTicks, log);
 
         // [ai]
         if (auto v = tbl["ai"]["difficulty"].value<std::string>()) {
@@ -898,48 +774,15 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log, bool* par
         // [discovery]
         if (auto v = tbl["discovery"]["enabled"].value<bool>())
             cfg.discovery.enabled = *v;
-        if (auto v = tomlInt(tbl["discovery"]["interval_ms"])) {
-            if (*v < 100 || *v > 60000) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "discovery.interval_ms out of range [100,60000]; using default");
-            } else {
-                cfg.discovery.intervalMs = static_cast<int>(*v);
-            }
-        }
+        clampInt(tbl, "discovery", "interval_ms", 100, 60000, cfg.discovery.intervalMs, log);
         if (auto v = tbl["discovery"]["query_enabled"].value<bool>())
             cfg.discovery.queryEnabled = *v;
-        if (auto v = tomlInt(tbl["discovery"]["query_port"])) {
-            if (*v >= 0 && *v <= 65535)
-                cfg.discovery.queryPort = static_cast<int>(*v);
-            else
-                log->log(LogLevel::Warn, __FILE__, __LINE__, "discovery.query_port out of range [0,65535]; using auto");
-        }
+        clampInt(tbl, "discovery", "query_port", 0, 65535, cfg.discovery.queryPort, log);
 
         // [security]
-        if (auto v = tomlInt(tbl["security"]["connect_rate_limit_count"])) {
-            if (*v < 1 || *v > 100000) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "security.connect_rate_limit_count out of range [1,100000]; using default");
-            } else {
-                cfg.security.connectRateLimitCount = static_cast<int>(*v);
-            }
-        }
-        if (auto v = tomlInt(tbl["security"]["connect_rate_limit_window_s"])) {
-            if (*v < 1 || *v > 3600) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "security.connect_rate_limit_window_s out of range [1,3600]; using default");
-            } else {
-                cfg.security.connectRateLimitWindowS = static_cast<int>(*v);
-            }
-        }
-        if (auto v = tomlInt(tbl["security"]["packet_flood_multiplier"])) {
-            if (*v < 1 || *v > 100) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "security.packet_flood_multiplier out of range [1,100]; using default");
-            } else {
-                cfg.security.packetFloodMultiplier = static_cast<int>(*v);
-            }
-        }
+        clampInt(tbl, "security", "connect_rate_limit_count", 1, 100000, cfg.security.connectRateLimitCount, log);
+        clampInt(tbl, "security", "connect_rate_limit_window_s", 1, 3600, cfg.security.connectRateLimitWindowS, log);
+        clampInt(tbl, "security", "packet_flood_multiplier", 1, 100, cfg.security.packetFloodMultiplier, log);
         if (auto v = tbl["security"]["banlist_path"].value<std::string>())
             cfg.security.banlistPath = std::move(*v);
         if (auto v = tbl["security"]["allowlist_path"].value<std::string>())
@@ -962,122 +805,31 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log, bool* par
         }
         if (auto v = tbl["security"]["operator_password"].value<std::string>())
             cfg.security.operatorPassword = std::move(*v);
-        if (auto v = tomlInt(tbl["security"]["pre_handshake_rate_limit_count"])) {
-            if (*v < 0 || *v > 10000) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "security.pre_handshake_rate_limit_count out of range [0,10000]; using default");
-            } else {
-                cfg.security.preHandshakeRateLimitCount = static_cast<int>(*v);
-            }
-        }
-        if (auto v = tomlInt(tbl["security"]["pre_handshake_window_ms"])) {
-            if (*v < 100 || *v > 60000) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "security.pre_handshake_window_ms out of range [100,60000]; using default");
-            } else {
-                cfg.security.preHandshakeWindowMs = static_cast<int>(*v);
-            }
-        }
-        if (auto v = tomlInt(tbl["security"]["max_connections_per_ip"])) {
-            if (*v < 0 || *v > 1024) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "security.max_connections_per_ip out of range [0,1024]; using default");
-            } else {
-                cfg.security.maxConnectionsPerIp = static_cast<int>(*v);
-            }
-        }
-        if (auto v = tomlInt(tbl["security"]["seat_request_rate_limit_per_s"])) {
-            if (*v < 1 || *v > 60) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "security.seat_request_rate_limit_per_s out of range [1,60]; using default");
-            } else {
-                cfg.security.seatRequestRateLimitPerS = static_cast<int>(*v);
-            }
-        }
-        if (auto v = tomlInt(tbl["security"]["team_switch_cooldown_s"])) {
-            if (*v < 0 || *v > 3600) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "security.team_switch_cooldown_s out of range [0,3600]; using default");
-            } else {
-                cfg.security.teamSwitchCooldownS = static_cast<int>(*v);
-            }
-        }
-        if (auto v = tomlInt(tbl["security"]["heartbeat_rate_limit_per_s"])) {
-            if (*v < 1 || *v > 60) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "security.heartbeat_rate_limit_per_s out of range [1,60]; using default");
-            } else {
-                cfg.security.heartbeatRateLimitPerS = static_cast<int>(*v);
-            }
-        }
-        if (auto v = tomlInt(tbl["security"]["admin_auth_max_failures"])) {
-            if (*v < 1 || *v > 100) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "security.admin_auth_max_failures out of range [1,100]; using default");
-            } else {
-                cfg.security.adminAuthMaxFailures = static_cast<int>(*v);
-            }
-        }
-        if (auto v = tomlInt(tbl["security"]["admin_auth_lockout_s"])) {
-            if (*v < 1 || *v > 86400) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "security.admin_auth_lockout_s out of range [1,86400]; using default");
-            } else {
-                cfg.security.adminAuthLockoutSeconds = static_cast<int>(*v);
-            }
-        }
-        if (auto v = tomlInt(tbl["security"]["idle_timeout_s"])) {
-            if (*v < 0 || *v > 86400) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "security.idle_timeout_s out of range [0,86400]; using 0 (disabled)");
-            } else {
-                cfg.security.idleTimeoutS = static_cast<int>(*v);
-            }
-        }
+        clampInt(tbl, "security", "pre_handshake_rate_limit_count", 0, 10000, cfg.security.preHandshakeRateLimitCount,
+                 log);
+        clampInt(tbl, "security", "pre_handshake_window_ms", 100, 60000, cfg.security.preHandshakeWindowMs, log);
+        clampInt(tbl, "security", "max_connections_per_ip", 0, 1024, cfg.security.maxConnectionsPerIp, log);
+        clampInt(tbl, "security", "seat_request_rate_limit_per_s", 1, 60, cfg.security.seatRequestRateLimitPerS, log);
+        clampInt(tbl, "security", "team_switch_cooldown_s", 0, 3600, cfg.security.teamSwitchCooldownS, log);
+        clampInt(tbl, "security", "heartbeat_rate_limit_per_s", 1, 60, cfg.security.heartbeatRateLimitPerS, log);
+        clampInt(tbl, "security", "admin_auth_max_failures", 1, 100, cfg.security.adminAuthMaxFailures, log);
+        clampInt(tbl, "security", "admin_auth_lockout_s", 1, 86400, cfg.security.adminAuthLockoutSeconds, log);
+        clampInt(tbl, "security", "idle_timeout_s", 0, 86400, cfg.security.idleTimeoutS, log, "disabled");
 
         // [shutdown]
-        if (auto v = tomlInt(tbl["shutdown"]["warning_interval_s"])) {
-            if (*v < 1 || *v > 86400)
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "shutdown.warning_interval_s out of range [1,86400]; using default");
-            else
-                cfg.shutdown.warningIntervalS = static_cast<int>(*v);
-        }
-        if (auto v = tomlInt(tbl["shutdown"]["min_shutdown_delay_s"])) {
-            if (*v < 0 || *v > 86400)
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "shutdown.min_shutdown_delay_s out of range [0,86400]; using default");
-            else
-                cfg.shutdown.minDelayS = static_cast<int>(*v);
-        }
+        clampInt(tbl, "shutdown", "warning_interval_s", 1, 86400, cfg.shutdown.warningIntervalS, log);
+        clampInt(tbl, "shutdown", "min_shutdown_delay_s", 0, 86400, cfg.shutdown.minDelayS, log);
         if (auto v = tbl["shutdown"]["require_confirm"].value<bool>())
             cfg.shutdown.requireConfirm = *v;
 
         // [rcon]
         if (auto v = tbl["rcon"]["enabled"].value<bool>())
             cfg.rcon.enabled = *v;
-        if (auto v = tomlInt(tbl["rcon"]["port"])) {
-            if (*v < 1 || *v > 65535)
-                log->log(LogLevel::Warn, __FILE__, __LINE__, "rcon.port out of range [1,65535]; using default");
-            else
-                cfg.rcon.port = static_cast<uint16_t>(*v);
-        }
+        clampInt(tbl, "rcon", "port", 1, 65535, cfg.rcon.port, log);
         if (auto v = tbl["rcon"]["password"].value<std::string>())
             cfg.rcon.password = std::move(*v);
-        if (auto v = tomlInt(tbl["rcon"]["max_auth_failures"])) {
-            if (*v < 1 || *v > 1000)
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "rcon.max_auth_failures out of range [1,1000]; using default");
-            else
-                cfg.rcon.maxAuthFailures = static_cast<int>(*v);
-        }
-        if (auto v = tomlInt(tbl["rcon"]["lockout_seconds"])) {
-            if (*v < 1 || *v > 86400)
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "rcon.lockout_seconds out of range [1,86400]; using default");
-            else
-                cfg.rcon.lockoutSeconds = static_cast<int>(*v);
-        }
+        clampInt(tbl, "rcon", "max_auth_failures", 1, 1000, cfg.rcon.maxAuthFailures, log);
+        clampInt(tbl, "rcon", "lockout_seconds", 1, 86400, cfg.rcon.lockoutSeconds, log);
         if (cfg.rcon.enabled && cfg.rcon.password.empty())
             log->log(LogLevel::Warn, __FILE__, __LINE__,
                      "rcon.password is empty; RCON will accept unauthenticated connections"
@@ -1086,28 +838,11 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log, bool* par
         // [http_admin] (#233)
         if (auto v = tbl["http_admin"]["enabled"].value<bool>())
             cfg.httpAdmin.enabled = *v;
-        if (auto v = tomlInt(tbl["http_admin"]["port"])) {
-            if (*v < 1 || *v > 65535)
-                log->log(LogLevel::Warn, __FILE__, __LINE__, "http_admin.port out of range [1,65535]; using default");
-            else
-                cfg.httpAdmin.port = static_cast<uint16_t>(*v);
-        }
+        clampInt(tbl, "http_admin", "port", 1, 65535, cfg.httpAdmin.port, log);
         if (auto v = tbl["http_admin"]["bind_address"].value<std::string>())
             cfg.httpAdmin.bindAddress = std::move(*v);
-        if (auto v = tomlInt(tbl["http_admin"]["max_auth_failures"])) {
-            if (*v < 1 || *v > 1000)
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "http_admin.max_auth_failures out of range [1,1000]; using default");
-            else
-                cfg.httpAdmin.maxAuthFailures = static_cast<int>(*v);
-        }
-        if (auto v = tomlInt(tbl["http_admin"]["lockout_seconds"])) {
-            if (*v < 1 || *v > 86400)
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "http_admin.lockout_seconds out of range [1,86400]; using default");
-            else
-                cfg.httpAdmin.lockoutSeconds = static_cast<int>(*v);
-        }
+        clampInt(tbl, "http_admin", "max_auth_failures", 1, 1000, cfg.httpAdmin.maxAuthFailures, log);
+        clampInt(tbl, "http_admin", "lockout_seconds", 1, 86400, cfg.httpAdmin.lockoutSeconds, log);
         if (auto* toks = tbl["http_admin"]["tokens"].as_array()) {
             for (auto& node : *toks) {
                 auto* t = node.as_table();
@@ -1161,20 +896,8 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log, bool* par
                 if (auto s = node.value<std::string>(); s && !s->empty())
                     cfg.ai.mcp.allowlist.push_back(std::move(*s));
         }
-        if (auto v = tomlInt(tbl["ai"]["mcp"]["rate_limit_per_min"])) {
-            if (*v < 0 || *v > 100000)
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "ai.mcp.rate_limit_per_min out of range [0,100000]; using default");
-            else
-                cfg.ai.mcp.rateLimitPerMin = static_cast<int>(*v);
-        }
-        if (auto v = tomlInt(tbl["ai"]["mcp"]["max_sessions"])) {
-            if (*v < 1 || *v > 4096)
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "ai.mcp.max_sessions out of range [1,4096]; using default");
-            else
-                cfg.ai.mcp.maxSessions = static_cast<int>(*v);
-        }
+        clampInt(tbl, "ai", "mcp", "rate_limit_per_min", 0, 100000, cfg.ai.mcp.rateLimitPerMin, log);
+        clampInt(tbl, "ai", "mcp", "max_sessions", 1, 4096, cfg.ai.mcp.maxSessions, log);
         // MCP has no listener of its own by design (plan #1036 D2): it is a second frontend on the
         // [http_admin] one, sharing its token table and per-IP lockout. Enabling it alone would be a
         // config that reads as "MCP is on" and serves nothing, so say why rather than failing quietly.
@@ -1214,31 +937,14 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log, bool* par
                      "ai.provider.api_key is not a supported key -- put the secret in the environment "
                      "variable named by ai.provider.api_key_env (default FL_AI_API_KEY) instead");
         }
-        if (auto v = tomlInt(tbl["ai"]["provider"]["max_calls_per_minute"])) {
-            if (*v < 0 || *v > 100000)
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "ai.provider.max_calls_per_minute out of range [0,100000]; using default");
-            else
-                cfg.ai.provider.maxCallsPerMinute = static_cast<int>(*v);
-        }
-        if (auto v = tomlInt(tbl["ai"]["provider"]["world_evolution_interval_min"])) {
-            if (*v < 1 || *v > 100000)
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "ai.provider.world_evolution_interval_min out of range [1,100000]; using default");
-            else
-                cfg.ai.provider.worldEvolutionIntervalMin = static_cast<int>(*v);
-        }
+        clampInt(tbl, "ai", "provider", "max_calls_per_minute", 0, 100000, cfg.ai.provider.maxCallsPerMinute, log);
+        clampInt(tbl, "ai", "provider", "world_evolution_interval_min", 1, 100000,
+                 cfg.ai.provider.worldEvolutionIntervalMin, log);
 
         // [ai.chat_intent] (#611)
         if (auto v = tbl["ai"]["chat_intent"]["enabled"].value<bool>())
             cfg.ai.chatIntent.enabled = *v;
-        if (auto v = tomlInt(tbl["ai"]["chat_intent"]["rate_limit_per_min"])) {
-            if (*v < 0 || *v > 10000)
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "ai.chat_intent.rate_limit_per_min out of range [0,10000]; using default");
-            else
-                cfg.ai.chatIntent.rateLimitPerMin = static_cast<int>(*v);
-        }
+        clampInt(tbl, "ai", "chat_intent", "rate_limit_per_min", 0, 10000, cfg.ai.chatIntent.rateLimitPerMin, log);
         if (auto v = tbl["ai"]["chat_intent"]["notify_on_decline"].value<bool>())
             cfg.ai.chatIntent.notifyOnDecline = *v;
         // The intent tier is a CONSUMER of the provider seam. Enabled without one it would map
@@ -1253,13 +959,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log, bool* par
         // [metrics]
         if (auto v = tbl["metrics"]["tick_json_path"].value<std::string>())
             cfg.metrics.tickJsonPath = std::move(*v);
-        if (auto v = tomlInt(tbl["metrics"]["tick_json_interval_ms"])) {
-            if (*v < 100 || *v > 60000)
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "metrics.tick_json_interval_ms out of range [100,60000]; using default");
-            else
-                cfg.metrics.tickJsonIntervalMs = static_cast<uint32_t>(*v);
-        }
+        clampInt(tbl, "metrics", "tick_json_interval_ms", 100, 60000, cfg.metrics.tickJsonIntervalMs, log);
 
         // [wind] — altitude wind profile (#489)
         if (auto v = tbl["wind"]["profile_path"].value<std::string>())
@@ -1274,27 +974,9 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log, bool* par
             cfg.replay.enabled = *v;
         if (auto v = tbl["replay"]["dir"].value<std::string>())
             cfg.replay.dir = std::move(*v);
-        if (auto v = tomlInt(tbl["replay"]["keyframe_interval_ticks"])) {
-            if (*v < 15 || *v > 3600)
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "replay.keyframe_interval_ticks out of range [15, 3600]; using default 120");
-            else
-                cfg.replay.keyframeIntervalTicks = static_cast<uint32_t>(*v);
-        }
-        if (auto v = tomlInt(tbl["replay"]["max_file_mb"])) {
-            if (*v < 1 || *v > 65535)
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "replay.max_file_mb out of range [1, 65535]; using default 256");
-            else
-                cfg.replay.maxFileMb = static_cast<uint32_t>(*v);
-        }
-        if (auto v = tomlInt(tbl["replay"]["max_files"])) {
-            if (*v < 1 || *v > 10000)
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "replay.max_files out of range [1, 10000]; using default 20");
-            else
-                cfg.replay.maxFiles = static_cast<uint32_t>(*v);
-        }
+        clampInt(tbl, "replay", "keyframe_interval_ticks", 15, 3600, cfg.replay.keyframeIntervalTicks, log);
+        clampInt(tbl, "replay", "max_file_mb", 1, 65535, cfg.replay.maxFileMb, log);
+        clampInt(tbl, "replay", "max_files", 1, 10000, cfg.replay.maxFiles, log);
         if (auto v = tbl["replay"]["hash_log"].value<std::string>())
             cfg.replay.hashLog = std::move(*v);
 
@@ -1310,22 +992,10 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log, bool* par
             cfg.network.allowInsecure = *v;
         if (auto v = tbl["network"]["compress_snapshots"].value<bool>())
             cfg.network.compressSnapshots = *v;
-        if (auto v = tomlInt(tbl["network"]["gns_nagle_time_us"])) {
-            if (*v >= 0 && *v <= 200000)
-                cfg.network.gnsNagleTimeUs = static_cast<uint32_t>(*v);
-            else
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "network.gns_nagle_time_us out of range [0, 200000]; using default 0");
-        }
+        clampInt(tbl, "network", "gns_nagle_time_us", 0, 200000, cfg.network.gnsNagleTimeUs, log);
 
         // [spawn]
-        if (auto v = tbl["spawn"]["agl_offset"].value<double>()) {
-            if (*v >= 0.0 && *v <= 50000.0)
-                cfg.spawn.aglOffset = *v;
-            else
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "spawn.agl_offset out of range [0, 50000]; using default 500");
-        }
+        clampDouble(tbl, "spawn", "agl_offset", 0.0, 50000.0, cfg.spawn.aglOffset, log);
         if (auto* arr = tbl["spawn"]["points"].as_array()) {
             for (auto& elem : *arr) {
                 if (auto* t2 = elem.as_table()) {
@@ -1340,12 +1010,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log, bool* par
         }
 
         // [flight]  — the player's auto-spawned flight (#610)
-        if (auto v = tomlInt(tbl["flight"]["size"])) {
-            if (*v >= 0 && *v <= 8)
-                cfg.flight.size = static_cast<uint32_t>(*v);
-            else
-                log->log(LogLevel::Warn, __FILE__, __LINE__, "flight.size out of range [0, 8]; using default 0");
-        }
+        clampInt(tbl, "flight", "size", 0, 8, cfg.flight.size, log);
         if (auto v = tbl["flight"]["entity_type"].value<std::string>()) {
             if (!v->empty())
                 cfg.flight.entityType = *v;
@@ -1359,13 +1024,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log, bool* par
         clampDouble(tbl, "flight", "cover_range_m", 500.0, 200000.0, cfg.flight.coverRangeM, log);
         clampDouble(tbl, "flight", "designate_range_m", 500.0, 200000.0, cfg.flight.designateRangeM, log);
         clampDouble(tbl, "flight", "designate_half_angle_deg", 1.0, 90.0, cfg.flight.designateHalfAngleDeg, log);
-        if (auto v = tomlInt(tbl["flight"]["command_rate_limit_per_s"])) {
-            if (*v >= 1 && *v <= 60)
-                cfg.flight.commandRateLimitPerS = static_cast<int>(*v);
-            else
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "flight.command_rate_limit_per_s out of range [1, 60]; using default 4");
-        }
+        clampInt(tbl, "flight", "command_rate_limit_per_s", 1, 60, cfg.flight.commandRateLimitPerS, log);
 
         // [atc]  — air-traffic control (#706)
         if (auto v = tbl["atc"]["enabled"].value<bool>())
@@ -1376,24 +1035,12 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log, bool* par
         // [chat]  — in-match text chat (#646)
         if (auto v = tbl["chat"]["enabled"].value<bool>())
             cfg.chat.enabled = *v;
-        if (auto v = tomlInt(tbl["chat"]["rate_limit_per_s"])) {
-            if (*v >= 1 && *v <= 60)
-                cfg.chat.rateLimitPerS = static_cast<int>(*v);
-            else
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "chat.rate_limit_per_s out of range [1, 60]; using default 2");
-        }
+        clampInt(tbl, "chat", "rate_limit_per_s", 1, 60, cfg.chat.rateLimitPerS, log);
 
         // [voice]  — in-game voice comms (Epic J, #532)
         if (auto v = tbl["voice"]["enabled"].value<bool>())
             cfg.voice.enabled = *v;
-        if (auto v = tomlInt(tbl["voice"]["frame_rate_limit"])) {
-            if (*v >= 1 && *v <= 200)
-                cfg.voice.frameRateLimit = static_cast<int>(*v);
-            else
-                log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "voice.frame_rate_limit out of range [1, 200]; using default 52");
-        }
+        clampInt(tbl, "voice", "frame_rate_limit", 1, 200, cfg.voice.frameRateLimit, log);
         if (auto* arr = tbl["voice"]["nets"].as_array()) {
             for (auto& node : *arr) {
                 const auto* nt = node.as_table();
