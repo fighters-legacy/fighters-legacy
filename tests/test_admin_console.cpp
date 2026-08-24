@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ServerCommands.h"
+#include "temp_path.h"
 #include <console/CommandRegistry.h>
 #include <console/CommandShell.h>
 #include <loop/GameLoop.h>
@@ -202,7 +203,7 @@ namespace {
 struct TempConfig {
     std::filesystem::path path;
     explicit TempConfig(std::string_view body, std::string_view stem) {
-        path = std::filesystem::temp_directory_path() / (std::string("fl_") + std::string(stem) + ".toml");
+        path = fl::test::uniqueTempPath("fl_" + std::string(stem), ".toml");
         std::ofstream(path) << body;
     }
     ~TempConfig() {

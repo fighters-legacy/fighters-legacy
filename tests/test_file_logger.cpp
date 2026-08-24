@@ -2,7 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "FileLogger.h"
-#include "test_helpers.h"
+#include "temp_path.h"
 
 #include <filesystem>
 #include <fstream>
@@ -15,8 +15,8 @@ using namespace fl;
 namespace fs = std::filesystem;
 
 TEST_CASE("FileLogger: open creates log directory if absent", "[file_logger]") {
-    TempDir tmp;
-    auto logDir = (tmp.path / "logs").string();
+    fl::test::TempDirGuard tmp{"fl_test"};
+    auto logDir = (tmp.path() / "logs").string();
     FileLogger logger;
     REQUIRE(logger.open(logDir, 10));
     REQUIRE(fs::exists(logDir));
@@ -24,7 +24,7 @@ TEST_CASE("FileLogger: open creates log directory if absent", "[file_logger]") {
 }
 
 TEST_CASE("FileLogger: isOpen false before open and after close", "[file_logger]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     FileLogger logger;
     CHECK_FALSE(logger.isOpen());
     REQUIRE(logger.open(tmp.str(), 10));
@@ -34,7 +34,7 @@ TEST_CASE("FileLogger: isOpen false before open and after close", "[file_logger]
 }
 
 TEST_CASE("FileLogger: log below minLevel is suppressed", "[file_logger]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     FileLogger logger;
     REQUIRE(logger.open(tmp.str(), 10));
     logger.setMinLevel(LogLevel::Warn);
@@ -48,7 +48,7 @@ TEST_CASE("FileLogger: log below minLevel is suppressed", "[file_logger]") {
 }
 
 TEST_CASE("FileLogger: log at or above minLevel is written", "[file_logger]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     FileLogger logger;
     REQUIRE(logger.open(tmp.str(), 10));
     logger.setMinLevel(LogLevel::Warn);
@@ -63,7 +63,7 @@ TEST_CASE("FileLogger: log at or above minLevel is written", "[file_logger]") {
 }
 
 TEST_CASE("FileLogger: setMinLevel changes level mid-session", "[file_logger]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     FileLogger logger;
     REQUIRE(logger.open(tmp.str(), 10));
     logger.setMinLevel(LogLevel::Error);
@@ -78,7 +78,7 @@ TEST_CASE("FileLogger: setMinLevel changes level mid-session", "[file_logger]") 
 }
 
 TEST_CASE("FileLogger: ring buffer wraps and returns 200 most recent", "[file_logger]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     FileLogger logger;
     REQUIRE(logger.open(tmp.str(), 10));
     logger.setMinLevel(LogLevel::Debug);
@@ -95,7 +95,7 @@ TEST_CASE("FileLogger: ring buffer wraps and returns 200 most recent", "[file_lo
 }
 
 TEST_CASE("FileLogger: copyLastLines with fewer than requested entries", "[file_logger]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     FileLogger logger;
     REQUIRE(logger.open(tmp.str(), 10));
     logger.log(LogLevel::Info, "f.cpp", 1, "only");
@@ -106,7 +106,7 @@ TEST_CASE("FileLogger: copyLastLines with fewer than requested entries", "[file_
 }
 
 TEST_CASE("FileLogger: copyLastLines(0) returns 0", "[file_logger]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     FileLogger logger;
     REQUIRE(logger.open(tmp.str(), 10));
     logger.log(LogLevel::Info, "f.cpp", 1, "msg");
@@ -116,10 +116,10 @@ TEST_CASE("FileLogger: copyLastLines(0) returns 0", "[file_logger]") {
 }
 
 TEST_CASE("FileLogger: retention keeps at most maxRetained files", "[file_logger]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     // Seed 12 old engine_*.log files
     for (int i = 0; i < 12; ++i) {
-        std::ofstream f((tmp.path / ("engine_2026-01-0" + std::to_string(i) + "_00-00-00.log")).string());
+        std::ofstream f((tmp.path() / ("engine_2026-01-0" + std::to_string(i) + "_00-00-00.log")).string());
         f << "old\n";
     }
     // open() with maxRetained=10 should leave exactly 10 (11 old + 1 new = 12 → delete 3 oldest)
@@ -127,7 +127,7 @@ TEST_CASE("FileLogger: retention keeps at most maxRetained files", "[file_logger
     REQUIRE(logger.open(tmp.str(), 10));
 
     int count = 0;
-    for (auto& entry : fs::directory_iterator(tmp.path)) {
+    for (auto& entry : fs::directory_iterator(tmp.path())) {
         auto name = entry.path().filename().string();
         if (name.rfind("engine_", 0) == 0 && entry.path().extension() == ".log")
             ++count;
@@ -136,7 +136,7 @@ TEST_CASE("FileLogger: retention keeps at most maxRetained files", "[file_logger
 }
 
 TEST_CASE("FileLogger: flush does not crash on open logger", "[file_logger]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     FileLogger logger;
     REQUIRE(logger.open(tmp.str(), 10));
     logger.log(LogLevel::Info, "f.cpp", 1, "msg");
@@ -144,7 +144,7 @@ TEST_CASE("FileLogger: flush does not crash on open logger", "[file_logger]") {
 }
 
 TEST_CASE("FileLogger: currentLogPath returns non-empty engine_ filename", "[file_logger]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     FileLogger logger;
     REQUIRE(logger.open(tmp.str(), 10));
     auto& p = logger.currentLogPath();
@@ -153,7 +153,7 @@ TEST_CASE("FileLogger: currentLogPath returns non-empty engine_ filename", "[fil
 }
 
 TEST_CASE("FileLogger: log writes formatted line to file", "[file_logger]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     FileLogger logger;
     REQUIRE(logger.open(tmp.str(), 10));
     logger.log(LogLevel::Info, "engine/Foo.cpp", 42, "hello world");
@@ -169,7 +169,7 @@ TEST_CASE("FileLogger: log writes formatted line to file", "[file_logger]") {
 }
 
 TEST_CASE("FileLogger: log from multiple threads does not crash", "[file_logger]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     FileLogger logger;
     REQUIRE(logger.open(tmp.str(), 10));
     logger.setMinLevel(LogLevel::Debug);

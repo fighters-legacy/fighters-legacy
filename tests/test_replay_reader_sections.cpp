@@ -11,6 +11,8 @@
 // a vector before anything notices the file is 300 bytes long. So each case here declares something
 // the file cannot back and asserts the reader says no, by name, without having allocated for it.
 
+#include "temp_path.h"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include "net/ByteOrder.h"
@@ -27,19 +29,6 @@ using namespace fl;
 namespace {
 
 namespace fs = std::filesystem;
-
-struct TempDir {
-    fs::path path;
-    explicit TempDir(const std::string& tag) {
-        path = fs::temp_directory_path() / ("flrep_sections_" + tag);
-        fs::remove_all(path);
-        fs::create_directories(path);
-    }
-    ~TempDir() {
-        std::error_code ec;
-        fs::remove_all(path, ec);
-    }
-};
 
 // A valid header, up to but not including the section list.
 std::vector<uint8_t> headerBytes() {
@@ -58,12 +47,12 @@ std::vector<uint8_t> headerBytes() {
 }
 
 struct Writer {
-    TempDir dir;
+    fl::test::TempDirGuard dir;
     int n{0};
-    explicit Writer(const std::string& tag) : dir(tag) {}
+    explicit Writer(const std::string& tag) : dir("flrep_sections_" + tag) {}
 
     fs::path write(const std::vector<uint8_t>& b) {
-        const fs::path p = dir.path / ("case" + std::to_string(n++) + ".flrep");
+        const fs::path p = dir.path() / ("case" + std::to_string(n++) + ".flrep");
         std::ofstream out(p, std::ios::binary | std::ios::trunc);
         out.write(reinterpret_cast<const char*>(b.data()), static_cast<std::streamsize>(b.size()));
         return p;
@@ -387,7 +376,7 @@ TEST_CASE("flrep: durationSeconds is zero for a replay with no extent (#1145)", 
     CHECK(r.durationSeconds() == 0.0);
 
     // Re-opening a bad path after a good one leaves the reader closed, not holding the old file.
-    CHECK_FALSE(r.open(w.dir.path / "not_here.flrep"));
+    CHECK_FALSE(r.open(w.dir.path() / "not_here.flrep"));
     ReplayTick tick;
     CHECK_FALSE(r.readNextTick(tick));
     CHECK(r.durationSeconds() == 0.0);

@@ -46,6 +46,14 @@ inline std::filesystem::path uniqueTempPath(const std::string& prefix) {
     return std::filesystem::temp_directory_path() / (prefix + "_" + processToken() + "_" + std::to_string(n));
 }
 
+// The same, with a suffix kept LAST — for a test whose subject keys off the extension (a config
+// reader, a validator, a cache format) and so cannot take the token on the end.
+inline std::filesystem::path uniqueTempPath(const std::string& prefix, const std::string& suffix) {
+    std::filesystem::path p = uniqueTempPath(prefix);
+    p += suffix;
+    return p;
+}
+
 // Creates the directory and removes it (recursively, best-effort) on destruction.
 class TempDirGuard {
   public:
@@ -62,6 +70,11 @@ class TempDirGuard {
 
     [[nodiscard]] const std::filesystem::path& path() const noexcept {
         return m_path;
+    }
+
+    // The native string, for the many APIs that take a directory as std::string.
+    [[nodiscard]] std::string str() const {
+        return m_path.string();
     }
 
   private:

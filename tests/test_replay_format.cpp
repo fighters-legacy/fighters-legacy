@@ -16,6 +16,8 @@
 #include "replay/ReplayReader.h"
 #include "replay/ReplayWriter.h"
 
+#include "temp_path.h"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdio>
@@ -35,19 +37,6 @@ namespace fs = std::filesystem;
 
 // A temp directory that cleans itself up, so a failing assertion cannot leave a stale .flrep behind
 // to be read by the next run.
-struct TempDir {
-    fs::path path;
-    explicit TempDir(const std::string& tag) {
-        path = fs::temp_directory_path() / ("flrep_test_" + tag);
-        fs::remove_all(path);
-        fs::create_directories(path);
-    }
-    ~TempDir() {
-        std::error_code ec;
-        fs::remove_all(path, ec);
-    }
-};
-
 QuantEntity makeEntity(uint32_t idx, double x, double y, double z, uint32_t typeIndex = 3) {
     QuantEntity e;
     e.idx = idx;
@@ -161,19 +150,19 @@ ReplayWriter::Config makeWriterConfig(const fs::path& dir, const std::string& ba
 } // namespace
 
 TEST_CASE("flrep round-trips the header and sections", "[replay]") {
-    TempDir tmp("header");
+    fl::test::TempDirGuard tmp{"flrep_test_header"};
     const ReplayHeader header = makeHeader();
     const ReplaySections sections = makeSections();
 
     {
         ReplayWriter w;
-        REQUIRE(w.open(header, sections, makeWriterConfig(tmp.path)));
+        REQUIRE(w.open(header, sections, makeWriterConfig(tmp.path())));
         REQUIRE(w.writeTick(makeTick(0, {makeEntity(0, 10.0, 500.0, -20.0)}, true)));
         REQUIRE(w.close());
     }
 
     ReplayReader r;
-    REQUIRE(r.open(tmp.path / "session.flrep"));
+    REQUIRE(r.open(tmp.path() / "session.flrep"));
     CHECK(r.header().formatMajor == kReplayFormatMajor);
     CHECK(r.header().engineVersion == "0.3.12");
     CHECK(r.header().tickRateHz == 60);
@@ -194,19 +183,19 @@ TEST_CASE("flrep round-trips the header and sections", "[replay]") {
 }
 
 TEST_CASE("flrep round-trips entity records in the quantized domain", "[replay]") {
-    TempDir tmp("records");
+    fl::test::TempDirGuard tmp{"flrep_test_records"};
     std::vector<QuantEntity> ents{makeEntity(0, 1234.5, 3000.0, -987.25), makeEntity(5, -40000.0, 812.5, 65600.0),
                                   makeEntity(9, 0.0, 0.0, 0.0, 4)};
 
     {
         ReplayWriter w;
-        REQUIRE(w.open(makeHeader(), makeSections(), makeWriterConfig(tmp.path)));
+        REQUIRE(w.open(makeHeader(), makeSections(), makeWriterConfig(tmp.path())));
         REQUIRE(w.writeTick(makeTick(0, ents, true)));
         REQUIRE(w.close());
     }
 
     ReplayReader r;
-    REQUIRE(r.open(tmp.path / "session.flrep"));
+    REQUIRE(r.open(tmp.path() / "session.flrep"));
     ReplayTick t;
     REQUIRE(r.readNextTick(t));
     CHECK(t.tickIndex == 0);
@@ -240,7 +229,7 @@ TEST_CASE("flrep round-trips entity records in the quantized domain", "[replay]"
 }
 
 TEST_CASE("flrep round-trips interleaved match events", "[replay]") {
-    TempDir tmp("events");
+    fl::test::TempDirGuard tmp{"flrep_test_events"};
     ReplayTick t = makeTick(12, {makeEntity(0, 5.0, 100.0, 5.0)}, true);
 
     MatchEvent kill;
@@ -264,13 +253,13 @@ TEST_CASE("flrep round-trips interleaved match events", "[replay]") {
 
     {
         ReplayWriter w;
-        REQUIRE(w.open(makeHeader(), makeSections(), makeWriterConfig(tmp.path)));
+        REQUIRE(w.open(makeHeader(), makeSections(), makeWriterConfig(tmp.path())));
         REQUIRE(w.writeTick(t));
         REQUIRE(w.close());
     }
 
     ReplayReader r;
-    REQUIRE(r.open(tmp.path / "session.flrep"));
+    REQUIRE(r.open(tmp.path() / "session.flrep"));
     ReplayTick got;
     REQUIRE(r.readNextTick(got));
     REQUIRE(got.events.size() == 2);
@@ -284,13 +273,13 @@ TEST_CASE("flrep round-trips interleaved match events", "[replay]") {
 }
 
 TEST_CASE("flrep seeks to the keyframe at or before a tick", "[replay]") {
-    TempDir tmp("seek");
+    fl::test::TempDirGuard tmp{"flrep_test_seek"};
     constexpr uint64_t kTicks = 20;
     constexpr uint64_t kInterval = 5;
 
     {
         ReplayWriter w;
-        REQUIRE(w.open(makeHeader(), makeSections(), makeWriterConfig(tmp.path)));
+        REQUIRE(w.open(makeHeader(), makeSections(), makeWriterConfig(tmp.path())));
         for (uint64_t i = 0; i < kTicks; ++i) {
             const bool key = (i % kInterval) == 0;
             REQUIRE(w.writeTick(makeTick(i, {makeEntity(0, 10.0 + static_cast<double>(i), 500.0, 0.0)}, key)));
@@ -299,7 +288,7 @@ TEST_CASE("flrep seeks to the keyframe at or before a tick", "[replay]") {
     }
 
     ReplayReader r;
-    REQUIRE(r.open(tmp.path / "session.flrep"));
+    REQUIRE(r.open(tmp.path() / "session.flrep"));
     CHECK(r.index().size() == kTicks / kInterval);
     CHECK(r.firstTick() == 0);
     CHECK(r.lastTick() == kTicks - 1);
@@ -341,18 +330,18 @@ TEST_CASE("flrep seeks to the keyframe at or before a tick", "[replay]") {
 }
 
 TEST_CASE("flrep reads every tick back in order", "[replay]") {
-    TempDir tmp("order");
+    fl::test::TempDirGuard tmp{"flrep_test_order"};
     constexpr uint64_t kTicks = 37;
     {
         ReplayWriter w;
-        REQUIRE(w.open(makeHeader(), makeSections(), makeWriterConfig(tmp.path)));
+        REQUIRE(w.open(makeHeader(), makeSections(), makeWriterConfig(tmp.path())));
         for (uint64_t i = 0; i < kTicks; ++i)
             REQUIRE(w.writeTick(makeTick(i, {makeEntity(0, static_cast<double>(i), 500.0, 0.0)}, (i % 4) == 0)));
         REQUIRE(w.close());
     }
 
     ReplayReader r;
-    REQUIRE(r.open(tmp.path / "session.flrep"));
+    REQUIRE(r.open(tmp.path() / "session.flrep"));
     ReplayTick t;
     uint64_t expected = 0;
     while (r.readNextTick(t)) {
@@ -364,15 +353,15 @@ TEST_CASE("flrep reads every tick back in order", "[replay]") {
 }
 
 TEST_CASE("flrep with no ticks is valid and empty, not corrupt", "[replay]") {
-    TempDir tmp("empty");
+    fl::test::TempDirGuard tmp{"flrep_test_empty"};
     {
         ReplayWriter w;
-        REQUIRE(w.open(makeHeader(), makeSections(), makeWriterConfig(tmp.path)));
+        REQUIRE(w.open(makeHeader(), makeSections(), makeWriterConfig(tmp.path())));
         REQUIRE(w.close());
     }
 
     ReplayReader r;
-    REQUIRE(r.open(tmp.path / "session.flrep")); // a session that recorded nothing still opens
+    REQUIRE(r.open(tmp.path() / "session.flrep")); // a session that recorded nothing still opens
     CHECK(r.sections().entityTypes.size() == 2);
     ReplayTick t;
     CHECK_FALSE(r.readNextTick(t));
@@ -380,18 +369,18 @@ TEST_CASE("flrep with no ticks is valid and empty, not corrupt", "[replay]") {
 }
 
 TEST_CASE("flrep survives a missing trailer by rebuilding the index", "[replay]") {
-    TempDir tmp("trailer");
+    fl::test::TempDirGuard tmp{"flrep_test_trailer"};
     constexpr uint64_t kTicks = 12;
     {
         ReplayWriter w;
-        REQUIRE(w.open(makeHeader(), makeSections(), makeWriterConfig(tmp.path)));
+        REQUIRE(w.open(makeHeader(), makeSections(), makeWriterConfig(tmp.path())));
         for (uint64_t i = 0; i < kTicks; ++i)
             REQUIRE(w.writeTick(makeTick(i, {makeEntity(0, static_cast<double>(i), 500.0, 0.0)}, (i % 4) == 0)));
         REQUIRE(w.close());
     }
 
-    const fs::path good = tmp.path / "session.flrep";
-    const fs::path cut = tmp.path / "cut.flrep";
+    const fs::path good = tmp.path() / "session.flrep";
+    const fs::path cut = tmp.path() / "cut.flrep";
 
     // Read the whole file, then keep only what was on disk before the trailer -- i.e. the file a
     // killed server leaves behind. The last chunk is intact; the trailer never happened.
@@ -420,11 +409,11 @@ TEST_CASE("flrep survives a missing trailer by rebuilding the index", "[replay]"
 }
 
 TEST_CASE("flrep truncated mid-chunk keeps the ticks before the cut", "[replay]") {
-    TempDir tmp("truncated");
+    fl::test::TempDirGuard tmp{"flrep_test_truncated"};
     constexpr uint64_t kTicks = 16;
     {
         ReplayWriter w;
-        REQUIRE(w.open(makeHeader(), makeSections(), makeWriterConfig(tmp.path)));
+        REQUIRE(w.open(makeHeader(), makeSections(), makeWriterConfig(tmp.path())));
         for (uint64_t i = 0; i < kTicks; ++i)
             REQUIRE(w.writeTick(makeTick(i, {makeEntity(0, static_cast<double>(i), 500.0, 0.0)}, (i % 4) == 0)));
         REQUIRE(w.close());
@@ -432,14 +421,14 @@ TEST_CASE("flrep truncated mid-chunk keeps the ticks before the cut", "[replay]"
 
     std::vector<char> bytes;
     {
-        std::ifstream in(tmp.path / "session.flrep", std::ios::binary);
+        std::ifstream in(tmp.path() / "session.flrep", std::ios::binary);
         bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
     }
     uint64_t trailerOffset = 0;
     std::memcpy(&trailerOffset, bytes.data() + bytes.size() - 8, 8);
 
     // Cut inside the LAST chunk: its header promises more bytes than exist.
-    const fs::path cut = tmp.path / "mid.flrep";
+    const fs::path cut = tmp.path() / "mid.flrep";
     const auto keep = static_cast<std::streamsize>(trailerOffset - 8);
     {
         std::ofstream out(cut, std::ios::binary | std::ios::trunc);
@@ -458,17 +447,17 @@ TEST_CASE("flrep truncated mid-chunk keeps the ticks before the cut", "[replay]"
 }
 
 TEST_CASE("flrep refuses a newer major and names both versions", "[replay]") {
-    TempDir tmp("major");
+    fl::test::TempDirGuard tmp{"flrep_test_major"};
     {
         ReplayWriter w;
-        REQUIRE(w.open(makeHeader(), makeSections(), makeWriterConfig(tmp.path)));
+        REQUIRE(w.open(makeHeader(), makeSections(), makeWriterConfig(tmp.path())));
         REQUIRE(w.writeTick(makeTick(0, {makeEntity(0, 0.0, 500.0, 0.0)}, true)));
         REQUIRE(w.close());
     }
 
     // Bump the major in place: byte 4 of the file.
-    const fs::path bumped = tmp.path / "future.flrep";
-    fs::copy_file(tmp.path / "session.flrep", bumped);
+    const fs::path bumped = tmp.path() / "future.flrep";
+    fs::copy_file(tmp.path() / "session.flrep", bumped);
     {
         std::fstream f(bumped, std::ios::binary | std::ios::in | std::ios::out);
         f.seekp(4, std::ios::beg);
@@ -484,7 +473,7 @@ TEST_CASE("flrep refuses a newer major and names both versions", "[replay]") {
 }
 
 TEST_CASE("flrep reads a newer minor with an unknown section", "[replay]") {
-    TempDir tmp("minor");
+    fl::test::TempDirGuard tmp{"flrep_test_minor"};
     // Hand-build a file whose minor is ahead and which carries a section id this build has never
     // heard of. Skipping it by its declared length is what makes "additive is a minor bump" true.
     std::vector<uint8_t> f;
@@ -520,7 +509,7 @@ TEST_CASE("flrep reads a newer minor with an unknown section", "[replay]") {
     detail::putU64LE(f, 0);
     detail::putU64LE(f, trailerOffset);
 
-    const fs::path p = tmp.path / "minor.flrep";
+    const fs::path p = tmp.path() / "minor.flrep";
     {
         std::ofstream out(p, std::ios::binary | std::ios::trunc);
         out.write(reinterpret_cast<const char*>(f.data()), static_cast<std::streamsize>(f.size()));
@@ -535,10 +524,10 @@ TEST_CASE("flrep reads a newer minor with an unknown section", "[replay]") {
 }
 
 TEST_CASE("flrep refuses files that are not replays", "[replay]") {
-    TempDir tmp("refuse");
+    fl::test::TempDirGuard tmp{"flrep_test_refuse"};
 
     auto writeBytes = [&](const std::string& name, const std::vector<uint8_t>& b) {
-        const fs::path p = tmp.path / name;
+        const fs::path p = tmp.path() / name;
         std::ofstream out(p, std::ios::binary | std::ios::trunc);
         out.write(reinterpret_cast<const char*>(b.data()), static_cast<std::streamsize>(b.size()));
         return p;
@@ -562,7 +551,7 @@ TEST_CASE("flrep refuses files that are not replays", "[replay]") {
     }
     SECTION("missing file") {
         ReplayReader r;
-        CHECK_FALSE(r.open(tmp.path / "does_not_exist.flrep"));
+        CHECK_FALSE(r.open(tmp.path() / "does_not_exist.flrep"));
     }
     SECTION("impossible tick rate") {
         std::vector<uint8_t> b;
@@ -584,7 +573,7 @@ TEST_CASE("flrep refuses files that are not replays", "[replay]") {
 }
 
 TEST_CASE("flrep does not allocate on a declared length it cannot back", "[replay]") {
-    TempDir tmp("hostile");
+    fl::test::TempDirGuard tmp{"flrep_test_hostile"};
 
     auto headerBytes = []() {
         std::vector<uint8_t> b;
@@ -601,7 +590,7 @@ TEST_CASE("flrep does not allocate on a declared length it cannot back", "[repla
         return b;
     };
     auto writeBytes = [&](const std::string& name, const std::vector<uint8_t>& b) {
-        const fs::path p = tmp.path / name;
+        const fs::path p = tmp.path() / name;
         std::ofstream out(p, std::ios::binary | std::ios::trunc);
         out.write(reinterpret_cast<const char*>(b.data()), static_cast<std::streamsize>(b.size()));
         return p;
@@ -660,10 +649,10 @@ TEST_CASE("flrep does not allocate on a declared length it cannot back", "[repla
 }
 
 TEST_CASE("flrep writes through a non-ASCII path", "[replay]") {
-    TempDir tmp("unicode");
+    fl::test::TempDirGuard tmp{"flrep_test_unicode"};
     // std::filesystem::path end to end is the point: InputTraceWriter's std::string ctor is exactly
     // the bug that makes a player with a non-ASCII profile directory unable to record.
-    const fs::path dir = tmp.path / "réplays-日本";
+    const fs::path dir = tmp.path() / "réplays-日本";
     {
         ReplayWriter w;
         REQUIRE(w.open(makeHeader(), makeSections(), makeWriterConfig(dir, "sessión")));
@@ -678,9 +667,9 @@ TEST_CASE("flrep writes through a non-ASCII path", "[replay]") {
 }
 
 TEST_CASE("flrep rotates by size and bounds the directory", "[replay]") {
-    TempDir tmp("rotate");
+    fl::test::TempDirGuard tmp{"flrep_test_rotate"};
 
-    ReplayWriter::Config cfg = makeWriterConfig(tmp.path);
+    ReplayWriter::Config cfg = makeWriterConfig(tmp.path());
     cfg.maxFileBytes = 4096; // tiny, so a handful of ticks rolls the file
     cfg.maxFiles = 3;
 
@@ -697,7 +686,7 @@ TEST_CASE("flrep rotates by size and bounds the directory", "[replay]") {
     }
 
     std::vector<fs::path> files;
-    for (const auto& e : fs::directory_iterator(tmp.path))
+    for (const auto& e : fs::directory_iterator(tmp.path()))
         if (e.path().extension() == ".flrep")
             files.push_back(e.path());
 
@@ -715,8 +704,8 @@ TEST_CASE("flrep rotates by size and bounds the directory", "[replay]") {
 }
 
 TEST_CASE("flrep rotation with maxFiles = 1 keeps exactly one readable file", "[replay]") {
-    TempDir tmp("rotate1");
-    ReplayWriter::Config cfg = makeWriterConfig(tmp.path);
+    fl::test::TempDirGuard tmp{"flrep_test_rotate1"};
+    ReplayWriter::Config cfg = makeWriterConfig(tmp.path());
     cfg.maxFileBytes = 2048;
     cfg.maxFiles = 1;
 
@@ -731,7 +720,7 @@ TEST_CASE("flrep rotation with maxFiles = 1 keeps exactly one readable file", "[
     REQUIRE(w.close());
 
     std::vector<fs::path> files;
-    for (const auto& e : fs::directory_iterator(tmp.path))
+    for (const auto& e : fs::directory_iterator(tmp.path()))
         if (e.path().extension() == ".flrep")
             files.push_back(e.path());
 
@@ -745,7 +734,7 @@ TEST_CASE("flrep rotation with maxFiles = 1 keeps exactly one readable file", "[
 }
 
 TEST_CASE("flrep tick encoding is stable under a random workload", "[replay]") {
-    TempDir tmp("fuzzlite");
+    fl::test::TempDirGuard tmp{"flrep_test_fuzzlite"};
     std::mt19937 rng(20260727u); // fixed seed: a test that fails only sometimes teaches nothing
     std::uniform_real_distribution<double> posD(-200000.0, 200000.0);
     std::uniform_int_distribution<int> countD(0, 12);
@@ -753,7 +742,7 @@ TEST_CASE("flrep tick encoding is stable under a random workload", "[replay]") {
     std::vector<ReplayTick> written;
     {
         ReplayWriter w;
-        REQUIRE(w.open(makeHeader(), makeSections(), makeWriterConfig(tmp.path)));
+        REQUIRE(w.open(makeHeader(), makeSections(), makeWriterConfig(tmp.path())));
         for (uint64_t i = 0; i < 50; ++i) {
             std::vector<QuantEntity> ents;
             const int n = countD(rng);
@@ -767,7 +756,7 @@ TEST_CASE("flrep tick encoding is stable under a random workload", "[replay]") {
     }
 
     ReplayReader r;
-    REQUIRE(r.open(tmp.path / "session.flrep"));
+    REQUIRE(r.open(tmp.path() / "session.flrep"));
     for (const ReplayTick& expected : written) {
         ReplayTick got;
         REQUIRE(r.readNextTick(got));

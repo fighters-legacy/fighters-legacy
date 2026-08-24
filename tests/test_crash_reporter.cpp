@@ -4,7 +4,7 @@
 #include "FileLogger.h"
 #include "IWindow.h"
 #include "crash/CrashReporter.h"
-#include "test_helpers.h"
+#include "temp_path.h"
 
 #include <csignal>
 #include <filesystem>
@@ -111,77 +111,77 @@ static void writeCrashLog(const fs::path& userDataDir, const std::string& name) 
 // ---------------------------------------------------------------------------
 
 TEST_CASE("CrashReporter: checkPreviousCrash returns false when no sentinel", "[crash]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
     CHECK_FALSE(CrashReporter::checkPreviousCrash(tmp.str(), &win, nullptr, "https://example.com"));
 }
 
 TEST_CASE("CrashReporter: checkPreviousCrash returns false when process still alive", "[crash]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
 #if defined(_WIN32)
     int myPid = static_cast<int>(GetCurrentProcessId());
 #else
     int myPid = static_cast<int>(getpid());
 #endif
-    writeSentinel(tmp.path, myPid);
+    writeSentinel(tmp.path(), myPid);
     // Our own PID is alive — should not show dialog
     CHECK_FALSE(CrashReporter::checkPreviousCrash(tmp.str(), &win, nullptr, "https://example.com"));
 }
 
 TEST_CASE("CrashReporter: checkPreviousCrash returns true with dead PID sentinel", "[crash]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
-    win.buttonToReturn = 2;            // Dismiss
-    writeSentinel(tmp.path, 99999999); // almost certainly dead
-    writeCrashLog(tmp.path, "crash_2026-01-01_00-00-00.log");
+    win.buttonToReturn = 2;              // Dismiss
+    writeSentinel(tmp.path(), 99999999); // almost certainly dead
+    writeCrashLog(tmp.path(), "crash_2026-01-01_00-00-00.log");
     CHECK(CrashReporter::checkPreviousCrash(tmp.str(), &win, nullptr, "https://example.com"));
     CHECK(win.lastTitle.find("Crash") != std::string::npos);
 }
 
 TEST_CASE("CrashReporter: checkPreviousCrash View Log opens file:// URL", "[crash]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
     win.buttonToReturn = 0; // View Log
-    writeSentinel(tmp.path, 99999999);
-    writeCrashLog(tmp.path, "crash_2026-01-01_00-00-01.log");
+    writeSentinel(tmp.path(), 99999999);
+    writeCrashLog(tmp.path(), "crash_2026-01-01_00-00-01.log");
     CrashReporter::checkPreviousCrash(tmp.str(), &win, nullptr, "https://example.com");
     CHECK(win.lastUrl.rfind("file:///", 0) == 0);
 }
 
 TEST_CASE("CrashReporter: checkPreviousCrash Report opens github URL", "[crash]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
     win.buttonToReturn = 1; // Report
-    writeSentinel(tmp.path, 99999999);
-    writeCrashLog(tmp.path, "crash_2026-01-01_00-00-02.log");
+    writeSentinel(tmp.path(), 99999999);
+    writeCrashLog(tmp.path(), "crash_2026-01-01_00-00-02.log");
     CrashReporter::checkPreviousCrash(tmp.str(), &win, nullptr, "https://github.com/example/repo/issues/new");
     CHECK(win.lastUrl.find("github.com") != std::string::npos);
 }
 
 TEST_CASE("CrashReporter: checkPreviousCrash Dismiss sets no URL", "[crash]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
     win.buttonToReturn = 2; // Dismiss
-    writeSentinel(tmp.path, 99999999);
-    writeCrashLog(tmp.path, "crash_2026-01-01_00-00-03.log");
+    writeSentinel(tmp.path(), 99999999);
+    writeCrashLog(tmp.path(), "crash_2026-01-01_00-00-03.log");
     CrashReporter::checkPreviousCrash(tmp.str(), &win, nullptr, "https://example.com");
     CHECK(win.lastUrl.empty());
 }
 
 TEST_CASE("CrashReporter: sentinel deleted after checkPreviousCrash", "[crash]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
     win.buttonToReturn = 2;
-    writeSentinel(tmp.path, 99999999);
+    writeSentinel(tmp.path(), 99999999);
     CrashReporter::checkPreviousCrash(tmp.str(), &win, nullptr, "https://example.com");
-    CHECK_FALSE(fs::exists(tmp.path / "state" / "engine.lock"));
+    CHECK_FALSE(fs::exists(tmp.path() / "state" / "engine.lock"));
 }
 
 TEST_CASE("CrashReporter: init creates sentinel file", "[crash]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
-    TempDir logTmp;
+    fl::test::TempDirGuard logTmp{"fl_test"};
     FileLogger logger;
     logger.open(logTmp.str(), 5);
 
@@ -189,14 +189,14 @@ TEST_CASE("CrashReporter: init creates sentinel file", "[crash]") {
     CrashInfo info{};
     info.engineVersion = "0.0.1";
     cr.init({tmp.str(), "https://example.com", &logger, &win}, info);
-    CHECK(fs::exists(tmp.path / "state" / "engine.lock"));
+    CHECK(fs::exists(tmp.path() / "state" / "engine.lock"));
     cr.shutdown();
 }
 
 TEST_CASE("CrashReporter: shutdown deletes sentinel file", "[crash]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
-    TempDir logTmp;
+    fl::test::TempDirGuard logTmp{"fl_test"};
     FileLogger logger;
     logger.open(logTmp.str(), 5);
 
@@ -205,7 +205,7 @@ TEST_CASE("CrashReporter: shutdown deletes sentinel file", "[crash]") {
     info.engineVersion = "0.0.1";
     cr.init({tmp.str(), "https://example.com", &logger, &win}, info);
     cr.shutdown();
-    CHECK_FALSE(fs::exists(tmp.path / "state" / "engine.lock"));
+    CHECK_FALSE(fs::exists(tmp.path() / "state" / "engine.lock"));
 }
 
 TEST_CASE("CrashReporter: shutdown with no init does not crash", "[crash]") {
@@ -214,9 +214,9 @@ TEST_CASE("CrashReporter: shutdown with no init does not crash", "[crash]") {
 }
 
 TEST_CASE("CrashReporter: formatCrashHeader contains version and OS", "[crash]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
-    TempDir logTmp;
+    fl::test::TempDirGuard logTmp{"fl_test"};
     FileLogger logger;
     logger.open(logTmp.str(), 5);
 
@@ -236,9 +236,9 @@ TEST_CASE("CrashReporter: formatCrashHeader contains version and OS", "[crash]")
 }
 
 TEST_CASE("CrashReporter: formatCrashHeader contains session log path", "[crash]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
-    TempDir logTmp;
+    fl::test::TempDirGuard logTmp{"fl_test"};
     FileLogger logger;
     logger.open(logTmp.str(), 5);
 
@@ -253,9 +253,9 @@ TEST_CASE("CrashReporter: formatCrashHeader contains session log path", "[crash]
 }
 
 TEST_CASE("CrashReporter: setGpuInfo reflected in formatCrashHeader", "[crash]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
-    TempDir logTmp;
+    fl::test::TempDirGuard logTmp{"fl_test"};
     FileLogger logger;
     logger.open(logTmp.str(), 5);
 
@@ -271,8 +271,8 @@ TEST_CASE("CrashReporter: setGpuInfo reflected in formatCrashHeader", "[crash]")
 }
 
 TEST_CASE("CrashReporter: init with null window does not crash", "[crash]") {
-    TempDir tmp;
-    TempDir logTmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
+    fl::test::TempDirGuard logTmp{"fl_test"};
     FileLogger logger;
     logger.open(logTmp.str(), 5);
 
@@ -284,13 +284,13 @@ TEST_CASE("CrashReporter: init with null window does not crash", "[crash]") {
 }
 
 TEST_CASE("CrashReporter: crash log rotation keeps at most 5", "[crash]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
-    TempDir logTmp;
+    fl::test::TempDirGuard logTmp{"fl_test"};
     FileLogger logger;
     logger.open(logTmp.str(), 5);
 
-    auto logsDir = tmp.path / "logs";
+    auto logsDir = tmp.path() / "logs";
     fs::create_directories(logsDir);
     // Seed 6 crash logs
     for (int i = 0; i < 6; ++i) {
@@ -328,9 +328,9 @@ TEST_CASE("CrashInfo::populateOS fills osInfo with non-empty string", "[crash]")
 }
 
 TEST_CASE("CrashReporter: setMods stores mod entries", "[crash]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
-    TempDir logTmp;
+    fl::test::TempDirGuard logTmp{"fl_test"};
     FileLogger logger;
     logger.open(logTmp.str(), 5);
 
@@ -353,8 +353,8 @@ TEST_CASE("CrashReporter: setMods stores mod entries", "[crash]") {
 }
 
 TEST_CASE("CrashReporter: setMods with null pointer clears mods", "[crash]") {
-    TempDir tmp;
-    TempDir logTmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
+    fl::test::TempDirGuard logTmp{"fl_test"};
     FileLogger logger;
     logger.open(logTmp.str(), 5);
 
@@ -370,8 +370,8 @@ TEST_CASE("CrashReporter: setMods with null pointer clears mods", "[crash]") {
 }
 
 TEST_CASE("CrashReporter: setGpuInfo with null is safe", "[crash]") {
-    TempDir tmp;
-    TempDir logTmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
+    fl::test::TempDirGuard logTmp{"fl_test"};
     FileLogger logger;
     logger.open(logTmp.str(), 5);
 
@@ -384,7 +384,7 @@ TEST_CASE("CrashReporter: setGpuInfo with null is safe", "[crash]") {
 }
 
 TEST_CASE("CrashReporter: formatCrashHeader with no logger shows (none)", "[crash]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     CrashReporter cr;
     CrashInfo info{};
     info.engineVersion = "0.0.1";
@@ -396,18 +396,18 @@ TEST_CASE("CrashReporter: formatCrashHeader with no logger shows (none)", "[cras
 }
 
 TEST_CASE("CrashReporter: checkPreviousCrash returns true with null window (headless)", "[crash]") {
-    TempDir tmp;
-    writeSentinel(tmp.path, 99999999);
+    fl::test::TempDirGuard tmp{"fl_test"};
+    writeSentinel(tmp.path(), 99999999);
     CHECK(CrashReporter::checkPreviousCrash(tmp.str(), nullptr, nullptr, "https://example.com"));
     // Sentinel should be cleaned up even in headless mode
-    CHECK_FALSE(fs::exists(tmp.path / "state" / "engine.lock"));
+    CHECK_FALSE(fs::exists(tmp.path() / "state" / "engine.lock"));
 }
 
 TEST_CASE("CrashReporter: checkPreviousCrash with dead PID and no crash log uses 2-button dialog", "[crash]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
     win.buttonToReturn = 2; // Dismiss
-    writeSentinel(tmp.path, 99999999);
+    writeSentinel(tmp.path(), 99999999);
     // No crash logs written → crashLogPath is empty → 2-button dialog
     CHECK(CrashReporter::checkPreviousCrash(tmp.str(), &win, nullptr, "https://example.com"));
     CHECK(win.lastTitle.find("Crash") != std::string::npos);
@@ -415,22 +415,22 @@ TEST_CASE("CrashReporter: checkPreviousCrash with dead PID and no crash log uses
 }
 
 TEST_CASE("CrashReporter: checkPreviousCrash Report with logger includes GitHub URL", "[crash]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
     win.buttonToReturn = 1; // Report
-    TempDir logTmp;
+    fl::test::TempDirGuard logTmp{"fl_test"};
     FileLogger logger;
     logger.open(logTmp.str(), 5);
     logger.log(LogLevel::Info, "test.cpp", 1, "test log entry");
-    writeSentinel(tmp.path, 99999999);
-    writeCrashLog(tmp.path, "crash_2026-01-01_12-00-00.log");
+    writeSentinel(tmp.path(), 99999999);
+    writeCrashLog(tmp.path(), "crash_2026-01-01_12-00-00.log");
     CrashReporter::checkPreviousCrash(tmp.str(), &win, &logger, "https://github.com/x/y/issues/new");
     CHECK(win.lastUrl.find("github.com") != std::string::npos);
 }
 
 TEST_CASE("CrashReporter: formatCrashHeader contains SIGILL", "[crash]") {
-    TempDir tmp;
-    TempDir logTmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
+    fl::test::TempDirGuard logTmp{"fl_test"};
     FileLogger logger;
     logger.open(logTmp.str(), 5);
 
@@ -444,8 +444,8 @@ TEST_CASE("CrashReporter: formatCrashHeader contains SIGILL", "[crash]") {
 }
 
 TEST_CASE("CrashReporter: formatCrashHeader with unknown signal number", "[crash]") {
-    TempDir tmp;
-    TempDir logTmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
+    fl::test::TempDirGuard logTmp{"fl_test"};
     FileLogger logger;
     logger.open(logTmp.str(), 5);
 
@@ -459,7 +459,7 @@ TEST_CASE("CrashReporter: formatCrashHeader with unknown signal number", "[crash
 }
 
 TEST_CASE("CrashReporter: formatCrashHeader with null engineVersion shows ?", "[crash]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     CrashReporter cr;
     CrashInfo info{}; // engineVersion is null (zero-initialized)
     cr.init({tmp.str(), "https://example.com", nullptr, nullptr}, info);
@@ -469,26 +469,26 @@ TEST_CASE("CrashReporter: formatCrashHeader with null engineVersion shows ?", "[
 }
 
 TEST_CASE("CrashReporter: checkPreviousCrash Report with null logger builds URL", "[crash]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
     win.buttonToReturn = 1; // Report
-    writeSentinel(tmp.path, 99999999);
-    writeCrashLog(tmp.path, "crash_2026-01-01_12-00-02.log");
+    writeSentinel(tmp.path(), 99999999);
+    writeCrashLog(tmp.path(), "crash_2026-01-01_12-00-02.log");
     // null logger → buildGitHubUrl if(logger) FALSE branch
     CrashReporter::checkPreviousCrash(tmp.str(), &win, nullptr, "https://github.com/x/y/issues/new");
     CHECK(win.lastUrl.find("github.com") != std::string::npos);
 }
 
 TEST_CASE("CrashReporter: checkPreviousCrash Report with logger that has no entries", "[crash]") {
-    TempDir tmp;
+    fl::test::TempDirGuard tmp{"fl_test"};
     MockWindow win;
     win.buttonToReturn = 1; // Report
-    TempDir logTmp;
+    fl::test::TempDirGuard logTmp{"fl_test"};
     FileLogger logger;
     logger.open(logTmp.str(), 5);
     // No log entries → copyLastLines returns 0 → if(n>0) FALSE branch
-    writeSentinel(tmp.path, 99999999);
-    writeCrashLog(tmp.path, "crash_2026-01-01_12-00-03.log");
+    writeSentinel(tmp.path(), 99999999);
+    writeCrashLog(tmp.path(), "crash_2026-01-01_12-00-03.log");
     CrashReporter::checkPreviousCrash(tmp.str(), &win, &logger, "https://github.com/x/y/issues/new");
     CHECK(win.lastUrl.find("github.com") != std::string::npos);
 }
