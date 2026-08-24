@@ -326,10 +326,7 @@ void SessionComms::sendRadioTransmission(const fl::atc::RadioTransmission& tx) {
         }
     }
     // No owning peer (an AI flight's clearance) or an undirected line: every peer hears it.
-    for (const auto& [pid, ps] : m_wb.m_peerInputs) {
-        (void)ps;
-        m_net.send(pid, &w, sizeof(w), /*reliable=*/true);
-    }
+    m_wb.broadcastMsg(w, /*reliable=*/true);
 }
 
 void SessionComms::handleRadioCommand(uint32_t peerId, const void* data, std::size_t size) {
@@ -342,16 +339,8 @@ void SessionComms::handleRadioCommand(uint32_t peerId, const void* data, std::si
 
     // Per-peer rate limit (~m_wb.m_flightCmdRateLimit/s). Silently drop over the limit — a radio flood must
     // not be amplified back at the sender with a reply per rejected packet.
-    {
-        const auto now = m_wb.m_clock->now();
-        if (now - ps.radioCmdWindowStart >= std::chrono::seconds(1)) {
-            ps.radioCmdWindowStart = now;
-            ps.radioCmdCount = 0;
-        }
-        ++ps.radioCmdCount;
-        if (ps.radioCmdCount > static_cast<uint32_t>(m_wb.m_flightCmdRateLimit))
-            return;
-    }
+    if (!ps.radioCmd.allow(m_wb.m_clock->now(), static_cast<uint32_t>(m_wb.m_flightCmdRateLimit)))
+        return;
 
     // The flight the command applies to = the requesting peer's own aircraft (invalid for an observer).
     const auto peerEnt = m_wb.m_peerEntities.find(peerId);
@@ -453,21 +442,12 @@ void SessionComms::handleChat(uint32_t peerId, const void* data, std::size_t siz
 
     // Per-peer rate limit (warn once per window; never one reply per rejected packet — a flood must not
     // be amplified back at the sender).
-    {
-        const auto now = m_wb.m_clock->now();
-        if (now - ps.chatWindowStart >= std::chrono::seconds(1)) {
-            ps.chatWindowStart = now;
-            ps.chatCount = 0;
-            ps.chatRateLimitWarned = false;
+    if (!ps.chat.allow(m_wb.m_clock->now(), static_cast<uint32_t>(m_chatRateLimit))) {
+        if (!ps.chat.warned) {
+            ps.chat.warned = true;
+            sendNoticeTo(peerId, "You are sending chat too fast.");
         }
-        ++ps.chatCount;
-        if (ps.chatCount > static_cast<uint32_t>(m_chatRateLimit)) {
-            if (!ps.chatRateLimitWarned) {
-                ps.chatRateLimitWarned = true;
-                sendNoticeTo(peerId, "You are sending chat too fast.");
-            }
-            return;
-        }
+        return;
     }
 
     // Moderation hook: false = suppress (fl-server default logs an audit line and allows).
@@ -544,11 +524,6 @@ bool SessionComms::setPeerVoiceMuted(uint32_t peerId, bool muted) {
     it->second.voiceMuted = muted;
     m_voiceViewsValid = false; // #1090: mute state is part of the recipient set
     return true;
-}
-
-bool SessionComms::isPeerVoiceMuted(uint32_t peerId) const {
-    const auto it = m_wb.m_peerInputs.find(peerId);
-    return it != m_wb.m_peerInputs.end() && it->second.voiceMuted;
 }
 
 std::vector<uint32_t> SessionComms::voiceMutedPeers() const {
@@ -651,16 +626,8 @@ void SessionComms::handleVoiceFrame(uint32_t peerId, const void* data, std::size
         return;
 
     // Bandwidth bound (see PeerInputState). Dropped silently: a reply to a flood is amplification.
-    {
-        const auto now = m_wb.m_clock->now();
-        if (now - ps.voiceWindowStart >= std::chrono::seconds(1)) {
-            ps.voiceWindowStart = now;
-            ps.voiceFrameCount = 0;
-        }
-        ++ps.voiceFrameCount;
-        if (ps.voiceFrameCount > static_cast<uint32_t>(m_voiceFrameRateLimit))
-            return;
-    }
+    if (!ps.voice.allow(m_wb.m_clock->now(), static_cast<uint32_t>(m_voiceFrameRateLimit)))
+        return;
 
     // Concurrent-speaker cap (#1090, D20). The relay cost of a net is (talkers x listeners) and only
     // the listener side was ever bounded: 128 open mics at 128 players is ~975,000 sendChannel calls
@@ -799,12 +766,8 @@ void SessionComms::broadcastScoreboard() {
     buildScoreboardPackets(m_scoreboardScratch);
     if (m_scoreboardScratch.empty())
         return;
-    for (const auto& [pid, pin] : m_wb.m_peerInputs) {
-        if (!pin.handshakeComplete)
-            continue;
-        for (const std::vector<uint8_t>& pkt : m_scoreboardScratch)
-            m_net.send(pid, pkt.data(), pkt.size(), /*reliable=*/false);
-    }
+    for (const std::vector<uint8_t>& pkt : m_scoreboardScratch)
+        m_wb.broadcastBytes(pkt, /*reliable=*/false, /*admittedOnly=*/true);
 }
 
 } // namespace fl

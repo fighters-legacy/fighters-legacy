@@ -375,10 +375,9 @@ std::string PeerAdmission::resolvePlayerEntityType(const char* requested) const 
 }
 
 void PeerAdmission::handleConnectRequest(uint32_t peerId, const void* data, std::size_t size) {
-    if (size < sizeof(MsgConnectRequest))
-        return; // truncated; ignore
     MsgConnectRequest req;
-    std::memcpy(&req, data, sizeof(req));
+    if (!readMsg(data, size, req))
+        return;                                                          // truncated; ignore
     req.requestedEntityType[sizeof(req.requestedEntityType) - 1] = '\0'; // untrusted char[]: force-terminate
 
     // The peer's source IP, resolved once at connect (#1069). Every refusal below reports it; before
@@ -661,9 +660,9 @@ void PeerAdmission::handleConnectRequest(uint32_t peerId, const void* data, std:
     // so a content mismatch is visible instead of silent placeholders. Reuses the MsgServerNotice banner
     // channel the client already surfaces (console + banner).
     if (!missingPackNotice.empty()) {
-        MsgServerNotice notice;
-        std::snprintf(notice.text, sizeof(notice.text), "Missing content: %s", missingPackNotice.c_str());
-        m_net.send(peerId, &notice, sizeof(notice), /*reliable=*/true);
+        char text[sizeof(MsgServerNotice::text)];
+        std::snprintf(text, sizeof(text), "Missing content: %s", missingPackNotice.c_str());
+        m_wb.m_comms.sendNoticeTo(peerId, text);
     }
 
     // Form this peer's flight (#610). The spawner lives in fl-server (it needs engine-ai to build
@@ -872,11 +871,7 @@ void PeerAdmission::sendConnectAck(uint32_t peerId, EntityId assigned, PeerRole 
         for (const auto& [objectId, eid] : m_wb.m_missionRoster) {
             if (eid.generation == 0)
                 continue; // invalid entity (e.g. an unbound player slot)
-            MsgMissionRoster rmsg{};
-            rmsg.entityIdx = eid.index;
-            rmsg.entityGen = static_cast<uint16_t>(eid.generation);
-            std::snprintf(rmsg.objectId, sizeof(rmsg.objectId), "%s", objectId.c_str());
-            appendMsg(rbuf, rmsg);
+            appendMsg(rbuf, WorldBroadcaster::makeMissionRosterMsg(objectId, eid));
         }
         if (!rbuf.empty())
             m_net.send(peerId, rbuf.data(), rbuf.size(), /*reliable=*/true);

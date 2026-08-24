@@ -263,10 +263,7 @@ void WorldBroadcaster::kickPeer(uint32_t peerId) {
 void WorldBroadcaster::broadcastMusicState(uint8_t state) {
     MsgMusicState msg;
     msg.state = state;
-    for (const auto& [peerId, pin] : m_peerInputs) {
-        (void)pin;
-        m_net.send(peerId, &msg, sizeof(msg), /*reliable=*/true);
-    }
+    broadcastMsg(msg, /*reliable=*/true);
 }
 
 void WorldBroadcaster::recordParticipant(uint32_t participantId, uint16_t faction, bool isBot, bool joined) {
@@ -293,10 +290,7 @@ void WorldBroadcaster::broadcastAlertLevelChange(uint16_t factionIndex, uint8_t 
     MsgAlertLevelChange msg;
     msg.factionIndex = factionIndex;
     msg.level = level;
-    for (const auto& [peerId, pin] : m_peerInputs) {
-        (void)pin;
-        m_net.send(peerId, &msg, sizeof(msg), /*reliable=*/true);
-    }
+    broadcastMsg(msg, /*reliable=*/true);
 }
 
 void WorldBroadcaster::broadcastHaptic(uint8_t kind, float a, float b, uint16_t durationMs) {
@@ -305,10 +299,7 @@ void WorldBroadcaster::broadcastHaptic(uint8_t kind, float a, float b, uint16_t 
     msg.a = a;
     msg.b = b;
     msg.durationMs = durationMs;
-    for (const auto& [peerId, pin] : m_peerInputs) {
-        (void)pin;
-        m_net.send(peerId, &msg, sizeof(msg), /*reliable=*/true);
-    }
+    broadcastMsg(msg, /*reliable=*/true);
 }
 
 void WorldBroadcaster::broadcastMissionOutcome(uint8_t outcome, float elapsedSeconds, uint16_t triggersFired) {
@@ -316,10 +307,7 @@ void WorldBroadcaster::broadcastMissionOutcome(uint8_t outcome, float elapsedSec
     msg.outcome = outcome;
     msg.elapsedSeconds = elapsedSeconds;
     msg.triggersFired = triggersFired;
-    for (const auto& [peerId, pin] : m_peerInputs) {
-        (void)pin;
-        m_net.send(peerId, &msg, sizeof(msg), /*reliable=*/true);
-    }
+    broadcastMsg(msg, /*reliable=*/true);
 }
 
 void WorldBroadcaster::updateMissionRoster(const std::string& missionObjectId, EntityId entity) {
@@ -335,14 +323,7 @@ void WorldBroadcaster::updateMissionRoster(const std::string& missionObjectId, E
     }
     if (!found || entity.generation == 0)
         return; // unknown object, or the slot was freed (invalid entity) — nothing to advertise
-    MsgMissionRoster rmsg{};
-    rmsg.entityIdx = entity.index;
-    rmsg.entityGen = static_cast<uint16_t>(entity.generation);
-    std::snprintf(rmsg.objectId, sizeof(rmsg.objectId), "%s", missionObjectId.c_str());
-    for (const auto& [peerId, pin] : m_peerInputs) {
-        (void)pin;
-        m_net.send(peerId, &rmsg, sizeof(rmsg), /*reliable=*/true);
-    }
+    broadcastMsg(makeMissionRosterMsg(missionObjectId, entity), /*reliable=*/true);
 }
 
 EjectionOutcome WorldBroadcaster::ejectPilot(EntityId eid) {
@@ -452,24 +433,12 @@ bool WorldBroadcaster::setPeerVoiceMuted(uint32_t peerId, bool muted) {
     return m_comms.setPeerVoiceMuted(peerId, muted);
 }
 
-bool WorldBroadcaster::isPeerVoiceMuted(uint32_t peerId) const {
-    return m_comms.isPeerVoiceMuted(peerId);
-}
-
 std::vector<uint32_t> WorldBroadcaster::voiceMutedPeers() const {
     return m_comms.voiceMutedPeers();
 }
 
-VoicePeerView WorldBroadcaster::voicePeerView(uint32_t peerId) const {
-    return m_comms.voicePeerView(peerId);
-}
-
 void WorldBroadcaster::setRadioNets(RadioNetTable nets) {
     m_comms.setRadioNets(std::move(nets));
-}
-
-void WorldBroadcaster::sendScoreboardTo(uint32_t peerId) {
-    m_comms.sendScoreboardTo(peerId);
 }
 
 void WorldBroadcaster::broadcastScoreboard() {
@@ -1381,9 +1350,7 @@ bool WorldBroadcaster::setPeerRole(uint32_t peerId, PeerRole role) {
             // unregistered. Leave the peer an observer: a "pilot" with no entity has no camera
             // anchor, no controller and no snapshot own-record, which is strictly worse than the
             // spectate they already had. Say why over the banner channel they can actually see.
-            MsgServerNotice notice;
-            std::snprintf(notice.text, sizeof(notice.text), "%s", "Cannot fly: the world is full.");
-            m_net.send(peerId, &notice, sizeof(notice), /*reliable=*/true);
+            sendNoticeTo(peerId, "Cannot fly: the world is full.");
             char msg[96];
             std::snprintf(msg, sizeof(msg), "peer %u observer->pilot refused: no airframe (entity soft cap?)", peerId);
             m_logger.log(LogLevel::Warn, __FILE__, __LINE__, msg);
@@ -2580,9 +2547,7 @@ void WorldBroadcaster::broadcastCrewRoster(EntityId id) {
     std::vector<uint8_t> buf;
     if (!buildCrewRosterPacket(id, buf))
         return;
-    for (const auto& [peerId, pin] : m_peerInputs)
-        if (pin.handshakeComplete)
-            m_net.send(peerId, buf.data(), buf.size(), /*reliable=*/true);
+    broadcastBytes(buf, /*reliable=*/true, /*admittedOnly=*/true);
 }
 
 void WorldBroadcaster::onEntityEvent(const EntityEvent& event) {
@@ -2767,7 +2732,8 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
 
     if (msgId == static_cast<uint8_t>(MsgId::ClientInput)) {
         MsgClientInput msg;
-        std::memcpy(&msg, data, sizeof(msg));
+        if (!readMsg(data, size, msg))
+            return;
 
         if (msg.protocolVersion != kProtocolVersion) {
             char vmsg[96];
@@ -2780,16 +2746,10 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         // Packet flood detection: disconnect peers that send faster than multiplier * tick rate.
         {
             auto& flood = m_peerFloodState[peerId];
-            auto now = m_clock->now();
-            if (now - flood.windowStart >= std::chrono::seconds(1)) {
-                flood.windowStart = now;
-                flood.packetCount = 0;
-            }
-            ++flood.packetCount;
-            if (flood.packetCount > static_cast<uint32_t>(60 * m_floodMultiplier)) {
+            if (!flood.allow(m_clock->now(), static_cast<uint32_t>(60 * m_floodMultiplier))) {
                 char fmsg[96];
                 std::snprintf(fmsg, sizeof(fmsg), "peer %u flooding — %u packets/s — disconnecting", peerId,
-                              flood.packetCount);
+                              flood.count);
                 m_logger.log(LogLevel::Warn, __FILE__, __LINE__, fmsg);
                 m_net.disconnectPeer(peerId);
                 return;
@@ -2929,7 +2889,8 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         const std::string& adminIp = m_peerInputs[peerId].peerIp;
 
         MsgAdminCommand msg;
-        std::memcpy(&msg, data, sizeof(msg));
+        if (!readMsg(data, size, msg))
+            return;
         msg.token[sizeof(msg.token) - 1] = '\0';
         msg.command[sizeof(msg.command) - 1] = '\0';
         uint16_t const reqId = msg.reqId;
@@ -2997,15 +2958,8 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
                 // with a clear message (when a password is configured, i.e. the channel is on and the
                 // peer merely lacks a grant) or silently drop (no password set — the channel is off
                 // for an ungranted peer, preserving the "no admin without credentials" behavior).
-                if (ps) {
-                    const auto now = m_clock->now();
-                    if (now - ps->adminCmdWindowStart >= std::chrono::seconds(1)) {
-                        ps->adminCmdWindowStart = now;
-                        ps->adminCmdCount = 0;
-                    }
-                    if (++ps->adminCmdCount > kUnauthAdminCmdsPerSecond)
-                        return;
-                }
+                if (ps && !ps->adminCmd.allow(m_clock->now(), kUnauthAdminCmdsPerSecond))
+                    return;
                 if (!m_operatorPassword.empty()) {
                     sendAdminResponse(m_net, peerId, reqId,
                                       "permission denied: the admin channel requires a granted role or the "
@@ -3072,18 +3026,10 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         // packet drew a reply, and nothing capped the rate. The packet above is still accounted
         // (liveness, delay estimate, ack) so a flooding peer cannot time itself out; only the REPLY
         // is suppressed, which is the half that costs the server bandwidth.
-        {
-            const auto now = m_clock->now();
-            if (now - ps.heartbeatWindowStart >= std::chrono::seconds(1)) {
-                ps.heartbeatWindowStart = now;
-                ps.heartbeatCount = 0;
-            }
-            ++ps.heartbeatCount;
-            if (ps.heartbeatCount <= static_cast<uint32_t>(m_heartbeatRateLimit)) {
-                MsgPeerDelay pd;
-                pd.delayTicks = static_cast<uint16_t>(std::min(ps.estimatedDelayTicks, 65535u));
-                m_net.send(peerId, &pd, sizeof(pd), /*reliable=*/false);
-            }
+        if (ps.heartbeat.allow(m_clock->now(), static_cast<uint32_t>(m_heartbeatRateLimit))) {
+            MsgPeerDelay pd;
+            pd.delayTicks = static_cast<uint16_t>(std::min(ps.estimatedDelayTicks, 65535u));
+            m_net.send(peerId, &pd, sizeof(pd), /*reliable=*/false);
         }
 
     } else if (msgId == static_cast<uint8_t>(MsgId::WingmanCommand)) {
@@ -3096,13 +3042,7 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
             // reliable traffic and a world mutation for 12 bytes. Over the limit: drop silently — a
             // MsgSeatResult per rejected packet would keep the amplifier this removes.
             auto& ps = m_peerInputs[peerId];
-            const auto now = m_clock->now();
-            if (now - ps.seatWindowStart >= std::chrono::seconds(1)) {
-                ps.seatWindowStart = now;
-                ps.seatCount = 0;
-            }
-            ++ps.seatCount;
-            if (ps.seatCount <= static_cast<uint32_t>(m_seatRequestRateLimit))
+            if (ps.seat.allow(m_clock->now(), static_cast<uint32_t>(m_seatRequestRateLimit)))
                 handleSeatRequest(peerId, req);
         }
     } else if (msgId == static_cast<uint8_t>(MsgId::RadioCommand)) {
@@ -3527,21 +3467,12 @@ void WorldBroadcaster::handleWingmanCommand(uint32_t peerId, const void* data, s
 
     // Per-peer order rate limit. Acked ONCE per window, never per packet: an ack for every rejected
     // packet would turn a flood into an amplifier pointed back at the sender.
-    {
-        const auto now = m_clock->now();
-        if (now - ps.wingmanCmdWindowStart >= std::chrono::seconds(1)) {
-            ps.wingmanCmdWindowStart = now;
-            ps.wingmanCmdCount = 0;
-            ps.wingmanRateLimitAcked = false;
+    if (!ps.wingmanCmd.allow(m_clock->now(), static_cast<uint32_t>(m_flightCmdRateLimit))) {
+        if (!ps.wingmanCmd.warned) {
+            ps.wingmanCmd.warned = true;
+            sendWingmanAck(peerId, msg.command, WingmanResult::RateLimited, msg.flightId, 0, kFlightAll, kNoTarget);
         }
-        ++ps.wingmanCmdCount;
-        if (ps.wingmanCmdCount > static_cast<uint32_t>(m_flightCmdRateLimit)) {
-            if (!ps.wingmanRateLimitAcked) {
-                ps.wingmanRateLimitAcked = true;
-                sendWingmanAck(peerId, msg.command, WingmanResult::RateLimited, msg.flightId, 0, kFlightAll, kNoTarget);
-            }
-            return;
-        }
+        return;
     }
 
     issueWingmanOrder(peerId, msg.command, msg.flightId, msg.memberIdx, (msg.flags & kFlightFlagCascade) != 0);
@@ -4463,9 +4394,7 @@ void WorldBroadcaster::respawnParticipant(uint32_t participantId) {
         // per death so a full world does not become a per-tick banner.
         if (auto rit = m_respawn.find(participantId); rit != m_respawn.end() && !rit->second.capNotified) {
             rit->second.capNotified = true;
-            MsgServerNotice notice;
-            std::snprintf(notice.text, sizeof(notice.text), "%s", "World full -- respawning when a slot frees.");
-            m_net.send(participantId, &notice, sizeof(notice), /*reliable=*/true);
+            sendNoticeTo(participantId, "World full -- respawning when a slot frees.");
             char msg[112];
             std::snprintf(msg, sizeof(msg), "participant %u respawn deferred: world at entity soft cap", participantId);
             m_logger.log(LogLevel::Warn, __FILE__, __LINE__, msg);
@@ -4539,27 +4468,37 @@ std::string WorldBroadcaster::sanitizeCallsign(const char* raw, uint32_t partici
     return out;
 }
 
-void WorldBroadcaster::upsertRoster(uint32_t participantId, const RosterRec& rec) {
-    m_roster[participantId] = rec;
-
-    MsgPlayerRosterHeader hdr{};
-    hdr.count = 1;
+PlayerRosterEntry WorldBroadcaster::makeRosterEntry(uint32_t participantId, const RosterRec& rec) {
     PlayerRosterEntry e{};
     e.participantId = participantId;
     e.factionIndex = rec.factionIndex;
     e.role = static_cast<uint8_t>(rec.role);
     e.flags = rec.isBot ? kRosterBot : 0u;
     std::snprintf(e.callsign, sizeof(e.callsign), "%s", rec.callsign.c_str());
+    return e;
+}
+
+MsgMissionRoster WorldBroadcaster::makeMissionRosterMsg(const std::string& objectId, EntityId entity) {
+    MsgMissionRoster rmsg{};
+    rmsg.entityIdx = entity.index;
+    rmsg.entityGen = static_cast<uint16_t>(entity.generation);
+    std::snprintf(rmsg.objectId, sizeof(rmsg.objectId), "%s", objectId.c_str());
+    return rmsg;
+}
+
+void WorldBroadcaster::upsertRoster(uint32_t participantId, const RosterRec& rec) {
+    m_roster[participantId] = rec;
+
+    MsgPlayerRosterHeader hdr{};
+    hdr.count = 1;
+    const PlayerRosterEntry e = makeRosterEntry(participantId, rec);
 
     std::vector<uint8_t> pkt;
     pkt.reserve(sizeof(hdr) + sizeof(e));
     appendMsg(pkt, hdr);
     appendMsg(pkt, e);
     // Broadcast to every peer that has completed its handshake (so the roster is consistent for all).
-    for (const auto& [pid, pin] : m_peerInputs) {
-        if (pin.handshakeComplete)
-            m_net.send(pid, pkt.data(), pkt.size(), /*reliable=*/true);
-    }
+    broadcastBytes(pkt, /*reliable=*/true, /*admittedOnly=*/true);
 }
 
 void WorldBroadcaster::removeRoster(uint32_t participantId) {
@@ -4574,10 +4513,7 @@ void WorldBroadcaster::removeRoster(uint32_t participantId) {
     pkt.reserve(sizeof(hdr) + sizeof(e));
     appendMsg(pkt, hdr);
     appendMsg(pkt, e);
-    for (const auto& [pid, pin] : m_peerInputs) {
-        if (pin.handshakeComplete)
-            m_net.send(pid, pkt.data(), pkt.size(), /*reliable=*/true);
-    }
+    broadcastBytes(pkt, /*reliable=*/true, /*admittedOnly=*/true);
 }
 
 void WorldBroadcaster::sendFullRoster(uint32_t peerId) {
@@ -4594,13 +4530,7 @@ void WorldBroadcaster::sendFullRoster(uint32_t peerId) {
         appendMsg(pkt, hdr);
         for (std::size_t j = 0; j < n; ++j) {
             const auto& [pid, rec] = all[i + j];
-            PlayerRosterEntry e{};
-            e.participantId = pid;
-            e.factionIndex = rec.factionIndex;
-            e.role = static_cast<uint8_t>(rec.role);
-            e.flags = rec.isBot ? kRosterBot : 0u;
-            std::snprintf(e.callsign, sizeof(e.callsign), "%s", rec.callsign.c_str());
-            appendMsg(pkt, e);
+            appendMsg(pkt, makeRosterEntry(pid, rec));
         }
         m_net.send(peerId, pkt.data(), pkt.size(), /*reliable=*/true);
     }

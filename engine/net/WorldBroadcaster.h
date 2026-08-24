@@ -10,6 +10,7 @@
 #include "JitterBuffer.h"
 #include "MatchEventLog.h" // the one append-only match record (#600)
 #include "PeerAdmission.h" // whether and how a peer enters the world (#1085) — owned by value below
+#include "RateWindow.h"    // the ONE per-peer 1 s rate-limit window (#1264)
 #include "RequiredPackPolicy.h"
 #include "SessionComms.h"     // everything the server says that is not world state (#1087)
 #include "SnapshotPipeline.h" // the per-tick snapshot path (#1086) — owned by value below
@@ -130,36 +131,29 @@ struct PeerInputState {
 
     // Wingman/flight order channel (#610). Lives here because this struct is already per-peer and is
     // already erased on disconnect, so the rate-limit window has no lifetime of its own to manage.
-    std::chrono::steady_clock::time_point wingmanCmdWindowStart{}; // 1 s rate-limit window
-    uint32_t wingmanCmdCount{0};                                   // orders seen in the current window
-    uint32_t lastWingmanSeq{0};                                    // dup/reorder guard
-    bool hasWingmanSeq{false};         // false until the first order (a reconnect restarts the counter)
-    bool wingmanRateLimitAcked{false}; // one RateLimited ack per window, never one per packet
+    RateWindow wingmanCmd{};    // 1 s budget; `warned` = the one RateLimited ack per window
+    uint32_t lastWingmanSeq{0}; // dup/reorder guard
+    bool hasWingmanSeq{false};  // false until the first order (a reconnect restarts the counter)
 
     // Player radio channel (#703 — ATC now). Same per-peer 1 s rate-limit window pattern as wingman.
-    std::chrono::steady_clock::time_point radioCmdWindowStart{};
-    uint32_t radioCmdCount{0};
+    RateWindow radioCmd{};
 
     // Admin command channel, grant-path only (#946). A peer NOT authenticating with the operator
     // password (empty token) reaches dispatch via its granted caps; a zero-cap peer is refused. This
     // 1 s window rate-limits that unauthenticated path so it is not a free probe/amplification channel.
     // The password-authenticated path is not rate-limited here (an operator is trusted).
-    std::chrono::steady_clock::time_point adminCmdWindowStart{};
-    uint32_t adminCmdCount{0};
+    RateWindow adminCmd{};
 
     // Text chat channel (#646). Same per-peer 1 s rate-limit window pattern as wingman (warn once per
     // window, silently drop the rest). chatMuted is session-scoped, set by the admin mute command.
-    std::chrono::steady_clock::time_point chatWindowStart{};
-    uint32_t chatCount{0};
-    bool chatRateLimitWarned{false};
+    RateWindow chat{}; // `warned` = the one "too fast" notice per window
     bool chatMuted{false};
 
     // Seat-request channel (#974/#1069). A grant is expensive — despawnPeerEntity + setSeatOccupant +
     // broadcastCrewRoster + a full sendConnectAck — so this is a WORLD-MUTATING request with a per-
     // second budget, not a chat-style nuisance limit. Over the limit: drop silently, no MsgSeatResult
     // (a reply per rejected packet is the amplifier this issue exists to remove).
-    std::chrono::steady_clock::time_point seatWindowStart{};
-    uint32_t seatCount{0};
+    RateWindow seat{};
 
     // Team-switch channel (#522/#1069). A COOLDOWN in seconds rather than a per-second budget: a grant
     // despawns and respawns the pilot on the new team, so the honest bound is "how often may a player
@@ -172,8 +166,7 @@ struct PeerInputState {
     // is a 1:1 reflector. The client sends ~1/s; 4/s leaves headroom for a burst after a stall. Over
     // the limit the packet is still ACCOUNTED (it refreshes liveness) but the REPLY is suppressed —
     // dropping liveness would let a flooding peer time itself out in a way a well-behaved one cannot.
-    std::chrono::steady_clock::time_point heartbeatWindowStart{};
-    uint32_t heartbeatCount{0};
+    RateWindow heartbeat{};
 
     // Entity-type table replication state (#1070). sendConnectAck is re-sent on every seat change,
     // role change, team change and authority grant, and it shipped the whole typeCount x 380 B table
@@ -196,8 +189,7 @@ struct PeerInputState {
     // unbounded sender costs the server (recipients x bytes), not (1 x bytes). Silent drop with no
     // reply — answering a flood is amplifying it. voiceMuted is session-scoped (admin voice_mute)
     // and gates TRANSMIT only; a muted peer still hears everyone.
-    std::chrono::steady_clock::time_point voiceWindowStart{};
-    uint32_t voiceFrameCount{0};
+    RateWindow voice{};
     bool voiceMuted{false};
 
     // Connect handshake (#853/#857). Set when MsgConnectRequest is processed. Before that a connected
@@ -1001,9 +993,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // wingman's engage/cover conditions can never fire, and boresight designation can never
     // designate. Default 1. Call before gameLoop.start().
     void setPlayerFaction(uint16_t faction) noexcept;
-    [[nodiscard]] uint16_t playerFaction() const noexcept {
-        return m_admission.playerFaction();
-    }
 
     // ── team assignment + balancing (#522) — sim-thread only ─────────────────
     // Sentinel for "no specific team preference" in claimMissionSlot / assignment. Defined at
@@ -1123,7 +1112,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     }
     // Session-scoped transmit mute (admin voice_mute/voice_unmute). Returns false if peer unknown.
     bool setPeerVoiceMuted(uint32_t peerId, bool muted);
-    [[nodiscard]] bool isPeerVoiceMuted(uint32_t peerId) const;
     [[nodiscard]] std::vector<uint32_t> voiceMutedPeers() const;
 
     // ── spectate (#403) — sim-thread only ───────────────────────────────────
@@ -1296,9 +1284,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // ConnectRefusalCode::BadPassword. Sim-thread; hot-reloadable via enqueueSimCallback.
     void setJoinPassword(std::string password) {
         m_admission.setJoinPassword(std::move(password));
-    }
-    [[nodiscard]] bool hasJoinPassword() const noexcept {
-        return m_admission.hasJoinPassword();
     }
 
     // Apply all pre-start scalar configuration in one call (rate limiting, per-IP cap, MOTD, operator
@@ -1527,8 +1512,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // honors mute + the moderation hook, then routes a MsgChatEvent to the channel's recipients.
     // Voice (#532): relay one received frame to the net's recipient set, and send a peer the net
     // table at admit time.
-    // Snapshot every admitted peer into the flat view the pure router consumes.
-    [[nodiscard]] VoicePeerView voicePeerView(uint32_t peerId) const;
     // Build + send one MsgChatEvent to a single peer. Sim-thread.
 
     // Push a positional snapshot onto a spectator peer's delay queue (#403), evicting the oldest when the
@@ -1705,12 +1688,38 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     void broadcastMatchState();                 // send m_matchState to every handshake-complete peer
     void sendMatchStateTo(uint32_t peerId);     // unicast to one peer (late joiner)
     void broadcastScoreboard();                 // build ONCE + send MsgScoreboard (chunked) to all peers
-    void sendScoreboardTo(uint32_t peerId);     // unicast to one peer (on admit)
     // The receiver-independent scoreboard packet set. Split out so the broadcast builds it once
     // rather than once per peer (#1091).
     void buildScoreboardPackets(std::vector<std::vector<uint8_t>>& out);
     void appendScoreboardRows(std::vector<uint8_t>& pkt, std::size_t begin, std::size_t count,
                               const std::vector<uint32_t>& order) const;
+
+    // ── the two peer fan-out loops (#1264) ───────────────────────────────────
+    // Ten sites hand-wrote one of these. Both walk m_peerInputs; what separates them is the ADMISSION
+    // GATE, and that difference is load-bearing rather than an oversight to unify away:
+    //
+    //   admittedOnly=false  every connected peer, handshake or not. What the six fixed-struct
+    //                       broadcasts (music, alert level, haptic, mission outcome, mission roster,
+    //                       radio transmission) do today. Whether an unadmitted peer SHOULD hear
+    //                       them is a real question, but a behavioural one -- not this refactor's.
+    //   admittedOnly=true   only peers past the handshake, so the receiver has the world state the
+    //                       packet refers to. What the roster/crew/scoreboard packets do.
+    //
+    // Sim-thread only, like every other m_peerInputs walk.
+    template <class T> void broadcastMsg(const T& msg, bool reliable, bool admittedOnly = false) {
+        for (const auto& [peerId, pin] : m_peerInputs) {
+            if (admittedOnly && !pin.handshakeComplete)
+                continue;
+            m_net.send(peerId, &msg, sizeof(msg), reliable);
+        }
+    }
+    void broadcastBytes(const std::vector<uint8_t>& pkt, bool reliable, bool admittedOnly) {
+        for (const auto& [peerId, pin] : m_peerInputs) {
+            if (admittedOnly && !pin.handshakeComplete)
+                continue;
+            m_net.send(peerId, pkt.data(), pkt.size(), reliable);
+        }
+    }
 
     // ── respawn (#648) ───────────────────────────────────────────────────────
     struct RespawnRec {
@@ -1739,6 +1748,14 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         bool isBot{false};
     };
     std::unordered_map<uint32_t, RosterRec> m_roster;
+    // One RosterRec -> wire mapping (#1264), so a field added to PlayerRosterEntry cannot reach the
+    // incremental upsert and not the full-roster catch-up. removeRoster deliberately does NOT use
+    // this: its record carries kRosterLeave and no rec fields at all.
+    [[nodiscard]] static PlayerRosterEntry makeRosterEntry(uint32_t participantId, const RosterRec& rec);
+    // One mission-object -> wire mapping (#1264), shared by the late-bind delta broadcast and the
+    // connect-ack catch-up. The caller keeps its own validity gate: updateMissionRoster returns early
+    // on generation 0, sendConnectAck skips that entry.
+    [[nodiscard]] static MsgMissionRoster makeMissionRosterMsg(const std::string& objectId, EntityId entity);
     // Sanitize an untrusted callsign: force-terminate, strip control chars, trim, clamp; empty falls
     // back to "Pilot-<participantId>". Returns the cleaned string (never empty).
     static std::string sanitizeCallsign(const char* raw, uint32_t participantId);
@@ -1850,12 +1867,9 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     uint64_t m_ratePruneTick{0}; // coarse prune cadence counter (every 600 ticks)
     uint64_t m_currentTick{0};   // set at start of each onTick; used in onReceive for delay estimation
 
-    // Per-peer packet flood detector (sim-thread only).
-    struct PeerFloodState {
-        uint32_t packetCount{0};
-        std::chrono::steady_clock::time_point windowStart{};
-    };
-    std::unordered_map<uint32_t, PeerFloodState> m_peerFloodState;
+    // Per-peer packet flood detector (sim-thread only). Same 1 s window as every other channel;
+    // what differs is the response -- over the limit the peer is disconnected, not merely dropped.
+    std::unordered_map<uint32_t, RateWindow> m_peerFloodState;
     int m_floodMultiplier{3};
 
     // Injectable clock for testing; defaults to steady_clock::now.
