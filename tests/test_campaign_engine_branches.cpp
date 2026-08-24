@@ -11,7 +11,9 @@
 // blob is plain text with no version field, so the only thing standing between a renamed story id and
 // a lost campaign is that deserialize skips what it does not recognise instead of bailing out.
 
+#include "campaign_fixture.h"
 #include <catch2/catch_approx.hpp>
+
 #include <catch2/catch_test_macros.hpp>
 
 #include "campaign/CampaignEngine.h"
@@ -25,28 +27,6 @@ using Catch::Approx;
 using namespace fl;
 
 namespace {
-
-// West half side A (60), east half side B (200); an "after" path yields all side A.
-CampaignEngine::FrontlineLoader syntheticLoader(int* loadCount = nullptr) {
-    return [loadCount](const std::string& path, Frontline& out) -> bool {
-        if (loadCount)
-            ++*loadCount;
-        const int cols = out.cols() > 0 ? out.cols() : 8;
-        const int rows = out.rows() > 0 ? out.rows() : 4;
-        Frontline f(cols, rows, out.bounds());
-        std::vector<uint8_t> px(static_cast<std::size_t>(cols) * rows, 0);
-        if (path.find("after") != std::string::npos) {
-            px.assign(px.size(), 60);
-        } else {
-            for (int r = 0; r < rows; ++r)
-                for (int c = 0; c < cols; ++c)
-                    px[static_cast<std::size_t>(r) * cols + c] = (c < cols / 2) ? 60 : 200;
-        }
-        (void)f.setPixels(std::move(px));
-        out = std::move(f);
-        return true;
-    };
-}
 
 CampaignDef parse(const char* yaml) {
     auto r = parseCampaign(yaml);

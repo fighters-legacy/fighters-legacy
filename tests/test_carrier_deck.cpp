@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "wb_fixture.h"
 #include <catch2/catch_approx.hpp>
+
 #include <catch2/catch_test_macros.hpp>
 
 #include "ILogger.h"
@@ -25,16 +27,6 @@ using namespace fl;
 namespace {
 
 // A controller that returns a fixed input every tick.
-struct ConstCtl : IEntityController {
-    ControlInput in{};
-    explicit ConstCtl(float throttle = 0.f) {
-        in.throttle = throttle;
-    }
-    ControlInput sample(const EntityState&, uint64_t, double, const AiTickContext&) override {
-        return in;
-    }
-};
-
 // A deliberately gutless fixed-wing model: the catapult, not the engine, must supply the launch
 // energy — so a catapult test that reaches flying speed proves the catapult did it.
 std::shared_ptr<FlightModelData> gutlessAircraft() {
@@ -283,8 +275,9 @@ struct CarrierWorld {
 TEST_CASE("Carrier: an aircraft dropped over the deck settles ON the deck, not the sea", "[carrier][wb]") {
     CarrierWorld w;
     // Stationary carrier at the origin; aircraft released 10 m above the deck plane (deck at 20 m).
-    w.wb.registerController(w.carrier, std::make_unique<ConstCtl>(0.f), BuiltinCarrierVesselModel::get(), 0.f);
-    const EntityId air = w.spawnAir(0.0, 30.0, 5.0, std::make_unique<ConstCtl>(0.f), gutlessAircraft(), 0.f);
+    w.wb.registerController(w.carrier, std::make_unique<ConstantController>(0.f), BuiltinCarrierVesselModel::get(),
+                            0.f);
+    const EntityId air = w.spawnAir(0.0, 30.0, 5.0, std::make_unique<ConstantController>(0.f), gutlessAircraft(), 0.f);
     w.tick(600); // 10 s to settle
     const EntityState* st = w.em.get(air);
     REQUIRE(st != nullptr);
@@ -295,8 +288,10 @@ TEST_CASE("Carrier: an aircraft dropped over the deck settles ON the deck, not t
 TEST_CASE("Carrier: a parked aircraft is carried by the steaming ship", "[carrier][wb]") {
     CarrierWorld w;
     // Carrier at full ahead; aircraft parked amidships-aft, engine idle.
-    w.wb.registerController(w.carrier, std::make_unique<ConstCtl>(1.f), BuiltinCarrierVesselModel::get(), 0.f);
-    const EntityId air = w.spawnAir(-50.0, 20.5, 0.0, std::make_unique<ConstCtl>(0.f), gutlessAircraft(), 0.f);
+    w.wb.registerController(w.carrier, std::make_unique<ConstantController>(1.f), BuiltinCarrierVesselModel::get(),
+                            0.f);
+    const EntityId air =
+        w.spawnAir(-50.0, 20.5, 0.0, std::make_unique<ConstantController>(0.f), gutlessAircraft(), 0.f);
     w.tick(60 * 30); // 30 s: the carrier works up to several m/s
     const EntityState* ship = w.em.get(w.carrier);
     const EntityState* st = w.em.get(air);
@@ -314,8 +309,10 @@ TEST_CASE("Carrier: the catapult throws a gutless aircraft to flying speed (park
     // ON the stroke (local x 30..130), military power: the catapult does the work.
     {
         CarrierWorld w;
-        w.wb.registerController(w.carrier, std::make_unique<ConstCtl>(0.f), BuiltinCarrierVesselModel::get(), 0.f);
-        const EntityId air = w.spawnAir(40.0, 20.5, 0.0, std::make_unique<ConstCtl>(1.f), gutlessAircraft(), 0.f);
+        w.wb.registerController(w.carrier, std::make_unique<ConstantController>(0.f), BuiltinCarrierVesselModel::get(),
+                                0.f);
+        const EntityId air =
+            w.spawnAir(40.0, 20.5, 0.0, std::make_unique<ConstantController>(1.f), gutlessAircraft(), 0.f);
         w.tick(60 * 4); // the ~100 m stroke completes in under 3 s
         const EntityState* st = w.em.get(air);
         REQUIRE(st != nullptr);
@@ -328,8 +325,10 @@ TEST_CASE("Carrier: the catapult throws a gutless aircraft to flying speed (park
     // AFT of the stroke at the same power: nothing shoots it, and 1 kN cannot accelerate 10 t.
     {
         CarrierWorld w;
-        w.wb.registerController(w.carrier, std::make_unique<ConstCtl>(0.f), BuiltinCarrierVesselModel::get(), 0.f);
-        const EntityId air = w.spawnAir(-60.0, 20.5, 0.0, std::make_unique<ConstCtl>(1.f), gutlessAircraft(), 0.f);
+        w.wb.registerController(w.carrier, std::make_unique<ConstantController>(0.f), BuiltinCarrierVesselModel::get(),
+                                0.f);
+        const EntityId air =
+            w.spawnAir(-60.0, 20.5, 0.0, std::make_unique<ConstantController>(1.f), gutlessAircraft(), 0.f);
         w.tick(60 * 8);
         const EntityState* st = w.em.get(air);
         REQUIRE(st != nullptr);
@@ -341,10 +340,12 @@ TEST_CASE("Carrier: the catapult throws a gutless aircraft to flying speed (park
 
 TEST_CASE("Carrier: a touchdown in the wires at trap speed is dragged to a stop", "[carrier][wb]") {
     CarrierWorld w;
-    w.wb.registerController(w.carrier, std::make_unique<ConstCtl>(0.f), BuiltinCarrierVesselModel::get(), 0.f);
+    w.wb.registerController(w.carrier, std::make_unique<ConstantController>(0.f), BuiltinCarrierVesselModel::get(),
+                            0.f);
     // Rolling onto the wires: 1 m above the deck plane, 60 m/s, just short of the wire zone
     // (zone is x in [-130, -90]).
-    const EntityId air = w.spawnAir(-140.0, 21.0, 0.0, std::make_unique<ConstCtl>(0.f), gutlessAircraft(), 60.f);
+    const EntityId air =
+        w.spawnAir(-140.0, 21.0, 0.0, std::make_unique<ConstantController>(0.f), gutlessAircraft(), 60.f);
     w.tick(60 * 6);
     const EntityState* st = w.em.get(air);
     REQUIRE(st != nullptr);

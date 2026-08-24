@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ENetNetwork.h"
 #include "IClock.h"
+#include "mock_network.h"
+
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <cstring>
@@ -12,54 +14,6 @@ using namespace fl;
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-struct Event {
-    enum class Type { Connect, Disconnect, Receive };
-    Type type;
-    uint32_t peerId{0};
-    std::vector<uint8_t> data; // populated for Receive events
-};
-
-struct EventSink : INetworkEventHandler {
-    std::vector<Event> events;
-
-    void onConnect(uint32_t peerId) override {
-        events.push_back({Event::Type::Connect, peerId, {}});
-    }
-    void onDisconnect(uint32_t peerId) override {
-        events.push_back({Event::Type::Disconnect, peerId, {}});
-    }
-    void onReceive(uint32_t peerId, const void* data, std::size_t size) override {
-        Event e;
-        e.type = Event::Type::Receive;
-        e.peerId = peerId;
-        e.data.assign(static_cast<const uint8_t*>(data), static_cast<const uint8_t*>(data) + size);
-        events.push_back(std::move(e));
-    }
-
-    int countType(Event::Type t) const {
-        int n = 0;
-        for (const auto& ev : events)
-            if (ev.type == t)
-                ++n;
-        return n;
-    }
-};
-
-static void pump(INetwork& server, INetwork& client, int iters, int msPerIter = 10) {
-    for (int i = 0; i < iters; ++i) {
-        server.service(msPerIter);
-        client.service(msPerIter);
-    }
-}
-
-static void pumpN(INetwork& server, std::initializer_list<INetwork*> clients, int iters, int msPerIter = 10) {
-    for (int i = 0; i < iters; ++i) {
-        server.service(msPerIter);
-        for (INetwork* c : clients)
-            c->service(msPerIter);
-    }
-}
 
 // PORTS ARE EPHEMERAL, NOT HARDCODED (#787).
 //
@@ -129,7 +83,7 @@ TEST_CASE("ENet library stays initialized until the last instance shuts down", "
     client.setEventHandler(&clientSink);
     REQUIRE(client.connect("127.0.0.1", port));
 
-    pump(b, client, 20);
+    pump(b, client, 20, 10);
     CHECK(clientSink.countType(Event::Type::Connect) == 1);
     CHECK(serverSink.countType(Event::Type::Connect) == 1);
 
@@ -213,7 +167,7 @@ TEST_CASE("loopback connect", "[network][integration]") {
     const uint16_t port = bindEphemeral(server, nullptr, 4);
     REQUIRE(client.connect("127.0.0.1", port));
 
-    pump(server, client, 20);
+    pump(server, client, 20, 10);
 
     REQUIRE(srvSink.countType(Event::Type::Connect) == 1);
     REQUIRE(cliSink.countType(Event::Type::Connect) == 1);
@@ -239,7 +193,7 @@ TEST_CASE("getPeerAddress returns ip:port", "[network][integration]") {
     const uint16_t port = bindEphemeral(server, nullptr, 4);
     REQUIRE(client.connect("127.0.0.1", port));
 
-    pump(server, client, 20);
+    pump(server, client, 20, 10);
 
     REQUIRE(srvSink.countType(Event::Type::Connect) == 1);
     const char* addr = server.getPeerAddress(0);
@@ -264,11 +218,11 @@ TEST_CASE("reliable send client to server", "[network][integration]") {
 
     const uint16_t port = bindEphemeral(server, nullptr, 4);
     REQUIRE(client.connect("127.0.0.1", port));
-    pump(server, client, 20);
+    pump(server, client, 20, 10);
 
     const uint8_t payload[] = {0xDE, 0xAD, 0xBE, 0xEF};
     REQUIRE(client.send(0, payload, sizeof(payload), true));
-    pump(server, client, 20);
+    pump(server, client, 20, 10);
 
     REQUIRE(srvSink.countType(Event::Type::Receive) == 1);
     const auto& ev = srvSink.events.back();
@@ -289,13 +243,13 @@ TEST_CASE("unreliable send server to client", "[network][integration]") {
 
     const uint16_t port = bindEphemeral(server, nullptr, 4);
     REQUIRE(client.connect("127.0.0.1", port));
-    pump(server, client, 20);
+    pump(server, client, 20, 10);
 
     REQUIRE(srvSink.countType(Event::Type::Connect) == 1);
 
     const uint8_t payload[] = {1, 2, 3, 4, 5};
     REQUIRE(server.send(0, payload, sizeof(payload), false));
-    pump(server, client, 20);
+    pump(server, client, 20, 10);
 
     REQUIRE(cliSink.countType(Event::Type::Receive) == 1);
     const auto& ev = cliSink.events.back();
@@ -316,7 +270,7 @@ TEST_CASE("large packet fragmentation", "[network][integration]") {
 
     const uint16_t port = bindEphemeral(server, nullptr, 4);
     REQUIRE(client.connect("127.0.0.1", port));
-    pump(server, client, 20);
+    pump(server, client, 20, 10);
 
     // 10 KB — well above the MTU (~1400 bytes); ENet must fragment and reassemble.
     constexpr std::size_t kSize = 10 * 1024;
@@ -325,7 +279,7 @@ TEST_CASE("large packet fragmentation", "[network][integration]") {
         big[i] = static_cast<uint8_t>(i % 256);
 
     REQUIRE(client.send(0, big.data(), kSize, true));
-    pump(server, client, 50);
+    pump(server, client, 50, 10);
 
     REQUIRE(srvSink.countType(Event::Type::Receive) == 1);
     const auto& ev = srvSink.events.back();
@@ -354,7 +308,7 @@ TEST_CASE("multiple clients connect", "[network][integration]") {
     REQUIRE(c1.connect("127.0.0.1", port));
     REQUIRE(c2.connect("127.0.0.1", port));
 
-    pumpN(server, {&c1, &c2}, 30);
+    pumpN(server, {&c1, &c2}, 30, 10);
 
     REQUIRE(srvSink.countType(Event::Type::Connect) == 2);
     CHECK(server.getPeerCount() == 2);
@@ -370,7 +324,7 @@ TEST_CASE("multiple clients connect", "[network][integration]") {
     REQUIRE(server.send(id1, msg1, 1, true));
     REQUIRE(server.send(id2, msg2, 1, true));
 
-    pumpN(server, {&c1, &c2}, 20);
+    pumpN(server, {&c1, &c2}, 20, 10);
     CHECK(s1.countType(Event::Type::Receive) == 1);
     CHECK(s2.countType(Event::Type::Receive) == 1);
     CHECK(s1.events.back().data[0] == 0xAA);
@@ -395,12 +349,12 @@ TEST_CASE("server broadcast reaches all clients", "[network][integration]") {
     REQUIRE(c1.connect("127.0.0.1", port));
     REQUIRE(c2.connect("127.0.0.1", port));
 
-    pumpN(server, {&c1, &c2}, 30);
+    pumpN(server, {&c1, &c2}, 30, 10);
     REQUIRE(srvSink.countType(Event::Type::Connect) == 2);
 
     const uint8_t msg[] = {0xFF};
     server.broadcast(msg, 1, true);
-    pumpN(server, {&c1, &c2}, 20);
+    pumpN(server, {&c1, &c2}, 20, 10);
 
     CHECK(s1.countType(Event::Type::Receive) == 1);
     CHECK(s2.countType(Event::Type::Receive) == 1);
@@ -424,11 +378,11 @@ TEST_CASE("disconnect fires callback", "[network][integration]") {
 
     const uint16_t port = bindEphemeral(server, nullptr, 4);
     REQUIRE(client.connect("127.0.0.1", port));
-    pump(server, client, 20);
+    pump(server, client, 20, 10);
     REQUIRE(srvSink.countType(Event::Type::Connect) == 1);
 
     client.disconnect();
-    pump(server, client, 20);
+    pump(server, client, 20, 10);
 
     CHECK(srvSink.countType(Event::Type::Disconnect) == 1);
 
@@ -446,11 +400,11 @@ TEST_CASE("send to disconnected peer returns false", "[network][integration]") {
 
     const uint16_t port = bindEphemeral(server, nullptr, 4);
     REQUIRE(client.connect("127.0.0.1", port));
-    pump(server, client, 20);
+    pump(server, client, 20, 10);
     REQUIRE(srvSink.countType(Event::Type::Connect) == 1);
 
     client.disconnect();
-    pump(server, client, 20);
+    pump(server, client, 20, 10);
 
     const uint8_t buf[] = {1};
     bool ok = server.send(0, buf, 1, true);
@@ -477,12 +431,12 @@ TEST_CASE("server full rejects new connection", "[network][integration]") {
 
     const uint16_t port = bindEphemeral(server, nullptr, 1); // only 1 peer slot
     REQUIRE(c1.connect("127.0.0.1", port));
-    pumpN(server, {&c1, &c2}, 20);
+    pumpN(server, {&c1, &c2}, 20, 10);
     REQUIRE(s1.countType(Event::Type::Connect) == 1);
 
     REQUIRE(c2.connect("127.0.0.1", port));
     // Pump 100 x 10 ms = 1 s -- enough to see if the server accepted a second peer.
-    pumpN(server, {&c1, &c2}, 100);
+    pumpN(server, {&c1, &c2}, 100, 10);
 
     CHECK(srvSink.countType(Event::Type::Connect) == 1);
     CHECK(server.getPeerCount() == 1);
@@ -507,14 +461,14 @@ TEST_CASE("IPv6 loopback round-trip", "[network][integration]") {
     const uint16_t port = bindEphemeral(server, "::", 4);
     REQUIRE(client.connect("::1", port));
 
-    pump(server, client, 20);
+    pump(server, client, 20, 10);
 
     REQUIRE(srvSink.countType(Event::Type::Connect) == 1);
     REQUIRE(cliSink.countType(Event::Type::Connect) == 1);
 
     const uint8_t payload[] = {0x69, 0x70, 0x76, 0x36};
     REQUIRE(client.send(0, payload, sizeof(payload), true));
-    pump(server, client, 20);
+    pump(server, client, 20, 10);
 
     REQUIRE(srvSink.countType(Event::Type::Receive) == 1);
     const auto& ev = srvSink.events.back();
@@ -536,7 +490,7 @@ TEST_CASE("getPeerAddress bracket notation for IPv6 peer", "[network][integratio
     const uint16_t port = bindEphemeral(server, "::", 4);
     REQUIRE(client.connect("::1", port));
 
-    pump(server, client, 20);
+    pump(server, client, 20, 10);
 
     REQUIRE(srvSink.countType(Event::Type::Connect) == 1);
 
@@ -565,7 +519,7 @@ TEST_CASE("dual-stack: IPv4 client connects to :: server", "[network][integratio
     const uint16_t port = bindEphemeral(server, "::", 4);
     REQUIRE(client.connect("127.0.0.1", port));
 
-    pump(server, client, 50);
+    pump(server, client, 50, 10);
 
     // On platforms where dual-stack works the server sees an IPv4-mapped peer.
     if (srvSink.countType(Event::Type::Connect) == 0) {
@@ -579,7 +533,7 @@ TEST_CASE("dual-stack: IPv4 client connects to :: server", "[network][integratio
 
     const uint8_t payload[] = {0xD5};
     REQUIRE(client.send(0, payload, 1, true));
-    pump(server, client, 20);
+    pump(server, client, 20, 10);
 
     REQUIRE(srvSink.countType(Event::Type::Receive) == 1);
     CHECK(srvSink.events.back().data[0] == 0xD5);
@@ -600,7 +554,7 @@ TEST_CASE("getPeerAddress plain format preserved for IPv4 peer", "[network][inte
     const uint16_t port = bindEphemeral(server, nullptr, 4);
     REQUIRE(client.connect("127.0.0.1", port));
 
-    pump(server, client, 20);
+    pump(server, client, 20, 10);
 
     REQUIRE(srvSink.countType(Event::Type::Connect) == 1);
 
@@ -649,7 +603,7 @@ TEST_CASE("pre-handshake rate limit blocks excess connect attempts", "[network][
 
     // Pump to complete handshakes for the two allowed peers.
     // Clock is fixed so all c3 retries are also dropped.
-    pumpN(server, {&c1, &c2, &c3}, 100);
+    pumpN(server, {&c1, &c2, &c3}, 100, 10);
 
     CHECK(srvSink.countType(Event::Type::Connect) == 2);
     CHECK(server.getPeerCount() == 2);
@@ -684,7 +638,7 @@ TEST_CASE("pre-handshake rate limit window expiry allows reconnection", "[networ
     c1.service(0);
     c2.service(0);
     server.service(0);
-    pumpN(server, {&c1, &c2}, 60);
+    pumpN(server, {&c1, &c2}, 60, 10);
 
     REQUIRE(srvSink.countType(Event::Type::Connect) == 1);
     CHECK(server.getPeerCount() == 1);
@@ -699,7 +653,7 @@ TEST_CASE("pre-handshake rate limit window expiry allows reconnection", "[networ
     REQUIRE(c3.connect("127.0.0.1", port));
     c3.service(0);
     server.service(0);
-    pumpN(server, {&c1, &c2, &c3}, 60);
+    pumpN(server, {&c1, &c2, &c3}, 60, 10);
 
     CHECK(srvSink.countType(Event::Type::Connect) == 2);
     CHECK(server.getPeerCount() == 2);
@@ -728,7 +682,7 @@ TEST_CASE("pre-handshake rate limit 0 disables pre-handshake filter", "[network]
     REQUIRE(c1.connect("127.0.0.1", port));
     REQUIRE(c2.connect("127.0.0.1", port));
     REQUIRE(c3.connect("127.0.0.1", port));
-    pumpN(server, {&c1, &c2, &c3}, 100);
+    pumpN(server, {&c1, &c2, &c3}, 100, 10);
 
     CHECK(srvSink.countType(Event::Type::Connect) == 3);
     CHECK(server.getPeerCount() == 3);
@@ -759,7 +713,7 @@ TEST_CASE("pre-handshake rate limit passes through established peer traffic", "[
     REQUIRE(c1.connect("127.0.0.1", port));
     c1.service(0);
     server.service(0);
-    pumpN(server, {&c1}, 30);
+    pumpN(server, {&c1}, 30, 10);
     REQUIRE(srvSink.countType(Event::Type::Connect) == 1);
 
     // c1 sends 10 reliable packets. Each passes the intercept (peerID != 0xFFF)
@@ -768,7 +722,7 @@ TEST_CASE("pre-handshake rate limit passes through established peer traffic", "[
         const uint8_t payload[] = {static_cast<uint8_t>(i)};
         REQUIRE(c1.send(0, payload, 1, true));
     }
-    pumpN(server, {&c1}, 20);
+    pumpN(server, {&c1}, 20, 10);
     // All 10 packets must reach the server -- none dropped by the intercept.
     CHECK(srvSink.countType(Event::Type::Receive) == 10);
 
@@ -777,7 +731,7 @@ TEST_CASE("pre-handshake rate limit passes through established peer traffic", "[
     REQUIRE(c2.connect("127.0.0.1", port));
     c2.service(0);
     server.service(0);
-    pumpN(server, {&c1, &c2}, 50);
+    pumpN(server, {&c1, &c2}, 50, 10);
 
     CHECK(srvSink.countType(Event::Type::Connect) == 1);
     CHECK(server.getPeerCount() == 1);

@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <map>
 #include <string>
 #include <vector>
@@ -106,5 +107,73 @@ struct TrackingNetwork : NullNetwork {
         return it == peerLinkStats.end() ? PeerLinkStats{} : it->second;
     }
 };
+
+// ---------------------------------------------------------------------------
+// Real-loopback scaffolding (#1276)
+// ---------------------------------------------------------------------------
+//
+// The ENet and GNS backend suites both drive two REAL sockets against each other and record what
+// came out. They had identical copies of the recorder and the service pump; test_gns_network.cpp's
+// own header comment says it "mirrors test_network.cpp's structure", which is exactly the state
+// this header exists to end.
+//
+// This is not an INetwork double -- it is the harness a real backend is tested THROUGH -- but it
+// belongs with the doubles: same interface, same consumers, same stdlib-only include set.
+
+// One recorded callback from a backend under test.
+struct Event {
+    enum class Type { Connect, Disconnect, Receive };
+    Type type;
+    uint32_t peerId{0};
+    std::vector<uint8_t> data; // populated for Receive events
+};
+
+struct EventSink : INetworkEventHandler {
+    std::vector<Event> events;
+
+    void onConnect(uint32_t peerId) override {
+        events.push_back({Event::Type::Connect, peerId, {}});
+    }
+    void onDisconnect(uint32_t peerId) override {
+        events.push_back({Event::Type::Disconnect, peerId, {}});
+    }
+    void onReceive(uint32_t peerId, const void* data, std::size_t size) override {
+        Event e;
+        e.type = Event::Type::Receive;
+        e.peerId = peerId;
+        e.data.assign(static_cast<const uint8_t*>(data), static_cast<const uint8_t*>(data) + size);
+        events.push_back(std::move(e));
+    }
+
+    [[nodiscard]] int countType(Event::Type t) const {
+        int n = 0;
+        for (const auto& ev : events)
+            if (ev.type == t)
+                ++n;
+        return n;
+    }
+};
+
+// Service both ends `iters` times, giving each `msPerIter` of budget.
+//
+// ⚠ msPerIter has NO DEFAULT, deliberately. The two copies defaulted it to 10 and 15 -- a tuning
+// difference, not a semantic one, but a shared default would have silently retimed whichever suite
+// did not match it. Stating the budget at the call site is how the two suites stay honestly
+// different where they are different.
+inline void pump(INetwork& server, INetwork& client, int iters, int msPerIter) {
+    for (int i = 0; i < iters; ++i) {
+        server.service(msPerIter);
+        client.service(msPerIter);
+    }
+}
+
+// The same for one server and several clients (the multi-client ENet cases).
+inline void pumpN(INetwork& server, std::initializer_list<INetwork*> clients, int iters, int msPerIter) {
+    for (int i = 0; i < iters; ++i) {
+        server.service(msPerIter);
+        for (INetwork* c : clients)
+            c->service(msPerIter);
+    }
+}
 
 } // namespace fl

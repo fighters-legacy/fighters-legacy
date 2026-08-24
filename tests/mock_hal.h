@@ -6,6 +6,7 @@
 #include "ICursor.h"
 #include "IDisplay.h"
 #include "IFilesystem.h"
+#include "IFilesystemWatcher.h"
 #include "IInput.h"
 #include "IJoystick.h"
 #include "ILogger.h"
@@ -567,6 +568,29 @@ struct MockRenderer : public IRenderer {
     void setConsoleElements(std::span<const HudElement>) override {}
 };
 
+// The IFilesystemWatcher double (#1276). Records both directions: two suites had near-identical
+// copies and only one of them recorded unwatch, so a leak of watches was invisible in the other.
+struct MockFilesystemWatcher : public IFilesystemWatcher {
+    struct WatchCall {
+        std::string path;
+        bool recursive;
+    };
+    std::vector<WatchCall> watchCalls;
+    std::vector<std::string> unwatchCalls;
+    std::vector<IFilesystemWatcher::Event> pendingEvents;
+
+    bool watch(PathDomain, const char* path, bool recursive) override {
+        watchCalls.push_back({path, recursive});
+        return true;
+    }
+    void unwatch(PathDomain, const char* path) override {
+        unwatchCalls.push_back(path);
+    }
+    std::vector<IFilesystemWatcher::Event> pollEvents() override {
+        return std::exchange(pendingEvents, {});
+    }
+};
+
 struct MockWindow : public IWindow {
     int logW{1280};
     int logH{720};
@@ -585,6 +609,12 @@ struct MockWindow : public IWindow {
     int folderDialogCalls{0};
     std::string lastFolderDialogTitle{};
     std::string lastFolderDialogLocation{};
+
+    // Scripted message-box result + the args it was asked with (#1276).
+    int buttonToReturn{0};
+    std::string lastTitle{};
+    std::string lastMessage{};
+    std::string lastUrl{};
 
     bool init(const char*, int w, int h) override {
         logW = w;
@@ -617,10 +647,17 @@ struct MockWindow : public IWindow {
     const char* getLastError() const override {
         return nullptr;
     }
-    int showMessageBox(MessageBoxType, const char*, const char*, const MessageBoxButton*, int) override {
-        return 0;
+    // Scripted message-box result + observation (#1276). buttonToReturn defaults to 0, which is what
+    // this mock always returned before -- a suite that wants a different answer says so, the way
+    // test_crash_reporter does when it dismisses a crash prompt.
+    int showMessageBox(MessageBoxType, const char* title, const char* message, const MessageBoxButton*, int) override {
+        lastTitle = title ? title : "";
+        lastMessage = message ? message : "";
+        return buttonToReturn;
     }
-    void openURL(const char*) override {}
+    void openURL(const char* url) override {
+        lastUrl = url ? url : "";
+    }
     std::optional<std::string> showFolderDialog(const char* title, const char* defaultLocation) override {
         ++folderDialogCalls;
         lastFolderDialogTitle = title ? title : "";

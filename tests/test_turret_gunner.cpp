@@ -27,12 +27,6 @@ using namespace fl;
 
 namespace {
 
-struct NeutralController : IEntityController {
-    ControlInput sample(const EntityState&, uint64_t, double, const AiTickContext&) override {
-        return ControlInput{};
-    }
-};
-
 WeaponDef makeGun() {
     WeaponDef d;
     d.id = "test:gun";
@@ -127,8 +121,8 @@ struct GunnerFixture {
         // the gun's hitscan (a ray, not a falling projectile) resolves cleanly. At this range even a
         // low-skill gunner's biased aim still lands inside the target's hit radius (so first-hit timing
         // isolates the reaction delay), while an ace's tighter cone lands more rounds over the window.
-        bomberId = spawnParked("test:gunbomber", 0.0, 0.0, /*faction=*/1, std::make_unique<NeutralController>());
-        targetId = spawnParked("test:target", 150.0, 0.0, /*faction=*/2, std::make_unique<NeutralController>());
+        bomberId = spawnParked("test:gunbomber", 0.0, 0.0, /*faction=*/1, std::make_unique<StillCtl>());
+        targetId = spawnParked("test:target", 150.0, 0.0, /*faction=*/2, std::make_unique<StillCtl>());
     }
 
     EntityId spawnParked(const char* type, double x, double z, uint16_t faction,
