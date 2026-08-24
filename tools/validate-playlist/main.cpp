@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "playlist_validator.h"
 
+#include "ValidatorCli.h"
+
 #include <cstdio>
 #include <cstring>
 #include <string>
 
 using namespace fl;
-
-static constexpr const char* kVersion = "0.0.1";
 
 static void printHelp() {
     std::printf("Usage: validate-playlist --playlist <path/to/data/playlist.toml> [--pack <dir>]\n"
@@ -37,7 +37,7 @@ int main(int argc, char* argv[]) {
             return 0;
         }
         if (std::strcmp(argv[i], "--version") == 0 || std::strcmp(argv[i], "-v") == 0) {
-            std::printf("validate-playlist %s\n", kVersion);
+            std::printf("validate-playlist %s\n", kValidatorVersion);
             return 0;
         }
         if (std::strcmp(argv[i], "--playlist") == 0 && i + 1 < argc) {

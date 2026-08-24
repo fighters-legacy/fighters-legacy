@@ -2,6 +2,7 @@
 #include "campaign_validator.h"
 
 #include "ILogger.h"
+#include "NullLogger.h"
 #include "campaign/CampaignParser.h"
 #include "campaign/FrontlinePng.h"
 #include "campaign/TemplateHeader.h"
@@ -24,20 +25,6 @@ namespace fs = std::filesystem;
 namespace fl {
 
 namespace {
-class SilentLogger final : public ILogger {
-  public:
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
-
-std::string readFile(const fs::path& p) {
-    std::ifstream f(p, std::ios::binary);
-    if (!f)
-        return {};
-    return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-}
-
 // Build a lenient FolderContentPack over the pack dir (id fields don't matter for our lookups).
 FolderContentPack::Manifest lenientManifest(const fs::path& root) {
     FolderContentPack::Manifest m;
@@ -46,7 +33,7 @@ FolderContentPack::Manifest lenientManifest(const fs::path& root) {
     m.namespaceId = m.id;
     if (fs::exists(root / "manifest.toml")) {
         try {
-            toml::table tbl = toml::parse(readFile(root / "manifest.toml"));
+            toml::table tbl = toml::parse(readFileBinary(root / "manifest.toml"));
             if (auto* mod = tbl["mod"].as_table()) {
                 m.id = (*mod)["id"].value<std::string>().value_or(m.id);
                 m.namespaceId = (*mod)["namespace"].value<std::string>().value_or(m.id);
@@ -119,7 +106,9 @@ CampaignValidationResult validateCampaign(std::string_view yamlContent, const st
     CampaignParseResult p = parseCampaign(yamlContent);
     const CampaignDef& def = p.campaign;
 
-    static SilentLogger silent;
+    // Silent by design: the content system's own log lines would duplicate the findings this tool
+    // reports itself, and break the "clean validation prints nothing" contract CI relies on.
+    static NullLogger silent;
     StdFilesystem stdfs(root, root);
     auto folderPack = std::make_unique<FolderContentPack>(stdfs, silent, ".", lenientManifest(root));
     FolderContentPack* pack = folderPack.get();

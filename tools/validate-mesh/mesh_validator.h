@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "ValidatorCli.h"
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -9,11 +11,8 @@
 
 namespace fl {
 
-struct MeshValidationResult {
-    bool ok{true};
-    std::vector<std::string> errors;
-    std::vector<std::string> warnings;
-};
+// The shared three-field shape (#1277); the name stays for every caller.
+using MeshValidationResult = ToolValidationResult;
 
 // One glTF node, flattened for the fl-viewer node-tree panel (#838). glm-free (the header stays
 // dependency-light like the rest of the validator lib); the viewer composes transforms itself.

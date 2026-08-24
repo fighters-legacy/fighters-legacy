@@ -4,6 +4,7 @@
 #include "mesh_validator.h" // #882: describeMeshNodesFromMemory / meshVariantTags for the variant cross-check
 
 #include "ILogger.h"
+#include "NullLogger.h"
 #include "content/AssetManager.h"
 #include "content/ContentIndex.h"
 #include "content/FolderContentPack.h"
@@ -32,24 +33,6 @@ namespace fs = std::filesystem;
 namespace fl {
 
 namespace {
-
-// The validator accumulates findings into its result; the content system's own log lines would
-// duplicate them (and break the "clean validation prints nothing" contract CI relies on).
-class SilentLogger final : public ILogger {
-  public:
-    void log(LogLevel, const char*, int, const char*) override {}
-    void setMinLevel(LogLevel) override {}
-    void flush() override {}
-};
-
-[[nodiscard]] std::string readFile(const fs::path& p) {
-    std::ifstream f(p, std::ios::binary);
-    if (!f)
-        return {};
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    return ss.str();
-}
 
 // AssetManager lowercases every asset name before it reaches a pack (cacheKey), so runtime
 // resolution is effectively case-insensitive. Mirror that here, or a name that only differs in
@@ -127,7 +110,7 @@ struct PackManifest {
     }
 
     try {
-        toml::table tbl = toml::parse(readFile(path));
+        toml::table tbl = toml::parse(readFileBinary(path));
         if (auto* mod = tbl["mod"].as_table()) {
             out.manifest.id = (*mod)["id"].value<std::string>().value_or(out.manifest.id);
             out.manifest.name = (*mod)["name"].value<std::string>().value_or(out.manifest.id);
@@ -175,7 +158,9 @@ EntityValidationResult validateEntityPack(const std::string& packDir) {
     // Resolve every reference through the REAL content system. The f5e/f5e defect was a path rule
     // (#818); reimplementing path rules here would let this tool and the engine drift apart, which
     // is the exact failure mode a validator exists to prevent.
-    static SilentLogger silent;
+    // Silent by design: the content system's own log lines would duplicate the findings this tool
+    // reports itself, and break the "clean validation prints nothing" contract CI relies on.
+    static NullLogger silent;
     StdFilesystem stdfs(root, root);
     auto folderPack = std::make_unique<FolderContentPack>(stdfs, silent, ".", pm.manifest);
     FolderContentPack* pack = folderPack.get();

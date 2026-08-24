@@ -40,12 +40,6 @@ namespace fs = std::filesystem;
 namespace fl {
 
 namespace {
-std::string readFile(const fs::path& p) {
-    std::ifstream f(p, std::ios::binary);
-    if (!f)
-        return {};
-    return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-}
 std::vector<uint8_t> readBytes(const fs::path& p) {
     std::ifstream f(p, std::ios::binary);
     if (!f)
@@ -81,14 +75,14 @@ void checkExpectFixture(ModValidationResult& out, const fs::path& p) {
 
     FlightModelData data;
     try {
-        data = parseFlightModel(readFile(model));
+        data = parseFlightModel(readFileBinary(model));
     } catch (const std::exception& e) {
         // The flight-model leg reports the parse failure itself; don't say it twice.
         (void)e;
         return;
     }
 
-    const ExpectResult r = checkExpectations(data, readFile(p));
+    const ExpectResult r = checkExpectations(data, readFileBinary(p));
     for (const auto& e : r.errors)
         out.errors.push_back("expectations: " + p.filename().string() + ": " + e);
     for (const auto& f : r.failures) {
@@ -164,14 +158,14 @@ ModValidationResult validateMod(const std::string& packDir, const ModValidateOpt
     if (!fs::exists(manifestPath)) {
         out.errors.push_back("manifest: no manifest.toml — the engine will not mount this directory as a pack");
     } else {
-        manifest = parseModManifest(readFile(manifestPath));
+        manifest = parseModManifest(readFileBinary(manifestPath));
         merge(out, "manifest", manifest);
     }
 
     // 2. Optional [files] SHA-256 table (the cheap half of #246): "<relpath>" = "<sha256 hex>".
     if (fs::exists(manifestPath)) {
         try {
-            toml::table tbl = toml::parse(readFile(manifestPath));
+            toml::table tbl = toml::parse(readFileBinary(manifestPath));
             if (auto* files = tbl["files"].as_table()) {
                 for (auto&& [key, val] : *files) {
                     const std::string rel(key.str());
@@ -223,9 +217,9 @@ ModValidationResult validateMod(const std::string& packDir, const ModValidateOpt
 
     // 5. Per-file drives for types with no pack-mode lib API.
     forEachFile(root / "sensors", ".toml",
-                [&](const fs::path& p) { merge(out, "sensors", validateSensor(readFile(p))); });
+                [&](const fs::path& p) { merge(out, "sensors", validateSensor(readFileBinary(p))); });
     forEachFile(root / "modes", ".toml",
-                [&](const fs::path& p) { merge(out, "modes", validateGameMode(readFile(p))); });
+                [&](const fs::path& p) { merge(out, "modes", validateGameMode(readFileBinary(p))); });
     // aircraft/**/*.toml is TWO file kinds, and running the wrong validator on one was #1104: every
     // `*.expect.toml` is an fm-trim expectation fixture, not a flight model, so the flight-model
     // validator reported a conforming pack's gate files as eight missing tables apiece. They are
@@ -236,7 +230,7 @@ ModValidationResult validateMod(const std::string& packDir, const ModValidateOpt
             checkExpectFixture(out, p);
             return;
         }
-        merge(out, "flight-models", validateFlightModel(readFile(p)));
+        merge(out, "flight-models", validateFlightModel(readFileBinary(p)));
     });
     forEachFile(root / "aircraft", ".glb", [&](const fs::path& p) {
         // Skip LOD siblings (validateMesh auto-discovers them from the base file).
@@ -255,20 +249,20 @@ ModValidationResult validateMod(const std::string& packDir, const ModValidateOpt
     });
     forEachFile(root / "airports", ".toml", [&](const fs::path& p) {
         try {
-            (void)parseAirportDef(readFile(p));
+            (void)parseAirportDef(readFileBinary(p));
         } catch (const std::exception& e) {
             out.errors.push_back("airports: " + p.filename().string() + ": " + e.what());
         }
     });
     forEachFile(root / "theaters", ".toml",
-                [&](const fs::path& p) { merge(out, "theaters", parseTheaterManifest(readFile(p))); });
+                [&](const fs::path& p) { merge(out, "theaters", parseTheaterManifest(readFileBinary(p))); });
     if (fs::exists(root / "data" / "playlist.toml"))
         merge(out, "playlist", validatePlaylist((root / "data" / "playlist.toml").string(), packDir));
 
     // 6. missions/*.yaml: discriminate mission vs campaign vs template and route accordingly.
     std::set<std::string> referencedTemplates; // for the orphan-template warning
     forEachFile(root / "missions", ".yaml", [&](const fs::path& p) {
-        const std::string yaml = readFile(p);
+        const std::string yaml = readFileBinary(p);
         switch (classifyPackYaml(yaml)) {
         case PackYamlKind::Mission:
             merge(out, "missions", validateMission(yaml, packDir));

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "campaign_validator.h"
 
+#include "ValidatorCli.h"
+
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -8,7 +10,6 @@
 #include <vector>
 
 namespace {
-constexpr const char* kVersion = "0.0.1";
 
 void printUsage() {
     std::printf("Usage: validate-campaign [--pack <dir>] <campaign.yaml> [more.yaml ...]\n"
@@ -23,12 +24,6 @@ void printUsage() {
                 "  --version, -v  Show version and exit\n");
 }
 
-std::string readFile(const char* path) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f)
-        return {};
-    return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-}
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -44,7 +39,7 @@ int main(int argc, char* argv[]) {
             return 0;
         }
         if (std::strcmp(argv[i], "--version") == 0 || std::strcmp(argv[i], "-v") == 0) {
-            std::printf("validate-campaign %s\n", kVersion);
+            std::printf("validate-campaign %s\n", fl::kValidatorVersion);
             return 0;
         }
         if (std::strcmp(argv[i], "--pack") == 0) {
@@ -64,19 +59,18 @@ int main(int argc, char* argv[]) {
 
     bool anyFail = false;
     for (const std::string& file : files) {
-        const std::string yaml = readFile(file.c_str());
-        if (yaml.empty()) {
+        // Kept as "missing or empty", not the shared "cannot open": this tool has always treated an
+        // empty campaign file as unreadable, and that message is its published output.
+        const std::optional<std::string> yaml = fl::readFileToString(file.c_str());
+        if (!yaml || yaml->empty()) {
             std::fprintf(stderr, "ERROR [%s] cannot read file (missing or empty)\n", file.c_str());
             anyFail = true;
             continue;
         }
-        fl::CampaignValidationResult res =
-            packDir.empty() ? fl::validateCampaign(yaml) : fl::validateCampaign(yaml, packDir);
-        for (const std::string& w : res.warnings)
-            std::fprintf(stderr, "WARN  [%s] %s\n", file.c_str(), w.c_str());
-        for (const std::string& e : res.errors)
-            std::fprintf(stderr, "ERROR [%s] %s\n", file.c_str(), e.c_str());
-        if (!res.ok)
+        int exitCode = 0;
+        fl::reportResult(packDir.empty() ? fl::validateCampaign(*yaml) : fl::validateCampaign(*yaml, packDir),
+                         file.c_str(), exitCode);
+        if (exitCode != 0)
             anyFail = true;
     }
     return anyFail ? 1 : 0;
