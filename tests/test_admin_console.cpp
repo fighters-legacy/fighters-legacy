@@ -2,6 +2,7 @@
 #include "ServerCommands.h"
 #include "mock_log.h"
 #include "temp_path.h"
+#include "wb_fixture.h"
 #include <console/CommandRegistry.h>
 #include <console/CommandShell.h>
 #include <loop/GameLoop.h>
@@ -776,24 +777,6 @@ struct MockNetworkWb : NullNetwork {
     }
 };
 
-static fl::EntityDef makeWbEntityDef(const char* id = "builtin:debug-entity") {
-    fl::EntityDef def;
-    def.id = id;
-    def.name = "Debug";
-    def.category = fl::ObjectCategory::AirVehicle;
-    def.maxHp = 100.0f;
-    return def;
-}
-
-// Drive the #853 connect handshake for a pilot: onConnect + the client's MsgConnectRequest, which now
-// triggers the spawn + ConnectAck (the old flow spawned/acked directly in onConnect).
-static void connectPilotWb(fl::WorldBroadcaster& b, uint32_t peerId = 0u) {
-    b.onConnect(peerId);
-    fl::MsgConnectRequest req{};
-    req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Pilot);
-    b.onReceive(peerId, &req, sizeof(req));
-}
-
 struct WbFixture {
     NullLogger log;
     MockNetworkWb net;
@@ -895,7 +878,7 @@ TEST_CASE("AdminConsole wb: revoke validates and queues with a synchronous ack (
 
 TEST_CASE("AdminConsole wb: grant -> act -> revoke -> refused end to end (#947)", "[admin_console][wb][permission]") {
     WbFixture f;
-    f.registry.registerType(makeWbEntityDef());
+    f.registry.registerType(makeDebugDef());
     f.broadcaster().onConnect(0u); // creates the peer's input slot so authority can be set
     auto reg = makeRegistry(f.ctx);
 
@@ -935,7 +918,7 @@ TEST_CASE("AdminConsole wb: peers with no connected peers returns 0 peer(s) conn
 
 TEST_CASE("AdminConsole wb: peers with one connected peer returns 1 peer(s) connected", "[admin_console][wb]") {
     WbFixture f;
-    f.registry.registerType(makeWbEntityDef());
+    f.registry.registerType(makeDebugDef());
     f.broadcaster().onConnect(0u);
 
     auto reg = makeRegistry(f.ctx);
@@ -977,7 +960,7 @@ TEST_CASE("AdminConsole wb: status with zero peers contains peers: 0", "[admin_c
 
 TEST_CASE("AdminConsole wb: status with one connected peer contains peers: 1", "[admin_console][wb]") {
     WbFixture f;
-    f.registry.registerType(makeWbEntityDef());
+    f.registry.registerType(makeDebugDef());
     f.broadcaster().onConnect(0u);
 
     auto reg = makeRegistry(f.ctx);
@@ -1047,7 +1030,7 @@ TEST_CASE("AdminConsole wb: tickstats before any tick reports no samples", "[adm
 
 TEST_CASE("AdminConsole wb: tickstats reports per-phase rows after ticks", "[admin_console][wb]") {
     WbFixture f;
-    f.registry.registerType(makeWbEntityDef());
+    f.registry.registerType(makeDebugDef());
     f.broadcaster().onConnect(0u);
     for (uint64_t tick = 1; tick <= 5; ++tick)
         f.broadcaster().onTick(1.0 / 60.0, tick);
@@ -1092,7 +1075,7 @@ TEST_CASE("AdminConsole wb: status and admin_auth_status reflect active lockout"
     WbFixture f{/*enetMaxFailures=*/1, /*enetLockoutSeconds=*/300};
     f.net.peerAddr = "1.2.3.4";
     f.broadcaster().setOperatorPassword("correct");
-    f.registry.registerType(makeWbEntityDef());
+    f.registry.registerType(makeDebugDef());
     f.broadcaster().onConnect(0u);
     // Complete the handshake: since #1069 an un-admitted peer's MsgAdminCommand is dropped in the
     // dispatch preamble, so it can no longer burn admin-auth attempts — and lock out an IP — without
@@ -1124,7 +1107,7 @@ TEST_CASE("AdminConsole wb: admin_auth_status shows pending failure line", "[adm
     WbFixture f{/*enetMaxFailures=*/3, /*enetLockoutSeconds=*/300};
     f.net.peerAddr = "1.2.3.4";
     f.broadcaster().setOperatorPassword("correct");
-    f.registry.registerType(makeWbEntityDef());
+    f.registry.registerType(makeDebugDef());
     f.broadcaster().onConnect(0u);
     // Complete the handshake: since #1069 an un-admitted peer's MsgAdminCommand is dropped in the
     // dispatch preamble, so it can no longer burn admin-auth attempts — and lock out an IP — without
@@ -1232,7 +1215,7 @@ TEST_CASE("AdminConsole wb: status shows no lockout line after admin_unlock clea
     f.net.peerAddr = "1.2.3.4";
     fl::AdminChannel& enet = f.enet();
     f.broadcaster().setOperatorPassword("correct");
-    f.registry.registerType(makeWbEntityDef());
+    f.registry.registerType(makeDebugDef());
     f.broadcaster().onConnect(0u);
 
     fl::MsgAdminCommand cmd{};
@@ -1254,9 +1237,9 @@ TEST_CASE("WorldBroadcaster: default MsgConnectAck carries Earth planet radius",
     fl::EntityTypeRegistry registry;
     fl::EntityManager em{log, registry};
     fl::WorldBroadcaster broadcaster{em, registry, net, log};
-    registry.registerType(makeWbEntityDef());
+    registry.registerType(makeDebugDef());
 
-    connectPilotWb(broadcaster);
+    connectPilotPeer(broadcaster, 0u);
 
     bool found = false;
     for (const auto& pkt : net.sends) {
@@ -1273,7 +1256,7 @@ TEST_CASE("WorldBroadcaster: default MsgConnectAck carries Earth planet radius",
 
 TEST_CASE("WorldBroadcaster: the ground-elevation query is called per entity during onTick", "[admin_console][wb]") {
     WbFixture f;
-    f.registry.registerType(makeWbEntityDef());
+    f.registry.registerType(makeDebugDef());
 
     int queryCalls = 0;
     // Built here rather than through the fixture: a query is frozen at construction now (#1082).
@@ -1283,7 +1266,7 @@ TEST_CASE("WorldBroadcaster: the ground-elevation query is called per entity dur
         return 42.f;
     };
     fl::WorldBroadcaster wb(f.em, f.registry, f.net, f.log, nullptr, std::move(queries));
-    connectPilotWb(wb);
+    connectPilotPeer(wb, 0u);
     wb.onTick(1.0 / 60.0, 1u);
 
     CHECK(queryCalls > 0);

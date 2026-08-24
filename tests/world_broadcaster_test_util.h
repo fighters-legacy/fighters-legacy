@@ -1,11 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
-// Shared fixtures for the two broadcaster-side suites. Extracted when the admission cases moved to
-// test_peer_admission.cpp (#1085): both suites drive the connect handshake through ONE
+// Shared fixtures for the FOUR broadcaster-side suites (test_world_broadcaster, test_peer_admission,
+// test_snapshot_pipeline, test_session_comms). Extracted when the admission cases moved to
+// test_peer_admission.cpp (#1085): they drive the connect handshake through ONE
 // connectPilotPeer/connectObserverPeer and decode snapshots with one decoder, because two copies
 // would be free to disagree about what "a connected pilot" is — the drift that makes a green test
-// meaningless.
+// meaningless. (It said "the two suites" for three releases after the fourth arrived.)
+//
+// This header is the HEAVY half — snapshot decoding, congestion, the interest-shed scenario — and it
+// pulls AtcService/ContentBootstrap/JobSystem along with it. The handshake and the def builders live
+// in wb_fixture.h (#1275), which five other suites include without any of that; a helper that needs
+// nothing from this file's includes belongs there instead.
 
 #include "IClock.h"
 #include "ILogger.h"
@@ -42,6 +48,7 @@
 #include "world/BuiltinAirport.h"
 
 #include "mock_network.h"
+#include "wb_fixture.h"
 
 #include <algorithm>
 #include <array>
@@ -68,18 +75,6 @@ using namespace fl;
 // Test helpers
 // ---------------------------------------------------------------------------
 
-// Records broadcasts/sends/disconnects + resolves configurable peer addresses (see mock_network.h).
-using MockNetwork = TrackingNetwork;
-
-inline fl::EntityDef makeDebugDef(const char* id = "builtin:debug-entity") {
-    fl::EntityDef def;
-    def.id = id;
-    def.name = "Debug";
-    def.category = fl::ObjectCategory::AirVehicle;
-    def.maxHp = 100.0f;
-    return def;
-}
-
 // Validate that the first send is a well-formed MsgHello with the current protocol version.
 inline fl::MsgHello parseSendHello(const MockNetwork& net) {
     REQUIRE(net.sends.size() >= 1u);
@@ -105,40 +100,6 @@ inline fl::MsgConnectRefusal parseSendRefusal(const MockNetwork& net) {
     fl::MsgConnectRefusal ref{};
     std::memcpy(&ref, net.sends[0].data(), sizeof(ref));
     return ref;
-}
-
-// Drive the #853 connect handshake for a PILOT peer: onConnect (which now only sends MsgHello) followed
-// by the client's MsgConnectRequest, which is what admits the peer (spawn + MsgConnectAck + MOTD +
-// flight check-in). This reproduces the exact net.sends sequence the pre-#853 auto-spawning onConnect
-// produced, so it is a drop-in replacement everywhere a test just needs a spawned pilot. If onConnect
-// REJECTED the peer (ban / allowlist / rate-limit / per-IP cap / lockout), the only send is a
-// MsgConnectRefusal and no request is injected — matching a rejected connection's old behavior exactly.
-inline void connectPilotPeer(fl::WorldBroadcaster& b, MockNetwork& net, uint32_t peerId, const char* entityType = "") {
-    const std::size_t before = net.sends.size();
-    b.onConnect(peerId);
-    const bool rejected = net.sends.size() > before && !net.sends.back().empty() &&
-                          net.sends.back()[0] == static_cast<uint8_t>(fl::MsgId::ConnectRefusal);
-    if (rejected)
-        return;
-    fl::MsgConnectRequest req{};
-    req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Pilot);
-    std::snprintf(req.requestedEntityType, sizeof(req.requestedEntityType), "%s", entityType);
-    b.onReceive(peerId, &req, sizeof(req));
-}
-
-// Drive the #853 handshake for an OBSERVER peer (#857): admitted with a role but NO entity/controller.
-// It still receives snapshots (interest centered on its camera eye, #858), so this is the fixture for
-// observer interest tests. Returns without injecting a request if onConnect rejected the peer.
-inline void connectObserverPeer(fl::WorldBroadcaster& b, MockNetwork& net, uint32_t peerId) {
-    const std::size_t before = net.sends.size();
-    b.onConnect(peerId);
-    const bool rejected = net.sends.size() > before && !net.sends.back().empty() &&
-                          net.sends.back()[0] == static_cast<uint8_t>(fl::MsgId::ConnectRefusal);
-    if (rejected)
-        return;
-    fl::MsgConnectRequest req{};
-    req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Observer);
-    b.onReceive(peerId, &req, sizeof(req));
 }
 
 // Build a MsgClientInput carrying only a camera eye world-position (#858) — the observer's viewpoint.
@@ -395,57 +356,6 @@ inline const fl::EntityState* slotPeerEntity(const fl::EntityManager& em, uint32
 
 // A minimal crewed bomber def for the replication tests: a Fly+Fire pilot on station 0 and a Fire
 // tail-gunner aiming a turret that mounts station 1. Valid one-owner partition.
-inline fl::EntityDef makeCrewBomberDef() {
-    fl::EntityDef d;
-    d.id = "test:crewbomber";
-    d.name = "CrewBomber";
-    d.category = fl::ObjectCategory::AirVehicle;
-    d.maxHp = 300.f;
-    fl::Hardpoint hp0;
-    hp0.slot = 0;
-    hp0.allowed = {"test:rkt"};
-    hp0.defaultWeapon = "test:rkt";
-    fl::Hardpoint hp1;
-    hp1.slot = 1;
-    hp1.allowed = {"test:rkt"};
-    hp1.defaultWeapon = "test:rkt";
-    d.hardpoints = {hp0, hp1};
-    fl::TurretDef t;
-    t.id = "tail";
-    t.stations = {1};
-    d.turrets = {t};
-    fl::SeatDef pilot;
-    pilot.role = "pilot";
-    pilot.capabilities = fl::withCapability(fl::withCapability(fl::CrewCapabilityMask{0}, fl::CrewCapability::Fly),
-                                            fl::CrewCapability::Fire);
-    pilot.stations = {0};
-    fl::SeatDef gunner;
-    gunner.role = "tail-gunner";
-    gunner.capabilities = fl::withCapability(fl::CrewCapabilityMask{0}, fl::CrewCapability::Fire);
-    gunner.turret = "tail";
-    d.crew = {pilot, gunner};
-    return d;
-}
-
-inline fl::WeaponDef makeRktWeapon() {
-    fl::WeaponDef w;
-    w.id = "test:rkt";
-    w.name = "Rkt";
-    w.type = fl::WeaponType::Rocket;
-    w.category = fl::WeaponCategory::AirToGround;
-    w.performance.maxRangeM = 4000.f;
-    w.performance.maxSpeedMps = 500.f;
-    w.load.massKg = 20.f;
-    w.load.rounds = 40;
-    return w;
-}
-
-struct StillCtl : fl::IEntityController {
-    fl::ControlInput sample(const fl::EntityState&, uint64_t, double, const fl::AiTickContext&) override {
-        return fl::ControlInput{};
-    }
-};
-
 inline fl::MsgSeatRequest joinReq(fl::EntityId host, uint8_t seat) {
     fl::MsgSeatRequest req{};
     req.seatIndex = seat;
@@ -605,19 +515,6 @@ SnapshotExt lastSnapshotExt(const MockNetwork& net, uint32_t peerId) {
     out.size = out.pkt.size() - off;
     return out;
 }
-
-// Stub controller: drives the entity at a fixed throttle with no peer connection. Records how many
-// times it is sampled so the test can confirm onTick steps non-peer entities.
-struct ConstantController : fl::IEntityController {
-    float throttle{1.0f};
-    int sampleCount{0};
-    fl::ControlInput sample(const fl::EntityState&, uint64_t, double, const fl::AiTickContext&) override {
-        ++sampleCount;
-        fl::ControlInput ctrl{};
-        ctrl.throttle = throttle;
-        return ctrl;
-    }
-};
 
 std::map<uint32_t, std::vector<std::vector<uint8_t>>> runSnapshotScenario(fl::JobSystem* jobs, uint64_t killAtTick,
                                                                           bool compress = false) {

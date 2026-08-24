@@ -16,6 +16,7 @@
 #include "net/GameProtocol.h" // MsgClientInput (seat-scoped input #972)
 #include "net/SeatInput.h"    // seatInputRouting / clampSeatStation (#972)
 #include "net/WorldBroadcaster.h"
+#include "wb_fixture.h"
 #include "weapon/ProjectileSystem.h" // projectileTypeId
 #include "weapon/WeaponRegistry.h"
 
@@ -57,67 +58,42 @@ struct StubGunner : ISeatController {
     }
 };
 
+// The shared test rocket (wb_fixture.h) plus the ballistics this suite actually asserts on: it
+// flies the store and checks where it lands, so burn time, dispersion, drag and the warhead are its
+// subject rather than boilerplate. Everything else — id, type, category, range, speed, mass, rounds
+// — comes from the shared def so a WeaponDef change lands in one place.
 WeaponDef makeRocket() {
-    WeaponDef d;
-    d.id = "test:rkt";
+    WeaponDef d = makeRktWeapon();
     d.name = "Test Rocket";
-    d.type = WeaponType::Rocket;
-    d.category = WeaponCategory::AirToGround;
-    d.performance.maxRangeM = 4000.f;
-    d.performance.maxSpeedMps = 500.f;
     d.performance.motorBurnTimeS = 1.f;
     d.performance.cepM = 0.f; // no dispersion: the store leaves exactly along the bore
     d.warhead.blastRadiusM = 10.f;
     d.warhead.damage = 40.f;
-    d.load.massKg = 20.f;
     d.load.dragFactor = 0.f;
-    d.load.rounds = 40;
     return d;
 }
 
-// A bomber: a Fly+Fire pilot on station 0, and a Fire tail-gunner aiming a turret that mounts
-// station 1. Built directly (not parsed) — the parser's one-owner invariant is covered in
-// test_entity; this def is a valid partition (one Fly seat, disjoint stations).
+// The shared crew bomber (wb_fixture.h) plus what THIS suite is about: a slewable turret with real
+// limits, and a tail seat that defaults to a bot and carries the #978 damage pool. The shared def
+// leaves the turret unbounded and the seat human, which is right for the suites that only need a
+// two-seat airframe.
+//
+// Built directly rather than parsed — the parser's one-owner invariant is covered in test_entity;
+// this def is a valid partition (one Fly seat, disjoint stations).
 EntityDef makeBomberDef() {
-    EntityDef d;
+    EntityDef d = makeCrewBomberDef();
     d.id = "test:bomber";
     d.name = "Bomber";
-    d.category = ObjectCategory::AirVehicle;
-    d.maxHp = 300.f;
 
-    Hardpoint hp0;
-    hp0.slot = 0;
-    hp0.allowed = {"test:rkt"};
-    hp0.defaultWeapon = "test:rkt";
-    Hardpoint hp1;
-    hp1.slot = 1;
-    hp1.allowed = {"test:rkt"};
-    hp1.defaultWeapon = "test:rkt";
-    d.hardpoints = {hp0, hp1};
+    d.turrets[0].azMinDeg = -180.f;
+    d.turrets[0].azMaxDeg = 180.f;
+    d.turrets[0].elMinDeg = -85.f;
+    d.turrets[0].elMaxDeg = 85.f;
+    d.turrets[0].slewRateDegS = 90.f;
 
-    TurretDef t;
-    t.id = "tail";
-    t.azMinDeg = -180.f;
-    t.azMaxDeg = 180.f;
-    t.elMinDeg = -85.f;
-    t.elMaxDeg = 85.f;
-    t.slewRateDegS = 90.f;
-    t.stations = {1};
-    d.turrets = {t};
-
-    SeatDef pilot;
-    pilot.role = "pilot";
-    pilot.capabilities =
-        withCapability(withCapability(CrewCapabilityMask{0}, CrewCapability::Fly), CrewCapability::Fire);
-    pilot.stations = {0};
-    SeatDef gunner;
-    gunner.role = "tail-gunner";
-    gunner.capabilities = withCapability(CrewCapabilityMask{0}, CrewCapability::Fire);
-    gunner.turret = "tail";
-    gunner.defaultOccupancy = SeatOccupancyDefault::Bot;
-    gunner.botSpec = "stub";
-    gunner.damageHp = 50.f; // #978: the gunner seat is a damageable HP pool
-    d.crew = {pilot, gunner};
+    d.crew[1].defaultOccupancy = SeatOccupancyDefault::Bot;
+    d.crew[1].botSpec = "stub";
+    d.crew[1].damageHp = 50.f; // #978: the gunner seat is a damageable HP pool
     return d;
 }
 
@@ -153,16 +129,12 @@ struct CrewFixture {
         wb->setGroundElevation(0.f);
     }
 
-    // Admit a peer the way a real one arrives (#853): onConnect, then its MsgConnectRequest. Joining
-    // as an Observer spawns no aircraft of its own, so the seat binding is the only thing that gives
-    // this peer an entity — which is exactly the human-gunner case. Required since #1069, where the
-    // dispatch preamble drops every client->server message from a peer that has not completed the
-    // handshake; before that a test could send input from a peer that had never connected at all.
+    // Admit a peer the way a real one arrives (#853). Joining as an Observer spawns no aircraft of
+    // its own, so the seat binding is the only thing that gives this peer an entity — which is
+    // exactly the human-gunner case. Required since #1069, where the dispatch preamble drops every
+    // client->server message from a peer that has not completed the handshake.
     void admitPeer(uint32_t peerId) {
-        wb->onConnect(peerId);
-        MsgConnectRequest req{};
-        req.requestedRole = static_cast<uint8_t>(PeerRole::Observer);
-        wb->onReceive(peerId, &req, sizeof(req));
+        connectObserverPeer(*wb, net, peerId);
     }
 
     EntityId spawnBomber(double x) {
@@ -195,6 +167,63 @@ struct CrewFixture {
 };
 
 } // namespace
+
+// #1275 moved the bomber and rocket defs onto the shared wb_fixture.h builders, keeping only this
+// suite's own fields as overrides. That is a silent change if it is wrong: a field the shared
+// builder sets differently would not fail a case that never asserts it, it would just quietly move
+// what this suite is testing against. So the composed values are pinned here, the way
+// test_math_constants.cpp pins each replaced spelling — the numbers below are the literals the
+// local builders used before the move.
+TEST_CASE("the shared builders compose the defs this suite used to spell out (#1275)", "[crew]") {
+    const EntityDef d = makeBomberDef();
+    CHECK(d.id == "test:bomber");
+    CHECK(d.name == "Bomber");
+    CHECK(d.category == ObjectCategory::AirVehicle);
+    CHECK(d.maxHp == 300.f);
+
+    REQUIRE(d.hardpoints.size() == 2u);
+    CHECK(d.hardpoints[0].slot == 0);
+    CHECK(d.hardpoints[1].slot == 1);
+    CHECK(d.hardpoints[0].defaultWeapon == "test:rkt");
+    CHECK(d.hardpoints[1].defaultWeapon == "test:rkt");
+
+    REQUIRE(d.turrets.size() == 1u);
+    CHECK(d.turrets[0].id == "tail");
+    CHECK(d.turrets[0].stations == std::vector<int>{1});
+    CHECK(d.turrets[0].azMinDeg == -180.f);
+    CHECK(d.turrets[0].azMaxDeg == 180.f);
+    CHECK(d.turrets[0].elMinDeg == -85.f);
+    CHECK(d.turrets[0].elMaxDeg == 85.f);
+    CHECK(d.turrets[0].slewRateDegS == 90.f);
+
+    REQUIRE(d.crew.size() == 2u);
+    CHECK(d.crew[0].role == "pilot");
+    CHECK(hasCapability(d.crew[0].capabilities, CrewCapability::Fly));
+    CHECK(hasCapability(d.crew[0].capabilities, CrewCapability::Fire));
+    CHECK(d.crew[0].stations == std::vector<int>{0});
+    CHECK(d.crew[1].role == "tail-gunner");
+    CHECK(hasCapability(d.crew[1].capabilities, CrewCapability::Fire));
+    CHECK_FALSE(hasCapability(d.crew[1].capabilities, CrewCapability::Fly));
+    CHECK(d.crew[1].turret == "tail");
+    CHECK(d.crew[1].defaultOccupancy == SeatOccupancyDefault::Bot);
+    CHECK(d.crew[1].botSpec == "stub");
+    CHECK(d.crew[1].damageHp == 50.f);
+
+    const WeaponDef w = makeRocket();
+    CHECK(w.id == "test:rkt");
+    CHECK(w.name == "Test Rocket");
+    CHECK(w.type == WeaponType::Rocket);
+    CHECK(w.category == WeaponCategory::AirToGround);
+    CHECK(w.performance.maxRangeM == 4000.f);
+    CHECK(w.performance.maxSpeedMps == 500.f);
+    CHECK(w.performance.motorBurnTimeS == 1.f);
+    CHECK(w.performance.cepM == 0.f);
+    CHECK(w.warhead.blastRadiusM == 10.f);
+    CHECK(w.warhead.damage == 40.f);
+    CHECK(w.load.massKg == 20.f);
+    CHECK(w.load.dragFactor == 0.f);
+    CHECK(w.load.rounds == 40);
+}
 
 TEST_CASE("Crewed frame: a bot gunner fires along the turret bore, not the airframe nose (#969)", "[crew]") {
     CrewFixture fx(/*gunnerFireAfter=*/90);
