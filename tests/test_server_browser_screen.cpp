@@ -15,6 +15,9 @@
 
 using namespace fl;
 
+// These suites drive the screen a fixed step at a time; nothing here is rate-dependent (#1241).
+constexpr float kTestFrameDtS = 1.f / 60.f;
+
 namespace {
 BrowserRow row(const char* name, const char* host, uint16_t port, int players) {
     BrowserRow r;
@@ -38,7 +41,7 @@ TEST_CASE("ServerBrowserScreen: renders rows + Refresh/Direct/Cancel controls (#
     d.rows = &rows;
     ServerBrowserScreen scr(std::move(d));
 
-    const Screen next = scr.update(input, window);
+    const Screen next = scr.update(input, window, kTestFrameDtS);
     CHECK(next == Screen::ServerBrowser); // nothing clicked -> stays
     CHECK(gui.newFrameCount == 0);        // the screen does not open the frame (Game does)
     // The three action buttons were queried, and both rows were offered as selectables.
@@ -67,11 +70,11 @@ TEST_CASE("ServerBrowserScreen: clicking a row prefills + navigates to JoinServe
     // Script the first selectable (its label starts with "Alpha") to click.
     // The label is composed, so match by prefix via the scripted map's exact label after a dry run.
     gui.clear();
-    scr.update(input, window); // records the selectable labels
+    scr.update(input, window, kTestFrameDtS); // records the selectable labels
     REQUIRE(gui.selectables.size() == 1u);
     gui.selectableClicks[gui.selectables[0]] = true;
 
-    const Screen next = scr.update(input, window);
+    const Screen next = scr.update(input, window, kTestFrameDtS);
     CHECK(next == Screen::JoinServer);
     REQUIRE(joined.has_value());
     CHECK(joined->first == "1.2.3.4");
@@ -92,16 +95,16 @@ TEST_CASE("ServerBrowserScreen: Refresh fires the callback; Cancel + Esc leave (
     ServerBrowserScreen scr(std::move(d));
 
     gui.buttonClicks["Refresh"] = true;
-    scr.update(input, window);
+    scr.update(input, window, kTestFrameDtS);
     CHECK(refreshes == 1);
 
     gui.buttonClicks["Refresh"] = false;
     gui.buttonClicks["Cancel"] = true;
-    CHECK(scr.update(input, window) == Screen::MainMenu);
+    CHECK(scr.update(input, window, kTestFrameDtS) == Screen::MainMenu);
 
     // Keyboard fallback: Escape leaves too.
     gui.buttonClicks["Cancel"] = false;
     MockInput esc;
     esc.justPressed.insert(Key::Escape);
-    CHECK(scr.update(esc, window) == Screen::MainMenu);
+    CHECK(scr.update(esc, window, kTestFrameDtS) == Screen::MainMenu);
 }

@@ -7,12 +7,15 @@
 
 using namespace fl;
 
+// These suites drive the screen a fixed step at a time; nothing here is rate-dependent (#1241).
+constexpr float kTestFrameDtS = 1.f / 60.f;
+
 static MockInput g_inp;
 static MockWindow g_win;
 
 TEST_CASE("MissionBriefScreen: default shows no mission name") {
     MissionBriefScreen s;
-    s.update(g_inp, g_win);
+    s.update(g_inp, g_win, kTestFrameDtS);
     auto elems = s.buildElements();
     CHECK(!elems.empty());
 }
@@ -20,7 +23,7 @@ TEST_CASE("MissionBriefScreen: default shows no mission name") {
 TEST_CASE("MissionBriefScreen: setMission populates name in elements") {
     MissionBriefScreen s;
     s.setMission("m01", "Desert Storm");
-    s.update(g_inp, g_win);
+    s.update(g_inp, g_win, kTestFrameDtS);
     auto elems = s.buildElements();
 
     bool foundName = false;
@@ -36,7 +39,7 @@ TEST_CASE("MissionBriefScreen: Enter on Fly returns Loading") {
     s.setMission("m01", "Alpha Mission");
     MockInput inp;
     inp.justPressed.insert(Key::Enter);
-    Screen next = s.update(inp, g_win);
+    Screen next = s.update(inp, g_win, kTestFrameDtS);
     CHECK(next == Screen::Loading);
 }
 
@@ -48,12 +51,12 @@ TEST_CASE("MissionBriefScreen: ArrowRight then Enter returns MissionSelect") {
     {
         MockInput inp;
         inp.justPressed.insert(Key::ArrowRight);
-        s.update(inp, g_win);
+        s.update(inp, g_win, kTestFrameDtS);
     }
     {
         MockInput inp;
         inp.justPressed.insert(Key::Enter);
-        Screen next = s.update(inp, g_win);
+        Screen next = s.update(inp, g_win, kTestFrameDtS);
         CHECK(next == Screen::MissionSelect);
     }
 }
@@ -63,14 +66,14 @@ TEST_CASE("MissionBriefScreen: Escape returns MissionSelect") {
     s.setMission("m02", "Charlie Mission");
     MockInput inp;
     inp.justPressed.insert(Key::Escape);
-    Screen next = s.update(inp, g_win);
+    Screen next = s.update(inp, g_win, kTestFrameDtS);
     CHECK(next == Screen::MissionSelect);
 }
 
 TEST_CASE("MissionBriefScreen: buildElements shows terrain-id placeholder") {
     MissionBriefScreen s;
     s.setMission("world", "World Map Test");
-    s.update(g_inp, g_win);
+    s.update(g_inp, g_win, kTestFrameDtS);
     auto elems = s.buildElements();
 
     bool foundMap = false;
@@ -84,7 +87,7 @@ TEST_CASE("MissionBriefScreen: buildElements shows terrain-id placeholder") {
 TEST_CASE("MissionBriefScreen: text centered; buttons anchor at 0.35 and 0.65") {
     MissionBriefScreen s;
     s.setMission("m01", "Desert Storm");
-    s.update(g_inp, g_win);
+    s.update(g_inp, g_win, kTestFrameDtS);
     auto elems = s.buildElements();
     bool foundFly = false;
     bool foundBack = false;

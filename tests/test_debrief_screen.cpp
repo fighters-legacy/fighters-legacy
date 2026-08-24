@@ -9,6 +9,9 @@
 
 using namespace fl;
 
+// These suites drive the screen a fixed step at a time; nothing here is rate-dependent (#1241).
+constexpr float kTestFrameDtS = 1.f / 60.f;
+
 static MockInput g_inp;
 static MockWindow g_win;
 
@@ -16,24 +19,24 @@ TEST_CASE("DebriefScreen: Continue returns MainMenu") {
     DebriefScreen s;
     MockInput inp;
     inp.justPressed.insert(Key::Enter);
-    CHECK(s.update(inp, g_win) == Screen::MainMenu);
+    CHECK(s.update(inp, g_win, kTestFrameDtS) == Screen::MainMenu);
 }
 
 TEST_CASE("DebriefScreen: Space also returns MainMenu") {
     DebriefScreen s;
     MockInput inp;
     inp.justPressed.insert(Key::Space);
-    CHECK(s.update(inp, g_win) == Screen::MainMenu);
+    CHECK(s.update(inp, g_win, kTestFrameDtS) == Screen::MainMenu);
 }
 
 TEST_CASE("DebriefScreen: no input stays on Debrief") {
     DebriefScreen s;
-    CHECK(s.update(g_inp, g_win) == Screen::Debrief);
+    CHECK(s.update(g_inp, g_win, kTestFrameDtS) == Screen::Debrief);
 }
 
 TEST_CASE("DebriefScreen: default shows success") {
     DebriefScreen s;
-    s.update(g_inp, g_win);
+    s.update(g_inp, g_win, kTestFrameDtS);
     auto elems = s.buildElements();
     bool foundSuccess = false;
     for (auto& e : elems) {
@@ -48,7 +51,7 @@ TEST_CASE("DebriefScreen: default shows success") {
 TEST_CASE("DebriefScreen: setStats with success=false shows failed text") {
     DebriefScreen s;
     s.setStats(0, 1, false);
-    s.update(g_inp, g_win);
+    s.update(g_inp, g_win, kTestFrameDtS);
     auto elems = s.buildElements();
     bool foundFailed = false;
     for (auto& e : elems) {
@@ -63,7 +66,7 @@ TEST_CASE("DebriefScreen: setStats with success=false shows failed text") {
 TEST_CASE("DebriefScreen: setStats non-zero kills appear in elements") {
     DebriefScreen s;
     s.setStats(3, 1, true);
-    s.update(g_inp, g_win);
+    s.update(g_inp, g_win, kTestFrameDtS);
     auto elems = s.buildElements();
     bool foundKills = false;
     for (auto& e : elems) {
@@ -77,7 +80,7 @@ TEST_CASE("DebriefScreen: setStats non-zero kills appear in elements") {
 
 TEST_CASE("DebriefScreen: buildElements not empty") {
     DebriefScreen s;
-    s.update(g_inp, g_win);
+    s.update(g_inp, g_win, kTestFrameDtS);
     CHECK(!s.buildElements().empty());
 }
 
@@ -85,7 +88,7 @@ TEST_CASE("DebriefScreen: setMatchResult shows winner banner and team scores (#6
     DebriefScreen s;
     s.setStats(4, 2, true);
     s.setMatchResult("RED WINS", {{"Red", 50}, {"Blue", 41}});
-    s.update(g_inp, g_win);
+    s.update(g_inp, g_win, kTestFrameDtS);
     auto elems = s.buildElements();
     bool foundWinner = false, foundRed = false, foundBlue = false;
     for (const auto& e : elems) {
@@ -107,7 +110,7 @@ TEST_CASE("DebriefScreen: empty setMatchResult clears the match section (#647)")
     DebriefScreen s;
     s.setMatchResult("X WINS", {{"X", 10}});
     s.setMatchResult("", {}); // clear
-    s.update(g_inp, g_win);
+    s.update(g_inp, g_win, kTestFrameDtS);
     auto elems = s.buildElements();
     int textCount = 0;
     for (const auto& e : elems)
@@ -119,7 +122,7 @@ TEST_CASE("DebriefScreen: empty setMatchResult clears the match section (#647)")
 TEST_CASE("DebriefScreen: all text elements are center-aligned at x=0.5") {
     DebriefScreen s;
     s.setStats(3, 1, true);
-    s.update(g_inp, g_win);
+    s.update(g_inp, g_win, kTestFrameDtS);
     auto elems = s.buildElements();
     int textCount = 0;
     for (const auto& el : elems) {

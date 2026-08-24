@@ -10,7 +10,7 @@ namespace fl {
 
 MissionSelectScreen::MissionSelectScreen(std::vector<std::string> missions) : m_missions(std::move(missions)) {}
 
-Screen MissionSelectScreen::update(IInput& input, IWindow& window) {
+Screen MissionSelectScreen::update(IInput& input, IWindow& window, float /*frameDtS*/) {
     const int n = static_cast<int>(m_missions.size());
 
     if (input.isKeyJustPressed(Key::Escape))

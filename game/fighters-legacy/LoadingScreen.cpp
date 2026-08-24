@@ -52,7 +52,7 @@ void LoadingScreen::addLine(const char* text) {
         m_lines[static_cast<std::size_t>(m_lineCount++)] = text;
 }
 
-Screen LoadingScreen::update(IInput& /*input*/, IWindow& /*window*/) {
+Screen LoadingScreen::update(IInput& /*input*/, IWindow& /*window*/, float /*frameDtS*/) {
     switch (m_phase) {
     case Phase::StartingServer: {
         using namespace std::chrono;

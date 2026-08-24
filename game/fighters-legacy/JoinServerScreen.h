@@ -43,7 +43,7 @@ class JoinServerScreen : public IScreen {
         setField(m_callsign, sizeof(m_callsign), m_deps.initialCallsign);
     }
 
-    Screen update(IInput& input, IWindow& window) override;
+    Screen update(IInput& input, IWindow& window, float frameDtS) override;
 
     // IGui screen — all rendering happens through the injected IGui in update(); no HudElements.
     std::span<const HudElement> buildElements() override {

@@ -10,6 +10,9 @@
 
 using namespace fl;
 
+// These suites drive the screen a fixed step at a time; nothing here is rate-dependent (#1241).
+constexpr float kTestFrameDtS = 1.f / 60.f;
+
 static MockInput g_inp;
 static MockWindow g_win;
 
@@ -30,7 +33,7 @@ TEST_CASE("LoadingScreen: stays on Loading while server not ready") {
     bool onReadyCalled = false;
     LoadingScreen s(ready, [&] { return connected; }, [&] { onReadyCalled = true; });
 
-    Screen next = s.update(g_inp, g_win);
+    Screen next = s.update(g_inp, g_win, kTestFrameDtS);
     CHECK(next == Screen::Loading);
     CHECK(!onReadyCalled);
 }
@@ -41,10 +44,10 @@ TEST_CASE("LoadingScreen: calls onServerReady once when serverReady fires") {
     int onReadyCount = 0;
     LoadingScreen s(ready, [&] { return connected; }, [&] { ++onReadyCount; });
 
-    s.update(g_inp, g_win); // StartingServer
+    s.update(g_inp, g_win, kTestFrameDtS); // StartingServer
     ready.store(true);
-    s.update(g_inp, g_win); // triggers onServerReady → Connecting
-    s.update(g_inp, g_win); // Connecting (still not connected)
+    s.update(g_inp, g_win, kTestFrameDtS); // triggers onServerReady → Connecting
+    s.update(g_inp, g_win, kTestFrameDtS); // Connecting (still not connected)
     CHECK(onReadyCount == 1);
 }
 
@@ -53,8 +56,8 @@ TEST_CASE("LoadingScreen: stays Connecting while isConnected returns false") {
     bool connected = false;
     LoadingScreen s(ready, [&] { return connected; }, [] {});
 
-    s.update(g_inp, g_win); // → Connecting (serverReady already true)
-    Screen next = s.update(g_inp, g_win);
+    s.update(g_inp, g_win, kTestFrameDtS); // → Connecting (serverReady already true)
+    Screen next = s.update(g_inp, g_win, kTestFrameDtS);
     CHECK(next == Screen::Loading);
 }
 
@@ -63,17 +66,17 @@ TEST_CASE("LoadingScreen: transitions to Flight after isConnected returns true")
     bool connected = false;
     LoadingScreen s(ready, [&] { return connected; }, [] {});
 
-    s.update(g_inp, g_win); // → Connecting
+    s.update(g_inp, g_win, kTestFrameDtS); // → Connecting
     connected = true;
-    s.update(g_inp, g_win);               // → Ready
-    Screen next = s.update(g_inp, g_win); // emits Screen::Flight
+    s.update(g_inp, g_win, kTestFrameDtS);               // → Ready
+    Screen next = s.update(g_inp, g_win, kTestFrameDtS); // emits Screen::Flight
     CHECK(next == Screen::Flight);
 }
 
 TEST_CASE("LoadingScreen: buildElements not empty while in progress") {
     std::atomic<bool> ready{false};
     LoadingScreen s(ready, [] { return false; }, [] {});
-    s.update(g_inp, g_win);
+    s.update(g_inp, g_win, kTestFrameDtS);
     CHECK(!s.buildElements().empty());
 }
 
@@ -84,25 +87,25 @@ TEST_CASE("LoadingScreen: reset allows reuse for a second session") {
     LoadingScreen s(ready, [&] { return connected; }, [&] { ++onReadyCount; });
 
     // First session: run to Flight
-    s.update(g_inp, g_win);
-    s.update(g_inp, g_win);
-    s.update(g_inp, g_win);
+    s.update(g_inp, g_win, kTestFrameDtS);
+    s.update(g_inp, g_win, kTestFrameDtS);
+    s.update(g_inp, g_win, kTestFrameDtS);
     CHECK(onReadyCount == 1);
 
     // Reset for second session
     ready.store(false);
     connected = false;
     s.reset();
-    s.update(g_inp, g_win); // StartingServer
+    s.update(g_inp, g_win, kTestFrameDtS); // StartingServer
     ready.store(true);
-    s.update(g_inp, g_win); // fires onServerReady again
+    s.update(g_inp, g_win, kTestFrameDtS); // fires onServerReady again
     CHECK(onReadyCount == 2);
 }
 
 TEST_CASE("LoadingScreen: multiplayer mode shows remote connect message") {
     std::atomic<bool> ready{false};
     LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/false);
-    s.update(g_inp, g_win);
+    s.update(g_inp, g_win, kTestFrameDtS);
     auto elems = s.buildElements();
     bool found = false;
     for (const auto& el : elems) {
@@ -121,12 +124,12 @@ TEST_CASE("LoadingScreen: connect timeout trips Failed phase then returns MainMe
     LoadingScreen s(ready, [] { return false; }, [] {});
     s.setClock(fakeNow);
 
-    s.update(g_inp, g_win); // StartingServer → Connecting; deadline = fakeNow + 10s
+    s.update(g_inp, g_win, kTestFrameDtS); // StartingServer → Connecting; deadline = fakeNow + 10s
 
-    CHECK(s.update(g_inp, g_win) == Screen::Loading); // within timeout
+    CHECK(s.update(g_inp, g_win, kTestFrameDtS) == Screen::Loading); // within timeout
 
-    fakeNow.advance(std::chrono::seconds(11));        // past connect deadline
-    CHECK(s.update(g_inp, g_win) == Screen::Loading); // → Failed; within kFailDisplaySeconds
+    fakeNow.advance(std::chrono::seconds(11));                       // past connect deadline
+    CHECK(s.update(g_inp, g_win, kTestFrameDtS) == Screen::Loading); // → Failed; within kFailDisplaySeconds
 
     bool foundMsg = false;
     for (const auto& el : s.buildElements())
@@ -135,7 +138,7 @@ TEST_CASE("LoadingScreen: connect timeout trips Failed phase then returns MainMe
     CHECK(foundMsg);
 
     fakeNow.advance(std::chrono::seconds(4)); // past kFailDisplaySeconds (3s)
-    CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
+    CHECK(s.update(g_inp, g_win, kTestFrameDtS) == Screen::MainMenu);
 }
 
 TEST_CASE("LoadingScreen: startup timeout trips Failed phase then returns MainMenu") {
@@ -146,13 +149,13 @@ TEST_CASE("LoadingScreen: startup timeout trips Failed phase then returns MainMe
     LoadingScreen s(ready, [] { return false; }, [&] { onReadyCalled = true; });
     s.setClock(fakeNow);
 
-    s.update(g_inp, g_win); // StartingServer; deadline = fakeNow + 10s
+    s.update(g_inp, g_win, kTestFrameDtS); // StartingServer; deadline = fakeNow + 10s
 
-    CHECK(s.update(g_inp, g_win) == Screen::Loading); // within timeout
+    CHECK(s.update(g_inp, g_win, kTestFrameDtS) == Screen::Loading); // within timeout
     CHECK(!onReadyCalled);
 
-    fakeNow.advance(std::chrono::seconds(11));        // past startup deadline
-    CHECK(s.update(g_inp, g_win) == Screen::Loading); // → Failed; within kFailDisplaySeconds
+    fakeNow.advance(std::chrono::seconds(11));                       // past startup deadline
+    CHECK(s.update(g_inp, g_win, kTestFrameDtS) == Screen::Loading); // → Failed; within kFailDisplaySeconds
     CHECK(!onReadyCalled);
 
     bool foundMsg = false;
@@ -162,7 +165,7 @@ TEST_CASE("LoadingScreen: startup timeout trips Failed phase then returns MainMe
     CHECK(foundMsg);
 
     fakeNow.advance(std::chrono::seconds(4)); // past kFailDisplaySeconds (3s)
-    CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
+    CHECK(s.update(g_inp, g_win, kTestFrameDtS) == Screen::MainMenu);
 }
 
 TEST_CASE("LoadingScreen: reset after startup timeout allows successful second session") {
@@ -175,9 +178,9 @@ TEST_CASE("LoadingScreen: reset after startup timeout allows successful second s
     s.setClock(fakeNow);
 
     // First session: startup timeout fires.
-    s.update(g_inp, g_win);
+    s.update(g_inp, g_win, kTestFrameDtS);
     fakeNow.advance(std::chrono::seconds(11));
-    s.update(g_inp, g_win); // → Failed
+    s.update(g_inp, g_win, kTestFrameDtS); // → Failed
     CHECK(onReadyCount == 0);
 
     // Reset for second session.
@@ -185,13 +188,13 @@ TEST_CASE("LoadingScreen: reset after startup timeout allows successful second s
     s.reset();
 
     // Second session: server starts and connects successfully.
-    s.update(g_inp, g_win); // StartingServer; fresh deadline
+    s.update(g_inp, g_win, kTestFrameDtS); // StartingServer; fresh deadline
     ready.store(true);
-    s.update(g_inp, g_win); // → Connecting; onServerReady fires
+    s.update(g_inp, g_win, kTestFrameDtS); // → Connecting; onServerReady fires
     CHECK(onReadyCount == 1);
     connected = true;
-    s.update(g_inp, g_win); // → Ready
-    CHECK(s.update(g_inp, g_win) == Screen::Flight);
+    s.update(g_inp, g_win, kTestFrameDtS); // → Ready
+    CHECK(s.update(g_inp, g_win, kTestFrameDtS) == Screen::Flight);
 }
 
 TEST_CASE("LoadingScreen: reset clears startup deadline so new session gets fresh timeout") {
@@ -201,16 +204,16 @@ TEST_CASE("LoadingScreen: reset clears startup deadline so new session gets fres
     LoadingScreen s(ready, [] { return false; }, [] {});
     s.setClock(fakeNow);
 
-    s.update(g_inp, g_win); // sets start deadline at fakeNow
+    s.update(g_inp, g_win, kTestFrameDtS); // sets start deadline at fakeNow
 
     fakeNow.advance(std::chrono::seconds(5)); // halfway through first session
     s.reset();                                // clears both deadlines
 
     // After reset the next update sets a fresh deadline from current fakeNow.
-    s.update(g_inp, g_win);
+    s.update(g_inp, g_win, kTestFrameDtS);
 
-    fakeNow.advance(std::chrono::seconds(6));         // only 6s into NEW deadline (< 10s)
-    CHECK(s.update(g_inp, g_win) == Screen::Loading); // must NOT have timed out
+    fakeNow.advance(std::chrono::seconds(6));                        // only 6s into NEW deadline (< 10s)
+    CHECK(s.update(g_inp, g_win, kTestFrameDtS) == Screen::Loading); // must NOT have timed out
 }
 
 TEST_CASE("LoadingScreen: spawn fail message shown immediately without timeout") {
@@ -221,10 +224,10 @@ TEST_CASE("LoadingScreen: spawn fail message shown immediately without timeout")
     LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/true, &failure);
     s.setClock(fakeNow);
 
-    s.update(g_inp, g_win); // sets start deadline; no failure yet
+    s.update(g_inp, g_win, kTestFrameDtS); // sets start deadline; no failure yet
 
     failure.store(SessionFailure::ServerSpawnFailed);
-    CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed, within kFailDisplaySeconds
+    CHECK(s.update(g_inp, g_win, kTestFrameDtS) == Screen::Loading); // -> Failed, within kFailDisplaySeconds
 
     bool found = false;
     for (const auto& el : s.buildElements())
@@ -233,7 +236,7 @@ TEST_CASE("LoadingScreen: spawn fail message shown immediately without timeout")
     CHECK(found);
 
     fakeNow.advance(std::chrono::seconds(4)); // past kFailDisplaySeconds (3 s)
-    CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
+    CHECK(s.update(g_inp, g_win, kTestFrameDtS) == Screen::MainMenu);
 }
 
 TEST_CASE("LoadingScreen: bind fail message shown immediately without timeout") {
@@ -244,10 +247,10 @@ TEST_CASE("LoadingScreen: bind fail message shown immediately without timeout") 
     LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/true, &failure);
     s.setClock(fakeNow);
 
-    s.update(g_inp, g_win); // sets start deadline
+    s.update(g_inp, g_win, kTestFrameDtS); // sets start deadline
 
     failure.store(SessionFailure::ServerBindFailed);
-    CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed, within kFailDisplaySeconds
+    CHECK(s.update(g_inp, g_win, kTestFrameDtS) == Screen::Loading); // -> Failed, within kFailDisplaySeconds
 
     bool found = false;
     for (const auto& el : s.buildElements())
@@ -256,7 +259,7 @@ TEST_CASE("LoadingScreen: bind fail message shown immediately without timeout") 
     CHECK(found);
 
     fakeNow.advance(std::chrono::seconds(4));
-    CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
+    CHECK(s.update(g_inp, g_win, kTestFrameDtS) == Screen::MainMenu);
 }
 
 TEST_CASE("LoadingScreen: server timeout fail message shown immediately without timeout") {
@@ -267,10 +270,10 @@ TEST_CASE("LoadingScreen: server timeout fail message shown immediately without 
     LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/true, &failure);
     s.setClock(fakeNow);
 
-    s.update(g_inp, g_win); // sets start deadline
+    s.update(g_inp, g_win, kTestFrameDtS); // sets start deadline
 
     failure.store(SessionFailure::ServerStartTimeout);
-    CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed, within kFailDisplaySeconds
+    CHECK(s.update(g_inp, g_win, kTestFrameDtS) == Screen::Loading); // -> Failed, within kFailDisplaySeconds
 
     bool found = false;
     for (const auto& el : s.buildElements())
@@ -279,7 +282,7 @@ TEST_CASE("LoadingScreen: server timeout fail message shown immediately without 
     CHECK(found);
 
     fakeNow.advance(std::chrono::seconds(4));
-    CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
+    CHECK(s.update(g_inp, g_win, kTestFrameDtS) == Screen::MainMenu);
 }
 
 TEST_CASE("LoadingScreen: fallback generic message shown on startup deadline with no fail msg") {
@@ -290,10 +293,10 @@ TEST_CASE("LoadingScreen: fallback generic message shown on startup deadline wit
     LoadingScreen s(ready, [] { return false; }, [] {});
     s.setClock(fakeNow);
 
-    s.update(g_inp, g_win); // sets start deadline at fakeNow + 10 s
+    s.update(g_inp, g_win, kTestFrameDtS); // sets start deadline at fakeNow + 10 s
 
-    fakeNow.advance(std::chrono::seconds(11));        // past startup deadline
-    CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed, within kFailDisplaySeconds
+    fakeNow.advance(std::chrono::seconds(11));                       // past startup deadline
+    CHECK(s.update(g_inp, g_win, kTestFrameDtS) == Screen::Loading); // -> Failed, within kFailDisplaySeconds
 
     bool found = false;
     for (const auto& el : s.buildElements())
@@ -302,7 +305,7 @@ TEST_CASE("LoadingScreen: fallback generic message shown on startup deadline wit
     CHECK(found);
 
     fakeNow.advance(std::chrono::seconds(4));
-    CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
+    CHECK(s.update(g_inp, g_win, kTestFrameDtS) == Screen::MainMenu);
 }
 
 TEST_CASE("LoadingScreen: version mismatch shown immediately in Connecting phase") {
@@ -313,10 +316,10 @@ TEST_CASE("LoadingScreen: version mismatch shown immediately in Connecting phase
     LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/false, &failure);
     s.setClock(fakeNow);
 
-    s.update(g_inp, g_win); // StartingServer -> Connecting (serverReady already true)
+    s.update(g_inp, g_win, kTestFrameDtS); // StartingServer -> Connecting (serverReady already true)
 
     failure.store(SessionFailure::VersionMismatch);
-    CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed, within kFailDisplaySeconds
+    CHECK(s.update(g_inp, g_win, kTestFrameDtS) == Screen::Loading); // -> Failed, within kFailDisplaySeconds
 
     bool found = false;
     for (const auto& el : s.buildElements())
@@ -325,7 +328,7 @@ TEST_CASE("LoadingScreen: version mismatch shown immediately in Connecting phase
     CHECK(found);
 
     fakeNow.advance(std::chrono::seconds(4)); // past kFailDisplaySeconds (3 s)
-    CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
+    CHECK(s.update(g_inp, g_win, kTestFrameDtS) == Screen::MainMenu);
 }
 
 TEST_CASE("LoadingScreen: connection refused shown immediately in Connecting phase") {
@@ -336,10 +339,10 @@ TEST_CASE("LoadingScreen: connection refused shown immediately in Connecting pha
     LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/false, &failure);
     s.setClock(fakeNow);
 
-    s.update(g_inp, g_win); // -> Connecting
+    s.update(g_inp, g_win, kTestFrameDtS); // -> Connecting
 
     failure.store(SessionFailure::ConnectionRefused);
-    CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed
+    CHECK(s.update(g_inp, g_win, kTestFrameDtS) == Screen::Loading); // -> Failed
 
     bool found = false;
     for (const auto& el : s.buildElements())
@@ -348,7 +351,7 @@ TEST_CASE("LoadingScreen: connection refused shown immediately in Connecting pha
     CHECK(found);
 
     fakeNow.advance(std::chrono::seconds(4));
-    CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
+    CHECK(s.update(g_inp, g_win, kTestFrameDtS) == Screen::MainMenu);
 }
 
 TEST_CASE("LoadingScreen: getConnectFailMsg null does not break timeout path") {
@@ -359,10 +362,10 @@ TEST_CASE("LoadingScreen: getConnectFailMsg null does not break timeout path") {
     LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/false);
     s.setClock(fakeNow);
 
-    s.update(g_inp, g_win); // -> Connecting
+    s.update(g_inp, g_win, kTestFrameDtS); // -> Connecting
 
-    fakeNow.advance(std::chrono::seconds(11));        // past connect deadline
-    CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed via timeout
+    fakeNow.advance(std::chrono::seconds(11));                       // past connect deadline
+    CHECK(s.update(g_inp, g_win, kTestFrameDtS) == Screen::Loading); // -> Failed via timeout
 
     bool found = false;
     for (const auto& el : s.buildElements())
@@ -371,7 +374,7 @@ TEST_CASE("LoadingScreen: getConnectFailMsg null does not break timeout path") {
     CHECK(found);
 
     fakeNow.advance(std::chrono::seconds(4));
-    CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
+    CHECK(s.update(g_inp, g_win, kTestFrameDtS) == Screen::MainMenu);
 }
 
 TEST_CASE("LoadingScreen: getConnectFailMsg null does not break success path") {
@@ -379,10 +382,10 @@ TEST_CASE("LoadingScreen: getConnectFailMsg null does not break success path") {
     bool connected = false;
     LoadingScreen s(ready, [&] { return connected; }, [] {}, /*isSinglePlayer=*/false);
 
-    s.update(g_inp, g_win); // -> Connecting
+    s.update(g_inp, g_win, kTestFrameDtS); // -> Connecting
     connected = true;
-    s.update(g_inp, g_win); // -> Ready
-    CHECK(s.update(g_inp, g_win) == Screen::Flight);
+    s.update(g_inp, g_win, kTestFrameDtS); // -> Ready
+    CHECK(s.update(g_inp, g_win, kTestFrameDtS) == Screen::Flight);
 }
 
 TEST_CASE("LoadingScreen: version mismatch in single-player flow") {
@@ -393,12 +396,12 @@ TEST_CASE("LoadingScreen: version mismatch in single-player flow") {
     LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/true, &failure);
     s.setClock(fakeNow);
 
-    s.update(g_inp, g_win); // StartingServer; deadline set
+    s.update(g_inp, g_win, kTestFrameDtS); // StartingServer; deadline set
     ready.store(true);
-    s.update(g_inp, g_win); // -> Connecting; onServerReady fires
+    s.update(g_inp, g_win, kTestFrameDtS); // -> Connecting; onServerReady fires
 
     failure.store(SessionFailure::VersionMismatch);
-    CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed immediately
+    CHECK(s.update(g_inp, g_win, kTestFrameDtS) == Screen::Loading); // -> Failed immediately
 
     bool found = false;
     for (const auto& el : s.buildElements())
@@ -407,7 +410,7 @@ TEST_CASE("LoadingScreen: version mismatch in single-player flow") {
     CHECK(found);
 
     fakeNow.advance(std::chrono::seconds(4));
-    CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
+    CHECK(s.update(g_inp, g_win, kTestFrameDtS) == Screen::MainMenu);
 }
 
 TEST_CASE("LoadingScreen: reset preserves multiplayer messages") {
@@ -415,8 +418,8 @@ TEST_CASE("LoadingScreen: reset preserves multiplayer messages") {
     bool connected = false;
     LoadingScreen s(ready, [&] { return connected; }, [] {}, /*isSinglePlayer=*/false);
     // Run one session to completion.
-    s.update(g_inp, g_win);
-    s.update(g_inp, g_win);
+    s.update(g_inp, g_win, kTestFrameDtS);
+    s.update(g_inp, g_win, kTestFrameDtS);
     ready.store(false);
     connected = false;
     s.reset();

@@ -14,7 +14,7 @@ void MissionBriefScreen::setMission(std::string_view missionId, std::string_view
     m_selectedIdx = 0;
 }
 
-Screen MissionBriefScreen::update(IInput& input, IWindow& window) {
+Screen MissionBriefScreen::update(IInput& input, IWindow& window, float /*frameDtS*/) {
     if (input.isKeyJustPressed(Key::Escape))
         return Screen::MissionSelect;
 

@@ -11,6 +11,9 @@
 
 using namespace fl;
 
+// These suites drive the screen a fixed step at a time; nothing here is rate-dependent (#1241).
+constexpr float kTestFrameDtS = 1.f / 60.f;
+
 // Minimal fixture: UserConfig backed by in-memory filesystem.
 struct Fixture {
     MockFilesystem fs;
@@ -26,7 +29,7 @@ static MockInput g_inp;
 TEST_CASE("SettingsScreen: constructs without crash") {
     Fixture f;
     SettingsScreen s(f.cfg, f.renderer, f.window, f.display);
-    Screen next = s.update(g_inp, f.window);
+    Screen next = s.update(g_inp, f.window, kTestFrameDtS);
     CHECK(next == Screen::Settings);
 }
 
@@ -35,7 +38,7 @@ TEST_CASE("SettingsScreen: Escape applies settings and returns MainMenu") {
     SettingsScreen s(f.cfg, f.renderer, f.window, f.display);
     MockInput inp;
     inp.justPressed.insert(Key::Escape);
-    Screen next = s.update(inp, f.window);
+    Screen next = s.update(inp, f.window, kTestFrameDtS);
     CHECK(next == Screen::MainMenu);
 }
 
@@ -45,14 +48,14 @@ TEST_CASE("SettingsScreen: setReturnTarget redirects Back to Pause") {
     s.setReturnTarget(Screen::Pause);
     MockInput inp;
     inp.justPressed.insert(Key::Escape);
-    Screen next = s.update(inp, f.window);
+    Screen next = s.update(inp, f.window, kTestFrameDtS);
     CHECK(next == Screen::Pause);
 }
 
 TEST_CASE("SettingsScreen: buildElements not empty") {
     Fixture f;
     SettingsScreen s(f.cfg, f.renderer, f.window, f.display);
-    s.update(g_inp, f.window);
+    s.update(g_inp, f.window, kTestFrameDtS);
     CHECK(!s.buildElements().empty());
 }
 
@@ -65,19 +68,19 @@ TEST_CASE("SettingsScreen: Right arrow cycles vsync Off to On") {
     for (int i = 0; i < 2; ++i) {
         MockInput inp;
         inp.justPressed.insert(Key::ArrowDown);
-        s.update(inp, f.window);
+        s.update(inp, f.window, kTestFrameDtS);
     }
     // Right = cycle vsync
     {
         MockInput inp;
         inp.justPressed.insert(Key::ArrowRight);
-        s.update(inp, f.window);
+        s.update(inp, f.window, kTestFrameDtS);
     }
     // Escape to apply + return
     {
         MockInput inp;
         inp.justPressed.insert(Key::Escape);
-        s.update(inp, f.window);
+        s.update(inp, f.window, kTestFrameDtS);
     }
     // Default vsync is On; one Right should cycle to Adaptive
     GraphicsSettings gs = f.cfg.graphics();
@@ -91,18 +94,18 @@ TEST_CASE("SettingsScreen: AA mode cycles on Right") {
     for (int i = 0; i < 3; ++i) {
         MockInput inp;
         inp.justPressed.insert(Key::ArrowDown);
-        s.update(inp, f.window);
+        s.update(inp, f.window, kTestFrameDtS);
     }
     // Default aaMode is TAA (ordinal 2); one Right wraps to Off (ordinal 0)
     {
         MockInput inp;
         inp.justPressed.insert(Key::ArrowRight);
-        s.update(inp, f.window);
+        s.update(inp, f.window, kTestFrameDtS);
     }
     {
         MockInput inp;
         inp.justPressed.insert(Key::Escape);
-        s.update(inp, f.window);
+        s.update(inp, f.window, kTestFrameDtS);
     }
     CHECK(f.cfg.graphics().aaMode == AntiAliasingMode::Off);
     CHECK(f.renderer.lastApplied.aaMode == RendererAAMode::Off);
@@ -114,18 +117,18 @@ TEST_CASE("SettingsScreen: AA mode wraps after 3 cycles") {
     for (int i = 0; i < 3; ++i) {
         MockInput inp;
         inp.justPressed.insert(Key::ArrowDown);
-        s.update(inp, f.window);
+        s.update(inp, f.window, kTestFrameDtS);
     }
     // Default is TAA (ordinal 2); 3 Rights wraps back to TAA
     for (int i = 0; i < 3; ++i) {
         MockInput inp;
         inp.justPressed.insert(Key::ArrowRight);
-        s.update(inp, f.window);
+        s.update(inp, f.window, kTestFrameDtS);
     }
     {
         MockInput inp;
         inp.justPressed.insert(Key::Escape);
-        s.update(inp, f.window);
+        s.update(inp, f.window, kTestFrameDtS);
     }
     CHECK(f.cfg.graphics().aaMode == AntiAliasingMode::TAA);
 }
@@ -137,18 +140,18 @@ TEST_CASE("SettingsScreen: ambient occlusion cycles on Right") {
     for (int i = 0; i < 5; ++i) {
         MockInput inp;
         inp.justPressed.insert(Key::ArrowDown);
-        s.update(inp, f.window);
+        s.update(inp, f.window, kTestFrameDtS);
     }
     // Default is High (ordinal 2); one Right wraps to Off (ordinal 0)
     {
         MockInput inp;
         inp.justPressed.insert(Key::ArrowRight);
-        s.update(inp, f.window);
+        s.update(inp, f.window, kTestFrameDtS);
     }
     {
         MockInput inp;
         inp.justPressed.insert(Key::Escape);
-        s.update(inp, f.window);
+        s.update(inp, f.window, kTestFrameDtS);
     }
     CHECK(f.cfg.graphics().ambientOcclusion == AmbientOcclusion::Off);
     CHECK(f.renderer.lastApplied.aoMode == RendererAOMode::Off);
@@ -161,18 +164,18 @@ TEST_CASE("SettingsScreen: sky quality cycles on Right") {
     for (int i = 0; i < 6; ++i) {
         MockInput inp;
         inp.justPressed.insert(Key::ArrowDown);
-        s.update(inp, f.window);
+        s.update(inp, f.window, kTestFrameDtS);
     }
     // Default is LUT (ordinal 1); one Right wraps to Procedural (ordinal 0)
     {
         MockInput inp;
         inp.justPressed.insert(Key::ArrowRight);
-        s.update(inp, f.window);
+        s.update(inp, f.window, kTestFrameDtS);
     }
     {
         MockInput inp;
         inp.justPressed.insert(Key::Escape);
-        s.update(inp, f.window);
+        s.update(inp, f.window, kTestFrameDtS);
     }
     CHECK(f.cfg.graphics().skyQuality == SkyQuality::Procedural);
     CHECK(f.renderer.lastApplied.skyQuality == RendererSkyQuality::Procedural);
@@ -185,18 +188,18 @@ TEST_CASE("SettingsScreen: shadow quality cycles on Right") {
     for (int i = 0; i < 4; ++i) {
         MockInput inp;
         inp.justPressed.insert(Key::ArrowDown);
-        s.update(inp, f.window);
+        s.update(inp, f.window, kTestFrameDtS);
     }
     // Default is High (ordinal 3); one Right cycles to Ultra
     {
         MockInput inp;
         inp.justPressed.insert(Key::ArrowRight);
-        s.update(inp, f.window);
+        s.update(inp, f.window, kTestFrameDtS);
     }
     {
         MockInput inp;
         inp.justPressed.insert(Key::Escape);
-        s.update(inp, f.window);
+        s.update(inp, f.window, kTestFrameDtS);
     }
     CHECK(f.cfg.graphics().shadowQuality == ShadowQuality::Ultra);
     CHECK(f.renderer.lastApplied.shadowQuality == RendererShadowQuality::Ultra);
@@ -209,18 +212,18 @@ TEST_CASE("SettingsScreen: particle density cycles on Right") {
     for (int i = 0; i < 7; ++i) {
         MockInput inp;
         inp.justPressed.insert(Key::ArrowDown);
-        s.update(inp, f.window);
+        s.update(inp, f.window, kTestFrameDtS);
     }
     // Default is High (ordinal 2); one Right cycles to Ultra
     {
         MockInput inp;
         inp.justPressed.insert(Key::ArrowRight);
-        s.update(inp, f.window);
+        s.update(inp, f.window, kTestFrameDtS);
     }
     {
         MockInput inp;
         inp.justPressed.insert(Key::Escape);
-        s.update(inp, f.window);
+        s.update(inp, f.window, kTestFrameDtS);
     }
     CHECK(f.cfg.graphics().particleDensity == ParticleDensity::Ultra);
     CHECK(f.renderer.lastApplied.particleDensity == RendererParticleDensity::Ultra);
@@ -239,18 +242,18 @@ TEST_CASE("SettingsScreen: master volume clamps at 0 when decremented from 0") {
     for (int i = 0; i < 9; ++i) {
         MockInput inp;
         inp.justPressed.insert(Key::ArrowDown);
-        s.update(inp, f.window);
+        s.update(inp, f.window, kTestFrameDtS);
     }
     // Left: decrement (should clamp at 0)
     {
         MockInput inp;
         inp.justPressed.insert(Key::ArrowLeft);
-        s.update(inp, f.window);
+        s.update(inp, f.window, kTestFrameDtS);
     }
     {
         MockInput inp;
         inp.justPressed.insert(Key::Escape);
-        s.update(inp, f.window);
+        s.update(inp, f.window, kTestFrameDtS);
     }
     CHECK(f.cfg.audio().masterVolume >= 0.0f);
     CHECK(f.cfg.audio().masterVolume <= 0.05f); // clamped near 0
@@ -267,17 +270,17 @@ TEST_CASE("SettingsScreen: master volume clamps at 1 when incremented from 1") {
     for (int i = 0; i < 9; ++i) {
         MockInput inp;
         inp.justPressed.insert(Key::ArrowDown);
-        s.update(inp, f.window);
+        s.update(inp, f.window, kTestFrameDtS);
     }
     {
         MockInput inp;
         inp.justPressed.insert(Key::ArrowRight);
-        s.update(inp, f.window);
+        s.update(inp, f.window, kTestFrameDtS);
     }
     {
         MockInput inp;
         inp.justPressed.insert(Key::Escape);
-        s.update(inp, f.window);
+        s.update(inp, f.window, kTestFrameDtS);
     }
     CHECK(f.cfg.audio().masterVolume <= 1.0f);
 }
@@ -285,7 +288,7 @@ TEST_CASE("SettingsScreen: master volume clamps at 1 when incremented from 1") {
 TEST_CASE("SettingsScreen: labels right-align at 0.48 and values left-align at 0.52") {
     Fixture f;
     SettingsScreen s(f.cfg, f.renderer, f.window, f.display);
-    s.update(g_inp, f.window);
+    s.update(g_inp, f.window, kTestFrameDtS);
     auto elems = s.buildElements();
     int labels = 0;
     int values = 0;
@@ -320,7 +323,7 @@ TEST_CASE("SettingsScreen: mouse hover focuses the row drawn under the cursor") 
     // hardcoded y — a new row must not silently move this test onto a different row.
     inp.mouseY =
         static_cast<int>((SettingsScreen::rowY(SettingsScreen::kRowAaMode) + 0.5f * SettingsScreen::kRowHitH) * 720.f);
-    s.update(inp, f.window);
+    s.update(inp, f.window, kTestFrameDtS);
     auto elems = s.buildElements();
     bool found = false;
     for (const auto& el : elems) {
@@ -344,7 +347,7 @@ TEST_CASE("SettingsScreen: hover matches drawn rows on the lower block (drift re
     inp.mouseY = static_cast<int>((SettingsScreen::rowY(SettingsScreen::kRowSfxVolume) + kGlyphH) * 720.f);
     // The band must actually contain the glyph bottom, or the test proves nothing.
     STATIC_REQUIRE(kGlyphH < SettingsScreen::kRowHitH);
-    s.update(inp, f.window);
+    s.update(inp, f.window, kTestFrameDtS);
     auto elems = s.buildElements();
     bool found = false;
     for (const auto& el : elems) {

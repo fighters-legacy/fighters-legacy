@@ -19,7 +19,7 @@ void DebriefScreen::setMatchResult(std::string winnerText, std::vector<std::pair
     m_hasMatchResult = !m_teamScores.empty();
 }
 
-Screen DebriefScreen::update(IInput& input, IWindow& /*window*/) {
+Screen DebriefScreen::update(IInput& input, IWindow& /*window*/, float /*frameDtS*/) {
     if (input.isKeyJustPressed(Key::Enter) || input.isKeyJustPressed(Key::Space) ||
         input.isKeyJustPressed(Key::Escape) || input.isMouseButtonJustPressed(MouseButton::Left) ||
         input.isGamepadButtonJustPressed(0, GamepadButton::A) || input.isGamepadButtonJustPressed(0, GamepadButton::B))

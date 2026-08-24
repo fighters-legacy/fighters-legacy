@@ -23,7 +23,7 @@ class DebriefScreen : public IScreen {
     // personal tallies. Passing an empty team list clears the match section (single-player debrief).
     void setMatchResult(std::string winnerText, std::vector<std::pair<std::string, int>> teamScores);
 
-    Screen update(IInput& input, IWindow& window) override;
+    Screen update(IInput& input, IWindow& window, float frameDtS) override;
     std::span<const HudElement> buildElements() override;
 
   private:

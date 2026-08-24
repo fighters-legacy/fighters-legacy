@@ -82,7 +82,7 @@ FlightScreen::~FlightScreen() {
         m_deps.clientNetHandler->snapshotCallback = nullptr;
 }
 
-Screen FlightScreen::update(IInput& input, IWindow& window) {
+Screen FlightScreen::update(IInput& input, IWindow& window, float frameDtS) {
     auto& d = m_deps;
 
     // Every gameplay key below resolves through the binding table (#1050). The exceptions are the
@@ -234,7 +234,7 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
     // Head tracking (#927): drain the opentrack UDP stream and feed the smoothed pose to the cockpit
     // look before the camera pose is computed.
     if (d.headTracker && d.userConfig) {
-        d.headTracker->poll(1.0f / 60.0f, d.userConfig->headTracking());
+        d.headTracker->poll(frameDtS, d.userConfig->headTracking());
         d.camInput->setHeadPose(&d.headTracker->pose());
     }
 
@@ -492,7 +492,7 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
             const float rawThrottle = msg->throttle;
             const bool throttleTouched = std::abs(rawThrottle - m_lastRawThrottle) > 0.02f;
             m_autopilot.notePlayerInput(msg->elevator, msg->aileron, msg->rudder, throttleTouched);
-            const fl::AutopilotCommand ap = m_autopilot.compute(*fs, 1.0f / 60.0f, radiusM);
+            const fl::AutopilotCommand ap = m_autopilot.compute(*fs, radiusM);
             if (ap.hasPitch)
                 msg->elevator = ap.elevator;
             if (ap.hasRoll) {
@@ -582,7 +582,7 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
 
         constexpr double kSceneEnterS = 2.0, kSceneTimeoutS = 60.0;
         if (onGround && spd < 1.5f)
-            m_landedStillS += 1.0 / 60.0;
+            m_landedStillS += static_cast<double>(frameDtS);
         else
             m_landedStillS = 0.0;
         const bool wantScene = m_landedStillS >= kSceneEnterS && m_landedStillS < kSceneEnterS + kSceneTimeoutS;
@@ -659,11 +659,11 @@ Screen FlightScreen::update(IInput& input, IWindow& window) {
             d.sceneRenderer->setInsetView(nullptr, glm::vec4{0.f});
         }
     }
-    d.windshieldRain->update(cockpit ? (1.f / 60.f) : 0.f, cockpit ? *d.env : EnvironmentState{},
+    d.windshieldRain->update(cockpit ? frameDtS : 0.f, cockpit ? *d.env : EnvironmentState{},
                              cockpit ? rollAngleRad(viewEntry, radiusM) : 0.f);
     // Haptics only for a real ownship — an observer viewing another entity should not feel its hits.
     if (d.hapticController)
-        d.hapticController->update(m_playerEntry, m_weaponFired, terrainElev, 1.f / 60.f, radiusM);
+        d.hapticController->update(m_playerEntry, m_weaponFired, terrainElev, frameDtS, radiusM);
 
     // The in-flight aircraft manual (#821). Non-modal, like the radio menu: the aircraft keeps flying
     // while you read it, because a reference you must stop flying to consult is one you never open.

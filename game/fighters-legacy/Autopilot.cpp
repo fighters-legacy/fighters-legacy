@@ -64,7 +64,7 @@ void Autopilot::notePlayerInput(float elevator, float aileron, float rudder, boo
         m_modes &= ~SpdHold;
 }
 
-AutopilotCommand Autopilot::compute(const FlightState& s, float /*dt*/, double R) const {
+AutopilotCommand Autopilot::compute(const FlightState& s, double R) const {
     AutopilotCommand cmd;
     if (m_modes == 0)
         return cmd;

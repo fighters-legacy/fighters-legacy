@@ -29,9 +29,16 @@ class SimRenderBridge;
 // Usage (once per frame):
 //   if (auto msg = flightInput.poll(...))
 //       clientNet->send(0, &*msg, sizeof(*msg), /*reliable=*/false);
+// The fixed client->server input send cadence: the server steps at 60 Hz, so this is a rate
+// matched to it, not an assumption about how fast frames arrive (#1241).
+inline constexpr float kInputSendPeriodS = 1.0f / 60.0f;
+// The longest gap a single poll may bill for. Without it, a stall or a debugger pause would hand
+// the throttle ramp a multi-second step and slam it to an end stop on the resuming frame.
+inline constexpr float kMaxInputElapsedS = 0.25f;
+
 class FlightInputCollector {
   public:
-    // Returns a populated MsgClientInput if 1/60 s has elapsed since the last
+    // Returns a populated MsgClientInput if kInputSendPeriodS has elapsed since the last
     // packet, otherwise returns nullopt. Never call from the server thread.
     // uiFocused: an in-flight overlay (the radio menu, #610) has the discrete keys/buttons this
     // frame. The AXES keep working — the menu is non-modal on purpose, because suppressing flight
@@ -125,6 +132,7 @@ class FlightInputCollector {
     float m_speedbrake{0.f}; // held, not latched: the airbrake is a momentary control
     const IClock* m_clock{&SystemClock::instance()};
     std::chrono::steady_clock::time_point m_lastInputTime{};
+    bool m_haveLastInput{false};
     bool m_weaponFired{false};
 
     InputBindings m_bindings{};     // default: the shipped key map

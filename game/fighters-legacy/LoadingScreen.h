@@ -33,7 +33,7 @@ class LoadingScreen : public IScreen {
                   std::function<void()> onServerReady, bool isSinglePlayer = true,
                   std::atomic<SessionFailure>* sessionFailure = nullptr);
 
-    Screen update(IInput& input, IWindow& window) override;
+    Screen update(IInput& input, IWindow& window, float frameDtS) override;
     std::span<const HudElement> buildElements() override;
 
     // Reset to initial state for a new session.

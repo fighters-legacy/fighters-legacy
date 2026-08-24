@@ -420,9 +420,57 @@ TEST_CASE("FlightInputCollector PageUp increases throttle via camInput", "[fligh
     fl::ManualClock t;
     fic.setClock(t);
 
+    // Two polls: the first only establishes the timestamp the ramp measures against, because the
+    // throttle moves at a RATE now and no time has passed yet (#1241). In play that is the opening
+    // frame of the session, one frame before any input can have been held for any length of time.
+    fic.poll(bridge, cam, console, kbOnly(inp));
     const float before = cam.throttle();
+    t.advance(std::chrono::milliseconds(20));
     fic.poll(bridge, cam, console, kbOnly(inp));
     CHECK(cam.throttle() > before);
+}
+
+// #1241: the throttle ramp is a RATE, so the same wall-clock interval must move it the same
+// distance however often poll() is called during it. It used to add a flat 1/60 per accepted poll,
+// which is one full travel per second only while polls land at 60 Hz — on a 30 fps machine the
+// throttle ramped at half speed, a control that responded differently depending on the GPU.
+//
+// 50 and 25 Hz, not 60 and 30: a 60 Hz step lands exactly ON the send period and whether it passes
+// the >= test is then a float-rounding coin toss. And 0.4 s, not a full second: adjustThrottle
+// clamps at 1.0, so a longer run has both arms saturate and agree for the wrong reason. The first
+// version of this test did exactly that and passed against the unfixed code.
+TEST_CASE("FlightInputCollector throttle ramps at the same rate at 25 and 50 fps (#1241)", "[flight_input]") {
+    constexpr float kRunSeconds = 0.4f;
+    auto rampFor = [](int fps) {
+        MockLogger log;
+        CommandRegistry reg;
+        GameConsole console(log, reg);
+        MockInput inp;
+        CameraInput cam;
+        fl::SimRenderBridge bridge;
+        FlightInputCollector fic;
+        fl::ManualClock t;
+        fic.setClock(t);
+        cam.setThrottle(0.f);
+        inp.held.insert(Key::PageUp); // ThrottleUp
+
+        const auto step = std::chrono::nanoseconds(1'000'000'000LL / fps);
+        for (int i = 0; i < static_cast<int>(kRunSeconds * static_cast<float>(fps)); ++i) {
+            t.advance(step);
+            fic.poll(bridge, cam, console, kbOnly(inp));
+        }
+        return cam.throttle();
+    };
+
+    const float at50 = rampFor(50);
+    const float at25 = rampFor(25);
+    INFO("50 fps -> " << at50 << ", 25 fps -> " << at25);
+    // One frame of tolerance: a 25 Hz arm can be up to one 40 ms step behind a 50 Hz one.
+    CHECK(at50 == Catch::Approx(at25).margin(0.05f));
+    // Neither arm may be saturated or the comparison is two ceilings agreeing, and it must actually
+    // have moved roughly the elapsed time at 1.0/s.
+    CHECK(at50 < 0.95f);
+    CHECK(at50 == Catch::Approx(kRunSeconds).margin(0.05f)); // 1.0/s over kRunSeconds
 }
 
 TEST_CASE("FlightInputCollector PageDown decreases throttle via camInput", "[flight_input]") {
@@ -437,8 +485,11 @@ TEST_CASE("FlightInputCollector PageDown decreases throttle via camInput", "[fli
     fl::ManualClock t;
     fic.setClock(t);
 
-    // Start at half-throttle so there is room to decrease.
+    // Start at half-throttle so there is room to decrease. Two polls: the first establishes the
+    // timestamp the rate-based ramp measures against (#1241).
+    fic.poll(bridge, cam, console, kbOnly(inp));
     cam.setThrottle(0.5f);
+    t.advance(std::chrono::milliseconds(20));
     fic.poll(bridge, cam, console, kbOnly(inp));
     CHECK(cam.throttle() < 0.5f);
 }

@@ -33,7 +33,7 @@ class ServerBrowserScreen : public IScreen {
 
     explicit ServerBrowserScreen(Deps deps) : m_deps(std::move(deps)) {}
 
-    Screen update(IInput& input, IWindow& window) override;
+    Screen update(IInput& input, IWindow& window, float frameDtS) override;
     std::span<const HudElement> buildElements() override {
         return {}; // all rendering is through IGui in update()
     }

@@ -15,7 +15,7 @@ class MissionSelectScreen : public IScreen {
   public:
     explicit MissionSelectScreen(std::vector<std::string> missions);
 
-    Screen update(IInput& input, IWindow& window) override;
+    Screen update(IInput& input, IWindow& window, float frameDtS) override;
     std::span<const HudElement> buildElements() override;
 
     // Returns the id of the last confirmed mission.

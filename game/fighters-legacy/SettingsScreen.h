@@ -27,7 +27,7 @@ class SettingsScreen : public IScreen {
   public:
     SettingsScreen(UserConfig& config, IRenderer& renderer, IWindow& window, IDisplay& display);
 
-    Screen update(IInput& input, IWindow& window) override;
+    Screen update(IInput& input, IWindow& window, float frameDtS) override;
     std::span<const HudElement> buildElements() override;
 
     // Where to return when the user presses Back.

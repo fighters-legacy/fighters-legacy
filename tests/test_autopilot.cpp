@@ -44,13 +44,13 @@ TEST_CASE("Autopilot: AltHold commands nose-up below the target, nose-down above
 
     // Drop 300 m below the captured target -> pull up (elevator > 0).
     auto low = levelState(1700.0, 200.f);
-    auto cmdLow = ap.compute(low, 1.f / 60.f, kR);
+    auto cmdLow = ap.compute(low, kR);
     CHECK(cmdLow.hasPitch);
     CHECK(cmdLow.elevator > 0.f);
 
     // Climb 300 m above -> push down (elevator < 0).
     auto high = levelState(2300.0, 200.f);
-    auto cmdHigh = ap.compute(high, 1.f / 60.f, kR);
+    auto cmdHigh = ap.compute(high, kR);
     CHECK(cmdHigh.elevator < 0.f);
 }
 
@@ -65,7 +65,7 @@ TEST_CASE("Autopilot: AltHold alone levels the wings (#640)", "[autopilot]") {
     banked.quat[1] = q.y;
     banked.quat[2] = q.z;
     banked.quat[3] = q.w;
-    auto cmd = ap.compute(banked, 1.f / 60.f, kR);
+    auto cmd = ap.compute(banked, kR);
     CHECK(cmd.hasRoll);
     CHECK(std::abs(cmd.aileron) > 0.f); // it fights the bank
 }
@@ -77,13 +77,13 @@ TEST_CASE("Autopilot: SpdHold opens the throttle when slow, closes it when fast 
 
     auto slow = levelState(2000.0, 150.f);
     slow.throttle_actual = 0.5f;
-    auto cmdSlow = ap.compute(slow, 1.f / 60.f, kR);
+    auto cmdSlow = ap.compute(slow, kR);
     CHECK(cmdSlow.hasThrottle);
     CHECK(cmdSlow.throttle > 0.5f);
 
     auto fast = levelState(2000.0, 260.f);
     fast.throttle_actual = 0.5f;
-    auto cmdFast = ap.compute(fast, 1.f / 60.f, kR);
+    auto cmdFast = ap.compute(fast, kR);
     CHECK(cmdFast.throttle < 0.5f);
 }
 
@@ -141,7 +141,7 @@ TEST_CASE("Autopilot: closed-loop AltHold climbs toward the target and stays bou
     float maxAbsErr = 0.f;
     float altAt5s = startAlt;
     for (int i = 0; i < 60 * 15; ++i) {
-        AutopilotCommand cmd = ap.compute(integ.state(), 1.f / 60.f, kR);
+        AutopilotCommand cmd = ap.compute(integ.state(), kR);
         ControlInput ci;
         if (cmd.hasPitch)
             ci.elevator = cmd.elevator;

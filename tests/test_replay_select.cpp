@@ -24,6 +24,9 @@
 
 using namespace fl;
 
+// These suites drive the screen a fixed step at a time; nothing here is rate-dependent (#1241).
+constexpr float kTestFrameDtS = 1.f / 60.f;
+
 namespace {
 
 namespace fs = std::filesystem;
@@ -132,7 +135,7 @@ TEST_CASE("ReplaySelectScreen confirm enters a session for a readable file", "[r
     MockInput input;
     MockWindow window;
     input.justPressed = {Key::Enter};
-    const Screen next = screen.update(input, window);
+    const Screen next = screen.update(input, window, kTestFrameDtS);
     CHECK(next == Screen::Loading);
     CHECK(screen.selectedReplay() == tmp.path() / "one.flrep");
     CHECK(screen.statusText().empty());
@@ -151,7 +154,7 @@ TEST_CASE("ReplaySelectScreen confirm on an unreadable file refuses and stays pu
     MockInput input;
     MockWindow window;
     input.justPressed = {Key::Enter};
-    const Screen next = screen.update(input, window);
+    const Screen next = screen.update(input, window, kTestFrameDtS);
     // Refusing here is the whole point: entering Loading would start a session that cannot begin.
     CHECK(next == Screen::ReplaySelect);
     CHECK(screen.selectedReplay().empty());
@@ -168,12 +171,12 @@ TEST_CASE("ReplaySelectScreen escape returns to the menu and an empty list is ha
 
     // Confirm on an empty list must not index off the end.
     input.justPressed = {Key::Enter};
-    CHECK(screen.update(input, window) == Screen::ReplaySelect);
+    CHECK(screen.update(input, window, kTestFrameDtS) == Screen::ReplaySelect);
     CHECK(screen.selectedReplay().empty());
     CHECK_FALSE(screen.buildElements().empty()); // still draws a title and "no recordings yet"
 
     input.justPressed = {Key::Escape};
-    CHECK(screen.update(input, window) == Screen::MainMenu);
+    CHECK(screen.update(input, window, kTestFrameDtS) == Screen::MainMenu);
 }
 
 TEST_CASE("ReplaySelectScreen navigation moves and clamps the selection", "[replay_select]") {
@@ -188,15 +191,15 @@ TEST_CASE("ReplaySelectScreen navigation moves and clamps the selection", "[repl
     MockWindow window;
 
     input.justPressed = {Key::ArrowUp}; // already at the top: clamps rather than wrapping
-    screen.update(input, window);
+    screen.update(input, window, kTestFrameDtS);
     CHECK(screen.selectedIndex() == 0);
 
     input.justPressed = {Key::ArrowDown};
-    screen.update(input, window);
+    screen.update(input, window, kTestFrameDtS);
     CHECK(screen.selectedIndex() == 1);
-    screen.update(input, window);
+    screen.update(input, window, kTestFrameDtS);
     CHECK(screen.selectedIndex() == 2);
-    screen.update(input, window);
+    screen.update(input, window, kTestFrameDtS);
     CHECK(screen.selectedIndex() == 2); // clamps at the end
 
     CHECK_FALSE(screen.buildElements().empty());

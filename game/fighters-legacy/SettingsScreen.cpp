@@ -180,7 +180,7 @@ void SettingsScreen::applyAndSave() {
     m_renderer.applySettings(rendererSettingsFrom(m_graphics));
 }
 
-Screen SettingsScreen::update(IInput& input, IWindow& window) {
+Screen SettingsScreen::update(IInput& input, IWindow& window, float /*frameDtS*/) {
     const float step = 0.05f;
     const float scrollStep = 0.01f;
 
