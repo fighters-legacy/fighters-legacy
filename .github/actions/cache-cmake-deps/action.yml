@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: 2026 MKZ Systems LLC
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Cache CMake FetchContent dependencies
+description: >
+  Cache build/_deps under one key scheme (#1265). Eight workflows carried this step with three
+  different naming schemes: asan and tsan were still on the pre-v2 key, so whatever motivated that
+  bump never reached them, and coverage had invented a fourth spelling of its own. The scheme and
+  its version now live here, so the next bump is one edit instead of eight.
+
+inputs:
+  flavor:
+    description: >
+      What this cache is FOR. build/_deps holds dependencies BUILT with this job's compiler and
+      flags, so two jobs may share a cache only if both are the same — hence the OS for an ordinary
+      build, and a name of its own for anything that builds the deps differently (asan and tsan use
+      clang with sanitizers, coverage instruments, fuzz uses libFuzzer, codeql instruments too).
+      Getting this wrong restores objects built for another toolchain, which fails in ways that look
+      like a source problem.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache@v6
+      with:
+        path: build/_deps
+        key: cmake-deps-v2-${{ inputs.flavor }}-${{ hashFiles('cmake/dependencies.cmake') }}

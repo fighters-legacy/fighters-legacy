@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 MKZ Systems LLC
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Configure OpenAL Soft null backend
+description: >
+  Point OpenAL Soft at its null driver so the audio tests run on a machine with no sound device
+  (#1265). ci.yml, asan.yml and coverage.yml each wrote the same two lines.
+
+  Without it OpenAL probes ALSA/PulseAudio, finds nothing, and the audio tests fail on the device
+  rather than on anything they were written to check.
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        mkdir -p "$HOME/.config"
+        printf '[general]\ndrivers = null\n' > "$HOME/.config/alsoft.conf"

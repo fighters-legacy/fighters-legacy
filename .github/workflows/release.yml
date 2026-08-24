@@ -14,8 +14,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # GNS is Linux-only for now (Windows: no runner protobuf; macOS: Homebrew protobuf 35 is the
-          # abseil-based 5.x line GNS v1.6.0 does not build against). Both ship enet6-only.
+          # RELEASE ARTEFACTS SHIP enet6-ONLY ON WINDOWS AND macOS. The old note here said GNS was
+          # impossible on both — no runner protobuf on Windows, only the abseil-based 5.x formula on
+          # macOS — and that stopped being true: ci.yml builds GNS on all three platforms every PR,
+          # via the vcpkg.json pin (protobuf 3.21.12, static-md) on Windows and the keg-only
+          # protobuf@21 formula on macOS. So this is a CHOICE about what to ship, not a limitation,
+          # and turning it on would change what a released binary can speak. Left as-is pending that
+          # call; the stale rationale is corrected here so nobody re-derives it (#1265).
           - os: windows-latest
             preset: release-msvc
             artifact: fighters-legacy-windows
@@ -46,10 +51,7 @@ jobs:
 
       - name: Install Vulkan SDK (Windows)
         if: matrix.os == 'windows-latest'
-        uses: humbletim/install-vulkan-sdk@v1.2
-        with:
-          version: '1.3.290.0'
-          cache: true
+        uses: ./.github/actions/setup-vulkan-sdk
 
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
@@ -57,10 +59,9 @@ jobs:
           brew install cmake ninja vulkan-headers molten-vk vulkan-loader glslang
 
       - name: Cache CMake FetchContent dependencies
-        uses: actions/cache@v6
+        uses: ./.github/actions/cache-cmake-deps
         with:
-          path: build/_deps
-          key: cmake-deps-v2-${{ matrix.os }}-${{ hashFiles('cmake/dependencies.cmake') }}
+          flavor: ${{ matrix.os }}
 
       - name: Set up MSVC developer environment (Windows)
         if: matrix.os == 'windows-latest'

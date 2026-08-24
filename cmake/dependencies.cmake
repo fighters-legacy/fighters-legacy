@@ -298,7 +298,7 @@ else()
             $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-w -include cstdint>
             $<$<CXX_COMPILER_ID:MSVC>:/W0 /FI cstdint>
         )
-        set_target_properties(yaml-cpp PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
+        fl_quiet_target(yaml-cpp)
     endif()
 endif()
 
@@ -466,7 +466,7 @@ else()
         )
         FetchContent_MakeAvailable(zstd_src)
         # Third-party C sources must not inherit -Werror (see the Lua block above).
-        set_target_properties(libzstd_static PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
+        fl_quiet_target(libzstd_static)
         add_library(fl-zstd INTERFACE)
         target_link_libraries(fl-zstd INTERFACE libzstd_static)
         target_include_directories(fl-zstd SYSTEM INTERFACE "${zstd_src_SOURCE_DIR}/lib")
@@ -543,7 +543,7 @@ unset(FL_SAVED_BUILD_TESTING)
 unset(INSTALL_DOCS)
 # Prevent the vendored C sources from inheriting CMAKE_COMPILE_WARNING_AS_ERROR=ON
 # (same pattern as the Lua FetchContent fallback).
-set_target_properties(ogg vorbis vorbisenc vorbisfile PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
+fl_quiet_target(ogg vorbis vorbisenc vorbisfile)
 
 # ---------------------------------------------------------------------------
 # Lua 5.5 — always built from source, and always compiled AS C++.
@@ -735,7 +735,7 @@ else()
         set(BUILD_TESTING "${FL_SAVED_BUILD_TESTING}")
         unset(FL_SAVED_BUILD_TESTING)
         # Third-party C sources must not inherit -Werror (see the Lua/zstd blocks above).
-        set_target_properties(opus PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
+        fl_quiet_target(opus)
         add_library(fl-opus INTERFACE)
         target_link_libraries(fl-opus INTERFACE opus)
         add_library(fl::opus ALIAS fl-opus)
@@ -797,7 +797,7 @@ if(FL_ENABLE_WHISPER)
     unset(FL_SAVED_BUILD_TESTING)
     foreach(_t whisper ggml ggml-base ggml-cpu)
         if(TARGET ${_t})
-            set_target_properties(${_t} PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
+            fl_quiet_target(${_t})
         endif()
     endforeach()
     message(STATUS "whisper.cpp: enabled (CPU-only; every ggml accelerator explicitly disabled)")

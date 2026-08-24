@@ -26,10 +26,9 @@ jobs:
           clang: 'true'
 
       - name: Cache CMake FetchContent dependencies
-        uses: actions/cache@v6
+        uses: ./.github/actions/cache-cmake-deps
         with:
-          path: build/_deps
-          key: cmake-deps-ubuntu-latest-${{ hashFiles('cmake/dependencies.cmake') }}
+          flavor: asan
 
       - name: Configure
         # GNS off: ASan/LSan value is our code; GNS + protobuf globals add third-party sanitizer noise.
@@ -42,9 +41,7 @@ jobs:
         run: cmake --build --preset asan
 
       - name: Configure OpenAL Soft null backend
-        run: |
-          mkdir -p "$HOME/.config"
-          printf '[general]\ndrivers = null\n' > "$HOME/.config/alsoft.conf"
+        uses: ./.github/actions/openal-null-backend
 
       - name: Test
         run: ctest --preset asan --output-on-failure

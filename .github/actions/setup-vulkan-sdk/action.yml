@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 MKZ Systems LLC
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Install Vulkan SDK
+description: >
+  Install the pinned Vulkan SDK (#1265). ci.yml, release.yml and scale-gate.yml each named the
+  version, so a bump meant finding all three — and a build compiled against one SDK while another
+  job used a different one is a difference nothing reports.
+
+runs:
+  using: composite
+  steps:
+    # THE PIN LIVES HERE. Bumping it is one edit, and every workflow moves together.
+    - uses: humbletim/install-vulkan-sdk@v1.2
+      with:
+        version: '1.3.290.0'
+        cache: true

@@ -15,6 +15,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45 # sized like asan; an apt-mirror hang must fail visibly in minutes, not squat for 6 h (#1216)
 
+    # JOB-level, not per-step (#1265). Five of the six TSan run steps set this and one did not, so
+    # test_world_broadcaster — the parallel-tick test, the one most likely to find a data race — ran
+    # with neither halt_on_error nor the suppression file. Hoisting it means a new run step cannot
+    # be added without it.
+    env:
+      TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1:suppressions=${{ github.workspace }}/tools/tsan.supp
+
     steps:
       - uses: actions/checkout@v7
         with:
@@ -26,10 +33,9 @@ jobs:
           clang: 'true'
 
       - name: Cache CMake FetchContent dependencies
-        uses: actions/cache@v6
+        uses: ./.github/actions/cache-cmake-deps
         with:
-          path: build/_deps
-          key: cmake-deps-ubuntu-latest-${{ hashFiles('cmake/dependencies.cmake') }}
+          flavor: tsan
 
       - name: Configure
         # GNS off: the TSan scope (test_job_system + test_world_broadcaster + test_honest_sensing) links INetwork via mocks,
@@ -47,8 +53,6 @@ jobs:
 
       - name: Run job-system tests under TSan
         run: ./build/tsan/tests/test_job_system
-        env:
-          TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1:suppressions=${{ github.workspace }}/tools/tsan.supp
 
       - name: Run WorldBroadcaster parallel-tick tests under TSan
         run: ./build/tsan/tests/test_world_broadcaster
@@ -63,15 +67,11 @@ jobs:
       # path (tier 3) is actually race-free. engine-world only, so no third-party threads.
       - name: Run faction-registry tests under TSan
         run: ./build/tsan/tests/test_faction_registry
-        env:
-          TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1:suppressions=${{ github.workspace }}/tools/tsan.supp
 
       - name: Run world-state + match-event-log tests under TSan
         run: |
           ./build/tsan/tests/test_world_state
           ./build/tsan/tests/test_match_event_log
-        env:
-          TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1:suppressions=${{ github.workspace }}/tools/tsan.supp
 
       # Crewed control frame (#966): the per-seat sample/slew/fire passes run inside the same
       # data-parallel tick, so their serial-equivalence needs the same race audit as the broadcaster.
@@ -79,12 +79,8 @@ jobs:
         run: |
           ./build/tsan/tests/test_crew_frame
           ./build/tsan/tests/test_turret_gunner
-        env:
-          TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1:suppressions=${{ github.workspace }}/tools/tsan.supp
 
       # The sensing pass runs data-parallel over observers (#685). Its serial-equivalence guarantee is
       # only worth as much as the absence of a race underneath it.
       - name: Run test_honest_sensing under TSan
         run: ./build/tsan/tests/test_honest_sensing
-        env:
-          TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1:suppressions=${{ github.workspace }}/tools/tsan.supp

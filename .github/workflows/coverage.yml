@@ -50,10 +50,9 @@ jobs:
         run: pip install gcovr
 
       - name: Cache CMake FetchContent dependencies
-        uses: actions/cache@v6
+        uses: ./.github/actions/cache-cmake-deps
         with:
-          path: build/_deps
-          key: cmake-deps-coverage-ubuntu-latest-${{ hashFiles('cmake/dependencies.cmake') }}
+          flavor: coverage
 
       - name: Configure
         run: cmake --preset coverage
@@ -62,9 +61,7 @@ jobs:
         run: cmake --build --preset coverage
 
       - name: Configure OpenAL Soft null backend
-        run: |
-          mkdir -p "$HOME/.config"
-          printf '[general]\ndrivers = null\n' > "$HOME/.config/alsoft.conf"
+        uses: ./.github/actions/openal-null-backend
 
       - name: Test
         run: ctest --preset coverage --output-on-failure
