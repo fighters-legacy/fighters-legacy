@@ -7,18 +7,16 @@ CI policy (docs/developer/ai-architecture.md §7) CI must never require a model,
 is the extraction/scoring/aggregation layer; the HTTP and subprocess edges are not touched.
 """
 
-import importlib.util
 import json
 import re
 from pathlib import Path
 
 import pytest
 
+from conftest import load_tool
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
-_MODULE_PATH = REPO_ROOT / "tools" / "ai_eval" / "ai_eval.py"
-_spec = importlib.util.spec_from_file_location("ai_eval", _MODULE_PATH)
-ae = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(ae)
+ae = load_tool("ai_eval", "tools", "ai_eval", "ai_eval.py")
 
 
 # ---- strip_code_fence / extract_json_object ----------------------------------------------------

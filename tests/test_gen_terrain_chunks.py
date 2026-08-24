@@ -4,25 +4,23 @@
 
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
 
 import numpy as np
 import pytest
+
+from conftest import load_tool
 
 # ---------------------------------------------------------------------------
 # Load the module without installing it as a package.
 # The guarded GDAL import in gen_terrain_chunks.py means this succeeds even
 # when GDAL is not installed (gdal/osr are set to None, _HAS_GDAL=False).
 # ---------------------------------------------------------------------------
-_spec = importlib.util.spec_from_file_location(
-    "gen_terrain_chunks",
-    Path(__file__).parent.parent / "tools" / "gen_terrain_chunks.py",
-)
-_mod = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_mod)
+_mod = load_tool("gen_terrain_chunks", "tools", "gen_terrain_chunks.py")
 
 _downsample = _mod._downsample
+# The encode is gen_terrain_tiles' (#1265) — reached through the chunks module so the tests below
+# exercise the function the tool actually calls, not a re-typed copy of it.
+encode_heights = _mod.encode_heights
 LOD_STRIDES = _mod.LOD_STRIDES
 CHUNK_PIXELS = _mod.CHUNK_PIXELS
 TERRAIN_ID_RE = _mod.TERRAIN_ID_RE
@@ -79,10 +77,9 @@ class TestHeightEncoding:
 
     @staticmethod
     def _encode(elev_m: float, scale: float = 1.0, offset: float = 32768.0) -> int:
-        arr = np.array([[elev_m]], dtype=np.float64)
-        arr = arr * scale + offset
-        np.clip(arr, 0, 65535, out=arr)
-        return int(arr.astype(np.uint16)[0, 0])
+        # Calls the SHIPPED encode. This used to re-implement it inline, which meant the cases below
+        # pinned the test's own arithmetic and would have kept passing if the tool's had moved.
+        return int(encode_heights(np.array([[elev_m]], dtype=np.float64), scale, offset)[0, 0])
 
     def test_sea_level_default(self) -> None:
         assert self._encode(0.0) == 32768

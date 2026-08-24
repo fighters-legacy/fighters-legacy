@@ -6,17 +6,13 @@ The gate reads source order to check a contract no C++ test can observe, so the 
 that can silently stop checking. These pin that it finds members, that it fails on a real inversion,
 and that it refuses to pass vacuously when the parser stops matching.
 """
-import importlib.util
-import sys
 from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parent.parent
-spec = importlib.util.spec_from_file_location("lint_teardown_order", ROOT / "tools" / "lint_teardown_order.py")
-lto = importlib.util.module_from_spec(spec)
-sys.modules["lint_teardown_order"] = lto
-spec.loader.exec_module(lto)
+from conftest import load_tool
+
+lto = load_tool("lint_teardown_order", "tools", "lint_teardown_order.py")
 
 IMPL = """
 struct ServerRuntime::Impl {

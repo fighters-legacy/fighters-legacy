@@ -11,7 +11,6 @@ bundle served from a local file so the checksum path is exercised for real.
 """
 
 import hashlib
-import importlib.util
 import json
 import os
 import sys
@@ -20,11 +19,10 @@ from pathlib import Path
 
 import pytest
 
+from conftest import load_tool
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
-_spec = importlib.util.spec_from_file_location("fetch_base_terrain", REPO_ROOT / "tools" / "fetch_base_terrain.py")
-fbt = importlib.util.module_from_spec(_spec)
-sys.modules["fetch_base_terrain"] = fbt
-_spec.loader.exec_module(fbt)
+fbt = load_tool("fetch_base_terrain", "tools", "fetch_base_terrain.py")
 
 
 def _lock(tmp_path: Path, **overrides) -> Path:

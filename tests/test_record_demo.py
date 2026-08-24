@@ -4,18 +4,14 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
 from pathlib import Path
 
 import pytest
 
-_spec = importlib.util.spec_from_file_location(
-    "record_demo",
-    Path(__file__).parent.parent / "tools" / "record_demo" / "record_demo.py",
-)
-_mod = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_mod)
+from conftest import load_tool
+
+_mod = load_tool("record_demo", "tools", "record_demo", "record_demo.py")
 load_manifest = _mod.load_manifest
 duration_ok = _mod.duration_ok
 

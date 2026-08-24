@@ -29,7 +29,6 @@ Stdlib only. The API key is read from the environment, never a flag.
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import os
 import sys
@@ -46,13 +45,16 @@ SCHEMA_VERSION = 1
 
 
 def _load_ai_eval():
-    """Import tools/ai_eval/ai_eval.py by path (it is a script, not an installed module)."""
-    spec = importlib.util.spec_from_file_location("ai_eval", AI_EVAL)
-    if spec is None or spec.loader is None:  # pragma: no cover - packaging edge
-        raise RuntimeError(f"cannot load {AI_EVAL}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    """Import tools/ai_eval/ai_eval.py by path (it is a script, not an installed module).
+
+    Through the shared loader (#1265), which also fixes what this copy was missing: it never
+    registered the module in sys.modules, so a dataclass in the script under load could not resolve
+    its annotations and a cross-import would have loaded a second copy.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "common"))
+    from pyload import load_script_module  # noqa: E402
+
+    return load_script_module("ai_eval", AI_EVAL)
 
 
 # ---- schedule ----------------------------------------------------------------------------------

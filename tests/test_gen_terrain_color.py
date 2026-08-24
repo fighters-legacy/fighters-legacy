@@ -1,18 +1,14 @@
 # SPDX-FileCopyrightText: 2026 Fighters Legacy contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Pure-logic tests for tools/gen_terrain_color.py (#488). No network; GDAL not required."""
-import importlib.util
-import os
 
 import pytest
 
+from conftest import load_tool
+
 np = pytest.importorskip("numpy")
 
-_SPEC = importlib.util.spec_from_file_location(
-    "gen_terrain_color", os.path.join(os.path.dirname(__file__), "..", "tools", "gen_terrain_color.py")
-)
-gtc = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(gtc)
+gtc = load_tool("gen_terrain_color", "tools", "gen_terrain_color.py")
 
 
 def test_s2_to_srgb_monotonic_and_clamped():

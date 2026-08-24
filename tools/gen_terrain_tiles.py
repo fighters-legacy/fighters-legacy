@@ -414,8 +414,12 @@ def _sample_raster(band, gt, width: int, height: int, nodata,
     return top * (1.0 - wy) + bot * wy
 
 
-def _write_png_u16(path: Path, data_u16: "np.ndarray") -> None:
-    """Write a 2-D uint16 array as a 16-bit grayscale PNG via GDAL."""
+def write_png_u16(path: Path, data_u16: "np.ndarray") -> None:
+    """Write a 2-D uint16 array as a 16-bit grayscale PNG via GDAL.
+
+    Public because gen_terrain_chunks.py writes the same format (#1265); it had a byte-identical
+    copy, down to the forward-slash path rewrite GDAL needs on Windows.
+    """
     h, w = data_u16.shape
     mem = gdal.GetDriverByName("MEM").Create("", w, h, 1, gdal.GDT_UInt16)
     mem.GetRasterBand(1).WriteArray(data_u16)
@@ -453,7 +457,7 @@ def _worker_tile(key: tuple) -> tuple:
                                    _g_bathy.RasterYSize, b_band.GetNoDataValue(), lat, lon, nearest=False)
             elev = merge_bathymetry(elev, bathy)
         height_path.parent.mkdir(parents=True, exist_ok=True)
-        _write_png_u16(height_path, encode_heights(elev, height_scale, height_offset))
+        write_png_u16(height_path, encode_heights(elev, height_scale, height_offset))
 
         if _g_lc is not None:
             lc_band = _g_lc.GetRasterBand(1)
@@ -462,7 +466,7 @@ def _worker_tile(key: tuple) -> tuple:
                                    _g_lc.RasterYSize, lc_nodata, lat, lon, nearest=True)
             cover = np.nan_to_num(cover, nan=0.0)
             lc_u16 = np.clip(cover, 0, 65535).astype(np.uint16)
-            _write_png_u16(Path(output_dir) / tile_rel_path(terrain_id, face, level, i, j, "landcover"),
+            write_png_u16(Path(output_dir) / tile_rel_path(terrain_id, face, level, i, j, "landcover"),
                            lc_u16)
         return key, True
     except Exception as exc:  # noqa: BLE001 - report + continue, never abort the batch

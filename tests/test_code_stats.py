@@ -7,17 +7,14 @@ in no category at all, produces a number that looks right and is not. The report
 GitHub release, where nobody re-derives it.
 """
 
-import importlib.util
-import sys
 from pathlib import Path
 
 import pytest
 
+from conftest import load_tool
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
-_spec = importlib.util.spec_from_file_location("code_stats", REPO_ROOT / "tools" / "code_stats.py")
-cs = importlib.util.module_from_spec(_spec)
-sys.modules["code_stats"] = cs
-_spec.loader.exec_module(cs)
+cs = load_tool("code_stats", "tools", "code_stats.py")
 
 
 # ---- classification ----------------------------------------------------------------------------

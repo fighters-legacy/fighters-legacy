@@ -317,6 +317,10 @@ target_link_libraries(validate-mesh PRIVATE validate-mesh-lib)
 add_library(tex-compress-lib STATIC tex-compress/tex_compress.cpp)
 target_include_directories(tex-compress-lib PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/tex-compress")
+# Subprocess::runAndWait — the shared argv spawner this tool used to carry its own copy of (#1265).
+# platform-subprocess is built unconditionally and pulls in no backend, so this stays an
+# always-built tool (the same shape validate-weapon-lib already has with platform-stdfs).
+target_link_libraries(tex-compress-lib PRIVATE platform-subprocess)
 
 add_executable(tex-compress tex-compress/main.cpp)
 target_link_libraries(tex-compress PRIVATE tex-compress-lib)

@@ -259,13 +259,10 @@ def _load_docs_drift():
     would guarantee the release notes and the drift gate eventually disagree about how many
     config keys the server has, which is the exact failure this repository keeps finding.
     """
-    import importlib.util
+    sys.path.insert(0, str(REPO_ROOT / "tools" / "common"))
+    from pyload import load_script_module  # noqa: E402  — the shared by-path loader (#1265)
 
-    spec = importlib.util.spec_from_file_location("docs_drift", REPO_ROOT / "tools" / "docs_drift.py")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["docs_drift"] = module
-    spec.loader.exec_module(module)
-    return module
+    return load_script_module("docs_drift", REPO_ROOT / "tools" / "docs_drift.py")
 
 
 def surface() -> dict[str, int]:

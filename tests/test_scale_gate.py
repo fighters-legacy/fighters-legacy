@@ -6,18 +6,15 @@ Pure-logic coverage only — no sockets, no fl-server/bot_swarm binaries. Mirror
 tests/test_gen_terrain_chunks.py / tests/test_latency_compare.py.
 """
 
-import importlib.util
 import json
-import os
 from pathlib import Path
 
 import pytest
 
+from conftest import load_tool
+
 # Load scale_gate.py by path (tools/ is not a package).
-_MOD_PATH = Path(__file__).resolve().parent.parent / "tools" / "bot_swarm" / "scale_gate.py"
-_spec = importlib.util.spec_from_file_location("scale_gate", _MOD_PATH)
-sg = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(sg)
+sg = load_tool("scale_gate", "tools", "bot_swarm", "scale_gate.py")
 
 
 # ---- load_config / load_profile ----------------------------------------------------------------
