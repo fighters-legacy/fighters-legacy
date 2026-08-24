@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "audio/MusicBuiltinTracks.h"
 
+#include "audio/PcmSynth.h" // toI16 / noise / makeMonoPcm / uploadPcm (#1265)
+
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -10,15 +12,7 @@ namespace fl {
 
 namespace {
 
-constexpr float kPi = 3.14159265358979f;
-
-int16_t toI16(float v) {
-    if (v > 1.f)
-        v = 1.f;
-    if (v < -1.f)
-        v = -1.f;
-    return static_cast<int16_t>(v * 32767.f);
-}
+constexpr float kPi = fl::kPi<float>;
 
 // Add a plucked/pad note: a fundamental + a soft second harmonic under a smooth attack/release
 // envelope, summed into the mix buffer. Deterministic float math only.

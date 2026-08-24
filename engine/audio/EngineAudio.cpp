@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "audio/EngineAudio.h"
 
+#include "audio/PcmSynth.h" // toI16 / noise / makeMonoPcm / uploadPcm (#1265)
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -9,29 +11,10 @@ namespace fl {
 
 namespace {
 
-constexpr float kPi = 3.14159265358979323846f;
-
-int16_t toI16(float v) {
-    v = std::clamp(v, -1.f, 1.f);
-    return static_cast<int16_t>(v * 32767.f);
-}
-
-// Deterministic white noise in [-1, 1] from a sample index — the SfxBuiltinSounds hash, so the
-// waveform is byte-stable everywhere.
-float noise(uint32_t i) {
-    uint32_t h = i * 0x9E3779B1u + 0x27D4EB2Fu;
-    h ^= h >> 15;
-    h *= 0x2C1B3C6Du;
-    h ^= h >> 12;
-    return (static_cast<float>(h & 0xFFFFu) / 32768.f) - 1.f;
-}
+constexpr float kPi = fl::kPi<float>;
 
 DecodedPcm makeMono(std::size_t samples) {
-    DecodedPcm p;
-    p.sampleRate = kEngineAudioSampleRate;
-    p.channels = 1;
-    p.samples.resize(samples);
-    return p;
+    return makeMonoPcm(kEngineAudioSampleRate, samples);
 }
 
 // A turbine hum: a harmonic stack over an 80 Hz fundamental. The buffer holds a WHOLE number of

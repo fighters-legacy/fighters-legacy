@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "content/ContentIndex.h"
 
+#include "content/AssetPaths.h" // assetKey — the ONE cache/index key format (#1265)
+
 #include "ILogger.h"
 #include "content/AssetManager.h"
 #include "content/IContentPack.h"
@@ -31,16 +33,8 @@ const char* rootTableFor(AssetType type) noexcept {
     }
 }
 
-std::string lowered(std::string_view s) {
-    std::string out;
-    out.reserve(s.size());
-    for (char c : s)
-        out += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return out;
-}
-
 std::string indexKey(AssetType type, std::string_view id) {
-    return std::to_string(static_cast<uint8_t>(type)) + ':' + lowered(id);
+    return assetKey(type, id);
 }
 
 // An id feeds a path builder the moment it is resolved to an asset name, so a separator in one is a

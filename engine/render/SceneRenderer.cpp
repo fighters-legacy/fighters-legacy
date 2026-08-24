@@ -127,19 +127,11 @@ void SceneRenderer::ensureBuiltins() {
 
     // Builtin procedural PBR textures (#867): base color / normal / ORM, uploaded raw-RGBA so the
     // albedo/normal/ORM SAMPLING path runs zero-pack (the builtin material otherwise used only PBR
-    // scalar factors). A helper uploads one BuiltinRgbaTexture via the raw-RGBA fallback.
-    auto uploadRaw = [this](const char* name, const BuiltinRgbaTexture& tex, bool srgb) -> TextureHandle {
-        TextureUploadDesc td{};
-        td.name = name;
-        td.bytes = tex.pixels;
-        td.srgb = srgb;
-        td.rawWidth = static_cast<uint32_t>(tex.width);
-        td.rawHeight = static_cast<uint32_t>(tex.height);
-        return m_renderer.createTexture(td);
-    };
-    m_builtinBaseColorTex = uploadRaw("builtin:base-color", builtinBaseColorTexture(), /*srgb=*/true);
-    m_builtinNormalTex = uploadRaw("builtin:normal", builtinNormalTexture(), /*srgb=*/false);
-    m_builtinOrmTex = uploadRaw("builtin:orm", builtinOrmTexture(), /*srgb=*/false);
+    // scalar factors).
+    const BuiltinPbrMaps maps = uploadBuiltinPbrMaps(m_renderer, "builtin:base-color", "builtin:normal", "builtin:orm");
+    m_builtinBaseColorTex = maps.baseColor;
+    m_builtinNormalTex = maps.normal;
+    m_builtinOrmTex = maps.orm;
 
     // Shaded fallback: used for resolved meshes lacking explicit material data, and (in release
     // builds) for the builtin placeholder entity. Now TEXTURED, so a builtin entity samples the

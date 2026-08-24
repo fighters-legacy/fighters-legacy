@@ -65,13 +65,18 @@ bool ciEndsWith(std::string_view s, std::string_view suffix) {
     }
     return true;
 }
-std::string lowered(std::string_view s) {
+} // namespace
+
+std::string asciiLowered(std::string_view s) {
     std::string out(s);
     for (char& c : out)
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return out;
 }
-} // namespace
+
+std::string assetKey(AssetType type, std::string_view id) {
+    return std::to_string(static_cast<uint8_t>(type)) + ':' + asciiLowered(id);
+}
 
 std::optional<std::pair<AssetType, std::string>> assetFromPackRelativePath(std::string_view relPath) {
     // Split off the first path segment (the asset-type subdir) and the remainder (name+ext).
@@ -95,7 +100,7 @@ std::optional<std::pair<AssetType, std::string>> assetFromPackRelativePath(std::
             ext = info.extFallback;
         else
             continue; // wrong extension for this subdir — try the next matching type
-        std::string name = lowered(rest.substr(0, rest.size() - ext.size()));
+        std::string name = asciiLowered(rest.substr(0, rest.size() - ext.size()));
         return std::make_pair(static_cast<AssetType>(t), std::move(name));
     }
     return std::nullopt; // unknown subdir, or a subdir with an extension it does not serve

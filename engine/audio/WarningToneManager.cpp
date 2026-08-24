@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "audio/WarningToneManager.h"
 
+#include "audio/PcmSynth.h" // toI16 / noise / makeMonoPcm / uploadPcm (#1265)
+
 #include "ILogger.h"
 
 #include <cmath>
@@ -10,26 +12,14 @@ namespace fl {
 
 namespace {
 
-int16_t toI16(float v) {
-    if (v > 1.f)
-        v = 1.f;
-    if (v < -1.f)
-        v = -1.f;
-    return static_cast<int16_t>(v * 32767.f);
-}
-
 DecodedPcm makeMono(std::size_t sampleCount) {
-    DecodedPcm pcm;
-    pcm.sampleRate = kWarningToneSampleRate;
-    pcm.channels = 1;
-    pcm.samples.resize(sampleCount);
-    return pcm;
+    return makeMonoPcm(kWarningToneSampleRate, sampleCount);
 }
 
 } // namespace
 
 DecodedPcm generateWarningTonePcm(WarningTone tone) {
-    constexpr float kPi = 3.14159265f;
+    constexpr float kPi = fl::kPi<float>;
     const float sr = static_cast<float>(kWarningToneSampleRate);
 
     switch (tone) {
@@ -176,8 +166,7 @@ void WarningToneManager::driveChannel(Channel& ch, WarningTone tone, bool want, 
             if (ch.src == 0) {
                 ch.src = m_audio->createSource();
                 const DecodedPcm pcm = generateWarningTonePcm(tone);
-                ch.buf = m_audio->uploadBuffer(pcm.samples.data(), pcm.samples.size() * sizeof(int16_t), pcm.sampleRate,
-                                               pcm.channels);
+                ch.buf = uploadPcm(*m_audio, pcm);
                 m_audio->setSourceRelative(ch.src, true); // head-locked: not spatialised
                 m_audio->setPosition(ch.src, 0.f, 0.f, 0.f);
                 m_audio->setRolloffFactor(ch.src, 0.f);
@@ -228,8 +217,7 @@ void WarningToneManager::driveRwr(RwrThreat want, float gain, float dt) {
         static constexpr WarningTone kToneFor[3] = {WarningTone::RwrSearch, WarningTone::RwrLock,
                                                     WarningTone::RwrLaunch};
         const DecodedPcm pcm = generateWarningTonePcm(kToneFor[idx]);
-        m_rwr.buf[idx] = m_audio->uploadBuffer(pcm.samples.data(), pcm.samples.size() * sizeof(int16_t), pcm.sampleRate,
-                                               pcm.channels);
+        m_rwr.buf[idx] = uploadPcm(*m_audio, pcm);
     }
 
     m_audio->setGain(m_rwr.src, gain); // live-track the RWR volume slider

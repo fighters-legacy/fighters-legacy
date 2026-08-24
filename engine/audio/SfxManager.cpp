@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "audio/SfxManager.h"
 
+#include "audio/PcmSynth.h" // toI16 / noise / makeMonoPcm / uploadPcm (#1265)
+
 #include "ILogger.h"
 #include "audio/OggDecoder.h"
 #include "content/AssetManager.h"
@@ -64,8 +66,7 @@ AudioBufferId SfxManager::getOrUploadBuffer(const Preset& preset) {
             return it->second;
         if (auto asset = m_assets->loadAudio(preset.packAsset.c_str()); asset && !asset->bytes.empty()) {
             if (DecodedPcm pcm = decodeOgg(asset->bytes); pcm.valid()) {
-                const AudioBufferId id = m_audio->uploadBuffer(pcm.samples.data(), pcm.samples.size() * sizeof(int16_t),
-                                                               pcm.sampleRate, pcm.channels);
+                const AudioBufferId id = uploadPcm(*m_audio, pcm);
                 if (id) {
                     m_bufferCache.emplace(key, id);
                     return id;
@@ -79,8 +80,7 @@ AudioBufferId SfxManager::getOrUploadBuffer(const Preset& preset) {
     if (auto it = m_bufferCache.find(key); it != m_bufferCache.end())
         return it->second;
     const DecodedPcm pcm = generateBuiltinSfx(preset.builtin);
-    const AudioBufferId id =
-        m_audio->uploadBuffer(pcm.samples.data(), pcm.samples.size() * sizeof(int16_t), pcm.sampleRate, pcm.channels);
+    const AudioBufferId id = uploadPcm(*m_audio, pcm);
     if (id)
         m_bufferCache.emplace(key, id);
     return id;
