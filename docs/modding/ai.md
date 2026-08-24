@@ -604,6 +604,11 @@ Every function is a safe no-op returning `nil`/`false` when the server has no AT
 (`[atc] enabled = false`), so a script is never required to check first. The service is
 server-authoritative and thread-safe — a script may call these from `compute_control`.
 
+**How a script was attached makes no difference.** A mission's `ai: lua <script>`, an entity type's
+default `ai_script`, and the admin `spawn --ai lua <script>` command all reach the same live service.
+Before v0.3.20 the two mission paths did not, and `atc.*` was silently inert for them (#1288) — a
+script written against a `spawn` command would go quiet the moment a mission attached it.
+
 The self-service calls (`clearance`, `request_takeoff`, `request_landing`, `inbound`) act on the
 entity the script is flying. An optional airport id targets a specific field; omitted, the **nearest**
 field is used.

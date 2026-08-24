@@ -6,8 +6,14 @@
 // (#705) or silently did not depending on which block built it.
 //
 // The parity these cases pin is the helper's: whatever the caller puts in `atcService` is what the
-// script gets. The mission path passing null is a documented structural fact (mission objects spawn
-// in initMission, the service is built in initSystems), not a second construction rule.
+// script gets. Since #1288 BOTH callers put the same thing there -- AtcService construction moved to
+// initWorld, ahead of initMission, so a mission-attached script is no longer handed null while an
+// admin-spawned one gets the live service. The null case below is now only the [atc] enabled = false
+// configuration, which both paths reach together.
+//
+// This file cannot see the wiring itself, only the ladder it feeds. The end-to-end pin for #1288 is
+// the mission_harness_atc_scramble ctest: a mission-attached script calls atc.scramble and the run
+// is asserted to end with the departure ATC launched still flying.
 
 #include "AiControllerBuild.h"
 
@@ -78,9 +84,10 @@ TEST_CASE("buildAiController: a Lua script reaches the ATC service the caller pa
 }
 
 TEST_CASE("buildAiController: with no ATC service the same script runs, atc.* being a safe no-op (#1236)") {
-    // The mission path's shape. The script must still LOAD and RUN — atc.* degrading to no-ops is
-    // the documented behaviour (#705); a script that failed to construct here would take the
-    // mission's aircraft down with it.
+    // The [atc] enabled = false shape — since #1288 that is the only way either caller passes null.
+    // The script must still LOAD and RUN: atc.* degrading to no-ops is the documented behaviour
+    // (#705), and a script that failed to construct here would take the mission's aircraft down
+    // with it.
     QuietLog log;
     EntityTypeRegistry reg;
     EntityDef d;

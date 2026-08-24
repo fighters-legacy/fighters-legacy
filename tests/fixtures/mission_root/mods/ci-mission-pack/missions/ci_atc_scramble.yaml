@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: Contributors to Fighters Legacy
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# ci_atc_scramble -- the #1288 regression mission. One object flying a mission-attached Lua script
+# that asks ATC to launch a departure. A mission-attached script and an admin-spawned one now reach
+# the same atc.* surface, and the only way to observe that end to end is to count the aircraft ATC
+# actually put in the air: 1 = the script's call went nowhere, 2 = the service was live.
+name: "CI ATC Scramble"
+map: world
+layer: world_clear
+time: { hour: 12, minute: 0 }
+wind: { heading: 0, speed: 0 }
+sides: [blue, red]
+objects:
+  - { type: builtin:debug-entity, id: caller, side: blue, pos: [0, 500, 0], heading: 0, ai: "lua atc_probe" }
+triggers:
+  - on: timer(3)
+    do: mission_success
