@@ -120,8 +120,13 @@ TEST_CASE("Autopilot: closed-loop AltHold climbs toward the target and stays bou
     // is a very powerful UFO, so this asserts the load-bearing behaviour — the loop drives the aircraft
     // in the right direction and never diverges — rather than long-horizon settling of an unrealistic
     // airframe. Speed hold is engaged too so the throttle regulates energy instead of runaway climb.
-    auto integ = FlightIntegrator(BuiltinFlightModel::get());
+    const auto model = BuiltinFlightModel::get();
+    auto integ = FlightIntegrator(model);
     FlightState init = levelState(2000.0, 150.f);
+    // Sync mass/fuel to the model like the production spawn — a verbatim reset() otherwise flies
+    // FlightState's 10,000 kg default, not the builtin (#1336).
+    init.fuel_kg = model->geometry.fuel_kg;
+    init.mass_kg = model->geometry.mass_kg + init.fuel_kg;
     init.throttle_actual = 0.2f;
     integ.reset(init);
 

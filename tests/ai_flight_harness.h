@@ -21,6 +21,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <functional>
 
 #include <glm/glm.hpp>
@@ -116,6 +118,21 @@ inline fl::EntityState entityStateFrom(const FlightState& fs, fl::EntityId id = 
 // that keeps turning).
 using TickHook = std::function<void(uint64_t tick, const fl::EntityState& own)>;
 
+// Whether the FL_HARNESS_PROBE diagnostic trace is enabled, read once per process. Wrapped so the
+// one std::getenv lives behind an MSVC C4996 suppression here instead of demanding
+// _CRT_SECURE_NO_WARNINGS from every test target that includes this header.
+inline bool harnessProbeEnabled() {
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
+    static const bool kEnabled = std::getenv("FL_HARNESS_PROBE") != nullptr;
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
+    return kEnabled;
+}
+
 // Fly `seconds` of `ctrl`. Stops early on ground contact and records when. `ctxFn` supplies the
 // AiTickContext for controllers that need one (sensor contacts etc.); the default is an empty
 // context, which is NORMATIVE — "not evaluated here", not "saw nothing". `model` selects the
@@ -124,7 +141,22 @@ using TickHook = std::function<void(uint64_t tick, const fl::EntityState& own)>;
 inline FlightTrace flyController(fl::IEntityController& ctrl, FlightState init, int seconds,
                                  const TickHook& tickHook = {}, const std::function<fl::AiTickContext()>& ctxFn = {},
                                  std::shared_ptr<const FlightModelData> model = {}) {
-    FlightIntegrator integ(model ? std::move(model) : BuiltinFlightModel::get());
+    const std::shared_ptr<const FlightModelData> m = model ? std::move(model) : BuiltinFlightModel::get();
+    // Sync the state's mass, fuel and wing sweep to the MODEL, exactly as the production spawn does
+    // (WorldBroadcaster::addControlledEntity; #1195 for the sweep) — reset() copies the state
+    // VERBATIM, and FlightState's defaults are mass 10,000 kg / fuel 4,000 kg, so until #1336 every
+    // closed-loop test here flew a ten-tonne phantom wearing the model's aero, and every measured
+    // bound quietly described that phantom rather than the aircraft the model declares. Only the
+    // still-at-default fields are synced, so a test that deliberately flies a specific fuel state
+    // (a mid-mission heavy) keeps it.
+    const FlightState kStateDefaults{};
+    if (init.mass_kg == kStateDefaults.mass_kg && init.fuel_kg == kStateDefaults.fuel_kg) {
+        init.fuel_kg = m->geometry.fuel_kg;
+        init.mass_kg = m->geometry.mass_kg + init.fuel_kg;
+    }
+    if (init.current_sweep_deg == kStateDefaults.current_sweep_deg)
+        init.current_sweep_deg = m->wing_sweep ? m->wing_sweep->ref_sweep_deg : 0.f;
+    FlightIntegrator integ(m);
     integ.reset(init);
     PayloadEffect payload{};
 
@@ -146,6 +178,23 @@ inline FlightTrace flyController(fl::IEntityController& ctrl, FlightState init, 
         const fl::AiTickContext ctx = ctxFn ? ctxFn() : fl::AiTickContext{};
         const ControlInput ci = ctrl.sample(es, static_cast<uint64_t>(i), kHarnessDt, ctx);
         integ.step(kHarnessDt, ci, payload);
+
+        // Diagnostic trace for re-measuring bounds (FL_HARNESS_PROBE=1): one line every 2 s of sim
+        // time with the states that settle a closed-loop argument — commanded vs actual energy
+        // (throttle/spool), the elevator, the attitude vs the flight path, alpha, and load factor.
+        // This is how the #1336 phantom-mass defect was isolated; it costs nothing when unset.
+        if (harnessProbeEnabled() && i % 120 == 0) {
+            const FlightState& ps = integ.state();
+            const double spd = std::sqrt(ps.vel_body[0] * ps.vel_body[0] + ps.vel_body[1] * ps.vel_body[1] +
+                                         ps.vel_body[2] * ps.vel_body[2]);
+            const auto& pp = ps.pos_world;
+            const float pitch = fl::pitchOf(ps.quat, glm::dvec3(pp[0], pp[1], pp[2]), kHarnessR);
+            const double alphaDeg = std::atan2(-ps.vel_body[1], ps.vel_body[0]) * 57.2958;
+            std::printf("t=%3d alt=%7.1f spd=%6.1f thr=%.2f act=%.2f el=%+.3f pitch=%+5.1f alpha=%+5.2f n=%+.2f "
+                        "stall=%d\n",
+                        i / 60, altOf(), spd, ci.throttle, ps.throttle_actual, ci.elevator, pitch * kRadToDeg, alphaDeg,
+                        ps.load_factor, static_cast<int>(ps.stalled));
+        }
 
         const auto& p = integ.state().pos_world;
         const glm::dvec3 wp(p[0], p[1], p[2]);
