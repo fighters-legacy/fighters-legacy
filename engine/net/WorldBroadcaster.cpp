@@ -408,6 +408,10 @@ void WorldBroadcaster::setMaxConnectionsPerIp(int max) noexcept {
     m_admission.setMaxConnectionsPerIp(max);
 }
 
+void WorldBroadcaster::setSpawnAirspeedOverride(float mps) noexcept {
+    m_admission.setSpawnAirspeedOverride(mps);
+}
+
 void WorldBroadcaster::setSpawnPoints(std::vector<std::array<double, 3>> points) noexcept {
     m_admission.setSpawnPoints(std::move(points));
 }

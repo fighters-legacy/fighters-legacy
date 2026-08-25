@@ -659,12 +659,18 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
             constexpr float kCrashReportThresholdMps = 6.f;
             if (impactSpd >= kCrashReportThresholdMps)
                 m_state.ground_impact_speed = impactSpd;
-            // Scale friction by impact severity so gravity's ~0.16 m/s/frame floor-tickle
-            // does not act as a continuous brake during ground roll. A VESSEL (#38) rides this
-            // floor as buoyancy, not wheels-on-dirt: its hull drag lives in VesselForceModel, so
-            // the contact response must not skim speed off it every tick.
-            const float kSlide =
-                m_data->isVessel() ? 1.f : kSlideRoll + (kSlideImpact - kSlideRoll) * std::min(impactSpd / 10.f, 1.f);
+            // Slide friction applies to IMPACTS, not to the rolling contact (#1334). The old
+            // severity blend started from kSlideRoll = 0.999 per tick, so gravity's ~0.16 m/s
+            // floor-tickle still skimmed ~0.4%/tick of horizontal speed — a ~0.25 s^-1 continuous
+            // brake that 14b's gear-aware friction then double-counted. The old UFO's 37 m/s^2
+            // out-thrusted it (equilibrium ~148 m/s, past rotation); the #1334 trainer's 3 m/s^2
+            // pinned at ~12 m/s and no ground takeoff could ever reach Vr. Below the same 2 m/s
+            // sink the vertical branch treats as "settled", the contact skims NOTHING — 14b owns
+            // rolling and belly friction; above it the severity blend applies as before. A VESSEL
+            // (#38) rides this floor as buoyancy and never skims.
+            const float kSlide = (m_data->isVessel() || impactSpd < 2.f)
+                                     ? 1.f
+                                     : kSlideRoll + (kSlideImpact - kSlideRoll) * std::min(impactSpd / 10.f, 1.f);
             const float newVUp = (impactSpd < 2.f) ? 0.f : -vUp * kCoR;
             std::array<float, 3> vw = {float(vel_world[0]), float(vel_world[1]), float(vel_world[2])};
             // Decompose into radial (vertical) + horizontal, reflect/stop the radial part, apply
@@ -676,10 +682,13 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
             vw[0] = horiz[0] + newVUp * up[0];
             vw[1] = horiz[1] + newVUp * up[1];
             vw[2] = horiz[2] + newVUp * up[2];
-            // Attenuate angular rates on impact to prevent post-contact spinning. Not for a
-            // VESSEL (#38): a ship is permanently settling onto its water floor, and halving its
-            // yaw rate every tick would crush the turn its rudder is commanding.
-            if (!m_data->isVessel()) {
+            // Attenuate angular rates on impact to prevent post-contact spinning — on IMPACTS
+            // only (#1334, same 2 m/s gate as the slide): during a rolling contact this fired on
+            // every settling tick and halved the pitch rate 60 times a second, which is a rotation
+            // at Vr fighting a brick (the ground-roll closed-loop test pins that it can rotate).
+            // Not for a VESSEL (#38): a ship is permanently settling onto its water floor, and
+            // halving its yaw rate every tick would crush the turn its rudder is commanding.
+            if (!m_data->isVessel() && impactSpd >= 2.f) {
                 m_state.omega[0] *= 0.5f;
                 m_state.omega[1] *= 0.5f;
                 m_state.omega[2] *= 0.5f;

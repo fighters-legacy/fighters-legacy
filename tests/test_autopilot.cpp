@@ -116,10 +116,11 @@ TEST_CASE("Autopilot: disengage logic - stick drops attitude holds, throttle dro
 }
 
 TEST_CASE("Autopilot: closed-loop AltHold climbs toward the target and stays bounded (#640)", "[autopilot]") {
-    // The AI-controller sample() pattern: close the loop through the real integrator. The builtin model
-    // is a very powerful UFO, so this asserts the load-bearing behaviour — the loop drives the aircraft
-    // in the right direction and never diverges — rather than long-horizon settling of an unrealistic
-    // airframe. Speed hold is engaged too so the throttle regulates energy instead of runaway climb.
+    // The AI-controller sample() pattern: close the loop through the real integrator. The builtin
+    // model is a realistic low-performance trainer (#1334), so this asserts the load-bearing
+    // behaviour — the loop drives the aircraft in the right direction and never diverges — rather
+    // than long-horizon settling. Speed hold is engaged too so the throttle regulates energy
+    // instead of runaway climb.
     const auto model = BuiltinFlightModel::get();
     auto integ = FlightIntegrator(model);
     FlightState init = levelState(2000.0, 150.f);

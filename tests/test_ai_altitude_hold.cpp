@@ -148,10 +148,13 @@ TEST_CASE("LoiterController does not descend into the ground at a modest AGL (#1
 
 TEST_CASE("LoiterController climbs to a higher commanded altitude and settles (#1141)", "[loiter][altitude]") {
     // Damping must not cost it the ability to actually change altitude.
+    // 180 s, re-measured for the builtin trainer (#1334): the guidance AoA bound trims ~4 deg of
+    // alpha on it, which banked in the orbit yields a steady ~15 m/s climb — the 1000 m step plus
+    // the capped-command settle tail no longer fits the UFO-era 120 s window.
     constexpr double kStart = 1000.0;
     constexpr double kTarget = 2000.0;
     fl::ai::LoiterController ctrl(glm::dvec3(0.0, kTarget, 0.0), 3000.f, static_cast<float>(kTarget));
-    const FlightTrace t = flyLoiter(ctrl, levelState(3000.0, kStart, 0.0, 150.f), kTarget, 120);
+    const FlightTrace t = flyLoiter(ctrl, levelState(3000.0, kStart, 0.0, 150.f), kTarget, 180);
 
     INFO("alt: start " << t.startAltM << " min " << t.minAltM << " max " << t.maxAltM << " end " << t.endAltM);
     CHECK(t.endAltM > kStart + 500.0);            // it got most of the way there

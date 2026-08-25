@@ -7,7 +7,9 @@ wind: { heading: 90, speed: 4 }
 sides: [blue]
 # The server-authoritative ATC service launches AI departures from the builtin airfield in strict
 # sequence (#673/#706). Three staggered `atc_scramble` triggers each queue one departure — spacing
-# them avoids stacking aircraft on the single hold-short point; ATC sequences takeoff, rotation, and
+# them avoids stacking aircraft on the single hold-short point — the #1334 trainer holds the runway
+# ~36 s per departure (~30 s ground roll to Vr 70 m/s, then the climb to the 40 m AGL occupancy
+# release), which sets the 36/72 s stagger; ATC sequences takeoff, rotation, and
 # climbout down the 090 runway. The mission `do:` string runs the same validated admin command an
 # operator would type. Scrambled aircraft are NOT mission-roster objects, so every camera look_at is
 # a fixed point along the runway and the climbout corridor. Two apron vehicles and a high CAP give
@@ -23,27 +25,29 @@ objects:
   # A high CAP crossing the field for scale. A behaviour's ARGUMENTS are world coordinates and are
   # not anchor-relative, so the orbit is authored as a route instead of `ai: "loiter ..."`.
   - { type: builtin:debug-entity, id: cap1, side: blue, pos: [0, 2600, -3000], heading: 0, speed: 170,
-      route: [ [0, 2600, 3000] ] }
+      route: [ [0, 2600, 3000], [0, 2600, -3000], [0, 2600, 3000], [0, 2600, -3000] ] }
 triggers:
   - on: mission_start
     do: atc_scramble builtin:airfield builtin:debug-entity 1
-  - on: timer(14)
+  - on: timer(36)
     do: atc_scramble builtin:airfield builtin:debug-entity 1
-  - on: timer(28)
+  - on: timer(72)
     do: atc_scramble builtin:airfield builtin:debug-entity 1
-  - on: timer(85)
+  - on: timer(135)
     do: mission_success
 cameras:
   shots:
     # Down the runway from behind the west threshold — the field, apron traffic, and the first
     # departure rolling out toward +east.
-    - { type: static, start: 0, duration: 10, pos: [-1700, 620, 220], look_at: [200, 575, 0], fov: 48 }
-    # Beside the runway at midfield as the departure accelerates and rotates.
-    - { type: static, start: 10, duration: 8, pos: [300, 590, 320], look_at: [900, 580, 0], fov: 44 }
-    # Track the climbout as the first departure lifts off and turns toward its CAP orbit.
-    - { type: move, start: 18, duration: 12, look_at: [2400, 900, 0], ease: smooth,
-        keyframes: [ { time: 0, pos: [1400, 700, -320] }, { time: 12, pos: [2600, 1200, -140] } ] }
+    - { type: static, start: 0, duration: 22, pos: [-1700, 620, 220], look_at: [200, 575, 0], fov: 48 }
+    # Beside the runway as the departure accelerates and rotates — the #1334 trainer needs ~1 km of
+    # ground roll, so rotation happens just west of midfield, not out at x≈900.
+    - { type: static, start: 22, duration: 12, pos: [300, 590, 320], look_at: [-200, 580, 0], fov: 44 }
+    # The climbout corridor: the first departure lifts off (~x -100) and climbs through the frame to
+    # its 300 m AGL handoff (~x +1300) — abeam, not chasing; the trainer cannot outrun the old rail.
+    - { type: move, start: 34, duration: 18, look_at: [700, 700, 0], ease: smooth,
+        keyframes: [ { time: 0, pos: [500, 800, -900] }, { time: 18, pos: [900, 950, -700] } ] }
     # Wide over the field as the next departures roll and climb out.
-    - { type: static, start: 30, duration: 8, pos: [0, 1650, 2550], look_at: [200, 950, 0], fov: 56 }
+    - { type: static, start: 52, duration: 40, pos: [0, 1650, 2550], look_at: [200, 950, 0], fov: 56 }
     # Closing frame down the flight line.
-    - { type: static, start: 38, duration: 6, pos: [-1600, 840, 500], look_at: [200, 650, 0], fov: 50 }
+    - { type: static, start: 92, duration: 36, pos: [-1600, 840, 500], look_at: [200, 650, 0], fov: 50 }

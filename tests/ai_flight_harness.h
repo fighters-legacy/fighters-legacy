@@ -136,11 +136,14 @@ inline bool harnessProbeEnabled() {
 // Fly `seconds` of `ctrl`. Stops early on ground contact and records when. `ctxFn` supplies the
 // AiTickContext for controllers that need one (sensor contacts etc.); the default is an empty
 // context, which is NORMATIVE — "not evaluated here", not "saw nothing". `model` selects the
-// airframe; the default is the builtin fighter-agility model, and passing one is how a test flies
+// airframe; the default is the builtin trainer (#1334), and passing one is how a test flies
 // a controller against an airframe class the builtin cannot stand in for (#1186's heavy bomber).
+// crashBelowAltM: the ground-contact heuristic — a run whose altitude drops under it stops and is
+// recorded as a crash. Pass a negative value for GROUND operations (a takeoff roll lives below the
+// default for half a minute, #1334); airborne cases keep the 1 m default.
 inline FlightTrace flyController(fl::IEntityController& ctrl, FlightState init, int seconds,
                                  const TickHook& tickHook = {}, const std::function<fl::AiTickContext()>& ctxFn = {},
-                                 std::shared_ptr<const FlightModelData> model = {}) {
+                                 std::shared_ptr<const FlightModelData> model = {}, double crashBelowAltM = 1.0) {
     const std::shared_ptr<const FlightModelData> m = model ? std::move(model) : BuiltinFlightModel::get();
     // Sync the state's mass, fuel and wing sweep to the MODEL, exactly as the production spawn does
     // (WorldBroadcaster::addControlledEntity; #1195 for the sweep) — reset() copies the state
@@ -207,7 +210,7 @@ inline FlightTrace flyController(fl::IEntityController& ctrl, FlightState init, 
         t.maxAbsSideslipDeg = std::max(
             t.maxAbsSideslipDeg, std::abs(fl::ai::sideslipOf(after.transform.quat, after.transform.vel)) * kRadToDeg);
         t.secondsFlown = (i + 1) / 60.0;
-        if (a < 1.0) {
+        if (crashBelowAltM >= 0.0 && a < crashBelowAltM) {
             t.crashTimeS = t.secondsFlown;
             break;
         }

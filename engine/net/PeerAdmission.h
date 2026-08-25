@@ -135,6 +135,12 @@ class PeerAdmission {
     void setRateLimitParams(int maxConnects, int windowSeconds) noexcept;
     void setMaxConnectionsPerIp(int max) noexcept;
     void setSpawnPoints(std::vector<std::array<double, 3>> points) noexcept;
+    // Test seam (#1334): when >= 0, every admitPilot spawn uses exactly this initial airspeed
+    // instead of the production rule (ramp points parked, airborne spawns at the default cruise).
+    // Wire-instrument tests set 0 so their subject entity holds still while bytes are compared.
+    void setSpawnAirspeedOverride(float mps) noexcept {
+        m_spawnAirspeedOverride = mps;
+    }
     void setPlayerFaction(uint16_t faction) noexcept;
     void setPlayerEntityType(std::string type);
     void setAllowObservers(bool allow) noexcept;
@@ -181,8 +187,10 @@ class PeerAdmission {
     std::unordered_map<uint32_t, std::string> m_peerGuids;       // peerId -> client guid (set at handshake)
     uint64_t m_reconnectGraceTicks{0};                           // 0 = disabled
 
-    std::vector<std::array<double, 3>> m_spawnPoints; // pre-cached [x,y,z]; read-only after start
-    uint32_t m_nextSpawnIdx{0};                       // round-robin counter
+    std::vector<std::array<double, 3>> m_spawnPoints;
+    float m_spawnAirspeedOverride{
+        -1.f}; // < 0 = production rule (#1334); >= 0 = forced (tests) // pre-cached [x,y,z]; read-only after start
+    uint32_t m_nextSpawnIdx{0}; // round-robin counter
 
     // Mission player slots (#854). m_slotOccupant[i] = the peer holding slot i, or kSlotFree.
     // m_peerSlot maps a peer to its held slot for O(1) release on despawn.

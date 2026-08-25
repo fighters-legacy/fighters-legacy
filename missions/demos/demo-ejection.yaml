@@ -20,13 +20,17 @@ triggers:
   # Each burst alone can never take HP from above the eject band (>15%) to death, so once the
   # cumulative damage crosses 85% the pilot auto-ejects rather than being killed outright. Burst
   # coords are the lead's traced positions at each trigger time (the report loop is deterministic).
-  - { on: timer(12), do: detonate -2930 2062 902 450 14 }
-  - { on: timer(14), do: detonate -2776 1905 755 450 14 }
-  - { on: timer(16), do: detonate -2547 1865 593 450 14 }
-  - { on: timer(18), do: detonate -2300 1864 439 450 14 }
-  - { on: timer(20), do: detonate -2047 1868 292 450 14 }
-  - { on: timer(22), do: detonate -1786 1875 154 450 14 }
-  - { on: timer(24), do: detonate -1519 1883 25 450 14 }
+  # Re-traced for the #1334 trainer: the slower bank-limited route capture arcs ~2.4 km off the
+  # corridor (spawn heading 90 vs the +x route) and speed sags 160 -> ~130 m/s, so the walk now
+  # follows that arc. The wing rides ~270-370 m out here, inside the 450 m falloff: it ends near
+  # 71% HP -- wounded but visually Intact, far above the eject band.
+  - { on: timer(12), do: detonate -3479 1696 1702 450 14 }
+  - { on: timer(14), do: detonate -3272 1692 1904 450 14 }
+  - { on: timer(16), do: detonate -3044 1690 2071 450 14 }
+  - { on: timer(18), do: detonate -2800 1689 2204 450 14 }
+  - { on: timer(20), do: detonate -2545 1688 2301 450 14 }
+  - { on: timer(22), do: detonate -2286 1688 2365 450 14 }
+  - { on: timer(24), do: detonate -2026 1690 2404 450 14 }
   # The final burst is the seventh — it crosses the eject band, so the lead auto-ejects at ~t=24.
   # No later burst fires, so nothing destroys the fragile (1 HP) parachute; it hangs at the ejection
   # point (a drift model is a #672 follow-on) and the camera holds on it before the mission ends.
@@ -36,11 +40,11 @@ cameras:
     # Chase the lead down the corridor as the first bursts bracket it (close, ~100 m astern).
     - { type: chase, start: 0, duration: 13, target: victim, offset: [-95, 22, 0], stiffness: 2.5 }
     # Side static ~300 m off the lead as the walking barrage closes.
-    - { type: static, start: 13, duration: 8, pos: [-2350, 1990, 250], look_at: victim, fov: 48 }
+    - { type: static, start: 13, duration: 8, pos: [-2780, 1840, 1880], look_at: victim, fov: 48 }
     # Framed ~300 m on the ejection zone — the airframe takes the killing near-miss and the pilot
     # punches out (the aircraft vanishes and a parachute appears at this fixed point ~t=24).
-    - { type: static, start: 21, duration: 10, pos: [-1560, 1960, -260], look_at: [-1530, 1870, 24], fov: 46 }
+    - { type: static, start: 21, duration: 10, pos: [-2023, 1765, 2126], look_at: [-2024, 1675, 2412], fov: 46 }
     # Slow push onto the hanging parachute — ends ~70 m out so the canopy reads clearly (the chute is
     # a non-roster runtime entity, so a fixed look_at rather than a target id).
-    - { type: move, start: 31, duration: 13, look_at: [-1530, 1882, 24], ease: smooth,
-        keyframes: [ { time: 0, pos: [-1750, 1960, 240] }, { time: 13, pos: [-1560, 1905, 80] } ] }
+    - { type: move, start: 31, duration: 13, look_at: [-2024, 1687, 2412], ease: smooth,
+        keyframes: [ { time: 0, pos: [-2266, 1753, 2603] }, { time: 13, pos: [-2060, 1698, 2464] } ] }

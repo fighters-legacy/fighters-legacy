@@ -733,6 +733,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Empty list = legacy behaviour: spawn at origin with y = m_groundElevation + 500 m.
     // Call before gameLoop.start(); never mutated after that.
     void setSpawnPoints(std::vector<std::array<double, 3>> points) noexcept;
+    void setSpawnAirspeedOverride(float mps) noexcept; // test seam (#1334) — see PeerAdmission
 
     // A joinable mission player slot (#854): a mission object marked `player: true`. A POD so engine-net
     // stays free of an engine-mission dependency — fl-server translates engine-mission's PlayerSlot into

@@ -624,6 +624,9 @@ TEST_CASE("WorldBroadcaster: onTick with connected peer and no extra entities se
     registry.registerType(makeDebugDef());
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    // Freeze the subject (#1334): this case compares wire bytes/state of a STILL entity;
+    // the production spawn is airborne at cruise since the builtin gained a real stall.
+    broadcaster.setSpawnAirspeedOverride(0.f);
     connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onTick(1.0 / 60.0, 5u);
 
@@ -1175,8 +1178,14 @@ TEST_CASE("WorldBroadcaster: two peers each control independent entities", "[wor
     inp1.throttle = 0.f;
     broadcaster.onReceive(1u, &inp1, sizeof(inp1));
 
+    // 120 ticks, not one (#1334): the trainer spools its engine over 4 s (the old UFO answered in
+    // 0.1 s), so a single tick leaves both velocities quantization-identical; two seconds of
+    // full-vs-idle throttle separates them decisively. The FIRST tick still emits the full entries
+    // the parse below relies on — later snapshots are deltas of the same records.
     broadcaster.onTick(1.0 / 60.0, 0u); // tick 0: all entities new → full entries
     REQUIRE(em.liveCount() == 2u);
+    for (uint64_t k = 1; k <= 120; ++k)
+        broadcaster.onTick(1.0 / 60.0, k);
 
     // Snapshot has both entities; find peer 0's and peer 1's entries by assigned idx. The handshake
     // interleaves several sends per peer (Hello, ConnectAck, type defs, roster, ...), so scan for the
@@ -1211,12 +1220,23 @@ TEST_CASE("WorldBroadcaster: two peers each control independent entities", "[wor
             ePeer1 = e;
     }
 
-    // Peer 0 (throttle=1) accelerates via thrust; peer 1 (throttle=0) decelerates via drag.
-    // After one tick from the same initial 40 m/s, peer 0 must be faster than peer 1.
+    // Both records reached the wire with real state.
     CHECK(ePeer0.vel[0] > 0.f);
-    CHECK(ePeer0.vel[0] > ePeer1.vel[0]);
     CHECK(std::isfinite(ePeer1.vel[0]));
     CHECK(std::isfinite(ePeer1.vel[1]));
+
+    // Peer 0 (throttle=1) accelerates via thrust; peer 1 (throttle=0) decelerates via drag. Read
+    // back from the entity manager AFTER the 2 s spool-up loop above (#1334): the trainer answers
+    // its throttle over 4 s where the old UFO answered in 0.1, so the tick-0 wire records parsed
+    // above are velocity-identical — the wire proved both entities exist; the physics contrast
+    // needs the elapsed time.
+    const fl::EntityState* s0 = em.get({ack0.assignedEntityIdx, ack0.assignedEntityGen});
+    const fl::EntityState* s1 = em.get({ack1.assignedEntityIdx, ack1.assignedEntityGen});
+    REQUIRE(s0 != nullptr);
+    REQUIRE(s1 != nullptr);
+    const float sp0 = std::hypot(s0->transform.vel[0], s0->transform.vel[1], s0->transform.vel[2]);
+    const float sp1 = std::hypot(s1->transform.vel[0], s1->transform.vel[1], s1->transform.vel[2]);
+    CHECK(sp0 > sp1);
 }
 
 TEST_CASE("WorldBroadcaster: onReceive discards MsgClientInput with mismatched protocolVersion",
@@ -1228,6 +1248,9 @@ TEST_CASE("WorldBroadcaster: onReceive discards MsgClientInput with mismatched p
 
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    // Freeze the subject (#1334): this case compares wire bytes/state of a STILL entity;
+    // the production spawn is airborne at cruise since the builtin gained a real stall.
+    broadcaster.setSpawnAirspeedOverride(0.f);
     connectPilotPeer(broadcaster, net, 0u);
 
     // Send a full-throttle input with the wrong protocol version.
@@ -1332,6 +1355,9 @@ TEST_CASE("WorldBroadcaster: onReceive discards duplicate seqNum", "[world_broad
     fl::EntityManager em(logger, registry);
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    // Freeze the subject (#1334): this case compares wire bytes/state of a STILL entity;
+    // the production spawn is airborne at cruise since the builtin gained a real stall.
+    broadcaster.setSpawnAirspeedOverride(0.f);
     connectPilotPeer(broadcaster, net, 0u);
 
     // First packet (seqNum=5, throttle=0) accepted.
@@ -3917,6 +3943,9 @@ TEST_CASE("WorldBroadcaster: spawn position preserves sub-mm precision at large 
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setSpawnPoints({std::array<double, 3>{1e5 + 1e-3, 500.0, 0.0}});
+    // Freeze the subject (#1334): this case compares wire bytes/state of a STILL entity;
+    // the production spawn is airborne at cruise since the builtin gained a real stall.
+    broadcaster.setSpawnAirspeedOverride(0.f);
     connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
@@ -4600,6 +4629,9 @@ TEST_CASE("WorldBroadcaster: totalEntityCount matches buffer content", "[world_b
     fl::EntityManager em(logger, registry);
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    // Freeze the subject (#1334): this case hand-computes buffer sizes for a STILL entity; the
+    // production spawn is airborne at cruise since the builtin gained a real stall.
+    broadcaster.setSpawnAirspeedOverride(0.f);
     connectPilotPeer(broadcaster, net, 0u);
 
     // Tick 1 → full entries
@@ -7239,8 +7271,10 @@ TEST_CASE("WorldBroadcaster: a mission slot with no loadout keeps the entity's d
     fl::WorldBroadcaster::MissionSpawnSlot slot;
     slot.entityType = "builtin:debug-entity";
     slot.factionIndex = 1;
+    slot.pos[1] = 500.0; // airborne (#1334): a launch from a ground-level slot scrapes the missile
+                         // off on the terrain in the release tick now that the fallback model flies
+                         // real physics; the case is about the default FIT, not ground clearance
     broadcaster.setMissionPlayerSlots({slot});
-
     connectPilotPeer(broadcaster, net, 0u);
 
     fl::MsgClientInput inp{};

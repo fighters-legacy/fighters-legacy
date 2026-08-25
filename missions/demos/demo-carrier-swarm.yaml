@@ -8,17 +8,24 @@ sides: [blue, red]
 # escorts, while a six-ship drone swarm flocks overhead on the boids controller (#353 — separation,
 # alignment, cohesion toward a lead point ahead of the group). Shows the advanced-vehicle work:
 # surface movement plus emergent multi-agent flight. Zero content pack.
+# Trainer-FM notes (#1334): this map's origin is the north pole, so a compass heading resolves
+# azimuthally around it — a shared `heading: 90` scatters the six spawn velocities up to ~190
+# degrees apart. The old high-thrust model shrugged that off; the trainer sinks ~25 m/s through the
+# long 45-degree-bank reversal and flies into the 545 m terrain. Each drone therefore gets the
+# explicit heading that points its spawn velocity down-range (+x), and the migration goal sits high
+# (y 3000) so its climb component outweighs the alignment term, which otherwise locks the flock
+# into any shared descent. The flock cruises ~95-110 m/s eastward in a 750-1100 m band.
 objects:
   - { type: builtin:carrier, id: carrier1, side: blue, pos: [0, 0, 0], heading: 90, start: ground,
       route: [ [6000, 0, 0] ] }
   - { type: builtin:naval-vessel, id: escort1, side: blue, pos: [1400, 0, 1200], heading: 90, start: ground }
   - { type: builtin:naval-vessel, id: escort2, side: blue, pos: [1400, 0, -1200], heading: 90, start: ground }
-  - { type: builtin:debug-entity, id: drone1, side: blue, pos: [-1400, 880, -700], heading: 90, ai: "swarm 5000 1500 0 1600 500 0.4" }
-  - { type: builtin:debug-entity, id: drone2, side: blue, pos: [-1100, 940, 650], heading: 90, ai: "swarm 5000 1500 0 1600 500 0.4" }
-  - { type: builtin:debug-entity, id: drone3, side: blue, pos: [-700, 900, -300], heading: 90, ai: "swarm 5000 1500 0 1600 500 0.4" }
-  - { type: builtin:debug-entity, id: drone4, side: blue, pos: [-500, 960, 400], heading: 90, ai: "swarm 5000 1500 0 1600 500 0.4" }
-  - { type: builtin:debug-entity, id: drone5, side: blue, pos: [-150, 900, -650], heading: 90, ai: "swarm 5000 1500 0 1600 500 0.4" }
-  - { type: builtin:debug-entity, id: drone6, side: blue, pos: [200, 940, 250], heading: 90, ai: "swarm 5000 1500 0 1600 500 0.4" }
+  - { type: builtin:debug-entity, id: drone1, side: blue, pos: [-1400, 880, -700], heading: 333, ai: "swarm 5000 3000 0 1600 500 0.7" }
+  - { type: builtin:debug-entity, id: drone2, side: blue, pos: [-1100, 940, 650], heading: 31, ai: "swarm 5000 3000 0 1600 500 0.7" }
+  - { type: builtin:debug-entity, id: drone3, side: blue, pos: [-700, 900, -300], heading: 337, ai: "swarm 5000 3000 0 1600 500 0.7" }
+  - { type: builtin:debug-entity, id: drone4, side: blue, pos: [-500, 960, 400], heading: 39, ai: "swarm 5000 3000 0 1600 500 0.7" }
+  - { type: builtin:debug-entity, id: drone5, side: blue, pos: [-150, 900, -650], heading: 283, ai: "swarm 5000 3000 0 1600 500 0.7" }
+  - { type: builtin:debug-entity, id: drone6, side: blue, pos: [200, 940, 250], heading: 129, ai: "swarm 5000 3000 0 1600 500 0.7" }
 triggers:
   - on: timer(88)
     do: mission_success
@@ -30,8 +37,8 @@ cameras:
     - { type: orbit, start: 8, duration: 12, target: carrier1, radius: 620, height: 200, period: -34 }
     # Fly the camera through the flock.
     - { type: move, start: 20, duration: 12, look_at: drone1, ease: smooth,
-        keyframes: [ { time: 0, pos: [-900, 700, -900] }, { time: 6, pos: [300, 1000, 0] }, { time: 12, pos: [1500, 950, 800] } ] }
+        keyframes: [ { time: 0, pos: [400, 820, -900] }, { time: 6, pos: [1700, 880, 50] }, { time: 12, pos: [3100, 900, 700] } ] }
     # Chase one drone as the swarm holds formation over the group.
     - { type: chase, start: 32, duration: 8, target: drone1, offset: [-70, 18, 0], stiffness: 2.0 }
     # Wide closing frame: the swarm streamed east of the near-stationary carrier group — frame both.
-    - { type: static, start: 40, duration: 6, pos: [1300, 1750, -3000], look_at: [1400, 750, 0], fov: 60 }
+    - { type: static, start: 40, duration: 6, pos: [1300, 1750, -3000], look_at: [2600, 800, 0], fov: 60 }
