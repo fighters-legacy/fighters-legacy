@@ -1,6 +1,6 @@
 {
   "kbs": {
-    "pr/weave": 63.122,
+    "pr/weave": 2.985,
     "reference-enet/aggressive": 66.348,
     "reference-enet/idle": 64.46,
     "reference-enet/weave": 64.747,
@@ -9,7 +9,7 @@
     "reference/weave": 65.995
   },
   "wire_kbs": {
-    "pr/weave": 66.8667,
+    "pr/weave": 2.6837,
     "reference-enet/aggressive": 69.1262,
     "reference-enet/idle": 66.934,
     "reference-enet/weave": 68.8774,

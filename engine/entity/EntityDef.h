@@ -62,7 +62,7 @@ struct EntityDef {
     // empty (the default) means "the shared airframe only" — every mesh authored before this existed.
     // Node PRESENCE, chosen statically at load; node POSE is articulation (#837), a different axis.
     std::string meshVariant;
-    std::string flightModelAsset;      // ASSET NAME: flight-model TOML; empty = builtin UFO model
+    std::string flightModelAsset;      // ASSET NAME: flight-model TOML; empty = the builtin trainer (#1334)
     std::string aiScriptAsset;         // ASSET NAME: Lua AI script; empty = no scripted AI (server-side)
     std::vector<Hardpoint> hardpoints; // weapon stations; empty = carries nothing
 

@@ -15,7 +15,7 @@ TakeoffController::TakeoffController(glm::dvec3 threshold, float headingDeg, flo
     : m_threshold(threshold), m_headingDeg(headingDeg), m_runwayElevM(runwayElevM), m_rotateSpeedMps(rotateSpeedMps),
       m_climboutAglM(climboutAglM) {}
 
-fl::ControlInput TakeoffController::sample(const fl::EntityState& state, uint64_t /*tick*/, double /*dt*/,
+fl::ControlInput TakeoffController::sample(const fl::EntityState& state, uint64_t /*tick*/, double dt,
                                            const fl::AiTickContext& /*ctx*/) {
     const glm::dvec3 ownPos(state.transform.pos[0], state.transform.pos[1], state.transform.pos[2]);
     const float gs = fl::horizontalGroundSpeed(
@@ -71,11 +71,18 @@ fl::ControlInput TakeoffController::sample(const fl::EntityState& state, uint64_
         break;
     }
     case Phase::Climb: {
-        // Airborne: hold a steady climb pitch and the runway heading with coordinated bank.
-        constexpr float kClimbPitchRad = 0.175f; // ~10 deg nose-up
+        // Airborne: climb-rate-closed altitude cascade toward the climbout gate (#1141, adopted here
+        // in #1334) and the runway heading with coordinated bank. The old form held a fixed ~10 deg
+        // pitch through elevatorFromPitchError, whose P-only elevator droops on a statically stable
+        // airframe — the builtin trainer flew it at barely 1 g, level at best — while this cascade
+        // keeps demanding until the aircraft is actually climbing. The +100 m margin keeps it
+        // commanding a real climb THROUGH the gate rather than levelling at it; Done fires at the
+        // gate regardless.
         const float curPitch = fl::pitchOf(state.transform.quat, ownPos, m_planetRadiusM);
         ctrl.throttle = 1.f;
-        ctrl.elevator = elevatorFromPitchError(kClimbPitchRad - curPitch);
+        ctrl.elevator = elevatorForAltitudeHold(state.transform.quat, state.transform.pos, state.transform.vel,
+                                                m_runwayElevM + m_climboutAglM + 100.f, m_planetRadiusM,
+                                                m_pitchRate.step(curPitch, dt));
         // Bank-ANGLE command closed on the current bank, and a rudder that nulls the SIDESLIP
         // (#1143). 25 deg: a climbout holds the runway heading, it does not manoeuvre.
         ctrl.aileron =

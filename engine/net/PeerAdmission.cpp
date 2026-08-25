@@ -305,11 +305,13 @@ EntityId PeerAdmission::admitPilot(uint32_t peerId, const std::string& entityTyp
         t.pos[2] = 60.0; // 60 m ahead of origin so peer doesn't overlap sandbox entity 0
         t.pos[1] = static_cast<double>(m_wb.m_groundElevation.load(std::memory_order_relaxed)) + kSpawnAGL;
     }
-    // Sandbox / round-robin fallback path: spawn stationary. The bare no-mission player flies the
-    // builtin UFO, which is controllable at zero airspeed; a mission's airborne player comes through the
-    // slot path below with a real cruise speed (#883).
+    // Sandbox / round-robin fallback path: spawn at the default airborne cruise (#1334). The bare
+    // no-mission player flies the builtin trainer, which — unlike the pre-#1334 UFO — has a real
+    // stall, so a stationary spawn at 500 m AGL would depart before the pilot ever had control.
+    // Negative airspeed = "use kDefaultSpawnAirspeedMps", the same default a mission's airborne
+    // spawn gets without a `speed:` (#883).
     const uint16_t f = (faction == kNoFaction) ? m_playerFaction : faction;
-    return m_wb.spawnPilotEntity(peerId, entityType, t, f, /*initialAirspeed=*/0.f);
+    return m_wb.spawnPilotEntity(peerId, entityType, t, f, /*initialAirspeed=*/-1.f);
 }
 
 void PeerAdmission::setMissionPlayerSlots(std::vector<MissionSpawnSlot> slots) {

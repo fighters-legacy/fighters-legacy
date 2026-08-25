@@ -420,7 +420,7 @@ using MissionSlotBinder = std::function<void(const std::string& missionObjectId,
 // Resolves an EntityDef::flightModelAsset to a parsed flight model for the spawn path. A std::function
 // so engine-net stays free of engine-content/engine-flight asset deps (the parse lives in fl-server,
 // which links both). Returns nullptr when the id is unknown; an empty flightModelAsset or an unset
-// resolver falls back to the builtin UFO model.
+// resolver falls back to the builtin trainer model (#1334).
 using FlightModelResolver = std::function<std::shared_ptr<const FlightModelData>(const std::string& id)>;
 
 // Resolves an entity type's DEFAULT loadout to the mass and drag it costs the airframe (#812).
@@ -567,7 +567,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
 
     // Register a server-side controller (AI, scripted, ...) for an already-spawned entity. The entity
     // is then stepped every onTick exactly like a connected peer and serialized into MsgWorldSnapshot
-    // for free — no peer required. The flight integrator is built from `model` (null = builtin UFO
+    // for free — no peer required. The flight integrator is built from `model` (null = builtin trainer
     // model) and reset to the entity's current transform. Replaces any existing controller for the
     // entity. Sim-thread only. This is the seam future AI/scripted controllers plug into.
     void registerController(EntityId id, std::unique_ptr<IEntityController> controller,
@@ -877,7 +877,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Resolves an EntityDef::flightModelAsset to a parsed flight model for the spawn path. Injected as a
     // std::function so engine-net stays free of engine-content/engine-flight asset deps (the parse
     // lives in fl-server, which links both). Returns nullptr when the id is unknown; an empty
-    // flightModelAsset or an unset resolver falls back to the builtin UFO model. Call before
+    // flightModelAsset or an unset resolver falls back to the builtin trainer model (#1334). Call before
     // gameLoop.start().
     // Resolves an entity type's DEFAULT loadout to the mass and drag it costs the airframe (#812).
     // Same std::function injection as the flight-model resolver, and for the same reason: the

@@ -154,10 +154,11 @@ constexpr float kOverGDamagePerG = 6.0f;
 constexpr float kAiEjectHpFraction = 0.15f;
 
 // Default airspeed for an airborne spawn that does not ask for a specific one (#883). A gentle cruise
-// (~230 kts) that is comfortably above the stall for the fighters this targets and flyable for the
-// no-stall builtin UFO, so a freshly spawned aircraft — pilot, AI, or mission object — is in stable
-// controlled flight at t=0 rather than dropped in at zero airspeed. A mission tunes it per object with
-// `speed:`; a ground start (#885) passes 0 instead.
+// (~230 kts) comfortably above the stall for the fighters this targets AND for the builtin trainer
+// (Vs ≈ 54 m/s at sea level, #1334) — every model that can be defaulted must fly at this speed, so a
+// freshly spawned aircraft — pilot, AI, or mission object — is in stable controlled flight at t=0
+// rather than dropped in at zero airspeed. A mission tunes it per object with `speed:`; a ground
+// start (#885) passes 0 instead. The bare sandbox admitPilot spawn uses this default too (#1334).
 constexpr float kDefaultSpawnAirspeedMps = 120.0f;
 
 // GameProtocol.h must stay stdlib-only (engine-protocol is zero-dep, enforced by fl_assert_zero_dep),
@@ -1293,7 +1294,7 @@ EntityId WorldBroadcaster::spawnPilotEntity(uint32_t peerId, const std::string& 
         }
 
         // Resolve the entity type's flight model (server-authoritative; never sent on the wire).
-        // Empty id, no resolver, or an unknown id falls back to the builtin UFO model.
+        // Empty id, no resolver, or an unknown id falls back to the builtin trainer (#1334).
         std::shared_ptr<const FlightModelData> model = resolveFlightModel(id);
 
         // PeerController reads the peer's stable input slot (pointer valid across rehash, slot torn
@@ -4073,7 +4074,7 @@ void WorldBroadcaster::registerController(EntityId id, std::unique_ptr<IEntityCo
                                           std::shared_ptr<const FlightModelData> model, float initialAirspeed,
                                           std::string aiScriptName) {
     // An AI aircraft flies ITS OWN aeroplane. When the caller does not hand us a model, resolve the
-    // entity type's own flightModelAsset rather than silently defaulting to the builtin UFO -- which
+    // entity type's own flightModelAsset rather than silently defaulting to the builtin model -- which
     // is what every `spawn <type> --ai <behavior>` did, so an AI F-5E flew a UFO with an F-5E's mesh
     // on it. Same silent-builtin-fallback bug as #811, on the server side of the same seam.
     if (!model)
