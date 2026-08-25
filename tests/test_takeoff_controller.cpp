@@ -29,10 +29,15 @@ TEST_CASE("TakeoffController: sequences LineUp -> Roll -> Rotate -> Climb -> Don
     CHECK(c.throttle == 1.f);
     CHECK(c.elevator == 0.f);
 
-    // Vr reached: rotate the nose up.
+    // Vr reached: rotate the nose up — a MEASURED pull since #1334 (0.25 of travel trims ~11 deg
+    // of alpha on the builtin trainer; the old 0.6 left the runway stalled at 38), with the gear
+    // commanded down: ControlInput defaults it false, and an uncommanded gear retracting mid-roll
+    // is the belly-scrape bug #1334 fixed.
     c = tc.sample(fl::mkState(0, 0, 0, 80.f, 0, 0), 2, dt);
     CHECK(tc.phase() == TakeoffController::Phase::Rotate);
-    CHECK(c.elevator > 0.5f);
+    CHECK(c.elevator > 0.2f);
+    CHECK(c.elevator < 0.4f);
+    CHECK(c.gear_down);
 
     // Airborne: climb phase, full power held.
     c = tc.sample(fl::mkState(0, 5.0, 0, 90.f, 5.f, 0), 3, dt);

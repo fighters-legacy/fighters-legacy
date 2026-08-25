@@ -1,7 +1,7 @@
 {
   "_comment": "v0.4.0 cinematic demo set (epic #909). Each entry: id, the mission YAML (also the shot track), the output basename, and the expected video duration in seconds (the sum of the mission's camera shot durations). record_demo.py --all reads this. Zero content pack; pack variants follow once fl-base-pack aircraft record well.",
   "demos": [
-    { "id": "demo-dogfight",          "mission_file": "demo-dogfight.yaml",          "out_name": "demo-dogfight",          "expected_duration": 48 },
+    { "id": "demo-dogfight",          "mission_file": "demo-dogfight.yaml",          "out_name": "demo-dogfight",          "expected_duration": 50 },
     { "id": "demo-sam-strike",        "mission_file": "demo-sam-strike.yaml",        "out_name": "demo-sam-strike",        "expected_duration": 44 },
     { "id": "demo-formation-tour",    "mission_file": "demo-formation-tour.yaml",    "out_name": "demo-formation-tour",    "expected_duration": 44 },
     { "id": "demo-sensors-intercept", "mission_file": "demo-sensors-intercept.yaml", "out_name": "demo-sensors-intercept", "expected_duration": 42 },
