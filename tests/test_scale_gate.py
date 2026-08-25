@@ -243,6 +243,26 @@ def test_compare_baseline_improvement_never_regresses():
     assert not sg.compare_baseline({"downstream_kbs_per_client": {"mean": 50.0}}, 100.0, 10)["regressed"]
 
 
+def test_compare_baseline_floor_governs_small_baselines():
+    """#1342: the pass ceiling is baseline + max(pct band, absolute floor). When #1334 dropped the
+    pr-profile payload from 63 to ~3-4 KB/s, the ~1 KB/s cross-machine spread that had always been
+    invisible inside +-10% of 63 became a 33% 'regression' between a dev box and CI. Absolute
+    jitter does not shrink with the baseline, so neither may the tolerance."""
+    # baseline 3.0, 10% band = 0.3, floor 1.5 -> limit 4.5: the observed 4.0 CI reading passes.
+    assert not sg.compare_baseline({"downstream_kbs_per_client": {"mean": 4.0}}, 3.0, 10, 1.5)["regressed"]
+    assert sg.compare_baseline({"downstream_kbs_per_client": {"mean": 4.6}}, 3.0, 10, 1.5)["regressed"]
+    # A big baseline still gates on the pct band — the floor is smaller and inert there.
+    assert not sg.compare_baseline({"downstream_kbs_per_client": {"mean": 110.0}}, 100.0, 10, 1.5)["regressed"]
+    assert sg.compare_baseline({"downstream_kbs_per_client": {"mean": 110.5}}, 100.0, 10, 1.5)["regressed"]
+
+
+def test_compare_wire_baseline_floor_matches_payload_semantics():
+    rep = {"server_tick": {"wire_out_kbs_per_client": 4.0}}
+    assert not sg.compare_wire_baseline(rep, 2.8, 10, 1.5)["regressed"]  # 2.8 + 1.5 = 4.3 ceiling
+    rep = {"server_tick": {"wire_out_kbs_per_client": 4.4}}
+    assert sg.compare_wire_baseline(rep, 2.8, 10, 1.5)["regressed"]
+
+
 # ---- overrun governor gate (#574) ----------------------------------------------------------------
 def test_assert_flags_emits_governor_asserts_when_enabled():
     prof = dict(sg.PROFILE_DEFAULTS)
