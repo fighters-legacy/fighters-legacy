@@ -1,6 +1,8 @@
 {
   "_comment": "Scale-gate thresholds for tools/bot_swarm/scale_gate.py (issue #520). Single source of truth for the gate numbers. See docs/developer/load-testing.md. Transport policy (#773): GameNetworkingSockets is the DEFAULT internet transport (#507), so every headline/characterisation profile pins `transport: gns` — the published numbers describe what ships. enet6 (the LAN/single-player backend) keeps two regression legs: `pr` (every PR, hosted runner) and `reference-enet` (128-client strict tier).",
   "kbs_baseline_tolerance_pct": 10,
+  "kbs_baseline_tolerance_floor_kbs": 1.5,
+  "_floor_comment": "#1342: the pass ceiling is baseline + max(pct, floor). The #1334 trainer dropped pr-profile payload 63 -> ~3-4 KB/s, and the ~1 KB/s cross-machine spread that was invisible inside 10% of 63 is 33% of 3 — absolute jitter does not shrink with the baseline. Floor sized at 1.5x the observed dev-box-vs-CI spread.",
   "profiles": {
     "pr": {
       "_comment": "Deterministic PR tier: only machine-independent metrics are hard-gated (bandwidth + admission + KB/s baseline). tick-Hz is a total-collapse tripwire; tick-ms is advisory (0 = disabled) because the client-side proxy and CPU timing are noisy on shared runners. Deliberately enet6 (bot_swarm's default): it is the enet6 regression instrument, and an enet6-only build keeps the PR leg lean (no protobuf/OpenSSL). SENSOR-LOADED since #1089: bots fly builtin:sensor-fighter against ai_entity_count hostiles, so ContactTables populate and datalink team fusion actually runs. Before that every table was empty, fusion merged nothing, and the headline numbers described a hollow battlespace -- the two systems most likely to break at 128 players were the two this gate could not see.",

@@ -402,7 +402,19 @@ def evaluate_report(report, profile, strict):
     return {"passed": passed, "checks": checks}
 
 
-def compare_baseline(report, baseline_entry, tolerance_pct):
+def baseline_limit(baseline_entry, tolerance_pct, tolerance_floor_kbs):
+    """The pass ceiling for a baselined KB/s figure: baseline + max(pct band, absolute floor).
+
+    The floor exists because a purely relative band stops meaning anything when the baseline is
+    small (#1342): the #1334 trainer dropped the pr-profile payload from 63 to ~3-4 KB/s, and the
+    ~1 KB/s of cross-machine spread that had always been invisible inside +-10% of 63 became a
+    33% "regression" between a dev box and the CI runner. Absolute jitter does not shrink with the
+    baseline, so neither may the tolerance.
+    """
+    return baseline_entry + max(baseline_entry * tolerance_pct / 100.0, tolerance_floor_kbs)
+
+
+def compare_baseline(report, baseline_entry, tolerance_pct, tolerance_floor_kbs=0.0):
     """Compare a report's downstream KB/s/client mean against a baseline value.
 
     Returns {regressed: bool, detail: str}. A missing baseline entry (None) is a no-op (not a
@@ -412,12 +424,12 @@ def compare_baseline(report, baseline_entry, tolerance_pct):
     if baseline_entry is None:
         return {"regressed": False, "detail": "no baseline (skipped)"}
     current = report.get("downstream_kbs_per_client", {}).get("mean", 0.0)
-    limit = baseline_entry * (1.0 + tolerance_pct / 100.0)
+    limit = baseline_limit(baseline_entry, tolerance_pct, tolerance_floor_kbs)
     regressed = current > limit
     return {
         "regressed": regressed,
         "detail": f"{current:.1f} vs baseline {baseline_entry:.1f} KB/s "
-                  f"(+{tolerance_pct:.0f}% = {limit:.1f})",
+                  f"(+{tolerance_pct:.0f}%/{tolerance_floor_kbs:.1f} floor = {limit:.1f})",
     }
 
 
@@ -433,7 +445,7 @@ def wire_kbs(report):
     return (report.get("server_tick") or {}).get("wire_out_kbs_per_client", 0.0)
 
 
-def compare_wire_baseline(report, baseline_entry, tolerance_pct):
+def compare_wire_baseline(report, baseline_entry, tolerance_pct, tolerance_floor_kbs=0.0):
     """Same contract as compare_baseline, on wire bytes (#772).
 
     Baselined PER PROFILE, and since the transport is a profile property (`gns` is its own profile),
@@ -445,11 +457,11 @@ def compare_wire_baseline(report, baseline_entry, tolerance_pct):
         return {"regressed": False, "detail": f"{current:.1f} KB/s (no wire baseline)"}
     if current <= 0.0:
         return {"regressed": False, "detail": "no wire data (server report pre-v6)"}
-    limit = baseline_entry * (1.0 + tolerance_pct / 100.0)
+    limit = baseline_limit(baseline_entry, tolerance_pct, tolerance_floor_kbs)
     return {
         "regressed": current > limit,
         "detail": f"{current:.1f} vs baseline {baseline_entry:.1f} KB/s wire "
-                  f"(+{tolerance_pct:.0f}% = {limit:.1f})",
+                  f"(+{tolerance_pct:.0f}%/{tolerance_floor_kbs:.1f} floor = {limit:.1f})",
     }
 
 
@@ -591,6 +603,7 @@ def main(argv=None):
     config = load_config(args.config)
     profile = load_profile(config, args.profile)
     tolerance = config.get("kbs_baseline_tolerance_pct", 10)
+    tolerance_floor = config.get("kbs_baseline_tolerance_floor_kbs", 1.5)
 
     baseline = {}
     wire_baseline = {}
@@ -644,9 +657,9 @@ def main(argv=None):
         wire_cmp = {"regressed": False, "detail": f"{wire_kbs(report):.1f} KB/s (not baselined)"}
         if baselined:
             key = baseline_key(args.profile, pattern)
-            cmp = compare_baseline(report, baseline.get(key), tolerance)
+            cmp = compare_baseline(report, baseline.get(key), tolerance, tolerance_floor)
             new_baseline[key] = report.get("downstream_kbs_per_client", {}).get("mean", 0.0)
-            wire_cmp = compare_wire_baseline(report, wire_baseline.get(key), tolerance)
+            wire_cmp = compare_wire_baseline(report, wire_baseline.get(key), tolerance, tolerance_floor)
             if wire_kbs(report) > 0.0:
                 new_wire_baseline[key] = wire_kbs(report)
         else:
