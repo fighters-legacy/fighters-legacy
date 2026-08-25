@@ -118,6 +118,21 @@ inline fl::EntityState entityStateFrom(const FlightState& fs, fl::EntityId id = 
 // that keeps turning).
 using TickHook = std::function<void(uint64_t tick, const fl::EntityState& own)>;
 
+// Whether the FL_HARNESS_PROBE diagnostic trace is enabled, read once per process. Wrapped so the
+// one std::getenv lives behind an MSVC C4996 suppression here instead of demanding
+// _CRT_SECURE_NO_WARNINGS from every test target that includes this header.
+inline bool harnessProbeEnabled() {
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
+    static const bool kEnabled = std::getenv("FL_HARNESS_PROBE") != nullptr;
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
+    return kEnabled;
+}
+
 // Fly `seconds` of `ctrl`. Stops early on ground contact and records when. `ctxFn` supplies the
 // AiTickContext for controllers that need one (sensor contacts etc.); the default is an empty
 // context, which is NORMATIVE — "not evaluated here", not "saw nothing". `model` selects the
@@ -168,7 +183,7 @@ inline FlightTrace flyController(fl::IEntityController& ctrl, FlightState init, 
         // time with the states that settle a closed-loop argument — commanded vs actual energy
         // (throttle/spool), the elevator, the attitude vs the flight path, alpha, and load factor.
         // This is how the #1336 phantom-mass defect was isolated; it costs nothing when unset.
-        if (getenv("FL_HARNESS_PROBE") && i % 120 == 0) {
+        if (harnessProbeEnabled() && i % 120 == 0) {
             const FlightState& ps = integ.state();
             const double spd = std::sqrt(ps.vel_body[0] * ps.vel_body[0] + ps.vel_body[1] * ps.vel_body[1] +
                                          ps.vel_body[2] * ps.vel_body[2]);
