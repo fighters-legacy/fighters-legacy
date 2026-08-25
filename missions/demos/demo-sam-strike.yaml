@@ -4,27 +4,37 @@ layer: world_clear
 time: { hour: 15, minute: 30 }
 wind: { heading: 200, speed: 6 }
 sides: [blue, red]
-# A blue strike pair pushes on a red SAM + AAA site. builtin:sam-site fires its SARH on a reload
-# interval; builtin:aaa leads with ballistic gunfire. Cameras stage from the site (launch plumes),
-# chase the inbound striker, then orbit the engagement. Zero content pack.
+# A blue strike pair (builtin trainer FM, #1334) runs in from 4 km west, and fires both IR rails
+# into the site defenses at ~15 s and the shots arrive at ~21 s (a marginal kill on the AAA —
+# it survived by a hair on the final #1334 physics; treat impacts, not kills, as the anchor).
+# builtin:sam-site answers
+# with a SARH at ~32 s as the red CAP arrives overhead. Terrain at the site sits ~545 m MSL.
+# Cameras: static at the site, chase the run-in, orbit the engagement, wide as the CAP merges.
+# Zero content pack.
 objects:
-  - { type: builtin:debug-entity, id: striker1, side: blue, pos: [-6000, 2200, 0], heading: 90, ai: "lua builtin:fighter" }
-  - { type: builtin:debug-entity, id: striker2, side: blue, pos: [-6000, 2200, 500], heading: 90, ai: "lua builtin:fighter" }
+  # heading 0 = local north = straight at the site: the world origin is the geodetic pole, so
+  # north from anywhere on this map points at [0, 0].
+  - { type: builtin:debug-entity, id: striker1, side: blue, pos: [-4000, 2200, 0], heading: 0, ai: "lua builtin:fighter" }
+  - { type: builtin:debug-entity, id: striker2, side: blue, pos: [-4000, 2200, 500], heading: 0, ai: "lua builtin:fighter" }
   - { type: builtin:sam-site, id: sam1, side: red, pos: [0, 0, 0], heading: 90, ai: "sam" }
   - { type: builtin:aaa, id: aaa1, side: red, pos: [400, 0, 300], heading: 90, ai: "aaa" }
   - { type: builtin:debug-entity, id: cap1, side: red, pos: [2500, 2000, 0], heading: 270, ai: "lua builtin:fighter" }
 triggers:
+  # destroy(sam1) is aspirational at trainer performance (#1334): the pair presses the AAA, not the
+  # SAM. The recording ends with the 44 s shot list; the timer then closes the mission.
   - on: destroy(sam1)
     do: mission_success
   - on: timer(120)
     do: mission_failure
 cameras:
   shots:
-    # Ground-level static at the site looking back up the threat axis — catches launch plumes.
-    - { type: static, start: 0, duration: 8, pos: [-350, 40, 250], look_at: sam1, fov: 50 }
-    # Chase the inbound striker as it runs in on the site.
-    - { type: chase, start: 8, duration: 14, target: striker1, offset: [-100, 22, 0], stiffness: 2.5, look_at: sam1 }
-    # Orbit the site during the engagement.
-    - { type: orbit, start: 22, duration: 14, target: sam1, radius: 700, height: 200, period: 34 }
-    # Wide static over the whole fight as the CAP merges.
-    - { type: static, start: 36, duration: 8, pos: [-1800, 1400, -1200], look_at: striker1, fov: 55 }
+    # Ground-level static at the site looking up the threat axis (ground here is ~545 m MSL) —
+    # the pair head-on inbound.
+    - { type: static, start: 0, duration: 6, pos: [-350, 585, 250], look_at: sam1, fov: 50 }
+    # Chase the striker down the run-in — both IR rails fire at ~15 s.
+    - { type: chase, start: 6, duration: 10, target: striker1, offset: [-100, 22, 0], stiffness: 2.5, look_at: sam1 }
+    # Orbit the site through the engagement: the missiles arrive at the site at ~21 s; the
+    # SAM answers with a SARH launch at ~32 s.
+    - { type: orbit, start: 16, duration: 16, target: sam1, radius: 700, height: 200, period: 34 }
+    # Wide static over the site as the red CAP merges overhead and the SARH climbs out.
+    - { type: static, start: 32, duration: 12, pos: [-1800, 1400, -1200], look_at: striker1, fov: 55 }

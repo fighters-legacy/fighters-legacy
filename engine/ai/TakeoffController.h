@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "ai/Guidance.h" // PitchRateEstimator — inner-loop damping for the climbout cascade (#1334)
 #include "entity/IEntityController.h"
 
 #include <cstdint>
@@ -44,6 +45,7 @@ class TakeoffController : public fl::IEntityController {
     float m_rotateSpeedMps;
     float m_climboutAglM;
     Phase m_phase{Phase::LineUp};
+    PitchRateEstimator m_pitchRate; // pitch differentiated for inner-loop damping (#1141/#1334)
 };
 
 } // namespace fl::ai

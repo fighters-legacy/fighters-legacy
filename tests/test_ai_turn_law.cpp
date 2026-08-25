@@ -119,11 +119,9 @@ void checkStaysUpright(const FlightTrace& t, const char* what, float maxSideslip
               << ".." << t.maxAltM << ", crash " << t.crashTimeS << " s, end speed " << t.endSpeedMps);
     CHECK_FALSE(t.crashed());
     // 90 deg is knife-edge; anything past it is on its back. Every one of these controllers reached
-    // 179.7-180.0 deg before #1143. The pursuit cases pass a wider bound (#1336): at the builtin's
-    // REAL 1,000 kg (the harness flew a ten-tonne phantom before) the P-only bank loop overshoots
-    // its 80 deg combat command by ~25 deg chasing an orbiting target — a transient past knife-edge,
-    // nowhere near the wind-up this suite exists to forbid. #1334's trainer, with fighter-normal
-    // wing loading, tightens it again.
+    // 179.7-180.0 deg before #1143. maxBankDeg exists because the bound is airframe-honest: the old
+    // featherweight UFO's P-only bank loop overshot its 80 deg combat command to ~104 deg (#1336);
+    // the #1334 trainer tracks the command to within 2 deg, so every case is back on the default.
     CHECK(t.maxAbsBankDeg < maxBankDeg);
     // A turn flown sideways is the other half of the finding: all of them peaked near 89 deg of
     // sideslip, i.e. flying at right angles to where they were pointing.
@@ -156,7 +154,7 @@ TEST_CASE("PursuitController survives a target in a sustained turn (#1143)", "[t
     fl::ai::PursuitController ctrl(w.em, w.targetId);
     const FlightTrace t = flyController(ctrl, levelStateAt(6000.0, 1000.0, 0.0, 150.f), kSoakSeconds,
                                         w.orbitingTarget(0.0, 1000.0, 0.0, 2500.0, 180.0));
-    checkStaysUpright(t, "pursuit of an orbiting target", 15.f, /*maxBankDeg=*/120.f);
+    checkStaysUpright(t, "pursuit of an orbiting target");
 }
 
 TEST_CASE("LeadPursuitController survives a target in a sustained turn (#1143)", "[turnlaw]") {
@@ -164,7 +162,7 @@ TEST_CASE("LeadPursuitController survives a target in a sustained turn (#1143)",
     fl::ai::LeadPursuitController ctrl(w.em, w.targetId);
     const FlightTrace t = flyController(ctrl, levelStateAt(6000.0, 1000.0, 0.0, 150.f), kSoakSeconds,
                                         w.orbitingTarget(0.0, 1000.0, 0.0, 2500.0, 180.0));
-    checkStaysUpright(t, "lead pursuit of an orbiting target", 15.f, /*maxBankDeg=*/120.f);
+    checkStaysUpright(t, "lead pursuit of an orbiting target");
 }
 
 TEST_CASE("LagPursuitController survives a target in a sustained turn (#1143)", "[turnlaw]") {
@@ -172,7 +170,7 @@ TEST_CASE("LagPursuitController survives a target in a sustained turn (#1143)", 
     fl::ai::LagPursuitController ctrl(w.em, w.targetId);
     const FlightTrace t = flyController(ctrl, levelStateAt(6000.0, 1000.0, 0.0, 150.f), kSoakSeconds,
                                         w.orbitingTarget(0.0, 1000.0, 0.0, 2500.0, 180.0));
-    checkStaysUpright(t, "lag pursuit of an orbiting target", 15.f, /*maxBankDeg=*/120.f);
+    checkStaysUpright(t, "lag pursuit of an orbiting target");
 }
 
 TEST_CASE("GunsEmploymentController survives a target in a sustained turn (#1143)", "[turnlaw]") {
@@ -180,7 +178,7 @@ TEST_CASE("GunsEmploymentController survives a target in a sustained turn (#1143
     fl::ai::GunsEmploymentController ctrl(w.em, w.targetId);
     const FlightTrace t = flyController(ctrl, levelStateAt(4000.0, 1000.0, 0.0, 150.f), kSoakSeconds,
                                         w.orbitingTarget(0.0, 1000.0, 0.0, 2500.0, 180.0));
-    checkStaysUpright(t, "guns tracking an orbiting target", 15.f, /*maxBankDeg=*/120.f);
+    checkStaysUpright(t, "guns tracking an orbiting target");
 }
 
 TEST_CASE("FormationController survives a lead in a sustained turn (#1143)", "[turnlaw]") {
@@ -256,11 +254,32 @@ TEST_CASE("TakeoffController climbs out without dropping a wing (#1143)", "[turn
     CHECK_FALSE(t.crashed());
     CHECK(t.maxAltM > 200.0); // it climbed, rather than skimming the start AGL
     CHECK(t.maxAbsBankDeg < 45.f);
-    // 45, not the suite's usual 20 (#1336): the builtin has cn_beta = 0 — no weathercock at all —
-    // so climbout coordination rests entirely on the rudder loop, and at the real 1,000 kg it
-    // measures ~36 deg of transient slip chasing the runway heading. #1334's trainer carries a real
-    // cn_beta and tightens this to the suite standard.
-    CHECK(t.maxAbsSideslipDeg < 45.f);
+    // Back at the suite standard (#1334): the old builtin had cn_beta = 0 — no weathercock — and
+    // slipped ~36 deg here; the trainer carries a real cn_beta and measures under a degree.
+    CHECK(t.maxAbsSideslipDeg < 20.f);
+}
+
+TEST_CASE("TakeoffController flies a full ground roll to liftoff (#1334)", "[turnlaw][takeoff]") {
+    // The case the 3-second ATC mission harness cannot see: a PARKED aircraft accelerating through
+    // its whole roll to rotation and climbout. This was silently impossible before #1334's gear fix:
+    // ControlInput defaults gear_down false, no C++ controller commanded it, the actuator retracted
+    // the gear during the roll, and the 0.55 g belly-scrape brake pinned any airframe that cannot
+    // out-thrust it. The old UFO (T/W 3.8) belly-scraped into the air and masked it; the trainer
+    // (T/W 0.32) sat at v = 0 at the hold-short point forever — every ATC scramble included.
+    fl::ai::TakeoffController ctrl(glm::dvec3{0.0, 0.0, 0.0}, /*headingDeg=*/90.f, /*runwayElevM=*/0.f);
+    FlightState init = levelStateAt(-1200.0, 0.5, 0.0, 0.f);
+    init.articulation.gear = 1.f; // parked on its wheels, as the production ground spawn seeds it
+    // 90 s: the trainer's full sequence is roll to Vr (~29 s), rotate, balloon and settle back, then
+    // accelerate IN GROUND EFFECT on its wheels to ~95 m/s and fly away for real near ~55 s — the
+    // measured technique of a low performer whose Vr is below the speed the guidance AoA bound can
+    // hold level. The claims: it takes off at all (impossible pre-#1334 — see the case comment),
+    // and it is climbing away, not scraping.
+    const FlightTrace t = flyController(ctrl, init, 90, {}, {}, {}, /*crashBelowAltM=*/-1.0);
+    INFO("groundroll: alt " << t.minAltM << ".." << t.maxAltM << ", end speed " << t.endSpeedMps << ", crash "
+                            << t.crashTimeS);
+    CHECK_FALSE(t.crashed());
+    CHECK(t.maxAltM > 150.0);    // it flew — the pre-fix trainer never left v=0
+    CHECK(t.endSpeedMps > 80.f); // and is flying, not ballistic off a scrape
 }
 
 // ---------------------------------------------------------------------------

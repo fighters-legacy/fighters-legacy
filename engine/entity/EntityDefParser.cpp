@@ -185,7 +185,7 @@ EntityDef parseEntityDef(std::string_view toml_src) {
     def.meshVariant = opt_string(entity["mesh_variant"]);      // optional; empty = untagged nodes only (#882)
     def.cockpitMesh = opt_string(entity["cockpit"]);           // optional; empty = no cockpit geometry (#813)
     def.manualAsset = opt_string(entity["manual"]);            // optional; empty = generated sections only (#821)
-    def.flightModelAsset = opt_string(entity["flight_model"]); // optional; empty = builtin UFO model
+    def.flightModelAsset = opt_string(entity["flight_model"]); // optional; empty = the builtin trainer (#1334)
     def.aiScriptAsset = opt_string(entity["ai_script"]);       // optional; empty = no scripted AI
 
     // Optional progressive damage section

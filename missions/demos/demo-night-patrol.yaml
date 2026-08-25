@@ -17,11 +17,15 @@ sides: [blue]
 #
 # The patrol flies a route rather than `ai: "loiter <x> <y> <z> ..."`: a behaviour's ARGUMENTS are
 # world coordinates and are NOT anchor-relative, so a loiter centre cannot be authored in this frame.
+# Each route is an out-and-back pair: a finished route drops WaypointController to throttle 0 with
+# neutral controls, and the trainer flight model (#1334) then decelerates through the stall — a
+# single-leg route put both aircraft in the dirt at t≈58–65 s, inside the timer. The return leg
+# keeps the CAP flying (second capture ≈87–91 s at 160 m/s) until mission_success fires at 75 s.
 objects:
   - { type: builtin:debug-entity, id: night1, side: blue, pos: [0, 1400, -2400], heading: 90, speed: 160,
-      route: [ [2600, 1400, 2400] ] }
+      route: [ [2600, 1400, 2400], [0, 1400, -2400] ] }
   - { type: builtin:debug-entity, id: night2, side: blue, pos: [-600, 1600, 2600], heading: 270, speed: 160,
-      route: [ [-3000, 1600, -2200] ] }
+      route: [ [-3000, 1600, -2200], [-600, 1600, 2600] ] }
   - { type: builtin:static-target, id: pad, side: blue, pos: [300, 0, 320], heading: 90, start: ground }
 triggers:
   - on: timer(75)

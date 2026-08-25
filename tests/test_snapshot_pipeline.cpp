@@ -979,6 +979,9 @@ TEST_CASE("WorldBroadcaster: SnapshotPeerLatency TLV absent when estimatedDelayT
     fl::EntityManager em(logger, registry);
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    // Freeze the subject (#1334): this case hand-computes packet sizes for a STILL entity; the
+    // production spawn is airborne at cruise since the builtin gained a real stall.
+    broadcaster.setSpawnAirspeedOverride(0.f);
     connectPilotPeer(broadcaster, net, 0u);
 
     // No heartbeat sent — estimatedDelayTicks stays 0.

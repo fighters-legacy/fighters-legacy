@@ -287,6 +287,37 @@ TEST_CASE("WorldBroadcaster: peer entity spawns at 500 m AGL when ground elevati
     CHECK(e.pos[1] <= 510.0);
 }
 
+TEST_CASE("WorldBroadcaster: bare admitPilot spawns at flying speed, not stationary (#1334)", "[world_broadcaster]") {
+    // The uncovered path the #1334 survey flagged: the no-mission/no-spawn-point sandbox spawn used
+    // to be stationary at 500 m AGL, which only the old no-stall builtin could survive — a real
+    // model dropped at zero airspeed departs before the pilot ever has control. The spawn now rides
+    // the same kDefaultSpawnAirspeedMps cruise every airborne mission spawn gets, and this pins it:
+    // the first snapshot must already show body-forward flying speed.
+    NullLogger logger;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:5000";
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    connectPilotPeer(broadcaster, net, 0u);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    REQUIRE(!snapshotsFor(net, 0).empty());
+    const auto pkt = snapshotsFor(net, 0).back();
+    const auto _ents = decodeEntities(pkt);
+    REQUIRE(!_ents.empty());
+    const DecodedEntity& e = _ents[0];
+    const double speed =
+        std::sqrt(double(e.vel[0]) * e.vel[0] + double(e.vel[1]) * e.vel[1] + double(e.vel[2]) * e.vel[2]);
+    CHECK(speed > 100.0); // the 120 m/s default cruise, quantized, less one tick of drag/gravity
+    CHECK(speed < 140.0);
+    // Along the spawn heading (identity = +X), not a vertical drop.
+    CHECK(e.vel[0] > 100.f);
+    CHECK(std::abs(e.vel[1]) < 30.f);
+}
+
 TEST_CASE("WorldBroadcaster: peer entity spawns at configured spawn point XYZ", "[world_broadcaster]") {
     NullLogger logger;
     MockNetwork net;
@@ -306,9 +337,11 @@ TEST_CASE("WorldBroadcaster: peer entity spawns at configured spawn point XYZ", 
     const auto _ents = decodeEntities(pkt);
     REQUIRE(!_ents.empty());
     const DecodedEntity& e = _ents[0];
-    // X and Z are set from the spawn point; Y allows ±10 m for one flight-integrator tick.
+    // X and Z are set from the spawn point; Y allows ±10 m and X +3 m for one flight-integrator
+    // tick — an admitPilot spawn is airborne at the default cruise since #1334, so it covers ~2 m
+    // of body-forward (+X) travel before the first snapshot.
     CHECK(e.pos[0] >= 999.0);
-    CHECK(e.pos[0] <= 1001.0);
+    CHECK(e.pos[0] <= 1003.0);
     CHECK(e.pos[1] >= 740.0);
     CHECK(e.pos[1] <= 760.0);
     CHECK(e.pos[2] >= -501.0);
@@ -342,9 +375,9 @@ TEST_CASE("WorldBroadcaster: spawn points assigned round-robin to peers", "[worl
 
     // e0 → point 0 (X≈0), e1 → point 1 (X≈1000)
     CHECK(e0.pos[0] >= -1.0);
-    CHECK(e0.pos[0] <= 1.0);
+    CHECK(e0.pos[0] <= 3.0); // +3 m: one tick of body-forward travel at the #1334 spawn cruise
     CHECK(e1.pos[0] >= 999.0);
-    CHECK(e1.pos[0] <= 1001.0);
+    CHECK(e1.pos[0] <= 1003.0); // +3 m: one tick of body-forward travel at the #1334 spawn cruise
     CHECK(e1.pos[2] >= 499.0);
     CHECK(e1.pos[2] <= 501.0);
 }
@@ -371,13 +404,14 @@ TEST_CASE("WorldBroadcaster: spawn point index wraps round-robin with three peer
     const auto entries = decodeEntities(pkt);
     REQUIRE(entries.size() >= 3u);
 
-    // Count how many entities landed near X=0 vs X=1000 (tolerance ±1 m).
+    // Count how many entities landed near X=0 vs X=1000 (−1..+3 m: one tick of body-forward travel
+    // at the #1334 spawn cruise rides on top of the spawn point).
     int nearPoint0 = 0;
     int nearPoint1 = 0;
     for (const auto& e : entries) {
-        if (e.pos[0] >= -1.0 && e.pos[0] <= 1.0)
+        if (e.pos[0] >= -1.0 && e.pos[0] <= 3.0)
             ++nearPoint0;
-        else if (e.pos[0] >= 999.0 && e.pos[0] <= 1001.0)
+        else if (e.pos[0] >= 999.0 && e.pos[0] <= 1003.0)
             ++nearPoint1;
     }
     CHECK(nearPoint0 == 2); // peers 0 and 2 → point 0

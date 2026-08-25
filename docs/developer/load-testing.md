@@ -289,14 +289,14 @@ load-spawn affordance — `[world] test_spawn_ai_count = N` pre-spawns N cheap l
 > column is sampled at spawn (`clearance 500.0..500.0 m` measured over a 50 km spread whose local
 > ground ranges 506–605 m).
 >
-> It is **not** enough to keep the population stable at a low AGL, and the reason is a different
-> defect: the loiter AI **oscillates in altitude**. Measured with 8 well-separated entities at an
-> exact 500 m clearance and no clients — `y` swings between ~1050 m and ~519 m against 506–605 m of
-> ground, and the population still decays 8 → 6 → 5 within 70 s. Terrain relief around each loiter
-> circle is only 30 m, and the entities are 17 km apart, so neither hills nor mutual collision
-> explains it. `run_loadtest.sh` therefore keeps `FL_TEST_SPAWN_AGL_M=4000`, which puts the trough of
-> that oscillation well clear of the ground. A world that shrinks while you measure it makes every
-> number a function of run duration and luck — it was worth ±13% on the `idle` baseline.
+> The margin's origin was a since-fixed defect: the pre-#1141 loiter AI **oscillated in altitude**
+> (measured then: 8 well-separated entities at an exact 500 m clearance swung between ~1050 m and
+> ~519 m and decayed 8 → 6 → 5 within 70 s). #1141 rebuilt the altitude law to close on climb rate,
+> and on the #1334 builtin trainer the same loiter measures a bounded excursion well under 150 m at
+> a 1,000 m station (`tests/test_ai_altitude_hold.cpp` pins it). `run_loadtest.sh` still keeps
+> `FL_TEST_SPAWN_AGL_M=4000`: the entity-scale sweep hard-gates an **exact** entity count, and a
+> world that shrinks while you measure it makes every number a function of run duration and luck —
+> it was worth ±13% on the `idle` baseline when it happened.
 
 The runner exposes it (and the worker sweep) via env, so you can sweep entity count × worker count and
 read the authoritative `server_tick` per-phase budget:

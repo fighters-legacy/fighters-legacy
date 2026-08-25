@@ -305,11 +305,22 @@ EntityId PeerAdmission::admitPilot(uint32_t peerId, const std::string& entityTyp
         t.pos[2] = 60.0; // 60 m ahead of origin so peer doesn't overlap sandbox entity 0
         t.pos[1] = static_cast<double>(m_wb.m_groundElevation.load(std::memory_order_relaxed)) + kSpawnAGL;
     }
-    // Sandbox / round-robin fallback path: spawn stationary. The bare no-mission player flies the
-    // builtin UFO, which is controllable at zero airspeed; a mission's airborne player comes through the
-    // slot path below with a real cruise speed (#883).
+    // Spawn airspeed rule (#1334): an airborne spawn gets the default cruise — the builtin trainer,
+    // unlike the pre-#1334 UFO, has a real stall, and a stationary spawn at altitude departs before
+    // the pilot ever has control. A spawn POINT close to the ground is a ramp start and spawns
+    // PARKED (base ops shut-down semantics, gear down via #639), exactly like a mission ground
+    // start. Negative airspeed = "use kDefaultSpawnAirspeedMps", the same default a mission's
+    // airborne spawn gets without a `speed:` (#883). Tests may force a value (the wire-instrument
+    // suites freeze their subject at 0) via setSpawnAirspeedOverride.
+    constexpr double kRampAglM = 10.0;
+    float airspeed = -1.f;
+    if (!m_spawnPoints.empty() &&
+        t.pos[1] - static_cast<double>(m_wb.m_groundElevation.load(std::memory_order_relaxed)) < kRampAglM)
+        airspeed = 0.f;
+    if (m_spawnAirspeedOverride >= 0.f)
+        airspeed = m_spawnAirspeedOverride;
     const uint16_t f = (faction == kNoFaction) ? m_playerFaction : faction;
-    return m_wb.spawnPilotEntity(peerId, entityType, t, f, /*initialAirspeed=*/0.f);
+    return m_wb.spawnPilotEntity(peerId, entityType, t, f, airspeed);
 }
 
 void PeerAdmission::setMissionPlayerSlots(std::vector<MissionSpawnSlot> slots) {

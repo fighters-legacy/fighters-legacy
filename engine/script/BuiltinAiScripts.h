@@ -22,8 +22,10 @@ namespace fl {
 namespace detail {
 
 // The reference builtin fighter: patrol an orbit, intercept the nearest hostile it has detected, then
-// close for guns/IR employment. Deliberately conservative gains (the builtin flight model has no G
-// limiter to lean on). Uses no require(), so it needs no pack root.
+// close for guns/IR employment. Deliberately conservative gains — the builtin trainer (#1334) has no
+// FBW G limiter, and unlike the pre-#1334 UFO it has a real stall at 15 deg and real +-7 g structural
+// limits that over-G billing enforces, so the script must respect both itself. It also has no
+// afterburner deck (ctrl.afterburner is a no-op on it). Uses no require(), so it needs no pack root.
 inline constexpr std::string_view kBuiltinFighterLua = R"lua(
 -- builtin:fighter (#866) -- honest-sensing fighter AI, zero content pack.
 local patrol_cx, patrol_cz = nil, nil
@@ -43,6 +45,7 @@ local MSL_MIN_M     = 560
 local MSL_CONE_COS  = 0.9397   -- cos(20 deg)
 
 local ROLL_GAIN = 2.0          -- aileron per rad of bank error in the hard-deck recovery
+local COMBAT_BANK = 1.396      -- 80 deg (kCombatBankRad): pursuit may bank harder than the 45 deg nav default
 
 local function len2(x, z) return math.sqrt(x * x + z * z) end
 
@@ -96,33 +99,53 @@ end
 -- own_alt: MSL altitude of the ownship, computed once per tick in compute_control. talt is MSL too.
 local own_alt = 0
 
-local function steer(state, tx, tz, talt, throttle, ab)
+-- Inner-loop pitch damping for the altitude cascade (#1196), differentiated across our own sample
+-- interval exactly like the C++ controllers -- EntityState carries no body rates on either side of
+-- the seam. Updated once per tick in compute_control.
+local prev_pitch = nil
+local pitch_rate = 0
+
+-- The three #1141/#1143 laws, adopted here in #1334. The pre-#1334 forms held station only on the
+-- old neutrally-stable UFO: rate-only aileron wound the bank up for as long as a heading error
+-- survived (the orbit's normal condition), the attitude-based pitch law's P-only elevator drooped
+-- below the trim a statically stable airframe needs (the #1186 mechanism), and the aileron-tied
+-- rudder commanded nothing in a steady turn. The trainer exposes all three.
+local function steer(state, tx, tz, talt, throttle, max_bank)
   local herr = guidance.heading_error(state.quat, state.pos, { x = tx, y = state.pos.y, z = tz })
-  local ail  = guidance.bank_to_turn_aileron(herr)
-  local perr = guidance.pitch_error_from_alt(state.quat, state.pos, talt - own_alt)
+  local ail  = guidance.turn_aileron(state.quat, state.pos, herr, nil, max_bank)
   return {
     aileron     = ail,
-    rudder      = guidance.coordinated_rudder(ail),
-    elevator    = guidance.elevator_from_pitch_error(perr),
+    rudder      = guidance.rudder_to_coordinate(guidance.sideslip(state.quat, state.vel)),
+    elevator    = guidance.elevator_for_altitude_hold(state.quat, state.pos, state.vel, talt,
+                                                      nil, nil, pitch_rate),
     throttle    = throttle,
-    afterburner = ab or false,
   }
 end
 
 function compute_control(state, tick, dt)
   if not patrol_cx then patrol_cx, patrol_cz = state.pos.x, state.pos.z end
   own_alt = guidance.altitude(state.pos)
+  local pitch = guidance.pitch_of(state.quat, state.pos)
+  pitch_rate = (prev_pitch and dt > 0) and (pitch - prev_pitch) / dt or 0
+  prev_pitch = pitch
 
   -- Hard deck first: terrain does not negotiate. MSL altitude, never pos.y -- read as pos.y this
   -- test is permanently true in an anchored mission and the recovery branch never exits (#1221).
   if own_alt < FLOOR then
-    local out = steer(state, patrol_cx, patrol_cz, PATROL_ALT, 1.0, true)
+    local out = steer(state, patrol_cx, patrol_cz, PATROL_ALT, 1.0)
     -- Recover in order: wings, THEN pull (#1141). A firm pull while rolled past vertical is a
     -- split-S into the terrain, so level the lift vector first and gate the pull on it pointing up.
+    -- The pull is speed-scaled (#1334): the trainer trims ~0.8 rad of alpha per rad of elevator
+    -- (cm_de/cm_alpha with 20 deg of travel), so a fixed large pull is over the +7 g structural
+    -- limit past ~140 m/s and past the 15 deg stall below it. 5300/V^2 holds the pull near 6 g at
+    -- sea level; the low clamp keeps a slow recovery honest, the high clamp (~14 deg equilibrium
+    -- alpha) stays under the stall.
     local bank = bank_of(state)
+    local spd  = math.sqrt(state.vel.x * state.vel.x + state.vel.y * state.vel.y
+                           + state.vel.z * state.vel.z)
     out.aileron  = clamp(-ROLL_GAIN * bank, -1, 1)
-    out.rudder   = guidance.coordinated_rudder(out.aileron)
-    out.elevator = math.cos(bank) > 0.5 and 0.5 or 0.0
+    out.rudder   = guidance.rudder_to_coordinate(guidance.sideslip(state.quat, state.vel))
+    out.elevator = math.cos(bank) > 0.5 and clamp(5300 / math.max(spd * spd, 1), 0.10, 0.30) or 0.0
     return out
   end
 
@@ -134,16 +157,17 @@ function compute_control(state, tick, dt)
 
     if dist > ENGAGE_M then
       -- INTERCEPT: lead pursuit on the last-known state; trust less the older the contact.
+      -- Full MIL only -- the trainer has no afterburner deck to gate on closure (#1334).
       local lead = math.min(dist / math.max(vc, 100), 12) * (tgt.age_s < 1 and 1 or 0.4)
       local ax, az = tgt.pos.x + tgt.vel.x * lead, tgt.pos.z + tgt.vel.z * lead
-      return steer(state, ax, az, math.max(guidance.altitude(tgt.pos), FLOOR + 200), 1.0, vc < 120)
+      return steer(state, ax, az, math.max(guidance.altitude(tgt.pos), FLOOR + 200), 1.0, COMBAT_BANK)
     end
 
     -- ENGAGE: blend pure with lag pursuit so we slide behind rather than overshoot.
     local lag = math.min((ENGAGE_M - dist) / ENGAGE_M, 0.6)
     local ax  = tgt.pos.x - tgt.vel.x * lag * 2.0
     local az  = tgt.pos.z - tgt.vel.z * lag * 2.0
-    local out = steer(state, ax, az, math.max(guidance.altitude(tgt.pos), FLOOR + 200), 1.0, vc < 60)
+    local out = steer(state, ax, az, math.max(guidance.altitude(tgt.pos), FLOOR + 200), 1.0, COMBAT_BANK)
 
     -- EMPLOY: geometry decides the weapon; the server's fire control has the final say.
     local cosang, rng = boresight(state, tgt.pos)

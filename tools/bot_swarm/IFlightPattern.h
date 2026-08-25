@@ -52,6 +52,16 @@ inline float clampUnit(float v) {
 inline float phaseOf(uint32_t clientIndex) {
     return static_cast<float>(clientIndex) * 0.7f;
 }
+// Elevator trim every pattern oscillates AROUND (#1334). The patterns are open-loop by design —
+// deterministic functions of (t, clientIndex) — and a ZERO-mean elevator holds ~zero mean alpha,
+// which on a real airframe is a steady descent: harmless on the old no-stall UFO (huge wing, it
+// floated), a continuous altitude loss on the builtin trainer that the short PR-tier runs absorb
+// but the minutes-long profiles (soak, entity-scale) pay in terrain deaths from the 500 m bot
+// spawn. The trim holds roughly the trainer's 1 g alpha at the spawn cruise, so every profile's
+// swarm flies level-ish for the whole run while staying a pure (t, clientIndex) function. Retune
+// it if the builtin model's gearing changes (tests/test_fm_trim.cpp pins the envelope this was
+// derived against).
+inline constexpr float kTrimElevator = 0.05f;
 } // namespace detail
 
 // Gentle weaving turn/climb — entities spread out and move (exercises physics + interest mgmt).
@@ -62,7 +72,7 @@ class WeavePattern : public IFlightPattern {
         BotControl c;
         c.throttle = 0.7f;
         c.aileron = 0.3f * std::sin(static_cast<float>(t) * 0.5f + ph);
-        c.elevator = 0.1f * std::sin(static_cast<float>(t) * 0.3f + ph * 1.3f);
+        c.elevator = detail::kTrimElevator + 0.1f * std::sin(static_cast<float>(t) * 0.3f + ph * 1.3f);
         return c;
     }
 };
@@ -73,6 +83,7 @@ class LevelPattern : public IFlightPattern {
     BotControl sample(double /*t*/, uint32_t /*clientIndex*/) override {
         BotControl c;
         c.throttle = 0.6f;
+        c.elevator = detail::kTrimElevator;
         return c;
     }
 };
@@ -85,17 +96,22 @@ class AggressivePattern : public IFlightPattern {
         BotControl c;
         c.throttle = 1.0f;
         c.aileron = detail::clampUnit(std::sin(static_cast<float>(t) * 2.0f + ph));
-        c.elevator = 0.8f * std::sin(static_cast<float>(t) * 1.5f + ph);
-        c.buttons = 0x02; // afterburner lit
+        c.elevator = detail::kTrimElevator + 0.8f * std::sin(static_cast<float>(t) * 1.5f + ph);
+        c.buttons = 0x02; // afterburner lit (a no-op on models with no AB deck, e.g. the builtin)
         return c;
     }
 };
 
-// No control input — measures pure connection + snapshot overhead.
+// Minimum control input — measures pure connection + snapshot overhead. Carries the shared trim
+// (#1334): a literally-zero stick is a descent into the terrain on a real airframe, and a dead
+// swarm measures even less than an idle one.
 class IdlePattern : public IFlightPattern {
   public:
     BotControl sample(double /*t*/, uint32_t /*clientIndex*/) override {
-        return {};
+        BotControl c;
+        c.throttle = 0.55f;
+        c.elevator = detail::kTrimElevator;
+        return c;
     }
 };
 
@@ -111,7 +127,7 @@ class WeaponsPattern : public IFlightPattern {
         BotControl c;
         c.throttle = 0.8f;
         c.aileron = 0.3f * std::sin(static_cast<float>(t) * 0.5f + ph);
-        c.elevator = 0.1f * std::sin(static_cast<float>(t) * 0.3f + ph * 1.3f);
+        c.elevator = detail::kTrimElevator + 0.1f * std::sin(static_cast<float>(t) * 0.3f + ph * 1.3f);
 
         // Gun: a per-client-phased 50% duty cycle at ~1 Hz. The server rate-limits it, so this
         // produces a steady stream of hitscan resolutions without a per-tick trigger storm.
@@ -134,7 +150,10 @@ class WeaponsPattern : public IFlightPattern {
 // deterministic for a given seed + call sequence.
 class RandomPattern : public IFlightPattern {
   public:
-    explicit RandomPattern(uint32_t seed) : m_rng(seed ? seed : 1u) {}
+    explicit RandomPattern(uint32_t seed) : m_rng(seed ? seed : 1u) {
+        m_c.elevator = detail::kTrimElevator; // the walk wanders around trim, not around a descent (#1334)
+        m_c.throttle = 0.6f;
+    }
     BotControl sample(double /*t*/, uint32_t /*clientIndex*/) override {
         std::uniform_real_distribution<float> step(-0.05f, 0.05f);
         m_c.aileron = detail::clampUnit(m_c.aileron + step(m_rng));

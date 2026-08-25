@@ -7,10 +7,13 @@ sides: [blue, red]
 # An honest-sensing intercept: a blue CAP on patrol detects an inbound red flight and runs the
 # intercept (builtin:fighter's patrol -> intercept -> engage chain over the shared sensor picture).
 # Cameras follow the interceptor, orbit the target at the detection range, and hold the merge. Zero pack.
+# The 6.2 km spawn split is timed to the #1334 trainer: both sides close from ~120 m/s at full MIL
+# (~330 m/s combined by the merge), crossing the static merge shot at ~30 s. The original 9 km split
+# slid the merge to ~38 s, past the whole 24-33 s window.
 objects:
   - { type: builtin:debug-entity, id: cap, side: blue, pos: [0, 2400, 0], heading: 90, ai: "lua builtin:fighter" }
-  - { type: builtin:debug-entity, id: bandit1, side: red, pos: [9000, 2600, 800], heading: 270, ai: "lua builtin:fighter" }
-  - { type: builtin:debug-entity, id: bandit2, side: red, pos: [9000, 2600, -800], heading: 270, ai: "lua builtin:fighter" }
+  - { type: builtin:debug-entity, id: bandit1, side: red, pos: [6200, 2600, 800], heading: 270, ai: "lua builtin:fighter" }
+  - { type: builtin:debug-entity, id: bandit2, side: red, pos: [6200, 2600, -800], heading: 270, ai: "lua builtin:fighter" }
 triggers:
   - on: timer(100)
     do: mission_failure

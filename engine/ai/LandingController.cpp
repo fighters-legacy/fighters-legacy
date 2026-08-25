@@ -62,6 +62,7 @@ fl::ControlInput LandingController::sample(const fl::EntityState& state, uint64_
     }
 
     fl::ControlInput ctrl{};
+    ctrl.gear_down = true; // an approach flies on its wheels' promise (#1334); default false retracts
     switch (m_phase) {
     case Phase::Final: {
         // Track the glidepath: the target altitude falls as the aircraft nears the threshold, so

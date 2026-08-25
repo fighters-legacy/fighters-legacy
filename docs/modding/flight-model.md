@@ -26,7 +26,10 @@ flight_model = "aircraft/f15_fm"   # resolves to this flight-model TOML
 The server resolves `flight_model` to a parsed model when the entity is spawned; it is
 **server-authoritative and never sent on the wire** (clients only render the state the server
 broadcasts). If `flight_model` is omitted, empty, or the id cannot be resolved, the entity falls
-back to the built-in UFO-like model (the same default used by the zero-content-pack sandbox).
+back to the builtin trainer — a realistic but deliberately low-performing subsonic model, the same
+default the zero-content-pack sandbox flies (#1334). The doctrine: an entity defaulted to the
+builtin for any reason flies plausibly at the floor of the performance ladder — a content mistake
+degrades an aircraft, it never promotes one to a UFO.
 
 ---
 

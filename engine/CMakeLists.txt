@@ -229,6 +229,7 @@ target_link_libraries(engine-difficulty
 
 add_library(engine-flight STATIC
     flight/Atmosphere.cpp
+    flight/BuiltinFlightModel.cpp
     flight/FlightModelParser.cpp
     flight/FlightModelLoad.cpp
     flight/AeroForces.cpp

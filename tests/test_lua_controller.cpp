@@ -833,12 +833,10 @@ TEST_CASE("builtin:fighter patrols closed-loop near the origin (#1221)", "[luaco
     INFO("minAlt " << t.minAltM << " maxAlt " << t.maxAltM << " crashed at " << t.crashTimeS);
     CHECK_FALSE(t.crashed());
     CHECK(t.minAltM > 1500.0);
-    // 13 km, not the 6 km this pinned before #1336: at the builtin's REAL 1,000 kg (the harness
-    // flew a ten-tonne phantom until then) the script's fixed 0.7 patrol throttle on a T/W ~3
-    // airframe balloons the attitude-law altitude loop to ~11.8 km before it settles back. The
-    // load-bearing claims stay what #1221 needed — it lives, and it never goes near the floor;
-    // #1334 retunes both the model and the script's laws and re-tightens the ceiling.
-    CHECK(t.maxAltM < 13000.0);
+    // Re-tightened by #1334 (the ceiling was 13 km while the true-mass UFO ballooned its old
+    // attitude-law loop to ~11.8 km): the trainer under the #1141 climb-rate cascade holds its
+    // 3,000 m station without the excursion, so the ceiling pins that again.
+    CHECK(t.maxAltM < 6000.0);
 }
 
 TEST_CASE("builtin:fighter patrols closed-loop at the anchored sandbox home (#1221)", "[luacontroller][turnlaw]") {
@@ -854,12 +852,10 @@ TEST_CASE("builtin:fighter patrols closed-loop at the anchored sandbox home (#12
     INFO("minAlt " << t.minAltM << " maxAlt " << t.maxAltM << " crashed at " << t.crashTimeS);
     CHECK_FALSE(t.crashed());
     CHECK(t.minAltM > 1500.0);
-    // 13 km, not the 6 km this pinned before #1336: at the builtin's REAL 1,000 kg (the harness
-    // flew a ten-tonne phantom until then) the script's fixed 0.7 patrol throttle on a T/W ~3
-    // airframe balloons the attitude-law altitude loop to ~11.8 km before it settles back. The
-    // load-bearing claims stay what #1221 needed — it lives, and it never goes near the floor;
-    // #1334 retunes both the model and the script's laws and re-tightens the ceiling.
-    CHECK(t.maxAltM < 13000.0);
+    // Re-tightened by #1334 (the ceiling was 13 km while the true-mass UFO ballooned its old
+    // attitude-law loop to ~11.8 km): the trainer under the #1141 climb-rate cascade holds its
+    // 3,000 m station without the excursion, so the ceiling pins that again.
+    CHECK(t.maxAltM < 6000.0);
 }
 
 // ---------------------------------------------------------------------------

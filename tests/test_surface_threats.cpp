@@ -234,9 +234,17 @@ struct EngagementResult {
 
 EngagementResult runSamEngagement(double samAltM, double rangeM, double targetAltAboveSamM, int ticks) {
     ThreatFixture f;
+    // The emplacement stands ON terrain at its own elevation, spawned PARKED (#1334): the elevated
+    // variant used to float at 600 m, which only the old no-stall builtin could survive — on a real
+    // fallback model it fell, died on impact, and took the SARH illumination with it (the 20 km
+    // shot went stupid mid-flight). And an emplacement spawned at the default cruise airspeed skid
+    // 350 m along the ground before friction latched it. A hilltop site vs a plains site is also
+    // the parity a mission author can actually build.
+    f.wb->setGroundElevation(static_cast<float>(samAltM));
     const EntityId sam = f.spawn("builtin:sam-site", 0.0, samAltM, 0.0, 2);
     const EntityId victim = f.spawn("builtin:debug-entity", rangeM, samAltM + targetAltAboveSamM, 0.0, 1);
-    f.wb->registerController(sam, std::make_unique<ai::SamEngagementController>(*f.em));
+    f.wb->registerController(sam, std::make_unique<ai::SamEngagementController>(*f.em), nullptr,
+                             /*initialAirspeed=*/0.f);
 
     const EntityState* vs0 = f.em->get(victim);
     const float startHp = vs0 ? vs0->hp : 0.f;

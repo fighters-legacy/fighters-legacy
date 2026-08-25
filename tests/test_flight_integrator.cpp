@@ -823,8 +823,10 @@ TEST_CASE("FlightIntegrator: nosewheel authority fades out above ~50 m/s (#700)"
 }
 
 TEST_CASE("FlightIntegrator: nonzero world wind affects forces", "[flight_integrator][weather]") {
-    // Use the parsed test model (mass=10000 kg) rather than BuiltinFlightModel (fuel=10M kg)
-    // so the wind drag force produces a float-distinguishable velocity difference.
+    // Use the parsed test model (mass=10000 kg) rather than BuiltinFlightModel — the builtin is a
+    // 4,450 kg trainer since #1334 (and carried near-infinite fuel in earlier lives); the fixture
+    // keeps this case pinned to one deliberate mass so the wind drag force produces a
+    // float-distinguishable velocity difference.
     auto make_fi = [] {
         FlightIntegrator fi(makeData());
         FlightState s{};

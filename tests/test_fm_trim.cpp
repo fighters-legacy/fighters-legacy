@@ -135,6 +135,29 @@ TEST_CASE("fm-trim: the builtin model trims to plausible, stable numbers", "[fm_
     CHECK(r.sustained_turn_deg_s > 0.f);
 }
 
+TEST_CASE("fm-trim: the builtin trainer's envelope is realistic and LOW-performing (#1334)", "[fm_trim]") {
+    // The doctrine pin: an entity defaulted to the builtin flies a docile subsonic trainer, never a
+    // UFO. Bands, not exact values, so an intentional retune moves inside them without churn — but
+    // a change that reintroduces UFO performance (no stall floor, supersonic level flight, absurd
+    // climb) fails here by construction. Derived at 1,000 m / full gross via the same fl::trim the
+    // fm-trim CI tool runs; measured centre values: Vs 56.0 m/s, M0.65, 21.8 m/s ROC, 2.3 g
+    // sustained. The AI floors these protect: Vs comfortably below the ATC 75/70 m/s
+    // approach/rotate defaults and the 120 m/s default spawn cruise; level flight strictly inside
+    // the declared max_mach 0.80 (fm-trim's honesty rule).
+    const auto& d = *BuiltinFlightModel::get();
+    const TrimResult r = trim(d, at(1000.f, 0.f));
+
+    REQUIRE(r.converged);
+    CHECK(r.stall_speed_1g_mps > 48.f);
+    CHECK(r.stall_speed_1g_mps < 64.f);
+    CHECK(r.max_level_mach > 0.55f);
+    CHECK(r.max_level_mach < d.limits.max_mach);
+    CHECK(r.roc_mps_mil > 15.f);
+    CHECK(r.roc_mps_mil < 30.f);
+    CHECK(r.sustained_g > 1.7f);
+    CHECK(r.sustained_g < 3.5f);
+}
+
 TEST_CASE("fm-trim: a light fighter's derived performance is physically coherent", "[fm_trim]") {
     const FlightModelData d = parseFlightModel(kLightFighter);
     const TrimResult r = trim(d, at(4572.f, 6500.f)); // 15 000 ft, combat weight

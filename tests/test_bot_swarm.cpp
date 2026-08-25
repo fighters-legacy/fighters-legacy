@@ -39,10 +39,14 @@ TEST_CASE("weave pattern is deterministic and spreads phase across clients", "[b
     CHECK(a.sample(2.0, 3).throttle == Catch::Approx(0.7f));
 }
 
-TEST_CASE("idle pattern emits no input; level holds throttle", "[bot_swarm][pattern]") {
+TEST_CASE("idle pattern emits minimum input; level holds throttle", "[bot_swarm][pattern]") {
+    // Since #1334 idle carries the shared elevator trim and a low cruise throttle: a literally-zero
+    // stick is a steady descent on a real airframe, and a swarm on the ground measures less than an
+    // idle one. The claim is stability of the MINIMUM input, not zero.
     IdlePattern idle;
     const BotControl ic = idle.sample(5.0, 2);
-    CHECK(ic.throttle == Catch::Approx(0.0f));
+    CHECK(ic.throttle == Catch::Approx(0.55f));
+    CHECK(ic.elevator == Catch::Approx(0.05f));
     CHECK(ic.aileron == Catch::Approx(0.0f));
     CHECK(ic.buttons == 0);
 
