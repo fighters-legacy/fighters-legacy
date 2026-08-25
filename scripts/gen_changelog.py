@@ -98,6 +98,19 @@ def normalize_newlines(text: str, newline: str) -> str:
     return text.replace("\r\n", "\n").replace("\n", newline) if newline != "\n" else text.replace("\r\n", "\n")
 
 
+def release_date() -> str:
+    """Today in UTC -- the same clock git-cliff stamps the section with.
+
+    Not local time. cliff.toml renders `{{ timestamp | date(...) }}`, which git-cliff evaluates in
+    UTC, so a local `date.today()` disagrees with it for however many hours the local offset is --
+    every evening west of Greenwich, every morning east of it. During that window G2 rejected a
+    section git-cliff had just produced and the release simply could not be cut. UTC also makes the
+    date independent of who runs the script and from where, which matters because the changelog
+    date, the tag date and the release body all have to agree.
+    """
+    return datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+
+
 def check_generated(section: str, semver: str, today: str) -> None:
     """G1, G2, G6 -- validate git-cliff's output before it is allowed near the file."""
     lines = section.replace("\r\n", "\n").split("\n")
@@ -258,7 +271,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         semver = parse_version(args.version)
-        today = datetime.date.today().isoformat()
+        today = release_date()
 
         changelog = args.repo_root / "CHANGELOG.md"
         cmakelists = args.repo_root / "CMakeLists.txt"
