@@ -23,7 +23,10 @@ fi
 git pull origin main
 
 SEMVER="${VERSION#v}"
-TODAY=$(date +%F)
+# UTC, to agree with the date gen_changelog.py wrote into the section (git-cliff stamps it in UTC).
+# A local date disagrees for the length of the local offset every day, which blocked the release
+# rather than dating it wrongly -- but the fix is the same: one clock for all three dates.
+TODAY=$(date -u +%F)
 
 # The CHANGELOG's section date must be the date the tag is created — that is the date the release
 # actually came out, it is what fires release.yml, and it is what the GitHub Release body states.

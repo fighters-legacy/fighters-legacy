@@ -14,6 +14,7 @@ are about what happens to its output afterwards. The real invocation is covered 
 """
 
 import datetime
+import time
 from pathlib import Path
 
 import pytest
@@ -22,7 +23,7 @@ from conftest import load_tool
 
 gc = load_tool("gen_changelog", "scripts", "gen_changelog.py")
 
-TODAY = datetime.date.today().isoformat()
+TODAY = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
 
 HEADER = (
     "# Changelog\n"
@@ -99,6 +100,25 @@ def test_g1_refuses_a_section_with_no_entries():
 def test_g2_refuses_the_wrong_version():
     with pytest.raises(gc.GenError, match=r"expected '## \[0\.4\.0\]"):
         gc.check_generated(SECTION, "0.4.0", TODAY)
+
+
+@pytest.mark.parametrize("tz", ["Pacific/Kiritimati", "Pacific/Niue"])
+def test_release_date_is_utc_not_local(monkeypatch, tz):
+    """The clock the section date comes from must be the one git-cliff stamps it with.
+
+    cliff.toml renders the timestamp in UTC. A local date.today() agrees with that only while the
+    local offset does not straddle midnight -- so for several hours every day G2 rejected a section
+    git-cliff had just produced, and the release could not be cut at all.
+
+    The two timezones are the point, not decoration. Asserting under the RUNNER's timezone would
+    only catch a local-clock implementation during the very window that is broken, and pass all the
+    other hours -- a test that is correct part of the day and vacuous the rest. Kiritimati is UTC+14
+    and Niue is UTC-11, so for any instant at least one of them has a local date that differs from
+    UTC, and a local implementation fails at every hour.
+    """
+    monkeypatch.setenv("TZ", tz)
+    time.tzset()
+    assert gc.release_date() == datetime.datetime.now(datetime.timezone.utc).date().isoformat()
 
 
 def test_g2_refuses_the_wrong_date():
