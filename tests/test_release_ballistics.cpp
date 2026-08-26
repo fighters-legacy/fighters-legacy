@@ -200,6 +200,49 @@ TEST_CASE("Turret launch: a store leaves along the aim direction, not the nose (
     CHECK(std::abs(turretVel.x) < 1.f);
 }
 
+TEST_CASE("CCIP from the AIRCRAFT's state predicts where the bomb actually lands (#1339)", "[release][ccip]") {
+    // The prediction a SCRIPT can make: it has the aeroplane's state, not the store's. The rack
+    // ejection between the two is not decoration -- 4 m/s of downward push takes 0.4 s off an 11 s
+    // fall, which is 60 m of range at 150 m/s. Predicting from the aircraft state as though the bomb
+    // simply inherited it put the solution 41 m short of a target the solver said it was hitting,
+    // which on a 150 hp emplacement inside a 60 m linear-falloff blast is the difference between a
+    // kill and a scratch. bombReleaseState is the same separation launch() applies; this pins them
+    // together, which is the only thing that keeps guidance.ccip honest as the launch path changes.
+    ReleaseWorld w;
+    const EntityId shooter = w.spawnShooter(500.0, 200.f);
+    const EntityState* ss = w.em->get(shooter);
+    REQUIRE(ss != nullptr);
+
+    const auto rel = ProjectileSystem::bombReleaseState(
+        glm::dvec3{ss->transform.pos[0], ss->transform.pos[1], ss->transform.pos[2]}, ss->transform.quat,
+        glm::vec3{ss->transform.vel[0], ss->transform.vel[1], ss->transform.vel[2]});
+    const double relArr[3] = {rel.pos.x, rel.pos.y, rel.pos.z};
+    const auto g = CentralGravityField::earthInstance().accelWorld(relArr);
+    const auto ccip = computeCcip(
+        rel.pos, rel.vel, {0.f, 0.f, 0.f}, ProjectileSystem::kCoastDecayPerS, {g[0], g[1], g[2]},
+        [](const glm::dvec3& pos) { return CentralGravityField::earthInstance().geodeticAltitude(&pos.x); });
+    REQUIRE(ccip.valid);
+
+    REQUIRE(w.ps.launch(*w.em, w.bombIdx, *ss, 0u).valid());
+    const auto impacts = w.flyOut();
+    REQUIRE(impacts.size() == 1u);
+    CHECK(std::abs(impacts[0].pos[0] - ccip.impact.x) < 15.0);
+    CHECK(std::abs(impacts[0].pos[2] - ccip.impact.z) < 15.0);
+
+    // And the separation is what makes it fit: the naive prediction, from the aeroplane itself,
+    // lands measurably LONG of where the bomb goes.
+    const double ownArr[3] = {ss->transform.pos[0], ss->transform.pos[1], ss->transform.pos[2]};
+    const auto gOwn = CentralGravityField::earthInstance().accelWorld(ownArr);
+    const auto naive =
+        computeCcip(glm::dvec3{ownArr[0], ownArr[1], ownArr[2]},
+                    glm::vec3{ss->transform.vel[0], ss->transform.vel[1], ss->transform.vel[2]}, {0.f, 0.f, 0.f},
+                    ProjectileSystem::kCoastDecayPerS, {gOwn[0], gOwn[1], gOwn[2]}, [](const glm::dvec3& pos) {
+                        return CentralGravityField::earthInstance().geodeticAltitude(&pos.x);
+                    });
+    REQUIRE(naive.valid);
+    CHECK(naive.impact.x - impacts[0].pos[0] > 20.0);
+}
+
 TEST_CASE("CCIP predicts where the bomb actually lands", "[release][ccip]") {
     ReleaseWorld w;
     const EntityId shooter = w.spawnShooter(500.0, 200.f);

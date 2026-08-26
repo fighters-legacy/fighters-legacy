@@ -305,6 +305,43 @@ if agl_ish < 15 and speed < 40 then  -- on the deck, stopped: landed
 Where on the planet a world position is: `lat` and `lon` in **degrees**, `alt` in metres MSL. Use it
 when a script cares about the place (which side of a border, which theatre) rather than the height.
 
+### `guidance.ccip(state, ground_alt_m[, wind[, radius_m]]) → {x, y, z, time_s}` | `nil`
+
+**Where a bomb released right now would land** — the Continuously Computed Impact Point. Forward-
+integrates the same point-mass model the store actually flies (gravity, plus drag decaying the
+velocity toward the air mass), from the state the bomb is in *after* the rack ejects it, so the
+prediction and the bomb cannot disagree by more than integration phase. `nil` if it never reaches the
+ground.
+
+`ground_alt_m` is the MSL elevation the store falls to. For a surface target, use **its own
+altitude**: a thing on the ground tells you the ground height under it, and there is no terrain query
+on this seam. `wind` defaults to the world's current wind — pass one only to model a different air
+mass.
+
+!!! danger "Pointing the aeroplane is not aiming"
+    A store leaves on the **flight path** (a rocket) or straight **down off the rack** (a bomb), and
+    then falls for several seconds. Three things a script gets wrong without this call, all measured
+    on the builtin trainer:
+
+    - Aiming the **nose** instead of the flight path puts the shot low by the angle of attack — ~5°
+      in a dive, a 175 m miss at 2 km.
+    - Ignoring the **rack ejection** (4 m/s down) leaves the solution 41 m long.
+    - Ignoring the **wind** costs another ~12 m on a 12 s fall in a 6 m/s breeze.
+
+    Steer the *solution* onto the target rather than the nose, too: nulling the bearing error leaves
+    a standing cross-track offset the bomb inherits, and it never came closer than 81 m however good
+    the pointing looked.
+
+```lua
+local imp = guidance.ccip(state, target_ground_alt_m)
+if imp then
+    local dx, dz = imp.x - tgt.x, imp.z - tgt.z
+    if math.sqrt(dx * dx + dz * dz) <= 25 then    -- inside the warhead's lethal radius
+        return { weapon_station = BOMB_STATION, release = true, throttle = 1.0 }
+    end
+end
+```
+
 ---
 
 ## `detected_contacts() → array`
@@ -328,6 +365,7 @@ Each entry:
 | `age_s` | number | Seconds since the target was last actually *seen*. `0` while it is being seen; it grows while coasting — which is exactly when you should stop trusting `pos` |
 | `reacted` | bool | `false` until the reaction delay has elapsed. **A contact exists before its owner has noticed it** — see below |
 | `faction` | int | Target's faction index (`0` = neutral) |
+| `category` | string | What KIND of thing it is: `air_vehicle`, `ground_vehicle`, `naval_vehicle`, `structure`, … . Employment geometry starts here — an air-to-air cone can never be satisfied against a SAM site, and a dive attack on an aeroplane is a collision course |
 | `sensor_types` | string[] | Which kinds hold it: `radar`, `ir`, `visual`, `laser`. "He has me on radar" and "he can see me" are different tactical facts |
 
 ```lua

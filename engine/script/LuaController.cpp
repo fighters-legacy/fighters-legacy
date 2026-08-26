@@ -14,8 +14,11 @@
 #include "atc/AtcService.h" // atc.* Lua module (#705)
 #include "entity/EntityManager.h"
 #include "entity/EntityState.h"
+#include "entity/ObjectCategory.h" // objectCategoryName — the contact's kind, for detected_contacts (#1339)
+#include "flight/BallisticLead.h"  // computeCcip — the impact-point solver behind guidance.ccip (#1339)
 #include "sensor/SensorSystem.h"
 #include "spatial/SpatialIndex.h"
+#include "weapon/ProjectileSystem.h" // kCoastDecayPerS — the SAME drag the store actually flies
 
 #include <array>
 #include <cstdint>
@@ -386,6 +389,81 @@ static int guidanceGeodetic(lua_State* L) {
     return 1;
 }
 
+// ccip(state, ground_alt_m, [wind {x,y,z}], [radius_m]) → {x, y, z, time_s} | nil
+//
+// Where an unpowered store released RIGHT NOW would land (#629/#1339) — the Continuously Computed
+// Impact Point, forward-integrated through the SAME point-mass model ProjectileSystem flies, so the
+// prediction and the bomb cannot disagree by more than integration phase.
+//
+// It exists because pointing an aeroplane is not aiming an unguided store. A rocket leaves along the
+// flight path and a bomb leaves DOWNWARD off the rack, and both then fall: a script that lines its
+// nose up on a target and releases has computed nothing. The reference striker (#1339) releases when
+// this lands within the warhead's own lethal radius of the target, which is the difference between
+// an air-to-ground script that works and one that flies a plausible-looking pass and misses.
+//
+// `ground_alt_m` is the elevation the store falls to — for a surface target, its OWN altitude, which
+// is the only ground height a script can know without a terrain query. `wind` defaults to still air:
+// a store decays toward the AIR mass, so a script that knows its mission's wind should pass it.
+static int guidanceCcip(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE); // the entity state: pos, vel and (for the rack ejection) quat
+    double pos[3];
+    double vel[3];
+    float quat[4] = {0.f, 0.f, 0.f, 1.f};
+    lua_getfield(L, 1, "pos");
+    luaL_checktype(L, -1, LUA_TTABLE);
+    readVec3(L, lua_gettop(L), pos);
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "vel");
+    luaL_checktype(L, -1, LUA_TTABLE);
+    readVec3(L, lua_gettop(L), vel);
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "quat");
+    if (lua_istable(L, -1))
+        readQuat(L, lua_gettop(L), quat);
+    lua_pop(L, 1);
+    const double groundAltM = luaL_checknumber(L, 2);
+    // Wind: the caller's if given, else THIS TICK'S from the world (AiTickContext::windMps), else
+    // still air. The default matters more than the argument does — a script that does not think
+    // about wind still gets the drift right, and the one that does can model a different air mass.
+    double wind[3] = {0.0, 0.0, 0.0};
+    const LuaController::Impl* impl = static_cast<LuaController::Impl*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (impl && impl->currentCtx && impl->currentCtx->windMps) {
+        wind[0] = impl->currentCtx->windMps[0];
+        wind[1] = impl->currentCtx->windMps[1];
+        wind[2] = impl->currentCtx->windMps[2];
+    }
+    if (lua_istable(L, 3))
+        readVec3(L, 3, wind);
+    const double R = luaL_optnumber(L, 4, fl::kEarthRadiusM);
+
+    // The store does not start where the aeroplane is: a bomb is EJECTED down off the rack, 4 m and
+    // 4 m/s along the airframe's own down (ProjectileSystem::launch, the same constants). Ignoring
+    // that push shortens nothing in the model and 0.4 s in reality, which at 150 m/s is 60 m of
+    // range — measured as a 41 m short miss on a target the solver said it was hitting.
+    const auto rel = fl::ProjectileSystem::bombReleaseState(
+        glm::dvec3{pos[0], pos[1], pos[2]}, quat,
+        glm::vec3{static_cast<float>(vel[0]), static_cast<float>(vel[1]), static_cast<float>(vel[2])});
+    const glm::dvec3 p = rel.pos;
+    const fl::CcipResult r = fl::computeCcip(
+        p, rel.vel, glm::vec3{static_cast<float>(wind[0]), static_cast<float>(wind[1]), static_cast<float>(wind[2])},
+        fl::ProjectileSystem::kCoastDecayPerS, fl::localGravity(p, R),
+        [groundAltM, R](const glm::dvec3& g) { return fl::localAltitude(g, R) - groundAltM; });
+    if (!r.valid) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_newtable(L);
+    lua_pushnumber(L, r.impact.x);
+    lua_setfield(L, -2, "x");
+    lua_pushnumber(L, r.impact.y);
+    lua_setfield(L, -2, "y");
+    lua_pushnumber(L, r.impact.z);
+    lua_setfield(L, -2, "z");
+    lua_pushnumber(L, static_cast<double>(r.timeOfFallS));
+    lua_setfield(L, -2, "time_s");
+    return 1;
+}
+
 // ---------------------------------------------------------------------------
 // nearby_entities(cx, cz, radius_m) → array of {idx, pos={x,y,z}}
 // Upvalue 1: LuaController::Impl* (lightuserdata)
@@ -528,6 +606,13 @@ static int luaDetectedContacts(lua_State* L) {
 
         lua_pushinteger(L, static_cast<lua_Integer>(c.factionIndex));
         lua_setfield(L, -2, "faction");
+
+        // What KIND of thing this is (#1339): "air_vehicle" / "ground_vehicle" / "naval_vehicle" /
+        // "structure". Employment geometry begins here — an air-to-air cone cannot be flown against
+        // a SAM site, and without this a script could not tell the difference between the two, which
+        // is why the reference fighter engaged ground emitters it could never satisfy a shot on.
+        lua_pushstring(L, fl::objectCategoryName(c.category));
+        lua_setfield(L, -2, "category");
 
         // Which KINDS of sensor hold it. "He has me on radar" and "he can see me" are different
         // tactical facts, and a script is entitled to tell them apart.
@@ -912,7 +997,11 @@ static void registerWorldModule(lua_State* L, LuaController::Impl* impl) {
     }
 }
 
-static void registerGuidanceModule(lua_State* L) {
+// The whole guidance table shares ONE upvalue: the controller's Impl. Most of these functions are
+// pure maths on their arguments and ignore it; guidance.ccip reads this tick's world wind through it
+// (#1339), which is the difference between a bombing solution and a guess. Registering that one
+// function separately would hide it from the docs-drift check, which reads the luaL_Reg table.
+static void registerGuidanceModule(lua_State* L, LuaController::Impl* impl) {
     static const luaL_Reg kFuncs[] = {
         {"heading_error", guidanceHeadingError},
         {"pitch_error_from_alt", guidancePitchErrorFromAlt},
@@ -927,10 +1016,12 @@ static void registerGuidanceModule(lua_State* L) {
         {"pitch_of", guidancePitchOf},
         {"altitude", guidanceAltitude},
         {"geodetic", guidanceGeodetic},
+        {"ccip", guidanceCcip},
         {nullptr, nullptr},
     };
     lua_newtable(L);
-    luaL_setfuncs(L, kFuncs, 0);
+    lua_pushlightuserdata(L, impl);
+    luaL_setfuncs(L, kFuncs, 1);
     lua_setglobal(L, "guidance");
 }
 
@@ -967,7 +1058,7 @@ LuaController::LuaController(std::string_view scriptSource, ScriptPackSource pac
     }
 
     lua_State* L = m_impl->sandbox->luaState();
-    registerGuidanceModule(L);
+    registerGuidanceModule(L, m_impl.get());
     registerSpatialFuncs(L, m_impl.get());
     registerWorldModule(L, m_impl.get());
     registerAtcModule(L, m_impl.get());

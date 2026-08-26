@@ -8,6 +8,7 @@
 #include "weapon/WeaponDef.h"
 #include "weapon/WeaponRegistry.h"
 
+#include <glm/gtc/quaternion.hpp>
 #include <glm/vec3.hpp>
 
 #include <cstdint>
@@ -151,6 +152,27 @@ class ProjectileSystem {
     }
 
     static constexpr float kContactFuzeM = 8.f;
+    // Rack ejection for a BOMB (#629): the ejector feet push it DOWN off the aircraft, never ahead
+    // of it. Named because the bombing solution has to model the same separation the store actually
+    // gets — 4 m/s of downward push shortens an 11 s fall by ~0.4 s, which is 60 m of range at
+    // 150 m/s and the difference between a hit and a crater in the next field (#1339).
+    static constexpr float kBombEjectDistM = 4.f;
+    static constexpr float kBombEjectSpeedMps = 4.f;
+
+    // The state a BOMB is in the instant after it leaves the rack, from the releasing aircraft's own
+    // state. launch() applies exactly this separation; a bombing solution has to START from it,
+    // because a store does not begin where the aeroplane is or with the aeroplane's velocity.
+    // Pinned against the real launch path by tests/test_release_ballistics.cpp.
+    struct ReleaseState {
+        glm::dvec3 pos{};
+        glm::vec3 vel{};
+    };
+    [[nodiscard]] static ReleaseState bombReleaseState(const glm::dvec3& pos, const float quat[4],
+                                                       const glm::vec3& vel) noexcept {
+        const glm::quat q{quat[3], quat[0], quat[1], quat[2]};
+        const glm::vec3 down = q * glm::vec3{0.f, -1.f, 0.f};
+        return {pos + glm::dvec3(down) * static_cast<double>(kBombEjectDistM), vel + down * kBombEjectSpeedMps};
+    }
     static constexpr float kMaxFlightTimeS = 90.f;
     static constexpr float kCoastDecayPerS = 0.035f;       // fraction of speed shed per second unpowered
     static constexpr uint32_t kSeekerCheckTicks = 6;       // 10 Hz at the 60 Hz tick — the reference cadence

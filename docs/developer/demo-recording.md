@@ -98,8 +98,9 @@ original set; the last five each showcase one engine epic that landed for v0.4.0
 
 1. **demo-dogfight** — 2v2 `builtin:fighter` guns + IR; establishing static → orbit at the merge →
    chase the blue lead → move flyby → static tracking a survivor.
-2. **demo-sam-strike** — a strike pair vs a SAM + AAA site; ground static at the site, chase inbound,
-   orbit the engagement.
+2. **demo-sam-strike** — a `builtin:striker` pair vs a SAM + AAA site: roll-in, a shallow dive to the
+   release height, a level bombing run, and the site goes up at ~40 s (#1339). Ground static at the
+   site, chase inbound, orbit the release, wide for the impact.
 3. **demo-formation-tour** — a 4-ship on a waypoint route at dawn under a partly-cloudy sky; move slide
    along the formation, wide landscape static.
 4. **demo-sensors-intercept** — a patrol → detect → intercept honest-sensing chain.

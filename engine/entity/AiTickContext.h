@@ -65,6 +65,16 @@ struct AiTickContext {
     // relationships (allies are friendly, everyone else hostile). Forward-declared: engine-entity
     // does NOT link engine-world — the observer's faction view is a pointer it is handed, not a dep.
     const FactionRegistry* factions{nullptr};
+
+    // Steady wind at the datum, world XZ in m/s (a 3-float array; Y is unused today). Null = not
+    // evaluated, which every consumer must read as "still air", not as "no wind" (#1339).
+    //
+    // A controller needs it for one reason: an UNGUIDED STORE drifts on it. ProjectileSystem already
+    // decays a coasting store's velocity toward the air mass, so a bombing solution computed in still
+    // air is wrong by the drift — measured on a 12 s fall in a 6 m/s wind, 12 m, which is the
+    // difference between a kill and a near miss on a 150 hp emplacement. Everything else an aircraft
+    // does about wind, it does by flying; this is the one case that has to be COMPUTED.
+    const float* windMps{nullptr};
 };
 
 } // namespace fl

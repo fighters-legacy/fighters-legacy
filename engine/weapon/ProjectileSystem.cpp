@@ -90,8 +90,8 @@ EntityId ProjectileSystem::launch(EntityManager& em, uint32_t weaponIndex, const
     const glm::vec3 bodyUp = rot * glm::vec3{0.f, 1.f, 0.f};
     const bool isBomb = def->type == WeaponType::Bomb;
     const glm::vec3 sepDir = isBomb ? -bodyUp : nose;
-    const float sepDistM = isBomb ? 4.f : 12.f;
-    const float sepPushMps = isBomb ? 4.f : 15.f;
+    const float sepDistM = isBomb ? kBombEjectDistM : 12.f;
+    const float sepPushMps = isBomb ? kBombEjectSpeedMps : 15.f;
 
     EntityTransform t{};
     for (int i = 0; i < 3; ++i)

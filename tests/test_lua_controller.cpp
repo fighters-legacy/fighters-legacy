@@ -858,6 +858,181 @@ TEST_CASE("builtin:fighter patrols closed-loop at the anchored sandbox home (#12
     CHECK(t.maxAltM < 6000.0);
 }
 
+// --- builtin:striker — surface attack (#1339) ----------------------------------------------------
+
+namespace {
+
+// A hostile SURFACE contact, held fresh. `category` is the field that makes the two reference
+// scripts differ: without it a script cannot tell a SAM site from an aeroplane, which is why the
+// fighter chased ground emitters it could never satisfy a firing cone against.
+fl::sensor::Contact surfaceContact(double x, double alt, double z, uint64_t tick) {
+    fl::sensor::Contact c{};
+    c.id = {77, 1};
+    c.factionIndex = 2;
+    c.category = fl::ObjectCategory::GroundVehicle;
+    c.state = fl::sensor::ContactState::Detected;
+    c.lastKnownPos[0] = x;
+    c.lastKnownPos[1] = alt;
+    c.lastKnownPos[2] = z;
+    c.lastSeenTick = tick;
+    c.firstDetectedTick = 0;
+    c.reacted = true;
+    return c;
+}
+
+} // namespace
+
+TEST_CASE("builtinAiScript resolves builtin:striker and lists it (#1339)") {
+    CHECK_FALSE(fl::builtinAiScript("builtin:striker").empty());
+    bool sawStriker = false;
+    for (std::string_view id : fl::builtinAiScriptIds())
+        if (id == "builtin:striker")
+            sawStriker = true;
+    CHECK(sawStriker);
+    // Both roles are the shared prelude plus their own body, so neither may be a prefix of the other.
+    CHECK(fl::builtinAiScript("builtin:striker") != fl::builtinAiScript("builtin:fighter"));
+}
+
+TEST_CASE("the builtin striker script compiles and drives an entity (#1339)") {
+    auto c = makeCtrl(std::string(fl::builtinAiScript("builtin:striker")).c_str());
+    REQUIRE(c->isValid());
+    const auto ctrl = c->sample(makeState(0.0, 2500.0, 0.0), 100, 1.0 / 60.0, fl::AiTickContext{});
+    CHECK(ctrl.throttle > 0.f); // nothing detected: it patrols its anchor
+}
+
+TEST_CASE("builtin:fighter leaves surface contacts alone (#1339)", "[luacontroller]") {
+    // The defect this closes: builtin:fighter engaged whatever hostile its sensors reported, ground
+    // emitters included, with an employment geometry that can never be satisfied against one — it
+    // pressed a SAM site until it was shot down, having never taken a shot. A fighter with ONLY a
+    // surface contact must patrol, not hunt.
+    fl::sensor::ContactTable contacts;
+    contacts.contacts.push_back(surfaceContact(1500.0, 545.0, 0.0, 100));
+
+    auto c = makeCtrl(std::string(fl::builtinAiScript("builtin:fighter")).c_str());
+    REQUIRE(c->isValid());
+    fl::AiTickContext ctx{};
+    ctx.contacts = &contacts;
+    const auto ctrl = c->sample(makeState(0.0, 3000.0, 0.0), 100, 1.0 / 60.0, ctx);
+    CHECK_FALSE(ctrl.trigger);
+    CHECK_FALSE(ctrl.release);
+    CHECK(ctrl.station == 255u); // no station selected at all: nothing was engaged
+}
+
+TEST_CASE("builtin:striker prosecutes a surface target and survives the pass (#1339)",
+          "[luacontroller][turnlaw][strike]") {
+    // The closed loop the issue asked for: a SAM-site-class contact on the deck, an attacker run in
+    // from 6 km at 2,200 m, flown through the real integrator. Before this script existed the
+    // measured outcome over 600 s of demo-sam-strike was "the site survives indefinitely while every
+    // attacking aircraft is eventually lost".
+    constexpr double kSiteAlt = 545.0; // demo-sam-strike's terrain elevation at the site
+    fl::sensor::ContactTable contacts;
+    contacts.contacts.push_back(surfaceContact(0.0, kSiteAlt, 0.0, 0));
+
+    auto c = makeCtrl(std::string(fl::builtinAiScript("builtin:striker")).c_str());
+    REQUIRE(c->isValid());
+
+    fl::AiTickContext ctx{};
+    ctx.contacts = &contacts;
+
+    bool droppedBomb = false;
+    bool firedAnythingElse = false;
+    double minAglOverSite = 1e9;
+    auto hook = [&](uint64_t tick, const fl::EntityState& own) {
+        contacts.contacts[0].lastSeenTick = tick; // the site is in plain sight the whole run
+        const double dx = own.transform.pos[0];
+        const double dz = own.transform.pos[2];
+        if (std::sqrt(dx * dx + dz * dz) < 4000.0)
+            minAglOverSite = std::min(minAglOverSite, own.transform.pos[1] - kSiteAlt);
+    };
+
+    // Wrap the controller so the test can see what it asked to fire, tick by tick.
+    struct Watching : fl::IEntityController {
+        fl::IEntityController* inner{nullptr};
+        bool* bomb{nullptr};
+        bool* other{nullptr};
+        fl::ControlInput sample(const fl::EntityState& st, uint64_t tick, double dt,
+                                const fl::AiTickContext& ctx) override {
+            const fl::ControlInput ci = inner->sample(st, tick, dt, ctx);
+            if (ci.release && ci.station == 4u)
+                *bomb = true;
+            else if ((ci.release || ci.trigger) && ci.station != 255u && ci.station != 4u)
+                *other = true;
+            return ci;
+        }
+    };
+    Watching watcher;
+    watcher.inner = c.get();
+    watcher.bomb = &droppedBomb;
+    watcher.other = &firedAnythingElse;
+
+    const fl::test::FlightTrace t = fl::test::flyController(
+        watcher, fl::test::levelStateAt(-8000.0, 2200.0, 0.0, 150.f), 150, hook, [&]() { return ctx; });
+
+    INFO("alt " << t.minAltM << ".." << t.maxAltM << " end " << t.endAltM << ", crash " << t.crashTimeS
+                << ", min AGL over the site " << minAglOverSite << ", bomb " << droppedBomb);
+    CHECK_FALSE(t.crashed());
+    CHECK(droppedBomb);             // it delivered the store the fighter could never line up
+    CHECK_FALSE(firedAnythingElse); // and only the air-to-ground one
+    // Terrain-floor discipline through the run-in: the pull-off is referenced to the target's own
+    // elevation, which is the only ground height a script can know without a terrain query.
+    CHECK(minAglOverSite > 250.0);
+}
+
+TEST_CASE("guidance.ccip solves from the aircraft's state, with the world's wind (#1339)", "[luacontroller][strike]") {
+    // The seam the striker aims with. Three properties, each of which was a real error before it
+    // existed: it predicts an impact AHEAD of a moving aircraft, it moves the impact DOWNWIND, and
+    // it reads the wind from the world unless the caller overrides it.
+    auto c = makeCtrl("function compute_control(s,t,dt)\n"
+                      "  local i = guidance.ccip(s, 0)\n"
+                      "  if not i then return {} end\n"
+                      "  return { throttle = 0.5, aileron = i.x / 10000, elevator = i.z / 10000,\n"
+                      "           rudder = i.time_s / 100 }\n"
+                      "end");
+    REQUIRE(c->isValid());
+
+    fl::EntityState st = makeState(0.0, 1000.0, 0.0);
+    st.transform.vel[0] = 200.f; // flying +X, level
+    st.transform.vel[1] = 0.f;
+    st.transform.vel[2] = 0.f;
+
+    const fl::ControlInput still = c->sample(st, 10, 1.0 / 60.0, fl::AiTickContext{});
+    const float impactX = still.aileron * 10000.f;
+    const float impactZ = still.elevator * 10000.f;
+    const float tof = still.rudder * 100.f;
+    INFO("still air: impact [" << impactX << ", " << impactZ << "] after " << tof << " s");
+    CHECK(tof > 10.f);       // ~14 s from 1,000 m
+    CHECK(tof < 20.f);       //
+    CHECK(impactX > 1500.f); // carried well downrange by 200 m/s
+    CHECK(std::abs(impactZ) < 5.f);
+
+    // The same release in a crosswind lands downwind of it — the store decays toward the AIR mass,
+    // which is exactly why a still-air solution misses.
+    const float wind[3] = {0.f, 0.f, 12.f};
+    fl::AiTickContext windy{};
+    windy.windMps = wind;
+    const fl::ControlInput blown = c->sample(st, 11, 1.0 / 60.0, windy);
+    INFO("12 m/s crosswind: z = " << blown.elevator * 10000.f);
+    CHECK(blown.elevator * 10000.f > impactZ + 10.f);
+}
+
+TEST_CASE("builtin:striker ignores an air contact (#1339)", "[luacontroller][strike]") {
+    // A dive attack on an aeroplane is a collision course. The striker has no air-to-air employment
+    // by design — an escort is the answer to a CAP — so an air-only picture leaves it patrolling.
+    fl::sensor::Contact bandit = surfaceContact(1200.0, 3000.0, 0.0, 100);
+    bandit.category = fl::ObjectCategory::AirVehicle;
+    fl::sensor::ContactTable contacts;
+    contacts.contacts.push_back(bandit);
+
+    auto c = makeCtrl(std::string(fl::builtinAiScript("builtin:striker")).c_str());
+    REQUIRE(c->isValid());
+    fl::AiTickContext ctx{};
+    ctx.contacts = &contacts;
+    const auto ctrl = c->sample(makeState(0.0, 3000.0, 0.0), 100, 1.0 / 60.0, ctx);
+    CHECK_FALSE(ctrl.release);
+    CHECK_FALSE(ctrl.trigger);
+    CHECK(ctrl.station == 255u);
+}
+
 // ---------------------------------------------------------------------------
 // Coroutine control flow (#412)
 // ---------------------------------------------------------------------------
