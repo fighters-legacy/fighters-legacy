@@ -493,6 +493,15 @@ struct GameServices {
         uint64_t startWallNs{0};              // wall clock at first recorded frame (maxSec)
         bool started{false};                  // has the first frame been pushed
         bool encoderFailed{false};            // a push/open error occurred
+        // Stop state, LATCHED (#1347). A server `[rotation]` restarts the mission underneath a
+        // connected client: sim time jumps back to zero and the outcome the recorder was waiting for
+        // un-happens, so an un-latched stop condition re-opens a finished recording and the session
+        // runs until someone kills it. `truncated` is the other half of the same honesty: a recording
+        // that stopped on the wall-clock safety cap did NOT record the shot list it was given, and
+        // must fail the run rather than hand back a short video that looks fine.
+        bool done{false};
+        bool truncated{false};
+        double stoppedAtSimS{0.0}; // sim seconds captured when the run stopped (for the report)
     };
     Recorder recorder;
     int exitCode{0};
@@ -700,10 +709,30 @@ bool Game::initRecorder() {
     rec.director = std::make_unique<fl::ShotDirector>(std::move(shots));
     rec.scheduler.emplace(rec.fps);
 
+    // Open the encoder at the size the RENDERER will actually deliver (#1347), which is not always the
+    // size that was asked for: headless renders into owned images at exactly --record-res, but a window
+    // is subject to the compositor (HiDPI / fractional scaling), and before #1347 it was not even
+    // asked for the requested size. The sink is size-matched against this, and a mismatch used to be
+    // SILENT: every frame was dropped and the encoder was fed the zero-filled buffer for the whole
+    // run, which is a video of pure black that no duration check can fail.
+    uint32_t w = static_cast<uint32_t>(d.services.headlessW);
+    uint32_t h = static_cast<uint32_t>(d.services.headlessH);
+    if (!d.services.headless && d.services.p.window && d.services.p.window->width() > 0) {
+        const uint32_t ww = static_cast<uint32_t>(d.services.p.window->width());
+        const uint32_t wh = static_cast<uint32_t>(d.services.p.window->height());
+        if (ww != w || wh != h) {
+            char szmsg[176];
+            std::snprintf(szmsg, sizeof(szmsg),
+                          "recorder: recording at %ux%u, the window's drawable size — %ux%u was requested", ww, wh, w,
+                          h);
+            d.services.rawLogger->log(LogLevel::Warn, __FILE__, __LINE__, szmsg);
+        }
+        w = ww;
+        h = wh;
+    }
+
     // Open the encoder: a PNG sequence if --record-png-dir, else ffmpeg mp4. FL_FFMPEG overrides the
     // executable. A failure to open is fatal — a recording run must not silently produce nothing.
-    const uint32_t w = static_cast<uint32_t>(d.services.headlessW);
-    const uint32_t h = static_cast<uint32_t>(d.services.headlessH);
     bool opened = false;
     if (!rec.pngDir.empty()) {
         opened = rec.encoder.openPngDir(rec.pngDir, w, h);
@@ -722,12 +751,29 @@ bool Game::initRecorder() {
 
     // Install the capture sink: copy each rendered frame into lastFrame. The record loop pushes it to
     // the encoder at capture boundaries (dup detection keys on the renderer frameIndex).
-    d.services.p.renderer->setCaptureSink([&rec](const fl::CaptureFrame& cf) {
+    fl::ILogger* sinkLog = d.services.rawLogger;
+    d.services.p.renderer->setCaptureSink([&rec, sinkLog](const fl::CaptureFrame& cf) {
         const std::size_t bytes = static_cast<std::size_t>(cf.width) * cf.height * 4u;
-        if (cf.pixels && cf.width == rec.lastW && cf.height == rec.lastH && rec.lastFrame.size() == bytes) {
-            std::memcpy(rec.lastFrame.data(), cf.pixels, bytes);
-            rec.lastFrameIndex = cf.frameIndex;
+        if (!cf.pixels)
+            return;
+        // A frame that does not fit the encoder is a FAILED RECORDING, not a frame to skip (#1347).
+        // Dropping it left `lastFrame` as the zero-filled buffer it was allocated with, and every
+        // capture boundary then pushed that: a full-length video of one black frame, which the
+        // duration gate blessed. Reported once (the condition repeats every frame) and fatal.
+        if (cf.width != rec.lastW || cf.height != rec.lastH || rec.lastFrame.size() != bytes) {
+            if (!rec.encoderFailed && sinkLog) {
+                char msg[192];
+                std::snprintf(msg, sizeof(msg),
+                              "recorder: captured frame is %ux%u but the encoder is open at %ux%u — "
+                              "recording ABORTED rather than written black",
+                              cf.width, cf.height, rec.lastW, rec.lastH);
+                sinkLog->log(LogLevel::Error, __FILE__, __LINE__, msg);
+            }
+            rec.encoderFailed = true;
+            return;
         }
+        std::memcpy(rec.lastFrame.data(), cf.pixels, bytes);
+        rec.lastFrameIndex = cf.frameIndex;
     });
     d.services.rawLogger->log(LogLevel::Info, __FILE__, __LINE__, "recorder: armed");
     return true;
@@ -786,15 +832,24 @@ void Game::recorderEmit(bool& running) {
     }
 
     // Stop conditions: the shot list ran out, the mission objective ended (--exit-on-mission-end), or the
-    // wall-clock safety cap tripped.
+    // wall-clock safety cap tripped. Each LATCHES into rec.done — see the field comment: a rotation
+    // that restarts the mission must not be able to re-open a recording that has already finished.
     const double simTime = fl::kServerTickRate.ticksToSeconds(latestTick);
     const bool tracksDone =
         rec.director && rec.director->totalDurationSec() > 0.0 && simTime >= rec.director->totalDurationSec();
     const bool missionEnded = rec.exitOnMissionEnd && d.session.clientHandler &&
                               d.session.clientHandler->missionOutcome() != fl::MissionResultCode::Incomplete;
+    // The cap is WALL CLOCK and the shot list is SIM time, and `fl-server --time-rate` is exactly the
+    // ratio between them: at `eighth`, a 180 s cap buys 22.5 s of shot list, which is why every demo
+    // recorded to the same 22.6 s whatever its shots said. Tripping it is now a FAILURE, not a stop.
     const bool timedOut =
         rec.maxSec > 0 && (nowNs - rec.startWallNs) >= static_cast<uint64_t>(rec.maxSec) * 1'000'000'000ull;
-    if (tracksDone || missionEnded || timedOut)
+    if ((tracksDone || missionEnded || timedOut) && !rec.done) {
+        rec.done = true;
+        rec.truncated = timedOut && !tracksDone && !missionEnded;
+        rec.stoppedAtSimS = simTime;
+    }
+    if (rec.done)
         running = false;
 }
 
@@ -817,7 +872,21 @@ void Game::recorderFinish() {
                   static_cast<unsigned long long>(rec.maxDup), encoderOk ? "ok" : "FAILED");
     d.services.rawLogger->log(encoderOk && !dupExceeded ? LogLevel::Info : LogLevel::Error, __FILE__, __LINE__, msg);
 
-    if (!encoderOk || dupExceeded)
+    // A recording cut off by the wall-clock cap is INCOMPLETE (#1347): it stopped mid-shot-list, and
+    // the difference between "the demo is 22.6 s long" and "the recorder ran out of wall clock at
+    // 22.6 s of a 50 s shot list" is exactly the difference a gate exists to tell. The cap is wall
+    // clock and the shot list is sim time; `--time-rate` is the ratio, so the fix when this fires is
+    // a bigger --record-max-sec (record_demo.py now derives one) or a faster --time-rate.
+    if (rec.truncated) {
+        char tmsg[256];
+        std::snprintf(tmsg, sizeof(tmsg),
+                      "recorder: TRUNCATED — the %d s wall-clock cap stopped the run at %.1f s of sim time, "
+                      "short of the %.1f s shot list",
+                      rec.maxSec, rec.stoppedAtSimS, rec.director ? rec.director->totalDurationSec() : 0.0);
+        d.services.rawLogger->log(LogLevel::Error, __FILE__, __LINE__, tmsg);
+    }
+
+    if (!encoderOk || dupExceeded || rec.truncated)
         d.services.exitCode = 1; // bad video is loud: non-zero exit fails the record_demo.py run
 }
 
@@ -999,8 +1068,10 @@ bool Game::initPlatform(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--run-seconds") == 0)
             d.services.runSeconds = std::max(0, std::atoi(argv[i + 1]));
         else if (std::strcmp(argv[i], "--size") == 0) {
-            // Headless render resolution (#666). Mirrors --record-res; windowed mode ignores it (the
-            // window's own size wins). Malformed values keep the 1280x720 default.
+            // Render resolution (#666). Mirrors --record-res, and since #1347 it sizes the WINDOW too,
+            // so a windowed recording gets the frame size it asked for. A compositor may still hand
+            // back a different drawable size (HiDPI / fractional scaling); the recorder follows what
+            // the renderer actually delivers. Malformed values keep the 1280x720 default.
             int w = 0, h = 0;
             if (std::sscanf(argv[i + 1], "%dx%d", &w, &h) == 2 && w > 0 && h > 0) {
                 d.services.headlessW = w;
@@ -1167,7 +1238,13 @@ bool Game::initWindowAndRenderer() {
     sdlWindow->setInputSink(static_cast<SDL3Input*>(d.services.p.input.get()));
     sdlWindow->setJoystickSink(static_cast<SDL3Joystick*>(d.services.p.joystick.get()));
 
-    if (!d.services.p.window->init("Fighters Legacy", 1280, 720)) {
+    // The window opens at the requested render resolution (#1347). `--size` / `--record-res` used to
+    // be documented as "windowed mode ignores it", while the recorder went on to open its encoder at
+    // exactly that ignored size and size-match every captured frame against it -- so asking a windowed
+    // run for 960x540 produced a 960x540 video of pure black from a perfectly healthy 1280x720
+    // renderer. Honouring the flag is half the fix; the recorder taking its size from the renderer
+    // rather than from the request is the other half (initRecorder).
+    if (!d.services.p.window->init("Fighters Legacy", d.services.headlessW, d.services.headlessH)) {
         d.services.rawLogger->log(LogLevel::Error, __FILE__, __LINE__, "window init failed");
         return false;
     }

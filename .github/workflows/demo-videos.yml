@@ -39,7 +39,12 @@ permissions:
 jobs:
   record:
     runs-on: ubuntu-latest
-    timeout-minutes: 90 # build + record with headroom; an apt-mirror hang must fail visibly in minutes, not squat for 6 h (#1216)
+    # Build + record with headroom; an apt-mirror hang must fail visibly in minutes, not squat for 6 h
+    # (#1216). Sized from the actual work since #1347: the demo set is ~436 s of SHOT LIST, and the
+    # recorder is capped in WALL CLOCK, so at the default `eighth` time-rate a full, untruncated set
+    # is ~58 min of recording plus the build. It used to fit in 90 because every demo was silently
+    # cut off at 22.6 s.
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v7
         with:

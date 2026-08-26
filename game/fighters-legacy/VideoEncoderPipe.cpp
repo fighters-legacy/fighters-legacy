@@ -71,7 +71,14 @@ bool VideoEncoderPipe::openFfmpeg(const std::string& outPath, uint32_t width, ui
     std::snprintf(sz, sizeof(sz), "%ux%u", width, height);
     const std::string bin = ffmpegBin.empty() ? std::string("ffmpeg") : ffmpegBin;
     std::string cmd = bin + " -y -loglevel error -f rawvideo -pixel_format rgba -video_size " + sz + " -framerate " +
-                      std::to_string(fps) + " -i - -an -c:v libx264 -crf 20 -pix_fmt yuv420p " + shellQuote(outPath);
+                      std::to_string(fps) + " -i - -an";
+    // H.264 in yuv420p needs EVEN dimensions, and a capture surface is not always even: a 960x540
+    // window under a 125%-scaling compositor has a 1200x675 drawable, and libx264 refuses it outright
+    // ("height not divisible by 2") -- the whole recording is lost to one row (#1347). Crop the odd
+    // edge instead. Only added when it is needed, so an even-sized recording runs no filter at all.
+    if ((width % 2u) != 0u || (height % 2u) != 0u)
+        cmd += " -vf \"crop=trunc(iw/2)*2:trunc(ih/2)*2\"";
+    cmd += " -c:v libx264 -crf 20 -pix_fmt yuv420p " + shellQuote(outPath);
 
     m_pipe = ::popen(cmd.c_str(), "w");
     if (!m_pipe) {

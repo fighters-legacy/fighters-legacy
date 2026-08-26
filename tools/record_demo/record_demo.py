@@ -14,10 +14,12 @@ recorder client, waits for it to finish, and ffprobes the output as an end-to-en
 (VK_ICD_FILENAMES + unset DISPLAY) so it renders with no display and no GPU. `--png` writes a PNG
 sequence instead of an mp4 (no ffmpeg/libx264 needed). See docs/developer/demo-recording.md.
 
-Only the pure helpers (manifest parse, duration bounds) are unit-tested (tests/test_record_demo.py); the
+Only the pure helpers (manifest parse, duration bounds, the wall-clock cap, the content checks)
+are unit-tested (tests/test_record_demo.py); the
 subprocess orchestration is exercised manually and by the optional demo-videos CI job (#918).
 """
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -64,6 +66,103 @@ def duration_ok(actual, expected, floor_frac=0.3, ceil_slack=6.0):
     return True, f"{actual:.1f}s within [{floor:.1f}, {ceil:.1f}]"
 
 
+# Sim seconds per wall-clock second, per `fl-server --time-rate` (engine/loop/TimeRate.h). The
+# recorder's --record-max-sec is WALL CLOCK and a shot list is SIM time, so this table is the ratio
+# between the cap and what the cap actually buys (#1347).
+TIME_RATE_MULTIPLIER = {
+    "paused": 0.0, "eighth": 0.125, "quarter": 0.25, "half": 0.5, "normal": 1.0,
+    "double": 2.0, "quad": 4.0, "octa": 8.0,
+}
+
+
+def wall_clock_cap(expected_duration, time_rate, requested=0, slack=1.5, fixed_s=60.0):
+    """Wall-clock seconds to allow a demo whose shot list is `expected_duration` SIM seconds.
+
+    The recorder's cap is wall clock; the shot list is sim time; `--time-rate` is the ratio. A flat
+    180 s cap at `--time-rate eighth` buys 22.5 s of shot list, which is why every demo recorded to
+    exactly 22.6 s whatever its shots said — and the cap is a silent stop, so nothing said so.
+
+    `requested > 0` (an explicit --max-sec) wins: the operator asked for a specific safety stop.
+    Pure — unit-tested. Returns whole seconds."""
+    if requested and requested > 0:
+        return int(requested)
+    mult = TIME_RATE_MULTIPLIER.get(str(time_rate).lower(), 1.0)
+    if mult <= 0.0:  # "paused" advances no sim time at all; no cap can be enough
+        raise ValueError("--time-rate paused records nothing: sim time never advances")
+    return int(expected_duration / mult * slack + fixed_s)
+
+
+def parse_content_probe(stderr_text):
+    """Sum the black and frozen seconds ffmpeg's blackdetect/freezedetect reported. Pure — unit-tested.
+
+    Returns (black_s, frozen_s). blackdetect prints `black_start:N black_end:N black_duration:N`;
+    freezedetect prints `lavfi.freezedetect.freeze_duration: N` per frozen run."""
+    black = 0.0
+    frozen = 0.0
+    for line in stderr_text.splitlines():
+        if "black_duration:" in line:
+            try:
+                black += float(line.split("black_duration:")[1].split()[0])
+            except (IndexError, ValueError):
+                pass
+        if "freeze_duration" in line:
+            try:
+                frozen += float(line.rsplit(":", 1)[1].strip())
+            except (IndexError, ValueError):
+                pass
+    return black, frozen
+
+
+def content_ok(duration, black_s, frozen_s, share=0.5):
+    """Does the video contain a PICTURE? Pure — unit-tested. Returns (ok, reason).
+
+    The duration check is an envelope check: it cannot fail on an empty video, and it did not — every
+    black, 22.6 s recording in #1347 printed `[OK] ... within [3.0, N]`. A gate that checks the
+    envelope and never the payload is not evidence. This is the payload check, and it is deliberately
+    coarse: more than half the run black, or more than half of it a single frozen frame, is not a
+    demo video however plausible its duration. Anything subtler is a job for a human watching it."""
+    if duration <= 0.0:
+        return False, "no content (zero-length)"
+    if black_s >= duration * share:
+        return False, f"{black_s:.1f}s of {duration:.1f}s is BLACK"
+    if frozen_s >= duration * share:
+        return False, f"{frozen_s:.1f}s of {duration:.1f}s is a FROZEN frame"
+    return True, f"picture ok (black {black_s:.1f}s, frozen {frozen_s:.1f}s)"
+
+
+def distinct_frames_ok(hashes, min_distinct=8):
+    """A PNG sequence must contain more than one distinct image. Pure — unit-tested.
+
+    The mp4 path has ffmpeg to look at the pixels; the PNG path deliberately has no image dependency,
+    so it counts DISTINCT FILE CONTENTS instead. One repeated black frame — the exact #1347 failure —
+    hashes to one value however many files it wrote."""
+    n = len(set(hashes))
+    if not hashes:
+        return False, "no frames"
+    want = min(min_distinct, len(hashes))
+    if n < want:
+        return False, f"only {n} distinct frame(s) in {len(hashes)} — the picture never changed"
+    return True, f"{n} distinct of {len(hashes)} frame(s)"
+
+
+def probe_content(path, ffmpeg="ffmpeg"):
+    """Decode `path` once through blackdetect+freezedetect. Returns (black_s, frozen_s).
+
+    Both filters are cheap next to the recording itself, and one decode pass answers both questions.
+    A missing/broken ffmpeg returns (0, 0) — the duration check still applies, and openFfmpeg would
+    have failed the recording long before this."""
+    try:
+        out = subprocess.run(
+            [ffmpeg, "-v", "info", "-nostats", "-i", path,
+             "-vf", "blackdetect=d=1:pix_th=0.03,freezedetect=n=0.001:d=2",
+             "-an", "-f", "null", "-"],
+            capture_output=True, text=True, timeout=300,
+        )
+        return parse_content_probe(out.stderr)
+    except (subprocess.SubprocessError, FileNotFoundError):
+        return 0.0, 0.0
+
+
 def ffprobe_duration(path, ffprobe="ffprobe"):
     """Return the container duration of a media file in seconds (0.0 if unavailable)."""
     try:
@@ -103,6 +202,14 @@ def record_one(args, demo, env):
     mission = str(Path(args.demos_dir) / demo["mission_file"])
     if not Path(mission).is_file():
         return False, f"mission file not found: {mission}"
+    # The recorder's cap is WALL CLOCK and the shot list is SIM time; --time-rate is the ratio, so
+    # the cap has to be derived from both or it silently truncates every demo to the same length
+    # (#1347). --max-sec still overrides it, and the subprocess timeout follows the cap.
+    try:
+        max_sec = wall_clock_cap(float(demo["expected_duration"]), args.time_rate, args.max_sec)
+    except ValueError as e:
+        return False, str(e)
+    timeout = args.timeout if args.timeout > 0 else max_sec + 120.0
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     srv_log = str(out_dir / f"{demo['out_name']}-server.log")
@@ -132,7 +239,7 @@ def record_one(args, demo, env):
             client = [args.game, "--connect", f"127.0.0.1:{port}", "--observer", "--auto",
                       "--assets", args.assets, "--shot-track", mission,
                       "--record-fps", str(args.fps), "--record-res", args.res,
-                      "--exit-on-mission-end", "--record-max-sec", str(args.max_sec),
+                      "--exit-on-mission-end", "--record-max-sec", str(max_sec),
                       "--record-max-dup", str(args.max_dup)]
             if args.headless:
                 client.append("--headless")
@@ -145,7 +252,7 @@ def record_one(args, demo, env):
                 out_path = str(out_dir / f"{demo['out_name']}.mp4")
                 client += ["--record", out_path]
 
-            proc = subprocess.run(client, timeout=args.timeout, env=env)
+            proc = subprocess.run(client, timeout=timeout, env=env)
             if proc.returncode != 0:
                 return False, f"recorder client exited {proc.returncode} (duplicated-frame cap or encoder error)"
         finally:
@@ -155,15 +262,26 @@ def record_one(args, demo, env):
             except subprocess.TimeoutExpired:
                 server.kill()
 
-        # 3) Smoke-check the output (mp4 only; PNG sequences are checked by frame count).
+        # 3) Check the output — the envelope AND the payload (#1347). A duration bound cannot fail on
+        # a video of one repeated black frame, and for a while it did not: every such run printed
+        # "[OK] ... 22.6s within [3.0, N]".
         if args.png:
-            frames = len(list((out_dir / demo["out_name"]).glob("frame_*.png")))
-            if frames <= 0:
+            pngs = sorted((out_dir / demo["out_name"]).glob("frame_*.png"))
+            if not pngs:
                 return False, "no PNG frames written"
-            return True, f"{frames} PNG frame(s)"
+            # Hash a spread of frames rather than all of them: enough to tell a moving picture from a
+            # still one without reading a gigabyte of PNGs.
+            step = max(1, len(pngs) // 32)
+            hashes = [hashlib.sha256(p.read_bytes()).hexdigest() for p in pngs[::step]]
+            ok, reason = distinct_frames_ok(hashes)
+            return ok, f"{len(pngs)} PNG frame(s): {reason}"
         dur = ffprobe_duration(out_path, args.ffprobe)
         ok, reason = duration_ok(dur, float(demo["expected_duration"]))
-        return ok, f"{out_path}: {reason}"
+        if not ok:
+            return False, f"{out_path}: {reason}"
+        black_s, frozen_s = probe_content(out_path, args.ffmpeg)
+        content, creason = content_ok(dur, black_s, frozen_s)
+        return content, f"{out_path}: {reason}; {creason}"
 
     try:
         return with_free_port(attempt)
@@ -191,12 +309,16 @@ def main(argv=None):
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--res", default="1280x720")
     ap.add_argument("--time-rate", default="quarter", help="fl-server wall-rate: quarter|eighth|half|normal")
-    ap.add_argument("--max-sec", type=int, default=180, help="per-demo wall-clock recording cap")
+    ap.add_argument("--max-sec", type=int, default=0,
+                    help="per-demo WALL-CLOCK recording cap; 0 = derive it from the shot list and "
+                         "--time-rate (a flat cap truncates every demo to the same length, #1347)")
     ap.add_argument("--max-dup", type=int, default=300, help="fail a demo if duplicated frames exceed this")
-    ap.add_argument("--timeout", type=float, default=900.0, help="per-demo client subprocess timeout")
+    ap.add_argument("--timeout", type=float, default=0.0,
+                    help="per-demo client subprocess timeout; 0 = the derived recording cap + 120 s")
     ap.add_argument("--headless", action="store_true", help="set the lavapipe env (no display, no GPU)")
     ap.add_argument("--png", action="store_true", help="record a PNG sequence instead of mp4 (no ffmpeg)")
     ap.add_argument("--ffprobe", default="ffprobe")
+    ap.add_argument("--ffmpeg", default="ffmpeg", help="used for the black/frozen content check")
     args = ap.parse_args(argv)
 
     manifest = str(Path(args.demos_dir) / "demos.json")

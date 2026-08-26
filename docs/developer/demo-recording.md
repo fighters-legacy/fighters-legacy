@@ -46,9 +46,39 @@ No ffmpeg / libx264 (PNG sequence instead of mp4):
     tools/record_demo/record_demo.py --game … --server … --assets . --mission demo-dogfight --headless --png
 
 The driver launches an `fl-server` at `--time-rate quarter`, connects a headless observer recorder,
-waits for it to finish, stops the server, and `ffprobe`s the output as a smoke check. A non-zero exit
-means a demo exceeded its duplicated-frame cap or the encoder failed — **bad video is loud, never
-silently shipped**.
+waits for it to finish, stops the server, and checks the output. A non-zero exit means a demo
+exceeded its duplicated-frame cap, was truncated by its wall-clock cap, produced a video with no
+picture in it, or the encoder failed — **bad video is loud, never silently shipped**.
+
+### What the acceptance check actually checks
+
+Two things, because for a while it was one ([#1347]):
+
+| Check | What fails it |
+|---|---|
+| **Envelope** — `ffprobe` container duration | zero-length, far shorter than the shot list, or longer than it |
+| **Payload** — one `ffmpeg` decode pass through `blackdetect` + `freezedetect` | more than half the run black, or more than half of it a single frozen frame |
+
+A duration bound cannot fail on an empty video, and it did not: a windowed recording that captured
+**pure black for its whole length** printed `[OK] … 22.6s within [3.0, N]` and reported "1/1 demo(s)
+recorded successfully". A gate that checks the envelope and never the payload is not evidence. The
+PNG path has no image dependency, so it counts **distinct frame hashes** instead — one repeated black
+frame hashes to one value however many files it wrote.
+
+### The recording cap is wall clock; the shot list is sim time
+
+`--record-max-sec` is a **wall-clock** safety stop and a shot list is **sim** seconds;
+`fl-server --time-rate` is exactly the ratio between them. A flat 180 s cap at `--time-rate eighth`
+buys 22.5 s of shot list, which is why every demo once recorded to the same 22.6 s whatever its shots
+said ([#1347]). Two things follow, and both are now true:
+
+- `record_demo.py --max-sec` defaults to **0 = derive it** from the demo's shot total and
+  `--time-rate` (`--timeout` follows it). Pass a number to override.
+- Tripping the cap **fails the run**: the recorder logs `recorder: TRUNCATED — the N s wall-clock cap
+  stopped the run at X s of sim time, short of the Y s shot list` and exits non-zero. Stopping early
+  is not the same fact as a short demo, and only one of them is a successful recording.
+
+[#1347]: https://github.com/fighters-legacy/fighters-legacy/issues/1347
 
 ## The honesty mechanism
 
@@ -85,6 +115,10 @@ drifts a demo, re-run the report and adjust. Iterate a shot list without touchin
 
 | Symptom | Fix |
 |---|---|
+| `recorder: TRUNCATED` | The wall-clock cap stopped the run inside the shot list. Raise `--max-sec` (or leave it at 0 and let the driver derive it) or use a faster `--time-rate`. |
+| `x.xs of y.ys is BLACK` / `is a FROZEN frame` | The recording has no picture in it. Check the recorder's size warning first (below), then that the mission is actually rendering (`--screenshot`). |
+| `recorder: recording at AxB — CxD was requested` | Windowed only, and not an error: the compositor gave the window a different drawable size (HiDPI / fractional scaling — a 960x540 request lands as 1200x675 at 125%). The video is recorded at what the renderer actually delivers. Use `--headless` for an exact frame size. |
+| `recorder: captured frame is AxB but the encoder is open at CxD` | A window resized mid-recording. The run aborts rather than write black frames; re-record without touching the window. |
 | `openFfmpeg: popen failed` | ffmpeg not on `PATH`. Install it, or use `--record-png-dir`. Override the binary with `FL_FFMPEG`. |
 | `Unknown encoder 'libx264'` | Your ffmpeg lacks libx264. Install a full build, or use `--record-png-dir`. |
 | Many duplicated frames / non-zero exit | The client can't keep up. Lower `--time-rate` (`eighth`), drop `--record-res`, or lower `--record-fps`. |
