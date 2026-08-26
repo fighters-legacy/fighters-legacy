@@ -86,8 +86,15 @@ void SnapshotPipeline::run(uint64_t tickIndex, uint32_t govSnapInterval, float g
     std::unordered_map<uint32_t, TelemetryEntry> entityTelemetry;
     for (auto& [entityIdx, ce] : m_wb.m_controlledEntities) {
         const auto& s = ce.sim->state();
+        // Percent of THIS airframe's capacity (#1345). The old divisor was a hardcoded 4000 kg —
+        // FlightState's ancient default — so every other tank size reported nonsense (the 950 kg
+        // builtin trainer spawned at "22%", a full B-1B read 100 until it burned below four
+        // tonnes), and ClientPrediction reconstructed a WRONG predicted fuel MASS from the percent
+        // against the true capacity, a first-order mass error in the predicted dynamics.
+        const float capacityKg = ce.sim->flightModel().geometry.fuel_kg;
+        const float fuelPctF = capacityKg > 0.f ? std::clamp(s.fuel_kg / capacityKg * 100.f, 0.f, 100.f) : 0.f;
         TelemetryEntry te{static_cast<uint8_t>(s.throttle_actual * 100.f),
-                          static_cast<uint8_t>(std::clamp(s.fuel_kg / 4000.f * 100.f, 0.f, 100.f)),
+                          static_cast<uint8_t>(fuelPctF),
                           static_cast<uint8_t>(s.ab_engaged ? 1u : 0u),
                           s.engineFailFlags,
                           {s.omega[0], s.omega[1], s.omega[2]},
