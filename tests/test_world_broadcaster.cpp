@@ -42,6 +42,110 @@ TEST_CASE("WorldBroadcaster: onTick advances the match event log's tick (#1076)"
     CHECK(it->tick == 41u);
 }
 
+TEST_CASE("WorldBroadcaster: snapshot fuel percent is a percent of THIS airframe's capacity (#1345)",
+          "[world_broadcaster]") {
+    // The old telemetry divided by a hardcoded 4000 kg (FlightState's ancient default), so the
+    // 950 kg builtin trainer spawned reading 23% and a full B-1B read 100 until it burned below
+    // four tonnes — and ClientPrediction reconstructed a wrong predicted fuel MASS from it.
+    NullLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    // Point 1: a freshly spawned pilot on the builtin trainer (950 kg capacity) reads FULL.
+    connectPilotPeer(broadcaster, net, 0u);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    REQUIRE(!snapshotsFor(net, 0).empty());
+    {
+        const auto ents = decodeEntities(snapshotsFor(net, 0).back());
+        REQUIRE(!ents.empty());
+        CHECK(ents[0].fuelPct >= 99); // the 4000 kg divisor read 23 here
+    }
+
+    // Point 2: a 10 kg tank burning 1 kg/s at MIL reads ~half after five seconds — a measured
+    // mid-tank value on a capacity nowhere near the old constant (which read 0 for this airframe).
+    const std::string tinyTank = std::string(R"(
+[aircraft]
+name = "Tiny Tank"
+type = "fighter"
+engine_type = "turbojet"
+
+[flight_model]
+mass_kg      = 3000.0
+wing_area_m2 = 18.0
+wingspan_m   = 9.0
+mac_m        = 2.0
+fuel_kg      = 10.0
+ixx_kg_m2    = 4000.0
+iyy_kg_m2    = 20000.0
+izz_kg_m2    = 22000.0
+
+[aero.cl_table]
+alpha  = [-5.0, 0.0, 5.0, 10.0, 15.0, 20.0]
+mach   = [0.0, 0.9]
+values = [-0.2,-0.2, 0.1,0.1, 0.5,0.5, 0.9,0.9, 1.2,1.2, 1.0,1.0]
+
+[aero.drag_polar]
+cd0 = 0.02
+k = 0.1
+speedbrake_cd = 0.05
+gear_cd = 0.02
+
+[aero.moments]
+cm_alpha = -0.6
+cm_q = -7.0
+cm_de = -1.0
+cl_beta = -0.08
+cl_p = -0.4
+cl_da = 0.08
+cn_beta = 0.1
+cn_r = -0.2
+cn_dr = -0.05
+
+[aero.limits]
+alpha_stall_deg = 15.0
+max_g_structural = 7.0
+min_g_structural = -3.0
+max_mach = 0.9
+
+[aero.controls]
+max_elevator_deg = 20.0
+max_aileron_deg = 18.0
+max_rudder_deg = 25.0
+
+[engine]
+fuel_flow_idle_kg_s = 0.0
+fuel_flow_mil_kg_s  = 1.0
+fuel_flow_ab_kg_s   = 1.0
+spool_time_s        = 0.1
+
+[engine.mil_thrust]
+mach   = [0.0, 0.9]
+alt_km = [0.0, 12.0]
+values = [20.0, 10.0, 20.0, 10.0]
+)");
+    auto tiny = std::make_shared<const fl::FlightModelData>(fl::parseFlightModel(tinyTank));
+    fl::EntityTransform t{};
+    t.pos[1] = 3000.0;
+    t.quat[3] = 1.f;
+    const fl::EntityId id = em.spawn("builtin:debug-entity", t);
+    REQUIRE(id.valid());
+    broadcaster.registerController(id, std::make_unique<ConstantController>(1.0f), tiny, /*airspeed=*/150.f);
+    for (uint64_t k = 2; k <= 302; ++k) // ~5 s at 1 kg/s from a 10 kg tank
+        broadcaster.onTick(1.0 / 60.0, k);
+    const auto ents = decodeEntities(snapshotsFor(net, 0).back());
+    bool found = false;
+    for (const auto& e : ents)
+        if (e.entityIdx == id.index) {
+            found = true;
+            CHECK(e.fuelPct > 35);
+            CHECK(e.fuelPct < 65);
+        }
+    CHECK(found);
+}
+
 TEST_CASE("WorldBroadcaster: a naval def with a broken flight model falls back to a VESSEL, not an aeroplane (#1335)",
           "[world_broadcaster]") {
     // The terminal fallback is category-aware: the pre-#1335 single fallback bound the fixed-wing
