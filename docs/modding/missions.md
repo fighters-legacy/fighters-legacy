@@ -257,6 +257,17 @@ A controller spec, using the same grammar as the `spawn --ai` admin command:
 - a C++ behavior name plus arguments — e.g. `pursuit <idx>`, `loiter <cx> <cy> <cz> [radius] [alt]`,
   `patrol_attack <idx>`, `escort <idx>`. See the AI controller factory for the full list.
 
+!!! note "A loiter radius is a floor, not a promise"
+    An orbit is flown at the commanded radius **or** at the tightest circle the aircraft can turn at
+    the speed it is actually flying, whichever is larger — `r = v² / (g·tan 45°)`, plus the margin
+    that keeps the turn off the bank limit ([#1340]). A radius the airframe cannot turn used to be
+    accepted silently and then not flown: the aircraft spiralled outward for the whole mission (a
+    700 m command measured 4.8 km) while the author's cameras pointed at the circle they had asked
+    for. If you need a tighter orbit, give the behaviour a lower trim throttle (`loiter <cx> <cy>
+    <cz> <radius> <alt> <throttle>`) so the aircraft flies slower, or fly a slower aeroplane.
+
+[#1340]: https://github.com/fighters-legacy/fighters-legacy/issues/1340
+
 **Static air defence** has two behaviours, for emplacements placed with `start: ground`. Neither
 takes a target index — both engage whatever hostile they honestly detect, so a battery a jammer has
 blinded engages nothing:

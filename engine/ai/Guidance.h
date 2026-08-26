@@ -172,6 +172,20 @@ inline float turnSpeedForRadius(float radiusM, float bankRad) {
     return std::sqrt(std::max(1.f, radiusM) * kG0<float> * std::tan(std::clamp(bankRad, 0.05f, 1.4f)));
 }
 
+// The inverse (#1340): the tightest level circle an aircraft flying at `speedMps` can close within
+// `bankRad` of bank -- r = v^2 / (g tan(bank)).
+//
+// It exists because the two halves of the orbit are set by DIFFERENT authorities. The radius comes
+// from the mission author; the speed comes from what the airframe will actually hold, which no
+// controller can know in advance -- a mission can ask for a 700 m racetrack, and the trainer's
+// throttle law will not fly it slower than ~100 m/s, which needs 1,250 m. Asking for the tighter
+// circle anyway does not produce it; it produces a permanently saturated turn. This is the same
+// honesty turnSpeedForRadius already encodes for the speed half of the problem.
+[[nodiscard]] inline float flyableOrbitRadius(float speedMps, float bankRad) {
+    const float v = std::max(0.f, speedMps);
+    return v * v / (kG0<float> * std::tan(std::clamp(bankRad, 0.05f, 1.4f)));
+}
+
 // Throttle to hold a target airspeed, trimmed around `trimThrottle`. Proportional and clamped —
 // enough to stop an unbounded accelerate-or-decay, not an autothrottle.
 inline float throttleForSpeed(float speedMps, float targetSpeedMps, float trimThrottle, float gain = 0.01f) {
@@ -338,6 +352,17 @@ enum class LoiterDir : uint8_t { Clockwise, CounterClockwise };
 // roll axes fight each other.
 inline constexpr float kOrbitBankRad = 0.785f;
 
+// How far around the circle the orbit aim point sits, in radians of orbit angle (#1340). The aim
+// point is on the orbit itself, so this sets how much of the radial error reaches the heading error:
+// too small and the capture is sluggish, too large and the aircraft cuts the corner and scallops.
+// 0.6 rad (~34 deg) settles the shipped 3 km default within a few percent of the commanded radius.
+inline constexpr float kOrbitLeadRad = 0.6f;
+
+// How far below its commanded altitude an orbit may sink before the speed hold loses the throttle
+// to the altitude hold (#1340). Full trim throttle is restored at this deficit and blended in below
+// it, so a momentary dip costs a little thrust and a real sink costs the deceleration.
+inline constexpr float kOrbitAltPriorityM = 100.f;
+
 // Pitch rate by backward difference across sample intervals (#1141/#1265).
 //
 // EntityState carries no body angular rates, so every controller with a damped pitch loop has to
@@ -369,10 +394,28 @@ struct OrbitParams {
     LoiterDir dir{LoiterDir::Clockwise};
 };
 
+// How far under the bank limit an orbit is flown, as a fraction of the speed that limit could turn
+// the radius at (#1141). A turn held exactly at the limit has nothing left for the altitude loop --
+// it is paid for with altitude, which was half of the original loiter descent. Factored out of
+// orbitSpeedForRadius (#1340) because the radius half of the same geometry needs the SAME margin:
+// picking the speed a margin under the limit, then sizing the circle to the limit, would have put
+// the aircraft right back on a saturated bank whenever the airframe declined to fly that slowly.
+inline constexpr float kOrbitSpeedMargin = 0.85f;
+
 // The airspeed an orbit of this radius is flyable at. Held a margin under the speed the bank limit
 // can turn the radius at, so the turn is not permanently saturated (#1141).
 [[nodiscard]] inline float orbitSpeedForRadius(float radiusM) {
-    return std::clamp(0.85f * turnSpeedForRadius(radiusM, kOrbitBankRad), 60.f, 300.f);
+    return std::clamp(kOrbitSpeedMargin * turnSpeedForRadius(radiusM, kOrbitBankRad), 60.f, 300.f);
+}
+
+// The tightest circle THIS orbit will actually ask for at `speedMps` -- the geometric minimum
+// (flyableOrbitRadius) opened up by the same margin orbitSpeedForRadius holds on the speed, so a
+// clamped orbit is flown at ~36 deg of bank rather than pinned against the 45 deg limit (#1340).
+// Measured on the builtin trainer at a 700 m command: at the bare geometric minimum it settled at
+// 1,300 m but bled 1,060 m of altitude over 300 s holding 44 deg of bank; with the margin it settles
+// wider and holds its altitude.
+[[nodiscard]] inline float orbitRadiusFloor(float speedMps) {
+    return flyableOrbitRadius(speedMps / kOrbitSpeedMargin, kOrbitBankRad);
 }
 
 // Fly a circle around `p.centre`, in one place (#1265).
@@ -387,13 +430,26 @@ struct OrbitParams {
 // undefined: the throttle is still set, the surfaces are left neutral, and the caller returns.
 inline bool orbitSteer(ControlInput& ctrl, const float quat[4], const double ownPos[3], const float velWorld[3],
                        const OrbitParams& p, double R, float pitchRate) {
+    const glm::dvec3 pos(ownPos[0], ownPos[1], ownPos[2]);
+    const float speed = std::sqrt(velWorld[0] * velWorld[0] + velWorld[1] * velWorld[1] + velWorld[2] * velWorld[2]);
+
     // Speed hold around the trim throttle (#1141). A FIXED throttle let the aircraft accelerate
     // 150 -> 226 m/s while descending, past the speed its own bank limit can turn a 3 km circle at
     // (v = sqrt(r g tan(bank))) -- at which point the orbit can only be flown by trading altitude,
     // and it does, all the way to the ground. Holding the flyable speed removes the energy half of
     // the problem; the flight-path altitude loop below removes the other half.
-    const float speed = std::sqrt(velWorld[0] * velWorld[0] + velWorld[1] * velWorld[1] + velWorld[2] * velWorld[2]);
-    ctrl.throttle = throttleForSpeed(speed, p.targetSpeedMps, p.trimThrottle);
+    //
+    // ALTITUDE OUTRANKS THAT SPEED TARGET (#1340). The speed hold is a P-loop with no equilibrium
+    // when its target is out of reach: a 700 m orbit asks the trainer for 70 m/s, which it cannot
+    // fly, so the throttle pins at idle and the aircraft pays the difference in altitude -- a steady
+    // 1.9 m/s sink, 570 m gone in 300 s, while the orbit geometry itself looked healthy. An aircraft
+    // gliding at idle is not loitering. So while the orbit is below its commanded altitude the
+    // throttle may not be pulled under its trim setting: the speed hold gets what is left after the
+    // altitude is paid for, which is the right priority for a station-keeping orbit and the
+    // assumption the altitude cascade below already makes about its own authority.
+    const float altErrM = p.targetAltM - static_cast<float>(fl::localAltitude(pos, R));
+    const float trimFloor = p.trimThrottle * std::clamp(altErrM / kOrbitAltPriorityM, 0.f, 1.f);
+    ctrl.throttle = std::max(throttleForSpeed(speed, p.targetSpeedMps, p.trimThrottle), trimFloor);
 
     // Vector from the entity to the centre in the XZ plane.
     const float tx = static_cast<float>(p.centre.x - ownPos[0]);
@@ -405,25 +461,31 @@ inline bool orbitSteer(ControlInput& ctrl, const float quat[4], const double own
     const float nx = tx / tLen;
     const float nz = tz / tLen;
 
-    // Tangent direction for the orbit:
-    //   Clockwise (right turns from +Y view):   tangent = (nz, -nx) in XZ
-    //   CounterClockwise (left turns):          tangent = (-nz, nx) in XZ
-    float tanX, tanZ;
-    if (p.dir == LoiterDir::Clockwise) {
-        tanX = nz;
-        tanZ = -nx;
-    } else {
-        tanX = -nz;
-        tanZ = nx;
-    }
+    // The circle we can actually fly (#1340). The commanded radius is a FLOOR, not a promise: below
+    // the radius the current speed can be turned at within the bank limit, the guidance would spend
+    // the whole orbit at a saturated bank and still never close the circle. Deriving it from the
+    // MEASURED speed each tick is the only honest source -- a controller sees an EntityState, never
+    // a flight model, so it cannot know how slowly this airframe will agree to fly. The speed hold
+    // above is already asking for the slower speed; this is what the geometry does meanwhile.
+    const float effRadiusM = std::max(p.radiusM, orbitRadiusFloor(speed));
 
-    // Lookahead point along the tangent from the current position, scaled with the orbit radius so
-    // larger circles get a proportionally farther target. The Y component is irrelevant to
-    // horizontalHeadingError (projected into the local tangent plane).
+    // Aim at a point ON that circle, an angular lead ahead of our own bearing from the centre --
+    // NOT at a lookahead along the tangent from wherever we happen to be (#1340). The tangent form
+    // had no radial term at all: flying perpendicular to the radius is an equilibrium at ANY radius,
+    // so every metre of outward drift the bank-limited turn lagged by was permanent, and the orbit
+    // grew for as long as the run lasted. Measured on the shipped 3 km default: 3.0 -> 8.7 km in
+    // 120 s, monotonically, with nothing in the mission or the log to say the circle had moved.
+    // An aim point on the circle carries the radial error into the heading error, which is what
+    // turns "I am outside my orbit" into a command to turn back onto it.
+    const float rx = -nx; // unit radial, centre -> own
+    const float rz = -nz;
+    const float lead = p.dir == LoiterDir::Clockwise ? kOrbitLeadRad : -kOrbitLeadRad;
+    const float cl = std::cos(lead);
+    const float sl = std::sin(lead);
     const double lookahead[3] = {
-        ownPos[0] + static_cast<double>(p.radiusM) * static_cast<double>(tanX),
+        p.centre.x + static_cast<double>(effRadiusM) * static_cast<double>(rx * cl - rz * sl),
         p.centre.y,
-        ownPos[2] + static_cast<double>(p.radiusM) * static_cast<double>(tanZ),
+        p.centre.z + static_cast<double>(effRadiusM) * static_cast<double>(rx * sl + rz * cl),
     };
 
     const float headErr = horizontalHeadingError(quat, ownPos, lookahead, R);
