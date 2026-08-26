@@ -2,6 +2,7 @@
 #pragma once
 
 #include "entity/EntityId.h"
+#include "entity/ObjectCategory.h" // Contact::category — what kind of thing is out there (#1339)
 #include "entity/SignatureDef.h"
 #include "sensor/Detection.h"
 #include "sensor/Iff.h"
@@ -38,8 +39,18 @@ inline constexpr std::size_t kMaxContactsPerObserver = 32;
 // record). An AI reading these cannot see through terrain or across the map, because ground truth is
 // not reachable from here — that is a structural property, not a rule someone has to remember.
 struct Contact {
-    EntityId id{};            // the target
-    uint32_t typeIndex{0};    // its entity type (what the observer believes it is looking at)
+    EntityId id{};         // the target
+    uint32_t typeIndex{0}; // its entity type (what the observer believes it is looking at)
+    // What KIND of thing the observer believes it is holding (#1339). Air, ground, naval, structure:
+    // the separation a radar operator reads off the scope and an eyeball reads off the horizon, and
+    // the first question any employment decision asks — an air-to-air cone geometry cannot be flown
+    // against a SAM site, and until this existed a script could not tell the two apart at all.
+    //
+    // NOT an identification wallhack: `ident` still gates who the contact belongs to, which is the
+    // fact that would be cheating. Where the contact is and how it moves is what a sensor measures.
+    // Defaults to AirVehicle for a contact whose type could not be resolved, matching the pre-#1339
+    // assumption every consumer already made.
+    ObjectCategory category{ObjectCategory::AirVehicle};
     uint16_t factionIndex{0}; // the target's ACTUAL faction (ground truth) — see `ident` for what the
                               // observer has actually IDENTIFIED, which is the honest, display-safe fact
     ContactState state{ContactState::Lost};

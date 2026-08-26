@@ -392,6 +392,10 @@ void SensorSystem::evaluateObserver(const ObserverWork& work, const SpatialIndex
         Contact c;
         c.id = tgt.id;
         c.typeIndex = tgt.typeIndex;
+        // Air / ground / naval / structure (#1339), straight off the def the observer believes it is
+        // looking at. An unresolved type keeps the AirVehicle default rather than inventing a kind.
+        if (tgtDef)
+            c.category = tgtDef->category;
         c.factionIndex = tgt.factionIndex;
         c.state = best;
         c.sensorTypeMask = typeMask;

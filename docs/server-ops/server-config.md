@@ -385,7 +385,7 @@ balance_teams = true
 | `fill` | integer | `0` | `[0, 128]` | Desired **total** participants, humans and bots together — not a bot count. Bots retire as players arrive. `0` disables backfill. |
 | `max_bots` | integer | `16` | `[0, 127]` | Hard cap on live bots regardless of `fill`. |
 | `entity_type` | string | `""` | — | Entity type flown by bots. Empty inherits `[world] player_entity_type`, so bots fly what players fly unless you say otherwise. |
-| `ai_script` | string | `"builtin:fighter"` | — | Compiled-in AI script the bots fly. An empty or unresolvable name falls back to `builtin:fighter` rather than spawning an inert aircraft. |
+| `ai_script` | string | `"builtin:fighter"` | — | Compiled-in AI script the bots fly: `builtin:fighter` (air-to-air) or `builtin:striker` (surface attack — it prosecutes ground and naval contacts and carries no air-to-air employment at all, so a server of strikers will not defend itself). A pack script by asset name works too. An empty or unresolvable name falls back to `builtin:fighter` rather than spawning an inert aircraft. |
 | `balance_teams` | bool | `true` | — | Spread bots evenly across the teams instead of stacking one side. |
 
 The roster is re-evaluated about once a second and changes by **at most one bot per pass** — it

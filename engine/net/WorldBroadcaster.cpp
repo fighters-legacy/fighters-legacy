@@ -921,6 +921,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     // serial-equivalent: the dice are seeded from (observer, target, tick, slot, lobe) rather than
     // drawn from shared RNG state, so the contact tables are byte-identical on 1 worker and on 16.
     sensor::SensingEnvironment sensingEnv{};
+    float windMps[3]{}; // datum wind handed to controllers for unguided-store solutions (#1339)
     if (m_weather) {
         const EnvironmentState envState = m_weather->computeEnvironment();
         sensingEnv.cloudCoverage = envState.cloudCoverage;
@@ -930,6 +931,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         sensingEnv.isNight = (envState.timeOfDay < 6.f || envState.timeOfDay >= 20.f);
         // Unpowered stores drift on the same steady wind the airframes fly in (#629).
         m_projectileSystem.setWind({envState.windX, 0.f, envState.windZ});
+        windMps[0] = envState.windX;
+        windMps[2] = envState.windZ;
     }
     m_sensingEnv = sensingEnv; // the weapons pass reads the same conditions the sensing pass ran under (#627)
     // Unset difficulty = NO scaling: radar reaches its authored range and the AI reacts the moment it
@@ -981,7 +984,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     {
         const auto tAiStart = m_clock->now();
         runEntityPass(m_stepItems.size(),
-                      [this, tickIndex, simDt, govAiStride, &sensingEnv, difficulty](size_t b, size_t e) {
+                      [this, tickIndex, simDt, govAiStride, &sensingEnv, &windMps, difficulty](size_t b, size_t e) {
                           for (size_t i = b; i < e; ++i) {
                               const StepItem& it = m_stepItems[i];
                               // AI-sample decimation (#514): a decimatable (non-player) entity reuses its last sampled
@@ -995,7 +998,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                               } else {
                                   const AiTickContext aiCtx{&m_spatialIndex, m_sensorSystem.contactsFor(it.idx),
                                                             &sensingEnv,     m_sensorSystem.threatsFor(it.idx),
-                                                            difficulty,      m_factionRegistry};
+                                                            difficulty,      m_factionRegistry,
+                                                            windMps};
                                   m_stepInputs[i] = it.ce->controller->sample(*it.state, tickIndex, simDt, aiCtx);
                                   it.ce->lastInput = m_stepInputs[i];
                                   it.ce->lastInputValid = true;
