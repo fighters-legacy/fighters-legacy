@@ -57,7 +57,7 @@ Entity indices shown by `entities` come from the most-recent render snapshot.
 
 | Behavior | Args | Description |
 |---|---|---|
-| `loiter` | `[cx cy cz] [radius_m] [alt_m] [throttle] [cw\|ccw]` | Orbit a fixed center point; `cw` = clockwise (default), `ccw` = counterclockwise |
+| `loiter` | `[cx cy cz] [radius_m] [alt_m] [throttle] [cw\|ccw]` | Orbit a fixed center point; `cw` = clockwise (default), `ccw` = counterclockwise. `radius_m` is a **floor**: the orbit opens up to the tightest circle the aircraft can turn at the speed it is flying (#1340) |
 | `dynamic_loiter` | `<entityIdx> [radius_m] [throttle] [cw\|ccw]` | Orbit a **moving** entity (#464): re-centers the loiter circle on the target's live position each tick and matches its altitude; returns neutral when the target is dead or invalid |
 | `waypoint` | `x1 y1 z1 [x2 y2 z2 ...] [--loop]` | Fly a sequence of 3D waypoints; `--loop` restarts from the first when complete |
 | `pursuit` | `<entityIdx>` | Pursue an entity by pool index; returns neutral when target is dead or invalid |
