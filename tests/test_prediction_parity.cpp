@@ -209,6 +209,48 @@ const std::vector<uint8_t>* findConnectAck(const TrackingNetwork& net) {
 
 } // namespace
 
+TEST_CASE("client resolver answers the builtin: namespace from the compiled-in authority (#1335)",
+          "[prediction_parity]") {
+    // THE LIVE BUG this pins: the client resolver had no builtin: intercept, so a def naming
+    // builtin:carrier-vessel loaded nothing zero-pack and prediction fell back to the fixed-wing
+    // builtin — a permanent client/server divergence for any piloted builtin:carrier. Both sides
+    // now resolve the whole prefix through fl::builtinFlightModel.
+    NullLogger log;
+    std::vector<std::unique_ptr<IContentPack>> noPacks;
+    AssetManager assets(std::move(noPacks), log);
+    assets.initialize(nullptr);
+
+    EntityTypeRegistry registry;
+    EntityDef carrier;
+    carrier.id = "test:carrier";
+    carrier.name = "Carrier";
+    carrier.category = ObjectCategory::NavalVehicle;
+    carrier.maxHp = 1000.f;
+    carrier.flightModelAsset = "builtin:carrier-vessel";
+    registry.registerType(std::move(carrier));
+
+    EntityDef bogus;
+    bogus.id = "test:bogus";
+    bogus.name = "Bogus";
+    bogus.category = ObjectCategory::AirVehicle;
+    bogus.maxHp = 100.f;
+    bogus.flightModelAsset = "builtin:no-such-model";
+    registry.registerType(std::move(bogus));
+
+    auto resolver = makeFlightModelResolver(registry, assets, log);
+
+    // The vessel model, by pointer identity with the server's authority — zero packs mounted.
+    std::shared_ptr<const FlightModelData> vessel = resolver(0);
+    REQUIRE(vessel != nullptr);
+    CHECK(vessel.get() == builtinFlightModel("builtin:carrier-vessel").get());
+    CHECK(vessel->isVessel());
+
+    // An UNKNOWN builtin name is an error and the trainer fallback — never a filesystem lookup.
+    std::shared_ptr<const FlightModelData> fallback = resolver(1);
+    REQUIRE(fallback != nullptr);
+    CHECK(fallback.get() == BuiltinFlightModel::get().get());
+}
+
 TEST_CASE("MsgEntityTypeDef carries the flight model asset name to the client", "[prediction_parity]") {
     NullLogger log;
     TrackingNetwork net;

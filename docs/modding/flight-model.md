@@ -29,7 +29,13 @@ broadcasts). If `flight_model` is omitted, empty, or the id cannot be resolved, 
 back to the builtin trainer — a realistic but deliberately low-performing subsonic model, the same
 default the zero-content-pack sandbox flies (#1334). The doctrine: an entity defaulted to the
 builtin for any reason flies plausibly at the floor of the performance ladder — a content mistake
-degrades an aircraft, it never promotes one to a UFO.
+degrades an aircraft, it never promotes one to a UFO. A naval-category entity falls back to the
+builtin vessel model instead, so a ship that loses its model still moves like a ship (#1335).
+
+The `builtin:` prefix is **reserved** (#1335): `flight_model = "builtin:trainer"`,
+`"builtin:carrier-vessel"`, `"builtin:helicopter"` or `"builtin:multirotor"` resolves from the
+engine on both the server and the client — never from a pack — and an unknown `builtin:` name is
+an error, not a filesystem lookup.
 
 ---
 

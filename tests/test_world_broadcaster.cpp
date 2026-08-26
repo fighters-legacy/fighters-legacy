@@ -42,6 +42,45 @@ TEST_CASE("WorldBroadcaster: onTick advances the match event log's tick (#1076)"
     CHECK(it->tick == 41u);
 }
 
+TEST_CASE("WorldBroadcaster: a naval def with a broken flight model falls back to a VESSEL, not an aeroplane (#1335)",
+          "[world_broadcaster]") {
+    // The terminal fallback is category-aware: the pre-#1335 single fallback bound the fixed-wing
+    // builtin to everything, so a naval vehicle that lost its model became an aeroplane parked on
+    // the water. A vessel-model fallback barely moves under full throttle in four seconds (nine
+    // hundred kilotonnes of telegraph lag) and holds the surface; the trainer would be ground-
+    // rolling at 10+ m/s and tens of metres downrange by then. That contrast is the assertion.
+    NullLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityDef naval;
+    naval.id = "test:patrol-boat";
+    naval.name = "Patrol Boat";
+    naval.category = fl::ObjectCategory::NavalVehicle;
+    naval.maxHp = 500.f;
+    naval.flightModelAsset = "no-such-pack:model"; // unresolvable — forces the terminal fallback
+    registry.registerType(std::move(naval));
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    fl::EntityTransform t{};
+    t.quat[3] = 1.f;
+    const fl::EntityId id = em.spawn("test:patrol-boat", t);
+    REQUIRE(id.valid());
+    broadcaster.registerController(id, std::make_unique<ConstantController>(1.0f), nullptr, /*airspeed=*/0.f);
+    for (uint64_t k = 1; k <= 240; ++k)
+        broadcaster.onTick(1.0 / 60.0, k);
+
+    const fl::EntityState* st = em.get(id);
+    REQUIRE(st != nullptr);
+    const double moved =
+        std::sqrt(st->transform.pos[0] * st->transform.pos[0] + st->transform.pos[2] * st->transform.pos[2]);
+    CHECK(moved < 10.0);                         // a ship answering its telegraph, not a ground roll
+    CHECK(std::abs(st->transform.pos[1]) < 2.0); // and riding the surface, not flying or sinking
+    const double speed =
+        std::sqrt(st->transform.vel[0] * st->transform.vel[0] + st->transform.vel[2] * st->transform.vel[2]);
+    CHECK(speed < 5.0); // far under any airworthy roll; the vessel cap itself is 16 m/s
+}
+
 TEST_CASE("WorldBroadcaster: replaceController swaps the controller preserving the integrator (#152)",
           "[world_broadcaster]") {
     NullLogger logger;

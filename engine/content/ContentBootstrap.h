@@ -109,6 +109,11 @@ EntityDef builtinAaaDef();
 // which points WorldBroadcaster::setParachuteType at "builtin:parachute".
 EntityDef builtinParachuteDef();
 
+// The builtin rotorcraft pair (#1335): the zero-pack proofs of HelicopterForceModel and
+// MultirotorForceModel, flying their compiled-in reduced-schema models. Unarmed by doctrine.
+EntityDef builtinHelicopterDef();
+EntityDef builtinMultirotorDef();
+
 // Registers all five builtin surface entities into `registry` (the "builtin:" namespace cannot
 // collide with a pack). Main thread, before GameLoop::start(). Returns the number registered.
 uint32_t registerBuiltinSurfaceEntities(EntityTypeRegistry& registry);

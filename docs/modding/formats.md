@@ -927,9 +927,20 @@ them when this page and the code disagree:
 | `builtin:aaa` | a gun hardpoint, sensing on the builtin eyeball (no declared sensors) |
 | `builtin:static-target` | `category = "structure"` — a strike target that does not shoot back |
 | `builtin:ground-vehicle`, `builtin:naval-vessel` | the plain surface categories |
+| `builtin:helicopter`, `builtin:multirotor` | the rotorcraft pair (#1335): `flight_model = "builtin:helicopter"` / `"builtin:multirotor"` — reduced-schema models resolved from the engine, no pack file involved |
 
 They are defined in `engine/content/ContentBootstrap.cpp` and placed by the `builtin:shape-gallery`
 and `builtin:sandbox` missions.
+
+**The `builtin:` prefix is reserved engine vocabulary (#1335)** — for entity-def ids AND for
+`flight_model` names. A pack def whose id starts with `builtin:` is refused at registration with a
+warning, and a `flight_model` starting with `builtin:` never touches pack content: it resolves
+against the engine's compiled-in set (`builtin:trainer`, `builtin:carrier-vessel`,
+`builtin:helicopter`, `builtin:multirotor`) on the server AND the client, or errors. Name one of
+those to give a def a guaranteed zero-pack model of the right flavour.
+
+**`category = "player"` is reserved (#1335):** it parses, but no compiled-in def uses it and player
+pilots fly `air_vehicle` defs (the `[world] player_entity_type` path). Don't build content on it.
 
 ---
 
@@ -1507,7 +1518,7 @@ Lua AI script. Place entity definition files anywhere in the pack directory (typ
 | `mesh`              | string | `""`    | Primary glTF asset name (renderer)                         |
 | `cockpit`           | string | `""`    | Cockpit interior glTF **asset name** |
 | `manual`            | string | `""`    | Hand-written manual prose (`manual/<name>.md`); the performance numbers are **generated**, never authored |
-| `flight_model`      | string | `""`    | Flight model TOML asset name; empty = the builtin trainer (#1334; server-side only) |
+| `flight_model`      | string | `""`    | Flight model TOML asset name; empty = the builtin trainer (#1334). A `builtin:` name resolves from the engine on both sides — see the reserved-namespace note above (#1335) |
 | `ai_script`         | string | `""`    | Lua AI script name from the pack's `ai/` directory; auto-assigned when spawned without `--ai`; empty = no scripted AI (server-side only) |
 | `sensors`           | string[] | `[]`  | Sensor-def IDs this entity carries (see [Sensor Data](#sensor-data--toml)); empty = the builtin eyeball for AI-controlled entities |
 | `collision_radius_m`| float  | `0`     | Collision sphere radius for entity-entity collision (#630); `0` = category default (air/player 8 m, ground/naval/structure 15 m). Set an explicit value for an oversized airframe (a blimp, a carrier). Projectiles never collide here — they use their own fuze path |

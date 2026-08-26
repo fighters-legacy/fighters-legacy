@@ -166,6 +166,28 @@ TEST_CASE("registerPackEntityDefs skips a duplicate id (first-wins)") {
     REQUIRE(registry.findById("fl-base:dupe") != nullptr);
 }
 
+TEST_CASE("registerPackEntityDefs refuses the reserved builtin: prefix (#1335)") {
+    // The prefix is engine vocabulary. First-wins registration protected the COMPILED-IN ids, but a
+    // pack id like "builtin:impostor" registered fine and meant something different per server —
+    // despite every comment saying the namespace cannot collide. Now the whole prefix is refused,
+    // loudly, and the valid sibling def still registers.
+    EntityDefPack pack;
+    pack.defs["impostor"] = defToml("builtin:impostor", "Impostor");
+    pack.defs["legit"] = defToml("fl-base:legit", "Legit");
+
+    fl::RecordingLogger log;
+    AssetManager assets(packsFrom(std::move(pack)), log);
+    assets.initialize(nullptr);
+
+    EntityTypeRegistry registry;
+    const uint32_t n = registerPackEntityDefs(assets, registry, log);
+
+    REQUIRE(n == 1);
+    CHECK(registry.findById("builtin:impostor") == nullptr);
+    CHECK(registry.findById("fl-base:legit") != nullptr);
+    CHECK(log.count(fl::LogLevel::Warn, "reserved builtin: prefix") == 1);
+}
+
 TEST_CASE("registerPackEntityDefs returns zero with no packs") {
     NullLogger log;
     std::vector<std::unique_ptr<IContentPack>> none;

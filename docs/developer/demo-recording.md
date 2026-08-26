@@ -134,5 +134,8 @@ Two authoring notes these demos exercise:
 ### Carrier launch/recovery and rotorcraft are out of the zero-pack set
 
 `demo-carrier-swarm` shows the vessel + swarm, not catapult/arrested-recovery flight ops: there is no
-zero-pack way to author an aircraft **on** a moving deck, and no builtin helicopter/drone flight
-model. Those become demos once a content pack provides carrier-capable aircraft and rotorcraft.
+zero-pack way to author an aircraft **on** a moving deck. (Builtin helicopter and multirotor models
+DO exist since #1335 — `builtin:helicopter` / `builtin:multirotor`, on display in
+`builtin:shape-gallery` — but no rotorcraft-aware AI controller flies them beyond a loiter, so a
+rotorcraft showcase demo waits on that.) Deck-ops demos follow once a content pack provides
+carrier-capable aircraft.

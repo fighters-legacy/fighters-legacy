@@ -55,6 +55,19 @@ ClientPrediction::FlightModelResolver makeFlightModelResolver(const EntityTypeRe
             return builtin;
         }
 
+        // The WHOLE "builtin:" prefix resolves through the same compiled-in authority the server
+        // uses (#1335) — the client had NO builtin intercept before, so a piloted builtin:carrier
+        // loaded nothing zero-pack and PREDICTED ON THE WRONG MODEL, the exact divergence this
+        // function exists to make impossible. An unknown builtin name errors like malformed content.
+        if (def->flightModelAsset.rfind("builtin:", 0) == 0) {
+            if (auto builtin = builtinFlightModel(def->flightModelAsset)) {
+                (*cache)[typeIndex] = builtin;
+                return builtin;
+            }
+            return fallback("entity type '" + def->id + "': unknown builtin flight model '" + def->flightModelAsset +
+                            "'");
+        }
+
         // flightModelAsset is an ASSET NAME, not a def id (#810) -- it names a file, so it goes
         // straight to the AssetManager without an index lookup. The load-and-parse step is shared
         // with the server spawn path (#1232) so both sides refuse malformed content the same way.
