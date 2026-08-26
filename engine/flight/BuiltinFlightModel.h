@@ -4,6 +4,7 @@
 #include "flight/FlightModelData.h"
 
 #include <memory>
+#include <string_view>
 
 namespace fl {
 
@@ -23,6 +24,28 @@ namespace fl {
 struct BuiltinFlightModel {
     static std::shared_ptr<const FlightModelData> get();
 };
+
+// Compiled-in helicopter (#1335): a docile light-utility single-main-rotor machine, so the
+// HelicopterForceModel is provable with zero content packs and a mission author can spawn a
+// rotorcraft that flies plausibly at the floor of the performance ladder (the #1334 doctrine).
+// Authored as reduced-schema TOML through FlightModelParser, like the trainer.
+struct BuiltinHelicopterModel {
+    static std::shared_ptr<const FlightModelData> get();
+};
+
+// Compiled-in multirotor (#1335): a large, slow camera-drone-class quad — the MultirotorForceModel's
+// zero-pack proof, and the sandbox's stand-in for any small drone. Same doctrine as above.
+struct BuiltinMultirotorModel {
+    static std::shared_ptr<const FlightModelData> get();
+};
+
+// THE resolver for the `builtin:` flight-model namespace (#1335): the single authority both the
+// server and the client resolvers intercept BEFORE any pack lookup, so a builtin name can never be
+// shadowed by pack content and both sides of the prediction seam agree by construction (the old
+// server-only "builtin:carrier-vessel" literal left a piloted builtin:carrier predicting on the
+// wrong model). Returns null for any name it does not own — including unknown `builtin:`-prefixed
+// names, which the CALLER must treat as an error rather than falling through to the filesystem.
+[[nodiscard]] std::shared_ptr<const FlightModelData> builtinFlightModel(std::string_view name);
 
 // Compiled-in carrier vessel model (#38): what "builtin:carrier" sails with, so the whole
 // launch/recovery cycle is provable with zero content packs (the armed-sandbox doctrine). A

@@ -41,6 +41,17 @@ uint32_t registerPackEntityDefs(AssetManager& assets, EntityTypeRegistry& regist
             EntityDef def =
                 parseEntityDef(std::string_view(reinterpret_cast<const char*>(raw->bytes.data()), raw->bytes.size()));
             const std::string id = def.id;
+            // The "builtin:" prefix is RESERVED engine vocabulary (#1335). Registration order used
+            // to be the only protection — first-wins kept a pack from shadowing a compiled-in id,
+            // but a pack id like "builtin:anything-not-compiled-in" registered fine and meant
+            // something different per server. Refuse the whole prefix, loudly.
+            if (id.rfind("builtin:", 0) == 0) {
+                log.log(LogLevel::Warn, __FILE__, __LINE__,
+                        (std::string("entity def id '") + id +
+                         "' uses the reserved builtin: prefix; skipping (pack ids may not claim engine vocabulary)")
+                            .c_str());
+                continue;
+            }
             if (registry.registerType(std::move(def)) == std::numeric_limits<uint32_t>::max())
                 log.log(LogLevel::Warn, __FILE__, __LINE__,
                         (std::string("entity def id '") + id + "' already registered; skipping duplicate").c_str());
@@ -539,6 +550,41 @@ EntityDef builtinParachuteDef() {
     def.signatures.ir = 0.2f;
     def.signatures.visual = 3.f;
     def.collisionRadiusM = 2.f;
+    return def;
+}
+
+EntityDef builtinHelicopterDef() {
+    // The builtin rotorcraft (#1335): what proves HelicopterForceModel with zero content packs, and
+    // the entity a mission author spawns to put a plausible, docile helicopter in the sky. Unarmed —
+    // the armed-sandbox doctrine arms what proves WEAPON systems (builtin:debug-entity does that);
+    // this def exists to prove a FORCE MODEL, and its sensors default to the builtin eyeball like
+    // every AI-controlled def.
+    EntityDef def;
+    def.id = "builtin:helicopter";
+    def.name = "Utility Helicopter";
+    def.category = ObjectCategory::AirVehicle;
+    def.maxHp = 120.f;
+    def.flightModelAsset = "builtin:helicopter"; // resolved by the builtin flight-model authority
+    def.signatures.rcs = 4.f;
+    def.signatures.ir = 6.f;
+    def.signatures.visual = 6.f;
+    def.collisionRadiusM = 9.f;
+    return def;
+}
+
+EntityDef builtinMultirotorDef() {
+    // The builtin drone (#1335): MultirotorForceModel's zero-pack proof — a large camera-quad-class
+    // machine, small, slow, and low-signature. Unarmed, same doctrine as the helicopter above.
+    EntityDef def;
+    def.id = "builtin:multirotor";
+    def.name = "Quad Drone";
+    def.category = ObjectCategory::AirVehicle;
+    def.maxHp = 10.f;
+    def.flightModelAsset = "builtin:multirotor";
+    def.signatures.rcs = 0.05f;
+    def.signatures.ir = 0.3f;
+    def.signatures.visual = 0.5f;
+    def.collisionRadiusM = 1.f;
     return def;
 }
 

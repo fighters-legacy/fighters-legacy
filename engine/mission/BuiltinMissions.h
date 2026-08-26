@@ -73,6 +73,11 @@ objects:
   - { type: builtin:ground-vehicle, id: gv, side: blue, pos: [600, 0, -240], heading: 0, start: ground }
   - { type: builtin:static-target, id: bunker, side: blue, pos: [600, 0, -120], heading: 0, start: ground }
   - { type: builtin:naval-vessel, id: ship, side: blue, pos: [700, 0, 220], heading: 0, start: ground }
+  # Rotorcraft pair (#1335): the helicopter hovers over the row, the drone loiters beside it —
+  # both fly their compiled-in reduced-schema models, so the two rotor force models are on display
+  # (and provable) in the same zero-pack scene as everything else.
+  - { type: builtin:helicopter, id: helo, side: blue, pos: [500, 120, 100], heading: 90, ai: "loiter" }
+  - { type: builtin:multirotor, id: drone, side: blue, pos: [520, 60, -80], heading: 90, ai: "loiter" }
   # Ordnance exhibits: projectile entity types floating in a line above the row.
   - { type: "projectile:builtin:ir-missile", id: exhibit-missile, side: blue, pos: [600, 0, -40], heading: 90, alt: 620 }
   - { type: "projectile:builtin:bomb", id: exhibit-bomb, side: blue, pos: [600, 0, 0], heading: 90, alt: 620 }

@@ -3690,8 +3690,18 @@ void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityC
     const EntityState* st = m_entityManager.get(id);
     if (!st)
         return;
-    if (!model)
-        model = BuiltinFlightModel::get();
+    if (!model) {
+        // Terminal fallback, by CATEGORY (#1335): a naval vehicle that lost its model should still
+        // move like a ship, not like an aeroplane — the pre-#1335 single fallback bound the
+        // fixed-wing builtin to everything (a controlled builtin:sam-site "worked" only because it
+        // spawned parked). Air flavours (helicopter/multirotor) cannot be inferred here: the
+        // flavour lives in the flight-model TOML that is precisely what is missing, so an air (or
+        // unknown-category) entity falls to the trainer and a def that WANTS a rotorcraft fallback
+        // names builtin:helicopter / builtin:multirotor explicitly.
+        const EntityDef* def = st ? m_registry.byIndex(st->typeIndex) : nullptr;
+        model = (def && def->category == ObjectCategory::NavalVehicle) ? BuiltinCarrierVesselModel::get()
+                                                                       : BuiltinFlightModel::get();
+    }
 
     FlightState fs{};
     fs.pos_world[0] = st->transform.pos[0];

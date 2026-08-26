@@ -754,6 +754,10 @@ bool ServerRuntime::Impl::initContent() {
     // The ejection parachute (#672): a replicating Effect entity spawned when a pilot ejects. The
     // broadcaster is pointed at it after construction (setParachuteType), below.
     entityRegistry.registerType(fl::builtinParachuteDef());
+    // The rotorcraft pair (#1335): the zero-pack proofs of the helicopter and multirotor force
+    // models, so a mission can put a plausible rotorcraft in the sky with no pack mounted.
+    entityRegistry.registerType(fl::builtinHelicopterDef());
+    entityRegistry.registerType(fl::builtinMultirotorDef());
 
     // Builtin surface targets + threats (#863): ground/naval/static targets and a SAM site + AAA that
     // shoot back, so the surface categories and air-defense threat exist with zero content mounted.
@@ -1030,10 +1034,20 @@ bool ServerRuntime::Impl::initWorld() {
     // (sim-thread-only access). Empty/unknown/malformed ids fall back to the builtin model in
     // WorldBroadcaster. Captures the cache pointer by value — see m_fmCache's declaration (#1178).
     queries.flightModel = [&assets, fmCache, log](const std::string& id) -> std::shared_ptr<const fl::FlightModelData> {
-        // The compiled-in carrier's vessel model (#38): a "builtin:" name never touches the
-        // filesystem, same rule as every other builtin asset.
-        if (id == "builtin:carrier-vessel")
-            return fl::BuiltinCarrierVesselModel::get();
+        // The WHOLE "builtin:" prefix is engine vocabulary (#1335): a builtin name never touches the
+        // filesystem, so pack content can never shadow it — the old guard covered only the literal
+        // "builtin:carrier-vessel" and let any other builtin:-named asset fall through to the packs.
+        // An unknown builtin name is an ERROR and a null (→ the builtin trainer fallback), never a
+        // pack lookup.
+        if (id.rfind("builtin:", 0) == 0) {
+            auto model = fl::builtinFlightModel(id);
+            if (!model)
+                log->log(fl::LogLevel::Error, __FILE__, __LINE__,
+                         ("unknown builtin flight model '" + id +
+                          "' -- the builtin: namespace is reserved; entities of this type will fly the builtin model")
+                             .c_str());
+            return model;
+        }
         if (auto it = fmCache->find(id); it != fmCache->end())
             return it->second;
         auto res = fl::loadAndParseFlightModel(assets, id.c_str());

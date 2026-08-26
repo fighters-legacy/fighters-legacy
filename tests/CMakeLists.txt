@@ -226,6 +226,7 @@ fl_add_test(test_air_angles LIBS engine-flight)
 fl_add_test(test_articulation_channels LIBS engine-flight)
 
 fl_add_test(test_rotor_force_models LIBS engine-flight)
+fl_add_test(test_builtin_models LIBS engine-bootstrap engine-flight)
 
 fl_add_test(test_carrier_deck LIBS engine-net engine-entity engine-flight engine-bootstrap)
 

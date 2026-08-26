@@ -110,12 +110,97 @@ values = [
 ]
 )";
 
+// The builtin helicopter (#1335): light-utility class in round numbers — 3.0 t empty + 600 kg
+// fuel, a 7.3 m rotor at 48 kN max collective (hover at ~74% collective at gross, honest margin,
+// nothing acrobatic), docile cyclic/pedal authority, and a draggy utility frame that tops out
+// near 70 m/s (~135 kt) in level tilt. Fuel flows give a couple of hours; running dry is a real
+// #308 flameout (autorotation is the force model's own term).
+constexpr const char* kBuiltinHelicopterToml = R"(
+[aircraft]
+name        = "builtin:helicopter"
+type        = "helicopter"
+engine_type = "turbofan"
+
+[flight_model]
+mass_kg   = 3000.0
+fuel_kg   = 600.0
+ixx_kg_m2 = 3500.0
+iyy_kg_m2 = 14000.0
+izz_kg_m2 = 12000.0
+
+[helicopter]
+main_rotor_radius_m     = 7.3
+main_rotor_max_thrust_n = 48000.0
+yaw_moment_max_nm       = 12000.0
+cyclic_moment_nm        = 25000.0
+flapback_nm_per_mps     = 40.0
+torque_factor           = 0.05
+frame_cd                = 1.2
+frame_area_m2           = 2.5
+
+[engine]
+fuel_flow_idle_kg_s = 0.02
+fuel_flow_mil_kg_s  = 0.12
+)";
+
+// The builtin multirotor (#1335): a large camera-drone-class quad — 9 kg empty + 3 kg battery-mass
+// budget, 55 N per rotor (hover at ~53% throttle), deliberately slow and stable rather than a
+// racer. flight_time_min folds the pack-style endurance into the fuel path.
+constexpr const char* kBuiltinMultirotorToml = R"(
+[aircraft]
+name        = "builtin:multirotor"
+type        = "multirotor"
+engine_type = "turbofan"
+
+[flight_model]
+mass_kg   = 9.0
+fuel_kg   = 3.0
+ixx_kg_m2 = 0.5
+iyy_kg_m2 = 0.5
+izz_kg_m2 = 0.9
+
+[multirotor]
+rotor_count        = 4
+rotor_thrust_max_n = 55.0
+rotor_arm_m        = 0.45
+yaw_torque_nm      = 6.0
+frame_cd           = 1.1
+frame_area_m2      = 0.15
+attitude_authority = 0.25
+rate_damping_s     = 1.4
+flight_time_min    = 30.0
+)";
+
 } // namespace
 
 std::shared_ptr<const FlightModelData> BuiltinFlightModel::get() {
     static std::shared_ptr<const FlightModelData> kInstance =
         std::make_shared<const FlightModelData>(parseFlightModel(kBuiltinTrainerToml));
     return kInstance;
+}
+
+std::shared_ptr<const FlightModelData> BuiltinHelicopterModel::get() {
+    static std::shared_ptr<const FlightModelData> kInstance =
+        std::make_shared<const FlightModelData>(parseFlightModel(kBuiltinHelicopterToml));
+    return kInstance;
+}
+
+std::shared_ptr<const FlightModelData> BuiltinMultirotorModel::get() {
+    static std::shared_ptr<const FlightModelData> kInstance =
+        std::make_shared<const FlightModelData>(parseFlightModel(kBuiltinMultirotorToml));
+    return kInstance;
+}
+
+std::shared_ptr<const FlightModelData> builtinFlightModel(std::string_view name) {
+    if (name == "builtin:trainer")
+        return BuiltinFlightModel::get();
+    if (name == "builtin:carrier-vessel")
+        return BuiltinCarrierVesselModel::get();
+    if (name == "builtin:helicopter")
+        return BuiltinHelicopterModel::get();
+    if (name == "builtin:multirotor")
+        return BuiltinMultirotorModel::get();
+    return nullptr;
 }
 
 std::shared_ptr<const FlightModelData> BuiltinCarrierVesselModel::get() {
