@@ -112,7 +112,7 @@ void printHelp() {
                 "  --assert-min-tick-hz X Exit nonzero if observed server tick-Hz min < X\n"
                 "  --assert-max-kbs Y     Exit nonzero if downstream KB/s per client max > Y\n"
                 "  --assert-max-tick-ms X Exit nonzero if authoritative server tick p99 (ms) > X\n"
-                "  --assert-min-entities N Exit nonzero if authoritative server_tick.entities < N\n"
+                "  --assert-min-entities N Exit nonzero if the server never reached N live entities\n"
                 "  --assert-max-rss-growth-kb N  Exit nonzero if server RSS growth (rss_kb - rss_startup_kb) > N\n"
                 "  --assert-max-rss-slope-kb-per-min X  Exit nonzero if the RSS growth TREND over the run's\n"
                 "                         tail exceeds X KB/min (the slow-leak gate; needs --server-metrics)\n"

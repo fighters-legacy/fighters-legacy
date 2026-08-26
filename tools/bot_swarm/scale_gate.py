@@ -378,6 +378,31 @@ def evaluate_report(report, profile, strict):
             "advisory": False,
         })
 
+    # World population (#1338). The report's `entities`/`peers` are read when the server writes its
+    # last metrics file — after the swarm has disconnected and every bot pilot entity has despawned —
+    # so they are 0 on every run ever recorded and say nothing about what the run held. The peaks are
+    # watermarks kept across the whole server process, so they do.
+    #
+    # Reported always, and it FAILS on a peak of zero while clients were connected: a run whose world
+    # never held a single entity is not a measurement of anything, and the gate that could not say so
+    # cost a full false hollow-world investigation (#1089's signature) during the #1334 baseline work.
+    # Anything above zero is advisory detail — the hard-gated metrics (kbs, admission, tick-Hz) do not
+    # depend on the count, and the entity-scale profiles gate the exact number via
+    # --assert-min-entities.
+    server = report.get("server_tick")
+    if server is not None and "entities_peak" in server:
+        peak = server.get("entities_peak", 0)
+        peers_peak = server.get("peers_peak", 0)
+        hollow = peak == 0 and report.get("clients_connected", 0) > 0
+        checks.append({
+            "name": "server_tick.entities_peak",
+            "ok": not hollow,
+            "detail": f"peak {peak} entities / {peers_peak} peers"
+                      f" (end-of-run sample: {server.get('entities', 0)}/{server.get('peers', 0)})"
+                      + (" — the world was EMPTY for the whole run" if hollow else ""),
+            "advisory": not hollow,
+        })
+
     # Sensing phase (#685/#686). ADVISORY, deliberately: the sensing pass is new, its cost depends on
     # how much content a pack ships (sensors, signatures) rather than on the engine alone, and a hard
     # threshold set today would be a number invented from nothing. What this DOES buy is visibility —

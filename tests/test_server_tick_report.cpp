@@ -32,6 +32,8 @@ ServerTickReport sample() {
     r.congestionMaxLoss = 0.11;         // peak sampled ENet loss (#714)
     r.entitySoftCap = 4096;             // world.entity_soft_cap in force (#1049)
     r.entityCapRefusals = 17;           // and it has actually refused spawns
+    r.entitiesPeak = 168;               // run watermark, ABOVE the end-of-run sample (#1338)
+    r.peersPeak = 128;                  // ditto for peers
     return r;
 }
 } // namespace
@@ -68,6 +70,37 @@ TEST_CASE("ServerTickReport JSON round-trips", "[servertick]") {
     CHECK(out.congestionMaxLoss == Approx(in.congestionMaxLoss).margin(1e-3));
     CHECK(out.entitySoftCap == in.entitySoftCap);
     CHECK(out.entityCapRefusals == in.entityCapRefusals);
+    CHECK(out.entitiesPeak == in.entitiesPeak);
+    CHECK(out.peersPeak == in.peersPeak);
+}
+
+TEST_CASE("ServerTickReport peaks are independent of the instantaneous counts (#1338)", "[servertick]") {
+    // The failure this pins: the metrics file a load test embeds is the LAST one written, when the
+    // swarm has already disconnected — peers and entities read 0 while the run held 128 of each.
+    ServerTickReport teardown;
+    teardown.peers = 0;
+    teardown.entities = 0;
+    teardown.peersPeak = 128;
+    teardown.entitiesPeak = 128;
+
+    ServerTickReport out;
+    REQUIRE(fromJson(toJson(teardown), out));
+    CHECK(out.peers == 0);
+    CHECK(out.entities == 0u);
+    CHECK(out.peersPeak == 128);
+    CHECK(out.entitiesPeak == 128u);
+}
+
+TEST_CASE("ServerTickReport: a file written before the peaks existed parses with zeroed peaks (#1338)",
+          "[servertick]") {
+    // Additive and name-keyed, so no schema bump (D18): an older file simply has no peak keys, and a
+    // reader must see 0 rather than garbage. bot_swarm's min-entities gate max()es the two for this.
+    const std::string old = R"({ "schema_version": 6, "peers": 8, "entities": 64 })";
+    ServerTickReport out;
+    REQUIRE(fromJson(old, out));
+    CHECK(out.entities == 64u);
+    CHECK(out.entitiesPeak == 0u);
+    CHECK(out.peersPeak == 0);
 }
 
 TEST_CASE("ServerTickReport toJson nesting indent is valid", "[servertick]") {
