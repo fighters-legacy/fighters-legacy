@@ -82,7 +82,8 @@ def test_assert_flags_tick_ms_only_when_strict():
 def _report(kbs_max=66.0, tick_hz_min=60.0, tick_p99=10.0, connected=64, requested=64,
             disconnected=0, with_server=True, rss_kb=200000, rss_startup_kb=200000,
             load_factor=1.0, dropped_ticks=0, congestion_min_hz=60.0, congestion_recovered_hz=60.0,
-            sensing=None, rss_slope="omit", rss_step_kb=None, rss_step_at_s=None):
+            sensing=None, rss_slope="omit", rss_step_kb=None, rss_step_at_s=None,
+            entities_peak=None, peers_peak=0, entities=0, peers=0):
     r = {
         "clients_requested": requested,
         "clients_connected": connected,
@@ -106,6 +107,14 @@ def _report(kbs_max=66.0, tick_hz_min=60.0, tick_p99=10.0, connected=64, request
         if sensing is not None:
             r["server_tick"]["sensing_ms"] = sensing
             r["server_tick"]["tick_ms"]["mean"] = 5.0
+        # #1338: entities/peers are the END-OF-RUN sample (0 on every real report, because the swarm
+        # has disconnected by then); the peaks are the run watermarks. entities_peak=None omits the
+        # keys entirely, i.e. a metrics file from a server that predates them.
+        if entities_peak is not None:
+            r["server_tick"]["entities"] = entities
+            r["server_tick"]["peers"] = peers
+            r["server_tick"]["entities_peak"] = entities_peak
+            r["server_tick"]["peers_peak"] = peers_peak
     return r
 
 
@@ -790,6 +799,49 @@ def test_sensing_advisory_never_fails_the_gate():
     sensing = [c for c in result["checks"] if c["name"] == "server_tick.sensing_ms"][0]
     assert sensing["advisory"] is True
     assert sensing["ok"] is True
+
+
+# --- #1338: the world-population watermark -------------------------------------------------------
+
+
+def test_entities_peak_is_reported_from_the_watermark_not_the_teardown_sample():
+    """The number a human reads must be what the run HELD, not what was left when it ended."""
+    report = _report(entities_peak=136, peers_peak=128, entities=0, peers=0)
+    result = sg.evaluate_report(report, _profile(), strict=True)
+
+    check = [c for c in result["checks"] if c["name"] == "server_tick.entities_peak"][0]
+    assert check["ok"] is True
+    assert check["advisory"] is True
+    assert "peak 136 entities / 128 peers" in check["detail"]
+    assert "end-of-run sample: 0/0" in check["detail"]
+    assert result["passed"]
+
+
+def test_a_world_that_never_held_an_entity_fails_the_gate():
+    """A run with clients connected and a peak of zero measured an empty world. That is not a
+    measurement of anything, and the gate that could not say so cost a false investigation."""
+    report = _report(entities_peak=0, peers_peak=64, connected=64)
+    result = sg.evaluate_report(report, _profile(), strict=True)
+
+    check = [c for c in result["checks"] if c["name"] == "server_tick.entities_peak"][0]
+    assert check["ok"] is False
+    assert check["advisory"] is False
+    assert "EMPTY" in check["detail"]
+    assert not result["passed"]
+
+
+def test_entities_peak_absent_is_not_a_check():
+    """A metrics file written before the watermark existed simply has no peak keys."""
+    result = sg.evaluate_report(_report(), _profile(), strict=True)
+    assert not [c for c in result["checks"] if c["name"] == "server_tick.entities_peak"]
+
+
+def test_zero_peak_with_no_clients_connected_is_not_a_hollow_world():
+    """An admission failure is already reported by its own check; do not double-fault it here."""
+    report = _report(entities_peak=0, connected=0, requested=64)
+    result = sg.evaluate_report(report, _profile(), strict=True)
+    check = [c for c in result["checks"] if c["name"] == "server_tick.entities_peak"][0]
+    assert check["ok"] is True
 
 
 # --- #1089: the gate must measure a POPULATED world ----------------------------------------------

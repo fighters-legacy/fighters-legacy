@@ -734,6 +734,22 @@ TEST_CASE("assert-min-entities gates on the authoritative server entity count (#
     SECTION("fails when the assert is enabled but no server metrics were provided") {
         CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1).assertsPassed);
     }
+
+    // #1338: the metrics file the gate reads is the LAST one the server wrote — after the swarm
+    // disconnected, so the instantaneous count is 0 however busy the run was. "Did the server reach
+    // N live entities" is a watermark question, and the peak is the field that answers it.
+    SECTION("passes on the run PEAK when the end-of-run sample has already emptied") {
+        ServerTickReport s = makeServer(6.0);
+        s.entities = 0;
+        s.entitiesPeak = 2050;
+        CHECK(buildReport(cfg, clients, 10.0, {}, 1, s).assertsPassed);
+    }
+    SECTION("still fails when the peak itself is short of the requested count") {
+        ServerTickReport s = makeServer(6.0);
+        s.entities = 0;
+        s.entitiesPeak = 128;
+        CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1, s).assertsPassed);
+    }
 }
 
 TEST_CASE("assert-max-rss-growth-kb gates on the server RSS growth (#707)", "[bot_swarm][metrics][servertick]") {

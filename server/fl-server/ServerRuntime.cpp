@@ -3225,6 +3225,14 @@ int ServerRuntime::Impl::mainLoop() {
     }
 
     uint64_t lastDroppedTicks = 0; // for the sim-overrun drop-rate Warn (#514)
+    // Run watermarks for the metrics file (#1338). The file is rewritten every interval and the LAST
+    // one written is what a load-test report embeds -- by which time the swarm has disconnected and
+    // every bot pilot entity has despawned, so the instantaneous `peers`/`entities` in it are 0 and
+    // say nothing about what the run actually loaded the server with. These are sampled on EVERY poll
+    // (~50 ms), not only when a file is written, so the peak does not depend on the metrics interval
+    // happening to line up with the busiest moment of the run.
+    uint32_t entitiesPeak = 0;
+    int peersPeak = 0;
     // Baseline RSS captured once after all init, before the main loop; the soak leak gate tracks
     // the growth (rss_kb - rss_startup_kb) over the run (#707). 0 when unavailable on this platform.
     const uint64_t rssStartupKb = fl::currentRssKb();
@@ -3290,6 +3298,9 @@ int ServerRuntime::Impl::mainLoop() {
             lastDroppedTicks = droppedTicks;
         }
 
+        entitiesPeak = std::max(entitiesPeak, entityManager.liveCount()); // #1338 run watermarks
+        peersPeak = std::max(peersPeak, broadcaster.getPeerCount());
+
         if (!metricsPath.empty() && std::chrono::steady_clock::now() >= nextMetricsWrite) {
             const fl::OverrunStatus ov = broadcaster.getOverrunStatus();
             const fl::CongestionTelemetry ct = broadcaster.getCongestionTelemetry();
@@ -3313,6 +3324,8 @@ int ServerRuntime::Impl::mainLoop() {
                 entityManager.softCapRefusals());
             rep.peerThrottle = std::move(throttles);
             rep.voiceRelaySends = broadcaster.voiceRelaySendCount(); // #1090: fan-out, not frame count
+            rep.entitiesPeak = entitiesPeak;                         // #1338: what the run actually held,
+            rep.peersPeak = peersPeak;                               //        not what is left at teardown
             fl::writeConfigFile(metricsPath, fl::toJson(rep) + "\n", *log);
             nextMetricsWrite = std::chrono::steady_clock::now() + metricsInterval;
         }

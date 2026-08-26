@@ -42,7 +42,8 @@ The same JSON shape is the standalone `--metrics-json` file and the embedded blo
 | `tick_hz` | actual recent tick rate over the sampling window (ring-derived) |
 | `ticks_sampled` / `ticks_total` | ticks in the rolling window / monotonic all-time |
 | `window_s` | wall-clock span of the sampling window |
-| `peers` / `entities` | live peer count / live entity count at write time |
+| `peers` / `entities` | live peer count / live entity count **at write time** — for the file a load test embeds that is *after* the swarm disconnected, so both read `0`. Use the peaks below (#1338) |
+| `peers_peak` / `entities_peak` | the run WATERMARKS: the most peers / live entities the server held at any poll (~50 ms) since start-up. These are what answer "was the world populated", and what `--assert-min-entities` gates on |
 | `load_factor` | overrun-governor load factor `[floor, 1]`; `1` = no degradation (#514) |
 | `interest_scale` | overrun-governor interest-radius scale `[fraction floor, 1]`; `1` = full radius (#726) |
 | `dropped_ticks` | all-time `GameLoop` catch-up drops (sim overrun / time dilation) (#514) |
@@ -308,7 +309,7 @@ read the authoritative `server_tick` per-phase budget:
 - `FL_SIM_WORKER_THREADS` → `fl-server --sim-worker-threads` (sweep `1 2 4 8`).
 - `FL_SNAPSHOT_BUDGET` → `[world] snapshot_budget_bytes` (0 = unlimited); sweep `1200` vs `0` to split
   the pool/index cost from the snapshot-budget cost.
-- `--assert-min-entities N` fails the run if the server did not reach N live entities (the spawn took).
+- `--assert-min-entities N` fails the run if the server never reached N live entities (the spawn took). It gates on `entities_peak`, not the end-of-run `entities` sample, which is 0 by the time the report is written (#1338).
 
 The whole matrix is a driver profile (advisory, **never baselined** — its sweep would corrupt the KB/s
 baseline; pins `transport: gns` since [#773], and deliberately carries **no tick-ms assert**: the
@@ -365,7 +366,7 @@ snapshot-visible), `tick_ms` +11% — reference-environment numbers belong in
       --assert-min-tick-hz X exit nonzero if observed (proxy) tick-Hz min < X
       --assert-max-kbs Y     exit nonzero if downstream KB/s/client max > Y
       --assert-max-tick-ms X exit nonzero if authoritative server tick p99 (ms) > X
-      --assert-min-entities N exit nonzero if authoritative server_tick.entities < N
+      --assert-min-entities N exit nonzero if the server never reached N live entities
       --assert-max-rss-growth-kb N  exit nonzero if server RSS growth (rss_kb - rss_startup_kb) > N
       --assert-max-load-factor X  exit nonzero if server_tick.load_factor > X (governor engaged? <0 = off)
       --assert-max-dropped-ticks N  exit nonzero if server_tick.dropped_ticks > N (<0 = off)

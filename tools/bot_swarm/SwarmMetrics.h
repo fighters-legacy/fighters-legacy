@@ -348,7 +348,14 @@ inline SwarmReport buildReport(const SwarmConfig& cfg, const std::vector<ClientM
     // Entity-scale gate (#573 hook): confirm the server actually reached the requested live entity
     // count (e.g. the [world] test_spawn_ai_count load-spawn took). Missing server data while the
     // assert is enabled is a failure, like assert-max-tick-ms.
-    if (cfg.assertMinEntities > 0 && (!r.hasServer || r.server.entities < static_cast<uint32_t>(cfg.assertMinEntities)))
+    //
+    // Gates on the PEAK, not the instantaneous count (#1338). The metrics file this reads is the last
+    // one the server wrote, and by then the swarm has disconnected and its pilot entities have
+    // despawned -- "did the server ever reach N live entities" is a watermark question, and the
+    // instantaneous field cannot answer it. max() with `entities` keeps a metrics file written by a
+    // server that predates the watermark (peak 0) behaving exactly as it did.
+    if (cfg.assertMinEntities > 0 && (!r.hasServer || std::max(r.server.entities, r.server.entitiesPeak) <
+                                                          static_cast<uint32_t>(cfg.assertMinEntities)))
         pass = false;
     // Soak leak gate (#707 hook): fail if the server's RSS grew more than the cap over the run.
     // Missing server data while the assert is enabled is a failure, like the other server gates.
