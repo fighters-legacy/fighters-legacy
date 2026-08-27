@@ -179,8 +179,41 @@ Maps heading error to an aileron command. Gain: `2/π` (90° error → full defl
 
 The same job, closed on your **current bank**: commands a bank *angle* for the heading error and
 stops there. `max_bank_rad` defaults to 45° — raise it for a fighter (80° is what the engine's
-pursuit controllers use), lower it near the ground (25° for an approach). Correct anywhere on the
+pursuit controllers use), lower it near the ground (25° for an approach). Treat it as a **ceiling,
+not a command**: pass `bank_limit_for_speed(...)` below so the bank you actually ask for is one the
+airspeed can pay for. Correct anywhere on the
 sphere; `own_pos` is required for the same reason as in `pitch_error_from_alt`.
+
+### `guidance.bank_limit_for_speed(speed_mps, max_bank_rad[, min_speed_mps]) → number`
+
+**The hardest turn this airspeed will pay for**, capped by your role ceiling. Feed its result to
+`turn_aileron` as `max_bank_rad` rather than the ceiling itself.
+
+A bank angle *is* a load factor — `n = 1/cos(bank)`, so 80° is 5.8 g. `min_speed_mps` is the speed
+your airframe stops flying at with margin; the default (65 m/s) is sized for the builtin trainer
+(1 g stall 54 m/s + ~20%), and a script flying anything else should pass its own, exactly as with
+`max_aoa_rad`.
+
+**A return of `0` means no turn is affordable at all: fly straight and accelerate.** A script that
+reads 0 as "no limit" has inverted the whole point.
+
+!!! danger "A fighter with no notion of its own energy will kill itself"
+    This is [#1353](https://github.com/fighters-legacy/fighters-legacy/issues/1353). `builtin:fighter`
+    pulled its 80° combat bank at any airspeed, which below about 130 m/s the trainer cannot even
+    reach and at no speed can sustain (T/W 0.32) — so every turn bought heading with airspeed that
+    could not be repaid. Measured on `demo-sam-strike`: 73–166 m/s across one engagement, then ~30 s
+    oscillating 547 ↔ 616 m MSL at **74–88 m/s** with the hard deck flickering on and off, a terrain
+    scrape (hp 100 → 77), and `pilot KIA (−0 m AGL, 69 m/s)`.
+
+    It was never short of thrust — the recovery already commanded `throttle = 1.0`. It was short of
+    **airspeed**, and its own pull is what held it there. A mush is escaped with energy, not with
+    more pull: unload first, accept the altitude it costs, and climb once the wing is flying again.
+
+    ```lua
+    local spd = math.sqrt(state.vel.x^2 + state.vel.y^2 + state.vel.z^2)
+    local ail = guidance.turn_aileron(state.quat, state.pos, herr, nil,
+                                      guidance.bank_limit_for_speed(spd, COMBAT_BANK))
+    ```
 
 ### `guidance.coordinated_rudder(aileron) → number`
 

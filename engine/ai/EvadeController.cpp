@@ -16,11 +16,18 @@ fl::ControlInput EvadeController::sample(const fl::EntityState& state, uint64_t 
                                          const fl::AiTickContext& ctx) {
     fl::ControlInput ctrl{};
 
+    // Stepped BEFORE the deck check, so the estimator keeps its continuity on the ticks the recovery
+    // takes over -- a backward difference that skips samples reports a rate that never happened.
+    const float curPitch = fl::pitchOf(
+        state.transform.quat, glm::dvec3(state.transform.pos[0], state.transform.pos[1], state.transform.pos[2]),
+        m_planetRadiusM);
+    const float pitchRate = m_pitchRate.step(curPitch, dt);
+
     // Terrain does not negotiate (#1352). The deck is checked FIRST and outranks whatever
     // geometry this controller was about to fly; below it the only job is to still be
     // airborne next tick.
     if (terrainFloorRecovery(ctrl, state.transform.quat, state.transform.pos, state.transform.vel, ctx, kCombatDeckAglM,
-                             m_planetRadiusM))
+                             m_planetRadiusM, pitchRate))
         return ctrl;
 
     // Honest targeting (#690): the target must be a CONTACT when sensing ran — a controller does
@@ -47,8 +54,13 @@ fl::ControlInput EvadeController::sample(const fl::EntityState& state, uint64_t 
     // somewhere it could not be spent.
     // A threat that keeps repositioning keeps this heading error alive indefinitely — with the
     // rate-only law that wound the aircraft to 179.9 deg of bank and into the ground within 90 s.
-    ctrl.aileron =
-        bankToTurnAileron(state.transform.quat, state.transform.pos, headErr, m_planetRadiusM, kFormationBankRad);
+    // The 60 deg ceiling is capped by the bank this airspeed will actually pay for (#1353): an
+    // evasion flown at more bank than the energy supports ends slow, and slow is how the threat wins.
+    const float evadeSpeed =
+        std::sqrt(state.transform.vel[0] * state.transform.vel[0] + state.transform.vel[1] * state.transform.vel[1] +
+                  state.transform.vel[2] * state.transform.vel[2]);
+    ctrl.aileron = bankToTurnAileron(state.transform.quat, state.transform.pos, headErr, m_planetRadiusM,
+                                     bankLimitForSpeed(evadeSpeed, kFormationBankRad));
     ctrl.rudder = rudderToCoordinate(sideslipOf(state.transform.quat, state.transform.vel));
 
     // Hold the altitude the evasion STARTED at (#1143). The elevator used to be left neutral, on the
@@ -61,11 +73,8 @@ fl::ControlInput EvadeController::sample(const fl::EntityState& state, uint64_t 
             glm::dvec3(state.transform.pos[0], state.transform.pos[1], state.transform.pos[2]), m_planetRadiusM));
         m_haveHoldAlt = true;
     }
-    const float curPitch = fl::pitchOf(
-        state.transform.quat, glm::dvec3(state.transform.pos[0], state.transform.pos[1], state.transform.pos[2]),
-        m_planetRadiusM);
     ctrl.elevator = elevatorForAltitudeHold(state.transform.quat, state.transform.pos, state.transform.vel, m_holdAltM,
-                                            m_planetRadiusM, m_pitchRate.step(curPitch, dt));
+                                            m_planetRadiusM, pitchRate);
 
     return ctrl;
 }

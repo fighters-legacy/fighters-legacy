@@ -46,8 +46,15 @@ using namespace fl;
 
 // Build an EntityState at (px,py,pz) with the given quaternion [x,y,z,w].
 // Default quaternion is identity (forward = +X world axis).
+//
+// The velocity is NOT left at zero (#1353). A bank angle is a load factor, so since the turn law
+// sizes the bank it commands by the airspeed available to pay for it, an aircraft at 0 m/s is
+// correctly told to command no turn at all -- and every sign assertion below would be asserting the
+// steering of something that is not flying. `speedMps` is world-frame along the state's own forward
+// axis, so the sideslip is zero whatever orientation the caller passed; 200 m/s is fast enough that
+// the ROLE ceiling is what binds, which is what these cases are about.
 static fl::EntityState makeState(double px, double py, double pz, float qx = 0.f, float qy = 0.f, float qz = 0.f,
-                                 float qw = 1.f) {
+                                 float qw = 1.f, float speedMps = 200.f) {
     fl::EntityState s{};
     s.id = {1, 1};
     s.transform.pos[0] = px;
@@ -57,6 +64,10 @@ static fl::EntityState makeState(double px, double py, double pz, float qx = 0.f
     s.transform.quat[1] = qy;
     s.transform.quat[2] = qz;
     s.transform.quat[3] = qw;
+    const glm::vec3 fwd = glm::quat(qw, qx, qy, qz) * glm::vec3(1.f, 0.f, 0.f);
+    s.transform.vel[0] = fwd.x * speedMps;
+    s.transform.vel[1] = fwd.y * speedMps;
+    s.transform.vel[2] = fwd.z * speedMps;
     return s;
 }
 
@@ -345,7 +356,8 @@ TEST_CASE("PursuitController: banks toward target entity") {
     fl::EntityManager em(log, reg);
 
     fl::EntityTransform ta{};
-    ta.quat[3] = 1.f; // identity
+    ta.quat[3] = 1.f;  // identity
+    ta.vel[0] = 200.f; // and flying along it -- see PursuitFixture (#1353)
     fl::EntityId attackerId = em.spawn("test:basic", ta);
 
     fl::EntityTransform tt{};
@@ -439,6 +451,7 @@ TEST_CASE("EvadeController: banks opposite to threat direction") {
 
     fl::EntityTransform ta{};
     ta.quat[3] = 1.f;
+    ta.vel[0] = 200.f; // flying, not parked -- see PursuitFixture (#1353)
     fl::EntityId attackerId = em.spawn("test:basic", ta);
 
     fl::EntityTransform tt{};
@@ -1315,7 +1328,11 @@ struct PursuitFixture {
     PursuitFixture() : em(log, reg) {
         reg.registerType(makeBasicDef());
         fl::EntityTransform ta{};
-        ta.quat[3] = 1.f; // identity: forward = +X
+        ta.quat[3] = 1.f;  // identity: forward = +X
+        ta.vel[0] = 200.f; // ...and actually flying along it (#1353): the bank a turn law commands
+                           // is sized by the airspeed available to pay for it, so an attacker at
+                           // 0 m/s is correctly told to command no turn, and every sign assertion
+                           // below would be measuring the steering of something that is parked.
         attackerId = em.spawn("test:basic", ta);
         fl::EntityTransform tt{};
         tt.pos[2] = 2000.0; // 2 km to the right (+Z)
@@ -1501,9 +1518,11 @@ TEST_CASE("LagPursuitController: lagFraction=1 shifts aim behind a moving target
 }
 
 TEST_CASE("LagPursuitController: lagFraction=0.5 gives intermediate aim between pure and full lag") {
-    // Target at (1000, 0, 500) moving +Z at 10 m/s; attacker at origin facing +X.
-    // closing speed < 0 → floored to 10 → TTC = 30 s.
-    // lag points (all X-shifted only in Z): lag05=(1000,0,350), lag1=(1000,0,200), pure=(1000,0,500).
+    // Target at (1000, 0, 500) moving +Z at 10 m/s; attacker at origin facing +X and FLYING along it
+    // at 200 m/s -- a parked attacker would command no bank at all since #1353, and this case is
+    // about the lag geometry, not about energy.
+    // Closing speed 174.4 m/s over a 1,118 m range → TTC 6.41 s, so the lag points are
+    // lag05=(1000,0,467.9), lag1=(1000,0,435.9), pure=(1000,0,500).
     // All heading errors are in the linear range of bankToTurnAileron (< 90°), giving strict ordering.
     NullLogger log;
     fl::EntityTypeRegistry reg;
@@ -1511,7 +1530,8 @@ TEST_CASE("LagPursuitController: lagFraction=0.5 gives intermediate aim between 
     fl::EntityManager em(log, reg);
 
     fl::EntityTransform ta{};
-    ta.quat[3] = 1.f; // identity: forward = +X
+    ta.quat[3] = 1.f;  // identity: forward = +X
+    ta.vel[0] = 200.f; // and flying along it (#1353)
     fl::EntityId attackerId = em.spawn("test:basic", ta);
     fl::EntityTransform tt{};
     tt.pos[0] = 1000.0;
@@ -1537,8 +1557,8 @@ TEST_CASE("LagPursuitController: lagFraction=0.5 gives intermediate aim between 
 }
 
 TEST_CASE("LagPursuitController: lagFraction=2 shifts aim further behind than lagFraction=1") {
-    // Same geometry: target at (1000, 0, 500), vel[2]=10 m/s, TTC=30 s.
-    // lag1 z = 500 - 10*30*1 = 200; lag2 z = 500 - 10*30*2 = -100.
+    // Same geometry as above: target at (1000, 0, 500), vel[2]=10 m/s, attacker flying +X at 200 m/s,
+    // TTC 6.41 s. lag1 z = 500 - 10*6.41*1 = 435.9; lag2 z = 500 - 10*6.41*2 = 371.8.
     // lag2 aims further behind → smaller aileron than lag1.
     NullLogger log;
     fl::EntityTypeRegistry reg;
@@ -1547,6 +1567,7 @@ TEST_CASE("LagPursuitController: lagFraction=2 shifts aim further behind than la
 
     fl::EntityTransform ta{};
     ta.quat[3] = 1.f;
+    ta.vel[0] = 200.f; // flying, not parked (#1353)
     fl::EntityId attackerId = em.spawn("test:basic", ta);
     fl::EntityTransform tt{};
     tt.pos[0] = 1000.0;
@@ -1815,7 +1836,8 @@ struct YoYoFixture {
     YoYoFixture() : em(log, reg) {
         reg.registerType(makeBasicDef());
         fl::EntityTransform ta{};
-        ta.quat[3] = 1.f; // forward = +X
+        ta.quat[3] = 1.f;  // forward = +X
+        ta.vel[0] = 200.f; // and flying along it -- see PursuitFixture (#1353)
         attackerId = em.spawn("test:basic", ta);
         fl::EntityTransform tt{};
         tt.pos[2] = 2000.0; // 2 km to the right (+Z)
@@ -3004,7 +3026,11 @@ struct SwarmFixture {
         reg.registerType(makeBasicDef("test:other")); // a different type: NOT a flockmate
     }
 
-    fl::EntityId spawnAt(const char* type, double x, double y, double z, float vx = 0.f, float vy = 0.f,
+    // vx defaults to a real cruise, not zero (#1353): the turn law sizes the bank it commands by the
+    // airspeed available to pay for it, so a flockmate at 0 m/s is correctly told to command no turn
+    // at all and every aileron-sign case below would be measuring a parked aeroplane. Callers that
+    // care about a specific velocity still pass one.
+    fl::EntityId spawnAt(const char* type, double x, double y, double z, float vx = 200.f, float vy = 0.f,
                          float vz = 0.f) {
         fl::EntityTransform t{};
         t.quat[3] = 1.f;

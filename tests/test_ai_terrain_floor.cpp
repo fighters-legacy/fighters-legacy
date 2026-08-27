@@ -21,12 +21,7 @@
 #include "ai/LoiterController.h"
 #include "ai/PursuitController.h"
 #include "ai/SplitSController.h"
-#include "entity/EntityDef.h"
-#include "entity/EntityManager.h"
-#include "entity/EntityTypeRegistry.h"
-#include "mock_log.h"
-
-#include "ai_flight_harness.h"
+#include "ai_ground_fixture.h"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -38,60 +33,12 @@ using namespace fl;
 using Catch::Approx;
 using fl::test::FlightTrace;
 using fl::test::flyController;
+using fl::test::groundAt;
+using fl::test::GroundWorld;
 using fl::test::kHarnessR;
 using fl::test::levelStateAt;
 
-namespace {
-
-// The demo-sam-strike site's terrain, which is where this defect was measured.
-constexpr float kTerrainM = 545.f;
-
-// A context carrying a ground reference, exactly as WorldBroadcaster fills it each tick.
-std::function<AiTickContext()> groundAt(const float& elevM) {
-    return [&elevM]() {
-        AiTickContext ctx{};
-        ctx.groundElevM = &elevM;
-        return ctx;
-    };
-}
-
-// One other aircraft, driven by the test.
-struct TargetWorld {
-    NullLogger logger;
-    EntityTypeRegistry registry;
-    EntityManager em;
-    EntityId targetId;
-
-    TargetWorld() : em(logger, registry) {
-        EntityDef d;
-        d.id = "test:target";
-        d.name = "Target";
-        registry.registerType(d);
-        EntityTransform t{};
-        t.pos[1] = kTerrainM + 15.0;
-        targetId = em.spawn("test:target", t);
-    }
-
-    // A target orbiting at `alt` MSL -- low over the terrain, and never straightening out, so the
-    // chaser's bearing error never dies and it keeps being told to go down there.
-    fl::test::TickHook lowOrbitingTarget(double alt, double radiusM, double speedMps) {
-        return [this, alt, radiusM, speedMps](uint64_t tick, const EntityState&) {
-            EntityState* tgt = em.get(targetId);
-            if (!tgt)
-                return;
-            const double omega = speedMps / radiusM;
-            const double a = omega * (static_cast<double>(tick) / 60.0);
-            tgt->transform.pos[0] = radiusM * std::cos(a);
-            tgt->transform.pos[1] = alt;
-            tgt->transform.pos[2] = radiusM * std::sin(a);
-            tgt->transform.vel[0] = static_cast<float>(-speedMps * std::sin(a));
-            tgt->transform.vel[1] = 0.f;
-            tgt->transform.vel[2] = static_cast<float>(speedMps * std::cos(a));
-        };
-    }
-};
-
-} // namespace
+constexpr float kTerrain = fl::test::kSiteTerrainM;
 
 // ---------------------------------------------------------------------------
 // The null contract
@@ -114,7 +61,7 @@ TEST_CASE("no ground reference disables the floor rather than inventing one", "[
 }
 
 TEST_CASE("the floor is measured from the terrain, not from sea level", "[terrainfloor][ai]") {
-    const float ground = kTerrainM;
+    const float ground = kTerrain;
     AiTickContext ctx{};
     ctx.groundElevM = &ground;
 
@@ -139,7 +86,7 @@ TEST_CASE("the floor is measured from the terrain, not from sea level", "[terrai
 
 TEST_CASE("rolled past knife-edge, the recovery levels the wings before it pulls", "[terrainfloor][ai]") {
     // #1141's ordering, kept: a firm pull while inverted is a split-S into the terrain.
-    const float ground = kTerrainM;
+    const float ground = kTerrain;
     AiTickContext ctx{};
     ctx.groundElevM = &ground;
     const double pos[3] = {0.0, 600.0, 0.0};
@@ -167,30 +114,30 @@ TEST_CASE("a pursuit chasing something low over terrain no longer flies into it"
     // crashBelowAltM is the terrain, not the harness's 1 m default: over ground at 545 m MSL, an
     // aircraft at 400 m is already wreckage, and a test that only notices sea level would call this
     // flight a success.
-    const double kCrashAt = static_cast<double>(kTerrainM);
+    const double kCrashAt = static_cast<double>(kTerrain);
     constexpr int kSeconds = 90;
-    constexpr double kTargetAlt = kTerrainM + 15.0;
+    constexpr double kTargetAlt = kTerrain + 15.0;
 
     FlightTrace blind{};
     {
-        TargetWorld world;
+        GroundWorld world;
         ai::PursuitController ctrl(world.em, world.targetId);
-        blind = flyController(ctrl, levelStateAt(2500.0, kTerrainM + 300.0, 0.0, 150.f), kSeconds,
+        blind = flyController(ctrl, levelStateAt(2500.0, kTerrain + 300.0, 0.0, 150.f), kSeconds,
                               world.lowOrbitingTarget(kTargetAlt, 1500.0, 140.0), {}, {}, kCrashAt);
     }
 
     FlightTrace floored{};
-    const float ground = kTerrainM;
+    const float ground = kTerrain;
     {
-        TargetWorld world;
+        GroundWorld world;
         ai::PursuitController ctrl(world.em, world.targetId);
-        floored = flyController(ctrl, levelStateAt(2500.0, kTerrainM + 300.0, 0.0, 150.f), kSeconds,
+        floored = flyController(ctrl, levelStateAt(2500.0, kTerrain + 300.0, 0.0, 150.f), kSeconds,
                                 world.lowOrbitingTarget(kTargetAlt, 1500.0, 140.0), groundAt(ground), {}, kCrashAt);
     }
 
-    INFO("no ground reference: min alt " << blind.minAltM << " (AGL " << blind.minAltM - kTerrainM << "), crash "
+    INFO("no ground reference: min alt " << blind.minAltM << " (AGL " << blind.minAltM - kTerrain << "), crash "
                                          << blind.crashTimeS << " s");
-    INFO("terrain floor: min alt " << floored.minAltM << " (AGL " << floored.minAltM - kTerrainM << "), crash "
+    INFO("terrain floor: min alt " << floored.minAltM << " (AGL " << floored.minAltM - kTerrain << "), crash "
                                    << floored.crashTimeS << " s, end speed " << floored.endSpeedMps);
 
     // Without a ground reference the aircraft goes where it was told, which is into the hill.
@@ -202,7 +149,7 @@ TEST_CASE("a pursuit chasing something low over terrain no longer flies into it"
     // under the 300 m deck, which is the recovery's own overshoot and is why the deck is sized with
     // room in it rather than set at the height the aircraft must not go below.
     CHECK_FALSE(floored.crashed());
-    CHECK(floored.minAltM - kTerrainM > 150.0);
+    CHECK(floored.minAltM - kTerrain > 150.0);
 
     // NOT asserted here, deliberately: the trainer ends this run at ~104 m/s against a ~150 m/s
     // cruise. The deck keeps it airborne and it is still slow, because holding the recovery's pull
@@ -214,35 +161,35 @@ TEST_CASE("the nav floor is a floor, not an altitude policy", "[terrainfloor][ai
     // A mission that asks for a low orbit still gets a low orbit. kNavDeckAglM is deliberately set
     // below anything a mission would sensibly command, so a controller HOLDING an altitude is never
     // fighting the deck -- only a controller about to hit the ground meets it.
-    const float ground = kTerrainM;
+    const float ground = kTerrain;
     constexpr double kOrbitAglM = 150.0;
     const glm::dvec3 centre{0.0, 0.0, 0.0};
 
-    ai::LoiterController loiter(centre, 3000.f, static_cast<float>(kTerrainM + kOrbitAglM), 0.7f);
-    const FlightTrace t = flyController(loiter, levelStateAt(3000.0, kTerrainM + kOrbitAglM, 0.0, 150.f), 120, {},
-                                        groundAt(ground), {}, static_cast<double>(kTerrainM));
+    ai::LoiterController loiter(centre, 3000.f, static_cast<float>(kTerrain + kOrbitAglM), 0.7f);
+    const FlightTrace t = flyController(loiter, levelStateAt(3000.0, kTerrain + kOrbitAglM, 0.0, 150.f), 120, {},
+                                        groundAt(ground), {}, static_cast<double>(kTerrain));
 
-    INFO("low orbit: alt " << t.minAltM << ".." << t.maxAltM << " (AGL " << t.minAltM - kTerrainM << ".."
-                           << t.maxAltM - kTerrainM << "), crash " << t.crashTimeS);
+    INFO("low orbit: alt " << t.minAltM << ".." << t.maxAltM << " (AGL " << t.minAltM - kTerrain << ".."
+                           << t.maxAltM - kTerrain << "), crash " << t.crashTimeS);
     CHECK_FALSE(t.crashed());
     // Measured: the orbit lives at 132..151 m AGL for the whole two minutes -- the commanded height,
     // not the deck. If kNavDeckAglM were sized like the combat one this band would be pinned against
     // it instead, and a low-level mission would be un-authorable.
-    CHECK(t.minAltM - kTerrainM > 100.0);
-    CHECK(t.maxAltM - kTerrainM < kOrbitAglM + 100.0);
+    CHECK(t.minAltM - kTerrain > 100.0);
+    CHECK(t.maxAltM - kTerrain < kOrbitAglM + 100.0);
 }
 
 TEST_CASE("a Split-S at the deck is abandoned, not flown", "[terrainfloor][ai]") {
     // The manoeuvre IS a dive. Started below the deck it is a way to hit the ground pointing the
     // right way, so the recovery outranks it -- while the phase clock keeps running, so the state
     // machine sequencing the manoeuvre still transitions out on schedule.
-    const float ground = kTerrainM;
+    const float ground = kTerrain;
     AiTickContext ctx{};
     ctx.groundElevM = &ground;
 
     EntityState es{};
     es.transform.pos[0] = 0.0;
-    es.transform.pos[1] = kTerrainM + 100.0; // inside the combat deck
+    es.transform.pos[1] = kTerrain + 100.0; // inside the combat deck
     es.transform.pos[2] = 0.0;
     es.transform.quat[3] = 1.f;
     es.transform.vel[0] = 150.f;
@@ -254,7 +201,7 @@ TEST_CASE("a Split-S at the deck is abandoned, not flown", "[terrainfloor][ai]")
 
     // Same controller, same phase, clear of the terrain: the manoeuvre is flown.
     ai::SplitSController clearOfIt;
-    es.transform.pos[1] = kTerrainM + 3000.0;
+    es.transform.pos[1] = kTerrain + 3000.0;
     const ControlInput high = clearOfIt.sample(es, 0, 1.0 / 60.0, ctx);
     CHECK(high.speedbrake == 1.f);
     CHECK(high.throttle == 0.f);

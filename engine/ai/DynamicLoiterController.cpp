@@ -13,12 +13,19 @@ DynamicLoiterController::DynamicLoiterController(const fl::EntityManager& entity
 
 fl::ControlInput DynamicLoiterController::sample(const fl::EntityState& state, uint64_t /*tick*/, double dt,
                                                  const fl::AiTickContext& ctx) {
+    // Stepped BEFORE the deck check, so the estimator keeps its continuity on the ticks the recovery
+    // takes over -- a backward difference that skips samples reports a rate that never happened.
+    const float curPitch = fl::pitchOf(
+        state.transform.quat, glm::dvec3(state.transform.pos[0], state.transform.pos[1], state.transform.pos[2]),
+        m_planetRadiusM);
+    const float pitchRate = m_pitchRate.step(curPitch, dt);
+
     // Terrain does not negotiate (#1352). A nav-role floor: this controller is holding a
     // commanded altitude, so the deck is set low enough that a deliberately low-level route or
     // orbit is still flown rather than fought.
     fl::ControlInput deck{};
     if (terrainFloorRecovery(deck, state.transform.quat, state.transform.pos, state.transform.vel, ctx, kNavDeckAglM,
-                             m_planetRadiusM))
+                             m_planetRadiusM, pitchRate))
         return deck;
 
     const fl::EntityState* target = m_entityManager.get(m_targetId);
@@ -34,11 +41,7 @@ fl::ControlInput DynamicLoiterController::sample(const fl::EntityState& state, u
         m_targetSpeedMps, m_throttle, m_dir};
 
     fl::ControlInput ctrl{};
-    const float curPitch = fl::pitchOf(
-        state.transform.quat, glm::dvec3(state.transform.pos[0], state.transform.pos[1], state.transform.pos[2]),
-        m_planetRadiusM);
-    orbitSteer(ctrl, state.transform.quat, state.transform.pos, state.transform.vel, orbit, m_planetRadiusM,
-               m_pitchRate.step(curPitch, dt));
+    orbitSteer(ctrl, state.transform.quat, state.transform.pos, state.transform.vel, orbit, m_planetRadiusM, pitchRate);
     return ctrl;
 }
 

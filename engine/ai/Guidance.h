@@ -234,6 +234,32 @@ inline constexpr float kFormationBankRad = 1.047f; // 60 deg — following a man
 inline constexpr float kCombatBankRad = 1.396f;    // 80 deg — pursuit and gun tracking
 inline constexpr float kApproachBankRad = 0.436f;  // 25 deg — approach and climbout, close to the ground
 
+// The hardest turn `speedMps` will pay for, capped by the role ceiling (#1353).
+//
+// A bank angle is a load factor: n = 1/cos(bank), so 80 deg of bank is 5.8 g. The builtin trainer
+// cannot reach that below ~130 m/s and cannot SUSTAIN it at any speed (T/W 0.32), so a pursuit law
+// that commands kCombatBankRad regardless of airspeed is not tracking hard -- it is converting the
+// airspeed it needs into heading it cannot hold. That is how builtin:fighter put itself on the back
+// of the drag curve and stayed there: 73-166 m/s over one engagement, then 74-88 m/s until it hit
+// the ground.
+//
+// The instantaneous lift limit is n = (V/Vmin)^2 at CLmax; kSustainedLoadFraction holds a margin
+// under it so the turn is one thrust can pay for rather than one bought with airspeed. Below the
+// speed that supports any turn at all this returns 0 -- fly straight and accelerate, which is the
+// correct answer and the one nothing in the AI could previously give. `minSpeedMps` is the caller's
+// for the same reason kDeckRecoverSpeedMps is: 65 m/s is the trainer's 54 m/s 1 g stall plus ~20%.
+inline constexpr float kDefaultMinFlyingSpeedMps = 65.f;
+inline constexpr float kSustainedLoadFraction = 0.6f;
+
+[[nodiscard]] inline float bankLimitForSpeed(float speedMps, float maxBankRad,
+                                             float minSpeedMps = kDefaultMinFlyingSpeedMps) {
+    const float ratio = speedMps / std::max(minSpeedMps, 1.f);
+    const float n = ratio * ratio * kSustainedLoadFraction;
+    if (n <= 1.05f)
+        return 0.f;
+    return std::min(maxBankRad, std::acos(1.f / n));
+}
+
 // Heading error -> aileron, closed on the entity's CURRENT bank relative to the local horizon.
 // This is the attitude feedback the rate-only form above is missing: the roll stops at the
 // commanded bank instead of continuing to wind up for as long as the heading error survives.
@@ -320,12 +346,18 @@ inline void pursuitOffsetPoint(double out[3], const double ownPos[3], const floa
 //   is back at zero and nothing else points the nose along the flight path.
 //
 // `maxBankRad` stays a caller argument -- it is the one thing these seven genuinely disagree about,
-// and the role constants below say why each picked what it did.
+// and the role constants below say why each picked what it did. It is a CEILING, not a command:
+// since #1353 the bank actually asked for is the hardest turn the current airspeed will pay for
+// (bankLimitForSpeed), because a bank angle is a load factor and commanding 80 deg at 80 m/s is not
+// tracking hard, it is spending the airspeed the aircraft needs on heading it cannot hold. This is
+// the one place it belongs: all seven callers steer through here, and none of them has any more idea
+// of its own airframe than this function does.
 //
 // Throttle is deliberately NOT set here: some callers hold a fixed throttle and others close a
 // speed loop, and that is a real difference rather than a copy.
 inline void steerTowardPoint(ControlInput& ctrl, const float quat[4], const double ownPos[3], const float ownVel[3],
-                             const double tgtPos[3], double R, float maxBankRad) {
+                             const double tgtPos[3], double R, float maxBankRad,
+                             float minSpeedMps = kDefaultMinFlyingSpeedMps) {
     const glm::dvec3 own(ownPos[0], ownPos[1], ownPos[2]);
     const glm::dvec3 tgt(tgtPos[0], tgtPos[1], tgtPos[2]);
 
@@ -333,7 +365,8 @@ inline void steerTowardPoint(ControlInput& ctrl, const float quat[4], const doub
     const float altErr = static_cast<float>(fl::localAltitude(tgt, R) - fl::localAltitude(own, R));
     const float pitchErr = pitchErrorFromAlt(quat, ownPos, altErr, R);
 
-    ctrl.aileron = bankToTurnAileron(quat, ownPos, headErr, R, maxBankRad);
+    const float speed = std::sqrt(ownVel[0] * ownVel[0] + ownVel[1] * ownVel[1] + ownVel[2] * ownVel[2]);
+    ctrl.aileron = bankToTurnAileron(quat, ownPos, headErr, R, bankLimitForSpeed(speed, maxBankRad, minSpeedMps));
     ctrl.rudder = rudderToCoordinate(sideslipOf(quat, ownVel));
     ctrl.elevator = elevatorFromPitchError(pitchErr);
 }
@@ -369,6 +402,27 @@ inline constexpr float kDeckPullVsq = 5300.f;
 inline constexpr float kDeckPullMin = 0.10f;
 inline constexpr float kDeckPullMax = 0.30f;
 
+// THE PULL IS ONLY AFFORDABLE ABOVE THIS SPEED (#1353). Below it the recovery UNLOADS to accelerate
+// instead, because the pull is what was holding the aircraft down.
+//
+// The trainer's corner speed -- where the aerodynamic limit meets the +-7 g structural one -- is
+// Vs(1 g) 54 m/s times sqrt(7), about 143 m/s, which is roughly its own cruise. Below that a full
+// pull cannot reach the structural limit however hard it asks: all it does is hold a high AoA at a
+// speed where induced drag exceeds what full power can overcome, and the aircraft mushes. 160 m/s is
+// that corner with margin. A caller argument, defaulted, for the same reason maxAoaRad is (#1186):
+// a controller sees an EntityState and never a flight model, so the primitive cannot infer this and
+// the only honest default is the airframe the engine ships.
+inline constexpr float kDeckRecoverSpeedMps = 160.f;
+
+// How much altitude the low-energy stage asks for above the height it currently has.
+//
+// NOT zero, and that is the whole difference between recovering and dying slowly. Commanding the
+// CURRENT altitude asks the cascade for a zero climb rate, which after the loop's own lag is a slow
+// sink -- measured from 80 m/s at 100 m AGL, a zero offset reaches the ground in 10.2 s. A 50 m
+// offset asks for a gentle climb, the cascade's bounded-AoA command unloads the wing to get it, and
+// thrust does the rest: same start, 156 m/s and 315 m AGL after 60 s.
+inline constexpr float kDeckHoldClimbM = 50.f;
+
 // Height above terrain [m], or nullopt when this tick evaluated no ground reference.
 //
 // The null is normative and must NOT be read as sea level: over the shipped sandbox's ~545 m terrain
@@ -391,15 +445,34 @@ inline constexpr float kDeckPullMax = 0.30f;
 //
 // Recover in order: WINGS, then pull (#1141). A firm pull while rolled past vertical is a split-S
 // into the terrain, so the lift vector is levelled first and the pull is gated on it pointing up.
-// Full throttle throughout — but note that thrust is not what gets a mushing aircraft off the back
-// of the drag curve, which is the separate defect in #1353.
+// Then the SPEED decides which recovery this is (#1353):
+//
+//   * ABOVE kDeckRecoverSpeedMps -- the firm speed-scaled pull. This is the dive arrest #1339 sized:
+//     the altitude cascade is far too gentle to stop a 30 deg descent at 175 m/s, and measured with
+//     the cascade doing it, both strikers flew into the terrain at ~100 m AGL.
+//   * BELOW it -- UNLOAD AND ACCELERATE. The pull is what is holding the aircraft down: at 80 m/s
+//     the speed-scaled term clamps to its maximum, which is a high-AoA pull at a speed where induced
+//     drag exceeds full power. The cascade is asked for a gentle climb instead, and its command --
+//     the CURRENT flight path plus a bounded AoA -- is a nose-DOWN command when the aircraft is
+//     mushing, so the wing flies again. Measured from 80 m/s at 100 m AGL over 60 s: the old
+//     always-pull law ended at 58 m/s, BELOW the 1 g stall, after porpoising 0..461 m AGL; this ends
+//     at 156 m/s and 315 m AGL, climbing out.
+//
+// Full throttle throughout, which was never the missing part -- the old recovery already commanded
+// it. A mush is escaped with ENERGY, not with more pull.
+//
+// `pitchRateRadS` damps the cascade's inner loop, and a controller holding a PitchRateEstimator
+// should pass it. Zero is a real but small degradation, measured on the case above: 155.5 m/s
+// against 156.0. That is why it is defaulted rather than required of all thirteen callers.
 //
 // A null ground reference disables the floor rather than inventing one. That keeps a
 // default-constructed AiTickContext behaving exactly as it did before this existed, which is the
 // contract every other field in that struct already has.
 [[nodiscard]] inline bool terrainFloorRecovery(ControlInput& ctrl, const float quat[4], const double ownPos[3],
                                                const float velWorld[3], const fl::AiTickContext& ctx,
-                                               float floorAglM = kCombatDeckAglM, double R = fl::kEarthRadiusM) {
+                                               float floorAglM = kCombatDeckAglM, double R = fl::kEarthRadiusM,
+                                               float pitchRateRadS = 0.f,
+                                               float recoverSpeedMps = kDeckRecoverSpeedMps) {
     const std::optional<float> agl = aglOf(ownPos, ctx, R);
     if (!agl || *agl >= floorAglM)
         return false;
@@ -411,9 +484,16 @@ inline constexpr float kDeckPullMax = 0.30f;
     ctrl = ControlInput{};
     ctrl.aileron = std::clamp(-kDeckRollGain * bank, -1.f, 1.f);
     ctrl.rudder = rudderToCoordinate(sideslipOf(quat, velWorld));
-    ctrl.elevator =
-        std::cos(bank) > 0.5f ? std::clamp(kDeckPullVsq / std::max(spdSq, 1.f), kDeckPullMin, kDeckPullMax) : 0.f;
     ctrl.throttle = 1.f;
+    if (std::cos(bank) <= 0.5f) {
+        ctrl.elevator = 0.f; // rolled past knife-edge: level the lift vector before asking for any g
+        return true;
+    }
+    ctrl.elevator = std::sqrt(spdSq) >= recoverSpeedMps
+                        ? std::clamp(kDeckPullVsq / std::max(spdSq, 1.f), kDeckPullMin, kDeckPullMax)
+                        : elevatorForAltitudeHold(quat, ownPos, velWorld,
+                                                  static_cast<float>(fl::localAltitude(pos, R)) + kDeckHoldClimbM, R,
+                                                  pitchRateRadS);
     return true;
 }
 

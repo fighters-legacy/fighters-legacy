@@ -253,6 +253,28 @@ static int guidanceTurnAileron(lua_State* L) {
     return 1;
 }
 
+// bank_limit_for_speed(speed_mps, max_bank_rad[, min_speed_mps]) → number
+//
+// The hardest turn this airspeed will pay for (#1353), capped by the caller's role ceiling. A bank
+// angle IS a load factor -- 80 deg is 5.8 g -- so a script that commands its combat bank regardless
+// of speed is not tracking hard, it is spending airspeed on heading it cannot hold. That is exactly
+// what builtin:fighter did: 73-166 m/s over one engagement, then 74-88 m/s until it hit the ground.
+//
+// Returns 0 when no turn at all is affordable, which means FLY STRAIGHT AND ACCELERATE. A script
+// that treats 0 as "no limit" has inverted the whole point.
+//
+// `min_speed_mps` is the speed the airframe stops flying at, with margin, and it is the CALLER's
+// because nothing on this seam knows the aeroplane: the default is sized for the builtin trainer
+// (Vs 54 m/s + ~20%), exactly as elevator_for_altitude_hold's AoA bound is (#1186).
+static int guidanceBankLimitForSpeed(lua_State* L) {
+    const float speed = static_cast<float>(luaL_checknumber(L, 1));
+    const float maxBank = static_cast<float>(luaL_checknumber(L, 2));
+    const float minSpeed =
+        static_cast<float>(luaL_optnumber(L, 3, static_cast<double>(fl::ai::kDefaultMinFlyingSpeedMps)));
+    lua_pushnumber(L, static_cast<double>(fl::ai::bankLimitForSpeed(speed, maxBank, minSpeed)));
+    return 1;
+}
+
 // sideslip(quat, vel) — the angle between where the aircraft points and where it is going.
 static int guidanceSideslip(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE); // quat
@@ -1034,6 +1056,7 @@ static void registerGuidanceModule(lua_State* L, LuaController::Impl* impl) {
         {"pitch_error_from_alt", guidancePitchErrorFromAlt},
         {"bank_to_turn_aileron", guidanceBankToTurnAileron},
         {"turn_aileron", guidanceTurnAileron},
+        {"bank_limit_for_speed", guidanceBankLimitForSpeed},
         {"coordinated_rudder", guidanceCoordinatedRudder},
         {"sideslip", guidanceSideslip},
         {"rudder_to_coordinate", guidanceRudderToCoordinate},
