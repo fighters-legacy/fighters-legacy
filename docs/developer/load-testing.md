@@ -177,6 +177,24 @@ The runner launches an `fl-server` with a load-test config and drives the swarm:
     tools/bot_swarm/run_loadtest.sh build/debug 128 30 weave
     # -> tools/bot_swarm/results/loadtest_128c_weave_<ts>.json
 
+For anything perf-shaped — and for reproducing a CI scale-gate leg — build the **`release-headless`**
+preset instead, which is the recipe `scale-gate.yml` runs:
+
+    cmake --preset release-headless          # Release, Vulkan off, GNS off -> build/release-headless
+    cmake --build --preset release-headless --target fl-server bot_swarm
+    python3 tools/bot_swarm/scale_gate.py --profile pr --build-dir build/release-headless \
+        --baseline tools/bot_swarm/scale-gate-baseline.json
+
+⚠ **Use the preset; do not hand `-DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON` to `--preset release`**
+([#1354](https://github.com/fighters-legacy/fighters-legacy/issues/1354)). That flag has no separate
+`binaryDir`, so it caches into the shared `build/release` tree, and the game client is guarded on
+`if(TARGET platform-sdl3 AND TARGET platform-vulkan)` — from that configure on, the tree has no
+`fighters-legacy` target at all. `cmake --build --preset release` still exits 0, the client binary
+from *before* the reconfigure is still sitting on disk, and everything run out of that tree
+afterwards is testing a stale client. It cost twelve days of "verified" before anyone noticed. The
+configure now emits a `message(WARNING)` when the client is skipped, but a separate tree is the
+actual fix.
+
 Or point `bot_swarm` at an already-running server:
 
     bot_swarm 127.0.0.1 4778 --clients 128 --duration 30 --pattern weave --json out.json
@@ -303,7 +321,7 @@ The runner exposes it (and the worker sweep) via env, so you can sweep entity co
 read the authoritative `server_tick` per-phase budget:
 
     FL_TEST_SPAWN_AI=2000 FL_SIM_WORKER_THREADS=4 FL_SNAPSHOT_BUDGET=1200 \
-        tools/bot_swarm/run_loadtest.sh build/release 64 30 weave -- --assert-min-entities 2000
+        tools/bot_swarm/run_loadtest.sh build/release-headless 64 30 weave -- --assert-min-entities 2000
 
 - `FL_TEST_SPAWN_AI` / `FL_TEST_SPAWN_SPREAD_KM` → the `[world]` load-spawn keys.
 - `FL_SIM_WORKER_THREADS` → `fl-server --sim-worker-threads` (sweep `1 2 4 8`).
@@ -314,7 +332,7 @@ read the authoritative `server_tick` per-phase budget:
 The whole matrix is a driver profile (advisory, **never baselined** — its sweep would corrupt the KB/s
 baseline; pins `transport: gns` since [#773], and deliberately carries **no tick-ms assert**: the
 collapsing single-worker cells are the characterisation, not a regression):
-`python3 tools/bot_swarm/scale_gate.py --profile entity-scale --build-dir build/release`,
+`python3 tools/bot_swarm/scale_gate.py --profile entity-scale --build-dir build/release-headless`,
 or the reference-env sweep `ENTITY_COUNTS="0 2000 5000" SIM_WORKERS="1 4 8" … run-container.sh`. The
 `spatial_cell_size_km` knob (`0` = auto from draw distance) tunes the index cell size — a cell much
 smaller than the draw distance explodes the `queryRadius` cell count. What to watch in `server_tick`:
@@ -339,7 +357,7 @@ leaves the AI phase and spawn/reap churn unstressed. Two additive knobs fix that
 
 The `entity-churn` driver profile runs the representative combination over the
 `entity_spawn_counts × sim_worker_threads` sweep (advisory, never baselined):
-`python3 tools/bot_swarm/scale_gate.py --profile entity-churn --build-dir build/release`. Compare its
+`python3 tools/bot_swarm/scale_gate.py --profile entity-churn --build-dir build/release-headless`. Compare its
 `ai_ms` / `collision_ms` / `maintenance_ms` against the same points in the plain `entity-scale`
 matrix. Indicative debug-build deltas at 2000 entities / 1 worker (mix + 120/s churn vs. all-loiter):
 `ai_ms` +12%, `maintenance_ms` +17%, `serialize_ms` +13% (the ~360 extra churned entities are
@@ -514,8 +532,8 @@ store-dependent, so its KB/s never touches the committed bandwidth baseline. Ref
 
 `--transport gns` points both ends at GNS:
 
-    FL_LOADTEST_TRANSPORT=gns ./tools/bot_swarm/run_loadtest.sh build/release 128 60 weave
-    python3 tools/bot_swarm/scale_gate.py --profile reference --build-dir build/release --strict
+    FL_LOADTEST_TRANSPORT=gns ./tools/bot_swarm/run_loadtest.sh build/release-headless 128 60 weave
+    python3 tools/bot_swarm/scale_gate.py --profile reference --build-dir build/release-headless --strict
 
 It requires an `FL_ENABLE_GNS=ON` build (the default). **A GNS run can never silently degrade into an
 enet6 run** — that would be a gate that lies, which is worse than no gate — so three independent
@@ -733,9 +751,9 @@ byte metrics are baselined — CPU-timing numbers are too noisy on shared runner
 regression beyond `kbs_baseline_tolerance_pct` (10%). Regenerate after an intentional bandwidth
 change (e.g. Epic B budgeting) with:
 
-    python3 tools/bot_swarm/scale_gate.py --profile pr             --build-dir build/release --update-baseline
-    python3 tools/bot_swarm/scale_gate.py --profile reference      --build-dir build/release --update-baseline
-    python3 tools/bot_swarm/scale_gate.py --profile reference-enet --build-dir build/release --update-baseline
+    python3 tools/bot_swarm/scale_gate.py --profile pr             --build-dir build/release-headless --update-baseline
+    python3 tools/bot_swarm/scale_gate.py --profile reference      --build-dir build/release-headless --update-baseline
+    python3 tools/bot_swarm/scale_gate.py --profile reference-enet --build-dir build/release-headless --update-baseline
 
 The payload KB/s baseline is machine-independent, so it can be regenerated from any box (a failed run
 aborts the update rather than committing a partial baseline). That independence is measured, not

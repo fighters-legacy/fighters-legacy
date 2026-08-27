@@ -54,19 +54,24 @@ jobs:
 
       # Vulkan disabled: fl-server + bot_swarm are headless and don't need the renderer/glslang.
       # Matches tools/bot_swarm/reference-env/run-benchmark.sh — a known-good Release config.
+      #
+      # `release-headless`, NOT `release -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON` (#1354): the flag
+      # form has no separate binaryDir, so running this recipe locally — which is exactly what
+      # reproducing a scale-gate leg means — caches Vulkan-off into build/release and silently
+      # removes the `fighters-legacy` client target from the shared tree. GNS off on the PR tier:
+      # bot_swarm defaults to enet6 (the regression instrument) and an enet6-only build keeps this
+      # leg fast (no protobuf/OpenSSL dep). The GNS-vs-GNS profile (#649) runs on the reference
+      # runner, where 128 clients are meaningful — see the `gns` leg.
       - name: Configure (Release, headless)
-        # GNS off on the PR tier: bot_swarm defaults to enet6 (the regression instrument) and an
-        # enet6-only build keeps this leg fast (no protobuf/OpenSSL dep). The GNS-vs-GNS profile
-        # (#649) runs on the reference runner, where 128 clients are meaningful — see the `gns` leg.
-        run: cmake --preset release -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON -DFL_ENABLE_GNS=OFF
+        run: cmake --preset release-headless
 
       - name: Build fl-server + bot_swarm
-        run: cmake --build --preset release --target fl-server bot_swarm
+        run: cmake --build --preset release-headless --target fl-server bot_swarm
 
       - name: Run scale gate (pr profile)
         run: |
           python3 tools/bot_swarm/scale_gate.py \
-            --profile pr --build-dir build/release \
+            --profile pr --build-dir build/release-headless \
             --baseline tools/bot_swarm/scale-gate-baseline.json
 
       - name: Upload reports
@@ -179,28 +184,31 @@ jobs:
         # fail the find with every package correctly installed — force-disabling GNS on the one
         # runner whose whole job is measuring it. This binary is a measurement binary that never
         # leaves the runner; the static preference exists for artefacts that ship (#905).
+        #
+        # `release-headless-gns` carries both, in its own binaryDir (#1354) — the reference runner
+        # is a VM on a dev box, and a shared build/release there loses its game client to the first
+        # Vulkan-off configure exactly as a laptop's does.
         run: |
-          cmake --preset release -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON -DFL_ENABLE_GNS=ON \
-                -DFL_ALLOW_SHARED_PROTOBUF=ON
+          cmake --preset release-headless-gns
           # KEY GUARD (same trap as #653): cmake/dependencies.cmake *silently* force-disables GNS
           # when OpenSSL/protobuf are missing, so a misprovisioned runner would build enet6-only and
           # every GNS leg would happily measure enet6 and pass. Fail the leg instead. (bot_swarm
           # also refuses --transport gns in an enet6-only build, and scale_gate.py cross-checks the
           # report's `transport` key — three independent ways this cannot pass silently.)
-          if ! grep -qx 'FL_ENABLE_GNS:BOOL=ON' build/release/CMakeCache.txt; then
+          if ! grep -qx 'FL_ENABLE_GNS:BOOL=ON' build/release-headless-gns/CMakeCache.txt; then
             echo "::error::FL_ENABLE_GNS was force-disabled during configure — the runner is missing"\
                  "OpenSSL/protobuf dev packages (see tools/bot_swarm/reference-env/vm-provision.sh)."
             exit 1
           fi
 
       - name: Build fl-server + bot_swarm
-        run: cmake --build --preset release --target fl-server bot_swarm
+        run: cmake --build --preset release-headless-gns --target fl-server bot_swarm
 
       - name: Run scale gate (strict)
         run: |
           python3 tools/bot_swarm/scale_gate.py \
             --profile "${{ matrix.leg.profile }}" \
-            --build-dir build/release \
+            --build-dir build/release-headless-gns \
             --baseline tools/bot_swarm/scale-gate-baseline.json \
             --strict
 

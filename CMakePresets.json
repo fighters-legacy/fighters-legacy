@@ -7,7 +7,9 @@
       "hidden": true,
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/${presetName}",
+      "description": "CMAKE_DISABLE_FIND_PACKAGE_Vulkan is pinned OFF here on purpose (#1354): a preset cacheVariable OVERWRITES an existing cache, but nothing a preset omits is ever removed from one. Without the explicit OFF, a tree that once saw -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON keeps it through every later `cmake --preset ...` and quietly has no game client. release-headless sets it back ON for itself.",
       "cacheVariables": {
+        "CMAKE_DISABLE_FIND_PACKAGE_Vulkan": "OFF",
         "CMAKE_CXX_STANDARD": "20",
         "CMAKE_CXX_STANDARD_REQUIRED": "ON",
         "CMAKE_CXX_EXTENSIONS": "OFF",
@@ -49,6 +51,26 @@
       "cacheVariables": {
         "CMAKE_C_COMPILER": "cl",
         "CMAKE_CXX_COMPILER": "cl"
+      }
+    },
+    {
+      "name": "release-headless",
+      "displayName": "Release (headless: no Vulkan, no GNS)",
+      "inherits": "release",
+      "description": "fl-server + bot_swarm without the renderer. Its OWN binaryDir on purpose (#1354): configuring build/release with Vulkan off deletes the `fighters-legacy` client target from that tree, and a later `cmake --build --preset release` then succeeds while leaving whatever client binary happened to be lying there — every verification after that runs a stale client.",
+      "cacheVariables": {
+        "CMAKE_DISABLE_FIND_PACKAGE_Vulkan": "ON",
+        "FL_ENABLE_GNS": "OFF"
+      }
+    },
+    {
+      "name": "release-headless-gns",
+      "displayName": "Release (headless + GameNetworkingSockets)",
+      "inherits": "release-headless",
+      "description": "The reference runner's scale-gate build (#773/#1136). Separate from release-headless so the enet6 and GNS legs cannot flip one cache back and forth between runs.",
+      "cacheVariables": {
+        "FL_ENABLE_GNS": "ON",
+        "FL_ALLOW_SHARED_PROTOBUF": "ON"
       }
     },
     {
@@ -99,6 +121,8 @@
   "buildPresets": [
     { "name": "debug",        "configurePreset": "debug"        },
     { "name": "release",      "configurePreset": "release"      },
+    { "name": "release-headless",     "configurePreset": "release-headless"     },
+    { "name": "release-headless-gns", "configurePreset": "release-headless-gns" },
     { "name": "debug-msvc",   "configurePreset": "debug-msvc"   },
     { "name": "release-msvc", "configurePreset": "release-msvc" },
     { "name": "coverage",     "configurePreset": "coverage"     },

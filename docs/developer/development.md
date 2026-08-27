@@ -195,13 +195,17 @@ ctest --preset debug-msvc --output-on-failure     # Windows
 |---|---|---|
 | `debug` | Linux / macOS | Development (Werror ON) |
 | `release` | Linux / macOS | Packaging |
+| `release-headless` | Linux / macOS | Headless `fl-server` + `bot_swarm` (no Vulkan, no GNS) — the scale gate |
+| `release-headless-gns` | Linux / macOS | Same, with GameNetworkingSockets — the reference runner |
 | `debug-msvc` | Windows | Development (Werror ON) |
 | `release-msvc` | Windows | Packaging |
 | `coverage` | Linux / macOS | Coverage reporting (Werror OFF) |
 | `asan` | Linux / macOS | AddressSanitizer + UBSan |
 | `tsan` | Linux / macOS | ThreadSanitizer (data races) |
 
-CI uses `debug` (Linux/macOS) and `debug-msvc` (Windows). The `coverage`, `asan`, and `tsan` presets have their own dedicated CI jobs.
+CI uses `debug` (Linux/macOS) and `debug-msvc` (Windows). The `coverage`, `asan`, and `tsan` presets have their own dedicated CI jobs, and the scale gate uses `release-headless` / `release-headless-gns`.
+
+⚠ **The two headless presets exist so that turning Vulkan off gets its own `binaryDir`** (#1354). Passing `-DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON` to `--preset release` instead caches it into the shared `build/release` tree, and since the game client is guarded on `if(TARGET platform-sdl3 AND TARGET platform-vulkan)`, that tree then has **no `fighters-legacy` target** — while `cmake --build --preset release` keeps exiting 0 and the pre-reconfigure client binary keeps sitting there being run. A configure that skips the client now says so with a `message(WARNING)`.
 
 ### Sanitizers: ASan and TSan catch different bugs
 
@@ -620,8 +624,8 @@ build job.
 | `docs-drift.yml` | PR | Runs `tools/docs_drift.py`, which diffs documented surfaces against the code **both ways**. `input-keys` additionally reads the **Key** column of every user-guide key table and resolves it against `applyDefaults()`, so a table must carry a `Binding` column naming the `InputAction` — see [Controls](../user-guide/controls.md). |
 | `fuzz-deep.yml` | weekly | 30 min per harness; auto-files a `fuzzing`-labelled findings issue. |
 
-**Scale gate** (#520) is the 128-client perf/soak gate. The Linux `pr-gate` job (Release `fl-server`
-+ `bot_swarm`, Vulkan disabled via `-DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON`) hard-fails on bandwidth
+**Scale gate** (#520) is the 128-client perf/soak gate. The Linux `pr-gate` job (the
+`release-headless` preset: Release `fl-server` + `bot_swarm`, no Vulkan, no GNS) hard-fails on bandwidth
 (≤ 150 KB/s/client), admission, and a `downstream_kbs_per_client` baseline regression on every PR —
 tick-Hz is a collapse tripwire and tick-ms p99 is advisory, because shared runners cannot be trusted
 for latency. A `windows-smoke` job runs `run_loadtest.ps1` (8 clients) to keep the launcher from
