@@ -100,6 +100,12 @@ fl_add_test(test_ai_orbit
     LIBS engine-flight engine-ai engine-entity engine-spatial engine-sensor
     INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
+# The terrain floor (#1352): a hard deck expressed in MSL protects nothing over terrain, and the
+# C++ controllers had no deck at all. Closed-loop, because the failure is a trajectory.
+fl_add_test(test_ai_terrain_floor
+    LIBS engine-flight engine-ai engine-entity engine-spatial engine-sensor
+    INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
+
 # Client-side target designation (#696): pure snapshot cycling / filtering / best-in-cone.
 add_executable(test_target_designation test_target_designation.cpp)
 target_link_libraries(test_target_designation PRIVATE Catch2::Catch2WithMain engine-render engine-entity game-client)

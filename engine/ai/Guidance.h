@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
-#include "flight/AeroForces.h" // ControlInput, for the shared steering tail
-#include "flight/LocalFrame.h" // enuBasis / radialUp / pitchOf / localAltitude (+ kEarthRadiusM via Geodetic.h)
-#include "math/Angles.h"       // wrapPi
-#include "math/Units.h"        // kG0
+#include "entity/AiTickContext.h" // the per-tick world view — the terrain floor reads its ground reference
+#include "flight/AeroForces.h"    // ControlInput, for the shared steering tail
+#include "flight/LocalFrame.h"    // enuBasis / radialUp / pitchOf / localAltitude (+ kEarthRadiusM via Geodetic.h)
+#include "math/Angles.h"          // wrapPi
+#include "math/Units.h"           // kG0
 
 #include <algorithm>
 #include <cmath>
@@ -12,6 +13,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <numbers>
+#include <optional>
 
 namespace fl::ai {
 
@@ -334,6 +336,85 @@ inline void steerTowardPoint(ControlInput& ctrl, const float quat[4], const doub
     ctrl.aileron = bankToTurnAileron(quat, ownPos, headErr, R, maxBankRad);
     ctrl.rudder = rudderToCoordinate(sideslipOf(quat, ownVel));
     ctrl.elevator = elevatorFromPitchError(pitchErr);
+}
+
+// ---------------------------------------------------------------------------
+// The terrain floor (#1352)
+// ---------------------------------------------------------------------------
+
+// Hard-deck heights above TERRAIN, by role. These are floors, not altitude policy: a mission that
+// commands a 300 m orbit still gets a 300 m orbit. What it no longer gets is a controller that keeps
+// flying its geometry while the ground comes up to meet it.
+//
+// Two numbers because the two families need different room. A MANOEUVRING controller arrives at the
+// deck nose-down and fast, and the pull costs height before it buys any: measured in #1339, a
+// trainer recovering from a 25 deg dive at 175 m/s with the altitude cascade doing the work hit the
+// terrain at ~100 m AGL, and the firm pull below stopped it ~250 m higher. 300 m is that recovery
+// plus margin. A NAVIGATION controller is already holding a commanded altitude and only needs a
+// genuine "you are about to hit the ground" backstop — set low so a deliberately low-level route or
+// a 100 m patrol orbit is still flown, not fought.
+inline constexpr float kCombatDeckAglM = 300.f; // pursuit, guns, evade, break, the yo-yos, Immelmann, Split-S
+inline constexpr float kNavDeckAglM = 60.f;     // waypoint, swarm, formation, the loiters
+
+// Aileron per rad of bank error while recovering. Firm — the roll is the part that has to finish
+// before the pull can start.
+inline constexpr float kDeckRollGain = 2.f;
+
+// Speed-scaled recovery pull, as v^2 * n: 5300 holds the pull near 6 g at sea level on the builtin
+// trainer, whose ~0.8 rad of trimmed alpha per rad of elevator makes a FIXED large pull both over
+// the +-7 g structural limit above ~140 m/s and past the 15 deg stall below it. The clamps keep a
+// slow recovery honest at one end and under the stall at the other. Shared verbatim with the
+// builtin Lua scripts' pull_out (engine/script/BuiltinAiScripts.h) — one law, two seams.
+inline constexpr float kDeckPullVsq = 5300.f;
+inline constexpr float kDeckPullMin = 0.10f;
+inline constexpr float kDeckPullMax = 0.30f;
+
+// Height above terrain [m], or nullopt when this tick evaluated no ground reference.
+//
+// The null is normative and must NOT be read as sea level: over the shipped sandbox's ~545 m terrain
+// that mistake is 545 m of imaginary air, which is the whole of #1352.
+[[nodiscard]] inline std::optional<float> aglOf(const double ownPos[3], const fl::AiTickContext& ctx,
+                                                double R = fl::kEarthRadiusM) {
+    if (!ctx.groundElevM)
+        return std::nullopt;
+    const glm::dvec3 pos(ownPos[0], ownPos[1], ownPos[2]);
+    return static_cast<float>(fl::localAltitude(pos, R) - static_cast<double>(*ctx.groundElevM));
+}
+
+// TERRAIN DOES NOT NEGOTIATE. Fills `ctrl` with a recovery and returns true when the entity is below
+// its hard deck; returns false and leaves `ctrl` alone otherwise.
+//
+// Call it FIRST, before the controller's own geometry, and return immediately when it fires — the
+// point is that it outranks the manoeuvre. That includes the manoeuvres whose whole shape is
+// nose-down (Split-S, the low yo-yo): abandoning one at the deck is the correct outcome, and the
+// state machine driving it re-enters on the next tick.
+//
+// Recover in order: WINGS, then pull (#1141). A firm pull while rolled past vertical is a split-S
+// into the terrain, so the lift vector is levelled first and the pull is gated on it pointing up.
+// Full throttle throughout — but note that thrust is not what gets a mushing aircraft off the back
+// of the drag curve, which is the separate defect in #1353.
+//
+// A null ground reference disables the floor rather than inventing one. That keeps a
+// default-constructed AiTickContext behaving exactly as it did before this existed, which is the
+// contract every other field in that struct already has.
+[[nodiscard]] inline bool terrainFloorRecovery(ControlInput& ctrl, const float quat[4], const double ownPos[3],
+                                               const float velWorld[3], const fl::AiTickContext& ctx,
+                                               float floorAglM = kCombatDeckAglM, double R = fl::kEarthRadiusM) {
+    const std::optional<float> agl = aglOf(ownPos, ctx, R);
+    if (!agl || *agl >= floorAglM)
+        return false;
+
+    const glm::dvec3 pos(ownPos[0], ownPos[1], ownPos[2]);
+    const float bank = fl::bankOf(quat, pos, R);
+    const float spdSq = velWorld[0] * velWorld[0] + velWorld[1] * velWorld[1] + velWorld[2] * velWorld[2];
+
+    ctrl = ControlInput{};
+    ctrl.aileron = std::clamp(-kDeckRollGain * bank, -1.f, 1.f);
+    ctrl.rudder = rudderToCoordinate(sideslipOf(quat, velWorld));
+    ctrl.elevator =
+        std::cos(bank) > 0.5f ? std::clamp(kDeckPullVsq / std::max(spdSq, 1.f), kDeckPullMin, kDeckPullMax) : 0.f;
+    ctrl.throttle = 1.f;
+    return true;
 }
 
 // Yaw coordination: rudder proportional to aileron.

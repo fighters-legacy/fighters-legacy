@@ -996,10 +996,23 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                                   ((tickIndex + it.idx) % govAiStride) != 0u) {
                                   m_stepInputs[i] = it.ce->lastInput;
                               } else {
+                                  // Terrain under THIS entity (#1352). Per-entity, so it is resolved
+                                  // here rather than hoisted with the wind: it is the ground reference
+                                  // a controller's hard deck needs, and the same query the projectile
+                                  // pass flies stores against, so the two cannot disagree about where
+                                  // the ground is. Unset query = the scalar floor, exactly as
+                                  // stepFlightSim resolves it. Only on ticks this entity actually
+                                  // samples — a decimated tick reuses its cached input and pays
+                                  // nothing.
+                                  const glm::dvec3 ownPos{it.state->transform.pos[0], it.state->transform.pos[1],
+                                                          it.state->transform.pos[2]};
+                                  const float groundElev = m_queries.groundElevation
+                                                               ? m_queries.groundElevation(ownPos)
+                                                               : m_groundElevation.load(std::memory_order_relaxed);
                                   const AiTickContext aiCtx{&m_spatialIndex, m_sensorSystem.contactsFor(it.idx),
                                                             &sensingEnv,     m_sensorSystem.threatsFor(it.idx),
                                                             difficulty,      m_factionRegistry,
-                                                            windMps};
+                                                            windMps,         &groundElev};
                                   m_stepInputs[i] = it.ce->controller->sample(*it.state, tickIndex, simDt, aiCtx);
                                   it.ce->lastInput = m_stepInputs[i];
                                   it.ce->lastInputValid = true;

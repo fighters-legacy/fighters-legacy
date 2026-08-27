@@ -13,8 +13,8 @@ class ImmelmannController : public fl::IEntityController {
   public:
     explicit ImmelmannController(float pullDurationS = 4.0f, float rollDurationS = 1.5f);
 
-    fl::ControlInput sample(const fl::EntityState& /*state*/, uint64_t /*tick*/, double dt,
-                            const fl::AiTickContext& /*ctx*/ = {}) override;
+    fl::ControlInput sample(const fl::EntityState& state, uint64_t /*tick*/, double dt,
+                            const fl::AiTickContext& ctx = {}) override;
 
   private:
     enum class Phase { Pull, Roll, Done };

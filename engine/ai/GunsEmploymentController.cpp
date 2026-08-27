@@ -21,6 +21,13 @@ fl::ControlInput GunsEmploymentController::sample(const fl::EntityState& state, 
                                                   const fl::AiTickContext& ctx) {
     fl::ControlInput ctrl{};
 
+    // Terrain does not negotiate (#1352). The deck is checked FIRST and outranks whatever
+    // geometry this controller was about to fly; below it the only job is to still be
+    // airborne next tick.
+    if (terrainFloorRecovery(ctrl, state.transform.quat, state.transform.pos, state.transform.vel, ctx, kCombatDeckAglM,
+                             m_planetRadiusM))
+        return ctrl;
+
     // Honest targeting (#690): the lead is computed from the CONTACT's last-known state.
     const TargetView tv = resolveTarget(m_entityManager, ctx, m_targetId);
     if (!tv.valid)

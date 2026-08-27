@@ -14,8 +14,8 @@ class SplitSController : public fl::IEntityController {
   public:
     explicit SplitSController(float rollDurationS = 1.5f, float pullDurationS = 4.0f);
 
-    fl::ControlInput sample(const fl::EntityState& /*state*/, uint64_t /*tick*/, double dt,
-                            const fl::AiTickContext& /*ctx*/ = {}) override;
+    fl::ControlInput sample(const fl::EntityState& state, uint64_t /*tick*/, double dt,
+                            const fl::AiTickContext& ctx = {}) override;
 
   private:
     enum class Phase { Roll, Pull, Done };
