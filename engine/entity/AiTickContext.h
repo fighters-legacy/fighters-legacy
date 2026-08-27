@@ -75,6 +75,18 @@ struct AiTickContext {
     // difference between a kill and a near miss on a 150 hp emplacement. Everything else an aircraft
     // does about wind, it does by flying; this is the one case that has to be COMPUTED.
     const float* windMps{nullptr};
+
+    // TERRAIN ELEVATION (m MSL) DIRECTLY BENEATH THIS ENTITY, this tick (#1352). Null = not
+    // evaluated, which every consumer must read as "no ground reference at all" — never as
+    // "sea level", which over the shipped sandbox's ~545 m terrain is 545 m of imaginary air.
+    //
+    // This is a radar altimeter, not a wallhack: an aircraft knows its own height above the ground.
+    // It exists because a hard deck expressed as an MSL altitude protects nothing — over terrain
+    // higher than the deck the "we are too low" test is only true BELOW GROUND, so the recovery is
+    // not late, it is unreachable. WorldBroadcaster fills it from the same
+    // WorldQueries::groundElevation the projectile pass has always used, so a controller and a bomb
+    // cannot disagree about where the ground is.
+    const float* groundElevM{nullptr};
 };
 
 } // namespace fl

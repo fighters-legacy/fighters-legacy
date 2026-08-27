@@ -56,8 +56,15 @@ glm::dvec3 FormationController::slotPoint(const fl::EntityState& lead) const noe
 }
 
 fl::ControlInput FormationController::sample(const fl::EntityState& state, uint64_t /*tick*/, double /*dt*/,
-                                             const fl::AiTickContext& /*ctx*/) {
+                                             const fl::AiTickContext& ctx) {
     fl::ControlInput ctrl{};
+
+    // Terrain does not negotiate (#1352). The deck is checked FIRST and outranks whatever
+    // geometry this controller was about to fly; below it the only job is to still be
+    // airborne next tick.
+    if (terrainFloorRecovery(ctrl, state.transform.quat, state.transform.pos, state.transform.vel, ctx, kNavDeckAglM,
+                             m_planetRadiusM))
+        return ctrl;
 
     const fl::EntityState* lead = m_entityManager.get(m_leadId);
     if (!lead || lead->dead) {

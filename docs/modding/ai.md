@@ -300,6 +300,34 @@ local agl_ish = guidance.altitude(state.pos) - FIELD_ELEV_M
 if agl_ish < 15 and speed < 40 then  -- on the deck, stopped: landed
 ```
 
+### `guidance.ground_elevation() → number` | `nil`
+
+**Terrain elevation (metres MSL) under the ownship, this tick** — the radar altimeter. Height above
+terrain is `guidance.altitude(state.pos) - guidance.ground_elevation()`.
+
+It takes no arguments on purpose: it answers only *how high is the ground under me*, which is what
+an aircraft's own instruments tell it. It is not a terrain probe for arbitrary points.
+
+`nil` means this tick evaluated **no ground reference** (a controller unit test, a hand-built
+context). Treat that as "no reference" and fall back to an MSL rule — **never** as sea level.
+
+!!! danger "A hard deck written in MSL protects nothing"
+    This is the whole of [#1352](https://github.com/fighters-legacy/fighters-legacy/issues/1352). The
+    builtin scripts' deck used to be `guidance.altitude(state.pos) < 600`. Over the shipped sandbox's
+    ~545 m terrain that is **55 m** of protection, and over any terrain above 600 m MSL the condition
+    is only true **below ground** — so the recovery is not late, it is unreachable. Measured before
+    the fix, the sandbox CAP fought between 547 and 616 m MSL with the deck flickering on and off,
+    scraped the terrain (hp 100 → 77), and ejected at −0 m AGL.
+
+    Write the deck as a height above terrain, with an MSL fallback for the `nil` case:
+
+    ```lua
+    local FLOOR_AGL, FLOOR_MSL = 450, 600
+    local ground = guidance.ground_elevation()
+    local deck   = ground and (ground + FLOOR_AGL) or FLOOR_MSL
+    if guidance.altitude(state.pos) < deck then return recover(state) end
+    ```
+
 ### `guidance.geodetic(pos[, radius_m]) → {lat, lon, alt}`
 
 Where on the planet a world position is: `lat` and `lon` in **degrees**, `alt` in metres MSL. Use it
@@ -314,9 +342,10 @@ prediction and the bomb cannot disagree by more than integration phase. `nil` if
 ground.
 
 `ground_alt_m` is the MSL elevation the store falls to. For a surface target, use **its own
-altitude**: a thing on the ground tells you the ground height under it, and there is no terrain query
-on this seam. `wind` defaults to the world's current wind — pass one only to model a different air
-mass.
+altitude**: a thing on the ground tells you the ground height under it, and that is the right
+reference here because the store is aimed *at* that target. `guidance.ground_elevation()` answers the
+different question of how high the ground is under the *aircraft*, which is what a hard deck needs.
+`wind` defaults to the world's current wind — pass one only to model a different air mass.
 
 !!! danger "Pointing the aeroplane is not aiming"
     A store leaves on the **flight path** (a rocket) or straight **down off the rack** (a bomb), and

@@ -17,6 +17,13 @@ fl::ControlInput HighYoYoController::sample(const fl::EntityState& state, uint64
                                             const fl::AiTickContext& ctx) {
     fl::ControlInput ctrl{};
 
+    // Terrain does not negotiate (#1352). The deck is checked FIRST and outranks whatever
+    // geometry this controller was about to fly; below it the only job is to still be
+    // airborne next tick.
+    if (terrainFloorRecovery(ctrl, state.transform.quat, state.transform.pos, state.transform.vel, ctx, kCombatDeckAglM,
+                             m_planetRadiusM))
+        return ctrl;
+
     // Honest targeting (#690): the target must be a CONTACT when sensing ran — a controller does
     // not chase what its entity cannot see. A coasting contact returns LAST-KNOWN state (steering at
     // a memory is what a coast is for); a dropped one is treated exactly like a dead target.

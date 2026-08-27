@@ -370,6 +370,31 @@ static int guidanceAltitude(lua_State* L) {
     return 1;
 }
 
+// ground_elevation() → terrain elevation MSL [m] under the OWNSHIP this tick, or nil
+//
+// The radar altimeter the Lua seam did not have (#1352). Every altitude a script could reach was
+// MSL, so a hard deck written as `altitude < 600` has whatever margin the terrain leaves it -- 55 m
+// over the shipped sandbox's ~545 m site, and NONE at all above 600 m, where the test is only true
+// below ground and the recovery is unreachable rather than late. Height above terrain is
+// `guidance.altitude(state.pos) - guidance.ground_elevation()`.
+//
+// Not a wallhack, and deliberately not a general terrain probe: it answers only "how high is the
+// ground under ME", which is what an aircraft's own instruments tell it. Sampling terrain at a
+// distant point is a different question and would need a different justification.
+//
+// nil when this tick evaluated no ground reference (a controller unit test, a context built by
+// hand). A script must treat nil as "no reference" and fall back to its MSL behaviour -- reading it
+// as sea level is the same defect one layer up.
+static int guidanceGroundElevation(lua_State* L) {
+    const LuaController::Impl* impl = static_cast<LuaController::Impl*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (!impl || !impl->currentCtx || !impl->currentCtx->groundElevM) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_pushnumber(L, static_cast<double>(*impl->currentCtx->groundElevM));
+    return 1;
+}
+
 // geodetic(pos, [radius_m]) → {lat, lon, alt} — latitude/longitude in DEGREES, altitude in metres.
 // The other half of the same gap: content that wants to know where on the planet it is (which
 // theatre, which side of a border) rather than just how high.
@@ -402,7 +427,9 @@ static int guidanceGeodetic(lua_State* L) {
 // an air-to-ground script that works and one that flies a plausible-looking pass and misses.
 //
 // `ground_alt_m` is the elevation the store falls to — for a surface target, its OWN altitude, which
-// is the only ground height a script can know without a terrain query. `wind` defaults to still air:
+// is the right reference for a bombing solution because the store is aimed AT that target.
+// `guidance.ground_elevation()` (#1352) answers the different question of how high the ground is
+// under the AIRCRAFT, which is what a hard deck needs. `wind` defaults to still air:
 // a store decays toward the AIR mass, so a script that knows its mission's wind should pass it.
 static int guidanceCcip(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE); // the entity state: pos, vel and (for the rack ejection) quat
@@ -999,7 +1026,7 @@ static void registerWorldModule(lua_State* L, LuaController::Impl* impl) {
 
 // The whole guidance table shares ONE upvalue: the controller's Impl. Most of these functions are
 // pure maths on their arguments and ignore it; guidance.ccip reads this tick's world wind through it
-// (#1339), which is the difference between a bombing solution and a guess. Registering that one
+// (#1339) and guidance.ground_elevation reads this tick's terrain height (#1352). Registering that one
 // function separately would hide it from the docs-drift check, which reads the luaL_Reg table.
 static void registerGuidanceModule(lua_State* L, LuaController::Impl* impl) {
     static const luaL_Reg kFuncs[] = {
@@ -1015,6 +1042,7 @@ static void registerGuidanceModule(lua_State* L, LuaController::Impl* impl) {
         {"body_forward", guidanceBodyForward},
         {"pitch_of", guidancePitchOf},
         {"altitude", guidanceAltitude},
+        {"ground_elevation", guidanceGroundElevation},
         {"geodetic", guidanceGeodetic},
         {"ccip", guidanceCcip},
         {nullptr, nullptr},

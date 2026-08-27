@@ -37,7 +37,15 @@ inline constexpr std::string_view kBuiltinAiPrelude = R"lua(
 -- 15 deg and real +-7 g structural limits that over-G billing enforces, so a script must respect
 -- both itself. It also has no afterburner deck (ctrl.afterburner is a no-op on it). Uses no
 -- require(), so it needs no pack root.
-local FLOOR      = 600         -- hard deck, MSL: below this, recovery outranks everything
+-- HARD DECK. A height above TERRAIN (#1352), not an MSL altitude: the ground is not at sea level,
+-- and this test used to be `altitude < 600` against a site whose terrain sits at ~545 m -- 55 m of
+-- protection, flickering on and off as the aircraft crossed 600 m, and over any terrain higher than
+-- 600 m the condition is only true BELOW GROUND, so the recovery was not late, it was unreachable.
+-- Measured on demo-sam-strike before the fix: the CAP fought between 547 and 616 m MSL, scraped the
+-- terrain (hp 100 -> 77) and ejected at -0 m AGL.
+local FLOOR_AGL  = 450         -- below this height above the ground, recovery outranks everything
+local FLOOR_MSL  = 600         -- fallback deck when the tick evaluated NO ground reference (nil is
+                               -- "no reference", never "sea level" -- reading it as 0 is the defect)
 local STALE_S    = 8.0         -- a contact older than this is not worth steering at
 
 -- Employment stations match builtin:debug-entity's hardpoints.
@@ -115,6 +123,11 @@ end
 
 -- own_alt: MSL altitude of the ownship, computed once per tick in compute_control. talt is MSL too.
 local own_alt = 0
+-- own_ground: terrain elevation MSL under the ownship this tick, or nil when the caller evaluated
+-- none (a unit test, a hand-built context). own_agl and deck_msl follow from it.
+local own_ground = nil
+local own_agl = nil
+local deck_msl = FLOOR_MSL
 
 -- Inner-loop pitch damping for the altitude cascade (#1196), differentiated across our own sample
 -- interval exactly like the C++ controllers -- EntityState carries no body rates on either side of
@@ -126,6 +139,11 @@ local own_pitch = 0
 -- One call at the top of every compute_control: the per-tick state both roles need.
 local function begin_tick(state, dt)
   own_alt = guidance.altitude(state.pos)
+  -- The radar altimeter (#1352). nil = no ground reference this tick, and the deck falls back to the
+  -- old MSL altitude rather than to a terrain height of zero.
+  own_ground = guidance.ground_elevation()
+  own_agl = own_ground and (own_alt - own_ground) or nil
+  deck_msl = own_ground and (own_ground + FLOOR_AGL) or FLOOR_MSL
   own_pitch = guidance.pitch_of(state.quat, state.pos)
   pitch_rate = (prev_pitch and dt > 0) and (own_pitch - prev_pitch) / dt or 0
   prev_pitch = own_pitch
@@ -171,7 +189,7 @@ local function pull_out(state, throttle)
 end
 
 local function hard_deck(state)
-  if own_alt >= FLOOR then return nil end
+  if own_alt >= deck_msl then return nil end
   return pull_out(state, 1.0)
 end
 
@@ -251,14 +269,14 @@ function compute_control(state, tick, dt)
       -- Full MIL only -- the trainer has no afterburner deck to gate on closure (#1334).
       local lead = math.min(dist / math.max(vc, 100), 12) * (tgt.age_s < 1 and 1 or 0.4)
       local ax, az = tgt.pos.x + tgt.vel.x * lead, tgt.pos.z + tgt.vel.z * lead
-      return steer(state, ax, az, math.max(guidance.altitude(tgt.pos), FLOOR + 200), 1.0, COMBAT_BANK)
+      return steer(state, ax, az, math.max(guidance.altitude(tgt.pos), deck_msl + 200), 1.0, COMBAT_BANK)
     end
 
     -- ENGAGE: blend pure with lag pursuit so we slide behind rather than overshoot.
     local lag = math.min((ENGAGE_M - dist) / ENGAGE_M, 0.6)
     local ax  = tgt.pos.x - tgt.vel.x * lag * 2.0
     local az  = tgt.pos.z - tgt.vel.z * lag * 2.0
-    local out = steer(state, ax, az, math.max(guidance.altitude(tgt.pos), FLOOR + 200), 1.0, COMBAT_BANK)
+    local out = steer(state, ax, az, math.max(guidance.altitude(tgt.pos), deck_msl + 200), 1.0, COMBAT_BANK)
 
     -- EMPLOY: geometry decides the weapon; the server's fire control has the final say.
     local cosang, rng = boresight(state, tgt.pos)
@@ -285,7 +303,8 @@ inline constexpr std::string_view kBuiltinStrikerBody = R"lua(
 --
 -- Why it exists: builtin:fighter engages whatever hostile its sensors report, including ground
 -- emitters, but its employment geometry is pure air-to-air -- it holds altitude at or above
--- FLOOR + 200 and fires only inside a 5 deg gun cone at 900 m or a 20 deg IR cone inside 2,500 m.
+-- the hard deck + 200 and fires only inside a 5 deg gun cone at 900 m or a 20 deg IR cone inside
+-- 2,500 m.
 -- Against a surface target it can never satisfy either cone before overflight: measured on
 -- demo-sam-strike over 600 s, the site survived indefinitely while every attacker was eventually
 -- lost. At the old UFO's performance the script sometimes lucked into a steep-slant snapshot; at
@@ -396,10 +415,16 @@ function compute_control(state, tick, dt)
     return patrol(state, anchor_cx, anchor_cz, PATROL_ALT, PATROL_R)
   end
 
-  -- A surface target sits ON the ground, so its own altitude IS the local terrain elevation -- the
-  -- only ground reference a script has, there being no terrain query on the Lua seam.
-  local talt = tgt.alt
-  local agl  = own_alt - talt
+  -- Two different heights, and conflating them is how a pass ends in a hill (#1352). tgt_agl is
+  -- height above the TARGET's own elevation -- a thing on the ground tells you the ground height
+  -- UNDER IT -- and it is the right reference for every part of the pass geometry, because the
+  -- release height is a height above the thing being bombed. `clear` is height above whatever is
+  -- closest below us right now: the target's elevation, or the real terrain under the aircraft when
+  -- a ground reference was evaluated (guidance.ground_elevation, #1352). Only the safety decisions
+  -- -- when to stop pulling off, and whether we are high enough to commit -- use `clear`.
+  local talt    = tgt.alt
+  local tgt_agl = own_alt - talt
+  local clear   = own_agl and math.min(tgt_agl, own_agl) or tgt_agl
 
   if phase == "pullup" then
     -- A dive is left with a FIRM pull, not by handing the aeroplane back to the altitude cascade:
@@ -408,7 +433,7 @@ function compute_control(state, tick, dt)
     -- cascade doing the recovery, both strikers flew into the terrain at ~100 m AGL on the first
     -- pass; the same pull the hard-deck recovery uses stops it ~250 m higher. Wings first, then pull
     -- (#1141) -- a firm pull while rolled past vertical is a split-S into the ground.
-    if own_pitch > 0.17 and agl > ABORT_ABOVE_M then phase = "egress" end
+    if own_pitch > 0.17 and clear > ABORT_ABOVE_M then phase = "egress" end
     return pull_out(state, 1.0)
   end
 
@@ -435,9 +460,9 @@ function compute_control(state, tick, dt)
     -- how high you are when you turn in, and a fixed roll-in range gives a 16 deg descent from one
     -- height and a 40 deg one from another. Measured with a fixed 5 km roll-in, the run-in reached
     -- the pull-off altitude while still 2 km out and never entered the firing window at all.
-    local roll_in = clamp((agl - ATTACK_AGL_M) / math.tan(NOMINAL_DIVE) + 2500,
+    local roll_in = clamp((tgt_agl - ATTACK_AGL_M) / math.tan(NOMINAL_DIVE) + 2500,
                          ROLL_IN_MIN_M, ROLL_IN_MAX_M)
-    phase = (dist < roll_in and agl > ABORT_ABOVE_M) and "attack" or "ingress"
+    phase = (dist < roll_in and clear > ABORT_ABOVE_M) and "attack" or "ingress"
   end
 
   if phase == "ingress" then
@@ -454,7 +479,7 @@ function compute_control(state, tick, dt)
   -- ~11 s and travels ~2.1 km, so the release happens at a standoff the airframe can survive and the
   -- solution is exact rather than lucky.
   local out
-  if agl > ATTACK_AGL_M + 100 then
+  if tgt_agl > ATTACK_AGL_M + 100 then
     out = dive_at(state, tgt.x, tgt.z, talt + ATTACK_AGL_M, dist)
   else
     out = steer(state, tgt.x, tgt.z, talt + ATTACK_AGL_M, 1.0, STRIKE_BANK)
@@ -486,9 +511,9 @@ function compute_control(state, tick, dt)
     bombs_gone = true
   end
 
-  -- Terrain-floor discipline: the pull-off is referenced to the TARGET's elevation, not to a fixed
-  -- MSL number, because the site is the only thing on this map whose ground height we know.
-  if bombs_gone or agl < ABORT_ABOVE_M or rng < BOMB_MIN_M then
+  -- Terrain-floor discipline: the pull-off is referenced to the ground, never to a fixed MSL number
+  -- (#1352) -- `clear` is the lower of the target's own elevation and the real terrain under us.
+  if bombs_gone or clear < ABORT_ABOVE_M or rng < BOMB_MIN_M then
     phase = "pullup"
   end
   return out

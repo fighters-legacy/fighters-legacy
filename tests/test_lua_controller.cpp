@@ -1015,6 +1015,54 @@ TEST_CASE("guidance.ccip solves from the aircraft's state, with the world's wind
     CHECK(blown.elevator * 10000.f > impactZ + 10.f);
 }
 
+TEST_CASE("guidance.ground_elevation is the tick's terrain height, or nil (#1352)", "[luacontroller][guidance]") {
+    // The radar altimeter the seam did not have. A script's only altitudes were MSL, so a hard deck
+    // written as `altitude < 600` had whatever margin the terrain left it -- 55 m over the shipped
+    // sandbox's ~545 m site, and none at all above 600 m, where the test is only true below ground.
+    auto c = makeCtrl("function compute_control(s,t,dt)\n"
+                      "  local g = guidance.ground_elevation()\n"
+                      "  if g == nil then return { throttle = -1.0 } end\n"
+                      "  return { throttle = 1.0, elevator = (guidance.altitude(s.pos) - g) / 1000.0 }\n"
+                      "end");
+    REQUIRE(c->isValid());
+
+    // No ground reference evaluated: NIL, and a script must be able to tell that apart from zero.
+    // Reading it as sea level is the same defect one layer up.
+    const auto none = c->sample(makeState(0.0, 600.0, 0.0), 0, 1.0 / 60.0);
+    CHECK(none.throttle == Catch::Approx(-1.0f));
+
+    // With one: the height above THAT, not above the datum.
+    const float ground = 545.f;
+    fl::AiTickContext ctx{};
+    ctx.groundElevM = &ground;
+    const auto over = c->sample(makeState(0.0, 600.0, 0.0), 1, 1.0 / 60.0, ctx);
+    CHECK(over.throttle == Catch::Approx(1.0f));
+    CHECK(over.elevator * 1000.f == Catch::Approx(55.f).margin(1.f));
+}
+
+TEST_CASE("the builtin hard deck follows the terrain (#1352)", "[luacontroller][guidance]") {
+    // builtin:fighter at 600 m MSL: above the old fixed deck exactly, and 55 m over the real ground.
+    // The recovery must fire -- before this issue it did not, and the sandbox CAP flew into the hill.
+    auto c = makeCtrl(std::string(fl::builtinAiScript("builtin:fighter")).c_str());
+    REQUIRE(c->isValid());
+
+    const float ground = 545.f;
+    fl::AiTickContext ctx{};
+    ctx.groundElevM = &ground;
+    const auto low = c->sample(makeState(0.0, 600.0, 0.0), 100, 1.0 / 60.0, ctx);
+    CHECK(low.throttle == Catch::Approx(1.0f)); // pull_out commands full throttle
+    CHECK(low.elevator > 0.f);                  // wings are level, so the pull is unlocked
+
+    // Clear of the same terrain, it goes back to patrolling: the deck is a floor, not a mode.
+    const auto high = c->sample(makeState(0.0, 3000.0, 0.0), 101, 1.0 / 60.0, ctx);
+    CHECK(high.throttle < 1.0f);
+
+    // And with NO ground reference it falls back to the old 600 m MSL rule rather than to a terrain
+    // height of zero -- which over this site would put the deck 545 m underground.
+    const auto blind = c->sample(makeState(0.0, 590.0, 0.0), 102, 1.0 / 60.0);
+    CHECK(blind.throttle == Catch::Approx(1.0f));
+}
+
 TEST_CASE("builtin:striker ignores an air contact (#1339)", "[luacontroller][strike]") {
     // A dive attack on an aeroplane is a collision course. The striker has no air-to-air employment
     // by design — an escort is the answer to a CAP — so an air-only picture leaves it patrolling.

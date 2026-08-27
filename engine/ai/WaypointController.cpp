@@ -13,8 +13,15 @@ WaypointController::WaypointController(std::vector<glm::dvec3> waypoints, float 
     : m_waypoints(std::move(waypoints)), m_captureRadiusM(captureRadiusM), m_throttle(throttle), m_loop(loop) {}
 
 fl::ControlInput WaypointController::sample(const fl::EntityState& state, uint64_t /*tick*/, double /*dt*/,
-                                            const fl::AiTickContext& /*ctx*/) {
+                                            const fl::AiTickContext& ctx) {
     fl::ControlInput ctrl{};
+
+    // Terrain does not negotiate (#1352). The deck is checked FIRST and outranks whatever
+    // geometry this controller was about to fly; below it the only job is to still be
+    // airborne next tick.
+    if (terrainFloorRecovery(ctrl, state.transform.quat, state.transform.pos, state.transform.vel, ctx, kNavDeckAglM,
+                             m_planetRadiusM))
+        return ctrl;
 
     // Exhausted (or empty list): return neutral.
     if (m_currentIdx >= static_cast<int>(m_waypoints.size()))

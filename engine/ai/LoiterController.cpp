@@ -11,8 +11,16 @@ LoiterController::LoiterController(glm::dvec3 center, float radiusM, float altit
       m_targetSpeedMps(orbitSpeedForRadius(radiusM)), m_dir(dir) {}
 
 fl::ControlInput LoiterController::sample(const fl::EntityState& state, uint64_t /*tick*/, double dt,
-                                          const fl::AiTickContext& /*ctx*/) {
+                                          const fl::AiTickContext& ctx) {
     fl::ControlInput ctrl{};
+
+    // Terrain does not negotiate (#1352). The deck is checked FIRST and outranks whatever
+    // geometry this controller was about to fly; below it the only job is to still be
+    // airborne next tick.
+    if (terrainFloorRecovery(ctrl, state.transform.quat, state.transform.pos, state.transform.vel, ctx, kNavDeckAglM,
+                             m_planetRadiusM))
+        return ctrl;
+
     const OrbitParams orbit{m_center, m_radiusM, m_altitudeM, m_targetSpeedMps, m_throttle, m_dir};
     const float curPitch = fl::pitchOf(
         state.transform.quat, glm::dvec3(state.transform.pos[0], state.transform.pos[1], state.transform.pos[2]),

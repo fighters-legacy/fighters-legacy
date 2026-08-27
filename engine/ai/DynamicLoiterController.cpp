@@ -12,7 +12,15 @@ DynamicLoiterController::DynamicLoiterController(const fl::EntityManager& entity
       m_targetSpeedMps(orbitSpeedForRadius(radiusM)), m_dir(dir) {}
 
 fl::ControlInput DynamicLoiterController::sample(const fl::EntityState& state, uint64_t /*tick*/, double dt,
-                                                 const fl::AiTickContext& /*ctx*/) {
+                                                 const fl::AiTickContext& ctx) {
+    // Terrain does not negotiate (#1352). A nav-role floor: this controller is holding a
+    // commanded altitude, so the deck is set low enough that a deliberately low-level route or
+    // orbit is still flown rather than fought.
+    fl::ControlInput deck{};
+    if (terrainFloorRecovery(deck, state.transform.quat, state.transform.pos, state.transform.vel, ctx, kNavDeckAglM,
+                             m_planetRadiusM))
+        return deck;
+
     const fl::EntityState* target = m_entityManager.get(m_targetId);
     if (!target || target->dead)
         return fl::ControlInput{}; // neutral: nothing to escort (same contract as PursuitController)
