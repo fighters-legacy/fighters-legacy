@@ -128,4 +128,26 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
     if(MSVC)
         target_compile_definitions(fighters-legacy PRIVATE _CRT_SECURE_NO_WARNINGS)
     endif()
+else()
+    # SAY SO (#1354). Skipping the client silently is what made a Vulkan-off reconfigure of an
+    # existing build/release tree invisible: the target simply stopped existing, `cmake --build`
+    # kept exiting 0, and the binary from before the reconfigure sat there being run by every
+    # subsequent verification — twelve days stale, in the case that found this. Configure-time is
+    # the only moment the cause is still on screen.
+    set(_fl_client_missing "")
+    if(NOT TARGET platform-sdl3)
+        list(APPEND _fl_client_missing "SDL3")
+    endif()
+    if(NOT TARGET platform-vulkan)
+        list(APPEND _fl_client_missing "Vulkan")
+    endif()
+    list(JOIN _fl_client_missing ", " _fl_client_missing_str)
+    message(WARNING
+        "Game client target `fighters-legacy` will NOT be built: ${_fl_client_missing_str} "
+        "unavailable in this configuration. This is expected for the headless presets "
+        "(release-headless, asan, tsan, fuzz) and for CI lint legs. If you did not intend it, note "
+        "that any fighters-legacy binary already present in ${CMAKE_BINARY_DIR} is now STALE and "
+        "will not be rebuilt.")
+    unset(_fl_client_missing)
+    unset(_fl_client_missing_str)
 endif()

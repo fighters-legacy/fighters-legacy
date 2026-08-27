@@ -187,7 +187,7 @@
     {
       "label": "CI: Scale gate (PR)",
       "type": "shell",
-      "command": "cmake --preset release -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON && cmake --build --preset release --target fl-server bot_swarm && python3 tools/bot_swarm/scale_gate.py --profile pr --build-dir build/release --baseline tools/bot_swarm/scale-gate-baseline.json",
+      "command": "cmake --preset release-headless && cmake --build --preset release-headless --target fl-server bot_swarm && python3 tools/bot_swarm/scale_gate.py --profile pr --build-dir build/release-headless --baseline tools/bot_swarm/scale-gate-baseline.json",
       "presentation": {
         "reveal": "always",
         "panel": "shared"
