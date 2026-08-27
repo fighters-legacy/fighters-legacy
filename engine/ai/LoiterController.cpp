@@ -14,19 +14,22 @@ fl::ControlInput LoiterController::sample(const fl::EntityState& state, uint64_t
                                           const fl::AiTickContext& ctx) {
     fl::ControlInput ctrl{};
 
+    // Stepped BEFORE the deck check, so the estimator keeps its continuity on the ticks the recovery
+    // takes over -- a backward difference that skips samples reports a rate that never happened.
+    const float curPitch = fl::pitchOf(
+        state.transform.quat, glm::dvec3(state.transform.pos[0], state.transform.pos[1], state.transform.pos[2]),
+        m_planetRadiusM);
+    const float pitchRate = m_pitchRate.step(curPitch, dt);
+
     // Terrain does not negotiate (#1352). The deck is checked FIRST and outranks whatever
     // geometry this controller was about to fly; below it the only job is to still be
     // airborne next tick.
     if (terrainFloorRecovery(ctrl, state.transform.quat, state.transform.pos, state.transform.vel, ctx, kNavDeckAglM,
-                             m_planetRadiusM))
+                             m_planetRadiusM, pitchRate))
         return ctrl;
 
     const OrbitParams orbit{m_center, m_radiusM, m_altitudeM, m_targetSpeedMps, m_throttle, m_dir};
-    const float curPitch = fl::pitchOf(
-        state.transform.quat, glm::dvec3(state.transform.pos[0], state.transform.pos[1], state.transform.pos[2]),
-        m_planetRadiusM);
-    orbitSteer(ctrl, state.transform.quat, state.transform.pos, state.transform.vel, orbit, m_planetRadiusM,
-               m_pitchRate.step(curPitch, dt));
+    orbitSteer(ctrl, state.transform.quat, state.transform.pos, state.transform.vel, orbit, m_planetRadiusM, pitchRate);
     return ctrl;
 }
 

@@ -256,10 +256,15 @@ TEST_CASE("pursuitOffsetPoint: a target on top of us is aimed at directly") {
 }
 
 TEST_CASE("steerTowardPoint: banks toward the target and respects the caller's bank limit") {
-    // Attacker at the origin facing +X; target off to the right (+Z) and above.
+    // Attacker at the origin facing +X and FLYING along it; target off to the right (+Z) and above.
+    // The velocity is load-bearing since #1353: the bank this tail commands is the caller's ceiling
+    // capped by bankLimitForSpeed, so a state left at 0 m/s is correctly told to command no turn at
+    // all, and both assertions below would be measuring a parked aeroplane. 250 m/s is fast enough
+    // that the ceiling is what binds, which is what this case is about.
     fl::EntityState s{};
     s.id = {1, 1};
     s.transform.quat[3] = 1.f; // identity
+    s.transform.vel[0] = 250.f;
     const double tgt[3] = {2000.0, 500.0, 2000.0};
 
     fl::ControlInput tight{}, loose{};
@@ -276,4 +281,14 @@ TEST_CASE("steerTowardPoint: banks toward the target and respects the caller's b
 
     // Throttle is deliberately not the tail's business: callers own it.
     CHECK(tight.throttle == 0.f);
+
+    // And the ceiling is only a ceiling (#1353): the same geometry flown slowly asks for less roll,
+    // because the bank a turn needs is a load factor the airspeed has to pay for.
+    fl::EntityState slow = s;
+    slow.transform.vel[0] = 95.f;
+    fl::ControlInput slowInp{};
+    fl::ai::steerTowardPoint(slowInp, slow.transform.quat, slow.transform.pos, slow.transform.vel, tgt,
+                             fl::kEarthRadiusM, fl::ai::kCombatBankRad);
+    CHECK(slowInp.aileron > 0.f);
+    CHECK(slowInp.aileron < loose.aileron);
 }

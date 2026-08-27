@@ -106,6 +106,12 @@ fl_add_test(test_ai_terrain_floor
     LIBS engine-flight engine-ai engine-entity engine-spatial engine-sensor
     INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
+# Energy management (#1353): the AI must not fly itself onto the back of the drag curve, and the
+# hard-deck recovery must be able to get it off. Closed-loop, over a real integrator.
+fl_add_test(test_ai_energy
+    LIBS engine-flight engine-ai engine-entity engine-spatial engine-sensor
+    INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
+
 # Client-side target designation (#696): pure snapshot cycling / filtering / best-in-cone.
 add_executable(test_target_designation test_target_designation.cpp)
 target_link_libraries(test_target_designation PRIVATE Catch2::Catch2WithMain engine-render engine-entity game-client)

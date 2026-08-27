@@ -58,6 +58,17 @@ local ROLL_GAIN = 2.0          -- aileron per rad of bank error in the hard-deck
 local COMBAT_BANK = 1.396      -- 80 deg (kCombatBankRad): pursuit may bank harder than the 45 deg nav default
 local STRIKE_BANK = 1.047      -- 60 deg (kFormationBankRad): a strike run-in rolls hard, not vertically
 
+-- ENERGY (#1353). These scripts had no notion of their own, and it killed them. COMBAT_BANK is a
+-- CEILING, never a command: a bank angle is a load factor (80 deg = 5.8 g) and the trainer cannot
+-- reach that below ~130 m/s or sustain it at any speed on T/W 0.32, so pulling it at 90 m/s buys
+-- heading with airspeed that cannot be repaid. Measured on demo-sam-strike: 73-166 m/s across one
+-- engagement, then ~30 s oscillating 547 <-> 616 m MSL at 74-88 m/s with the deck flickering, a
+-- terrain scrape (hp 100 -> 77), and KIA at -0 m AGL. guidance.bank_limit_for_speed does the sizing.
+local RECOVER_SPD  = 160       -- above this a firm pull is affordable; below it, unload (kDeckRecoverSpeedMps)
+local HOLD_CLIMB   = 50        -- the gentle climb the low-energy recovery asks for (kDeckHoldClimbM)
+local DISENGAGE_SPD = 95       -- slower than this in a fight and there is nothing left to fight WITH
+local REENGAGE_SPD  = 145      -- and this is the speed to come back at: near the trainer's cruise
+
 local function len2(x, z) return math.sqrt(x * x + z * z) end
 
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
@@ -154,9 +165,19 @@ end
 -- survived (the orbit's normal condition), the attitude-based pitch law's P-only elevator drooped
 -- below the trim a statically stable airframe needs (the #1186 mechanism), and the aileron-tied
 -- rudder commanded nothing in a steady turn. The trainer exposes all three.
+-- Own airspeed. Used often enough, and by enough of the energy logic, to be worth naming.
+local function speed_of(state)
+  local v = state.vel
+  return math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
+end
+
 local function steer(state, tx, tz, talt, throttle, max_bank)
   local herr = guidance.heading_error(state.quat, state.pos, { x = tx, y = state.pos.y, z = tz })
-  local ail  = guidance.turn_aileron(state.quat, state.pos, herr, nil, max_bank)
+  -- max_bank is the ROLE ceiling; what is actually commanded is the hardest turn this airspeed will
+  -- pay for (#1353). At cruise the two are nearly the same; slow, the limit is what stops the script
+  -- turning itself onto the back of the drag curve.
+  local ail  = guidance.turn_aileron(state.quat, state.pos, herr,
+                                     nil, guidance.bank_limit_for_speed(speed_of(state), max_bank or 0.785))
   return {
     aileron     = ail,
     rudder      = guidance.rudder_to_coordinate(guidance.sideslip(state.quat, state.vel)),
@@ -178,12 +199,33 @@ end
 -- and the recovery branch never exits (#1221).
 local function pull_out(state, throttle)
   local bank = bank_of(state)
-  local spd  = math.sqrt(state.vel.x * state.vel.x + state.vel.y * state.vel.y
-                         + state.vel.z * state.vel.z)
+  local spd  = speed_of(state)
+  -- WINGS, then ENERGY, then pull (#1141/#1353). The speed decides which recovery this is:
+  --   * rolled past knife-edge -- no g at all until the lift vector points up again;
+  --   * at or above RECOVER_SPD -- the firm speed-scaled pull, which is the dive arrest #1339 sized
+  --     (the altitude cascade cannot stop a 30 deg descent at 175 m/s; measured, it hit the terrain
+  --     at ~100 m AGL);
+  --   * below it -- UNLOAD AND ACCELERATE. The pull is what was holding the aircraft down: at
+  --     80 m/s the 5300/V^2 term clamps to its 0.30 maximum, a high-AoA pull at a speed where
+  --     induced drag exceeds full power, and the aircraft mushes. Asking the cascade for a gentle
+  --     climb instead gives a command built from the CURRENT flight path plus a bounded AoA, which
+  --     when mushing is nose-DOWN, so the wing flies again. Measured from 80 m/s at 100 m AGL over
+  --     60 s: the old always-pull law ended at 58 m/s -- below the 1 g stall -- after porpoising
+  --     0..461 m AGL; this ends at 156 m/s and 316 m AGL, climbing out.
+  -- Throttle was never the missing part; it was already 1.0. A mush is escaped with energy.
+  local el
+  if math.cos(bank) <= 0.5 then
+    el = 0.0
+  elseif spd >= RECOVER_SPD then
+    el = clamp(5300 / math.max(spd * spd, 1), 0.10, 0.30)
+  else
+    el = guidance.elevator_for_altitude_hold(state.quat, state.pos, state.vel, own_alt + HOLD_CLIMB,
+                                             nil, nil, pitch_rate)
+  end
   return {
     aileron  = clamp(-ROLL_GAIN * bank, -1, 1),
     rudder   = guidance.rudder_to_coordinate(guidance.sideslip(state.quat, state.vel)),
-    elevator = math.cos(bank) > 0.5 and clamp(5300 / math.max(spd * spd, 1), 0.10, 0.30) or 0.0,
+    elevator = el,
     throttle = throttle or 1.0,
   }
 end
@@ -250,6 +292,11 @@ local function pick_target(state)
   return best, best_d
 end
 
+-- Have we run ourselves out of energy? Latched, with a wide gap between the two speeds (#1353): a
+-- bare threshold chatters, committing and abandoning the fight every few ticks at exactly the speed
+-- where neither choice is being flown properly.
+local low_energy = false
+
 function compute_control(state, tick, dt)
   if not patrol_cx then patrol_cx, patrol_cz = state.pos.x, state.pos.z end
   begin_tick(state, dt)
@@ -257,6 +304,39 @@ function compute_control(state, tick, dt)
   -- Hard deck first: terrain does not negotiate.
   local recover = hard_deck(state)
   if recover then return recover end
+
+  -- DISENGAGE ON ENERGY (#1353). Below DISENGAGE_SPD there is nothing left to fight with: every
+  -- turn costs more speed, the guns cone cannot be held, and the recovery that used to be asked to
+  -- fix it could not. So stop fighting and go get the energy back -- wings level, full power, and a
+  -- shallow climb toward the patrol altitude -- until REENGAGE_SPD. Losing the merge is a decision
+  -- a pilot makes; flying into the ground at 69 m/s is not.
+  local spd = speed_of(state)
+  if low_energy then
+    if spd >= REENGAGE_SPD then low_energy = false end
+  elseif spd < DISENGAGE_SPD then
+    low_energy = true
+  end
+  if low_energy then
+    local out = {
+      aileron  = clamp(-ROLL_GAIN * bank_of(state), -1, 1),
+      rudder   = guidance.rudder_to_coordinate(guidance.sideslip(state.quat, state.vel)),
+      elevator = guidance.elevator_for_altitude_hold(state.quat, state.pos, state.vel,
+                                                     math.min(own_alt + HOLD_CLIMB, PATROL_ALT),
+                                                     nil, nil, pitch_rate),
+      throttle = 1.0,
+    }
+    -- A free shot is still a shot. What disengaging declines is TURNING for one -- if a target flies
+    -- through the gun cone while we are leaving, the trigger costs no energy at all.
+    local tgt = pick_target(state)
+    if tgt then
+      local cosang, rng = boresight(state, tgt.pos)
+      if cosang >= GUN_CONE_COS and rng <= GUN_RANGE_M then
+        out.weapon_station = GUN_STATION
+        out.trigger = true
+      end
+    end
+    return out
+  end
 
   local tgt, dist = pick_target(state)
   if tgt then

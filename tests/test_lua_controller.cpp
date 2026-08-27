@@ -76,16 +76,20 @@ static std::string aiMdLuaBlock(std::string_view needle) {
     return matches.front();
 }
 
+// The default velocity is a token 11 m/s: most cases here assert on a script's geometry, not on its
+// energy, and the number predates any script caring. A case that DOES care -- anything touching the
+// #1353 energy logic -- must pass a real airspeed, because at 11 m/s builtin:fighter is correct to
+// refuse to manoeuvre.
 static fl::EntityState makeState(double px = 0.0, double py = 600.0, double pz = 0.0, float hp = 100.f,
-                                 float maxHp = 100.f) {
+                                 float maxHp = 100.f, float speedMps = 0.f) {
     fl::EntityState s{};
     s.id = {1, 1};
     s.transform.pos[0] = px;
     s.transform.pos[1] = py;
     s.transform.pos[2] = pz;
-    s.transform.vel[0] = 10.f;
+    s.transform.vel[0] = speedMps > 0.f ? speedMps : 10.f;
     s.transform.vel[1] = 0.f;
-    s.transform.vel[2] = 5.f;
+    s.transform.vel[2] = speedMps > 0.f ? 0.f : 5.f;
     s.transform.quat[0] = 0.f;
     s.transform.quat[1] = 0.f;
     s.transform.quat[2] = 0.f;
@@ -1049,17 +1053,18 @@ TEST_CASE("the builtin hard deck follows the terrain (#1352)", "[luacontroller][
     const float ground = 545.f;
     fl::AiTickContext ctx{};
     ctx.groundElevM = &ground;
-    const auto low = c->sample(makeState(0.0, 600.0, 0.0), 100, 1.0 / 60.0, ctx);
+    // At a real cruise, so the #1353 energy logic is not what this case is measuring.
+    const auto low = c->sample(makeState(0.0, 600.0, 0.0, 100.f, 100.f, 150.f), 100, 1.0 / 60.0, ctx);
     CHECK(low.throttle == Catch::Approx(1.0f)); // pull_out commands full throttle
     CHECK(low.elevator > 0.f);                  // wings are level, so the pull is unlocked
 
     // Clear of the same terrain, it goes back to patrolling: the deck is a floor, not a mode.
-    const auto high = c->sample(makeState(0.0, 3000.0, 0.0), 101, 1.0 / 60.0, ctx);
+    const auto high = c->sample(makeState(0.0, 3000.0, 0.0, 100.f, 100.f, 150.f), 101, 1.0 / 60.0, ctx);
     CHECK(high.throttle < 1.0f);
 
     // And with NO ground reference it falls back to the old 600 m MSL rule rather than to a terrain
     // height of zero -- which over this site would put the deck 545 m underground.
-    const auto blind = c->sample(makeState(0.0, 590.0, 0.0), 102, 1.0 / 60.0);
+    const auto blind = c->sample(makeState(0.0, 590.0, 0.0, 100.f, 100.f, 150.f), 102, 1.0 / 60.0);
     CHECK(blind.throttle == Catch::Approx(1.0f));
 }
 
