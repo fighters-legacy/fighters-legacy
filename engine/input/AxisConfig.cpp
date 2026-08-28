@@ -15,9 +15,10 @@ namespace fl {
 AxisSample AxisConfig::apply(float raw) const {
     if (mode == AxisMode::Absolute) {
         // A full-travel lever: the whole [-1, 1] sweep maps onto [0, 1] and there is no centre to
-        // ignore. ALWAYS active — a throttle closed to idle is a command, not an absent input, and
-        // reading it as absent is what would let the keyboard throttle fight a stick the player had
-        // deliberately pulled back.
+        // ignore. `active` here is PROVISIONAL — there is no rest position to gate on, so the value
+        // alone cannot say whether the lever is what the player is using. actionAxis() gates it on
+        // motion instead (#1358): declaring it always in command is how an unfitted channel stuck at
+        // −1.0 latched the throttle at idle and locked the keyboard out.
         const float r = invert ? -raw : raw;
         const float v = std::clamp((r + 1.0f) * 0.5f, 0.0f, 1.0f) * scale;
         return {v, true};

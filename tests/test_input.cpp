@@ -251,13 +251,14 @@ TEST_CASE("AxisConfig absolute mode maps full travel onto [0,1]", "[axis_config]
     CHECK(cfg.apply(0.5f).value == Catch::Approx(0.75f));
 }
 
-TEST_CASE("AxisConfig absolute mode is always active, even at idle", "[axis_config]") {
+TEST_CASE("AxisConfig absolute mode ignores the deadzone and reports provisional active", "[axis_config]") {
     AxisConfig cfg;
     cfg.mode = AxisMode::Absolute;
     cfg.deadzone = 0.5f; // deliberately huge: an absolute lever has no centre to ignore
 
-    // A throttle closed to idle reads 0.0 and is still in command. If this reported inactive, the
-    // keyboard throttle would fight a stick the player had deliberately pulled back.
+    // apply() is the stateless value transform; its `active` for Absolute is PROVISIONAL. Whether
+    // the lever is actually in command is decided by the motion gate in actionAxis() (#1358) — the
+    // value alone cannot say, because every point of an absolute lever's travel is a valid setting.
     const AxisSample idle = cfg.apply(-1.0f);
     CHECK(idle.value == Catch::Approx(0.0f));
     CHECK(idle.active);
@@ -627,6 +628,24 @@ TEST_CASE("InputBindings: a wildcard binding is not waiting for a particular dev
     CHECK(b.deviceUsage().empty());
 }
 
+TEST_CASE("InputBindings: joystickBindingsAllWildcard detects the shipped-defaults shape (#1358)",
+          "[bindings][device]") {
+    // The startup multi-stick warning keys off this: several sticks + a pure-wildcard map means every
+    // joystick binding reads all of them, and the player should hear how to dedicate one.
+    InputBindings b;
+    CHECK(b.joystickBindingsAllWildcard()); // the defaults bind four wildcard joystick axes
+
+    // One concrete GUID anywhere means the player has taken over device assignment — no warning.
+    b.add(InputAction::FireWeapon, jsButton(5, kStickA));
+    CHECK_FALSE(b.joystickBindingsAllWildcard());
+
+    // No joystick bindings at all: nothing to warn about either.
+    InputBindings none;
+    for (int i = 0; i < InputBindings::kActionCount; ++i)
+        none.clear(static_cast<InputAction>(i));
+    CHECK_FALSE(none.joystickBindingsAllWildcard());
+}
+
 // ---------------------------------------------------------------------------
 // InputBindings — serialization
 // ---------------------------------------------------------------------------
@@ -927,20 +946,253 @@ TEST_CASE("actionAxis: the first ACTIVE axis in the list wins", "[bindings][axis
     CHECK(s.value < 0.0f);
 }
 
-TEST_CASE("actionAxis: an idle absolute throttle still commands the control", "[bindings][axis]") {
+TEST_CASE("actionAxis: an Absolute axis commands only when it moves (#1358)", "[bindings][axis]") {
     const InputBindings b;
     const AxisConfigTable axes;
     MockInput in;
     MockJoystick joy;
     joy.addDevice(kStickA).axes.assign(8, 0.0f);
-    joy.devices[0].axes[kHotasAxisThrottle] = -1.0f; // lever fully closed
+    joy.devices[0].axes[kHotasAxisThrottle] = -1.0f;
     JoystickDevices devices;
     devices.update(joy);
     const InputSources src{&in, &joy, &devices, 0};
 
-    const AxisSample thr = actionAxis(src, b, axes, InputAction::ThrottleAxis);
-    CHECK(thr.active);
-    CHECK(thr.value == Catch::Approx(0.0f));
+    // The #1358 headline: on real hardware the default throttle axis (2) is often an UNFITTED channel
+    // reading a constant −1.0. Under "Absolute = always active" it latched the throttle at idle and
+    // locked the keyboard throttle out, with a clean log. A constant value is not a touch.
+    AxisMotionTracker motion;
+    CHECK_FALSE(actionAxis(src, b, axes, InputAction::ThrottleAxis, &motion).active);
+    CHECK_FALSE(actionAxis(src, b, axes, InputAction::ThrottleAxis, &motion).active);
+    CHECK_FALSE(actionAxis(src, b, axes, InputAction::ThrottleAxis, &motion).active);
+
+    // A real lever MOVING is a command, at the lever's position.
+    joy.devices[0].axes[kHotasAxisThrottle] = 0.5f;
+    const AxisSample moved = actionAxis(src, b, axes, InputAction::ThrottleAxis, &motion);
+    CHECK(moved.active);
+    CHECK(moved.value == Catch::Approx(0.75f));
+
+    // A lever that has STOPPED yields the control (the keyboard throttle can trim from here); the
+    // next movement takes it back.
+    CHECK_FALSE(actionAxis(src, b, axes, InputAction::ThrottleAxis, &motion).active);
+    joy.devices[0].axes[kHotasAxisThrottle] = -1.0f; // pulled to idle — a movement, and a command
+    const AxisSample closed = actionAxis(src, b, axes, InputAction::ThrottleAxis, &motion);
+    CHECK(closed.active);
+    CHECK(closed.value == Catch::Approx(0.0f));
+
+    // Without a motion tracker an Absolute axis never asserts: a consumer that cannot remember
+    // motion must not let a mode claim the control unconditionally.
+    CHECK_FALSE(actionAxis(src, b, axes, InputAction::ThrottleAxis).active);
+}
+
+TEST_CASE("AxisMotionTracker: reference-compare, first sight seeds, slow sweep keeps firing", "[bindings][axis]") {
+    AxisMotionTracker t;
+    const AxisKey a{BindingSource::JoystickAxis, 2, makeDeviceRef(kStickA)};
+    const AxisKey b{BindingSource::JoystickAxis, 2, makeDeviceRef(kStickB)};
+
+    // First sighting seeds the reference — being present is not being touched.
+    CHECK_FALSE(t.update(a, 0, -1.0f));
+    CHECK_FALSE(t.update(a, 0, -1.0f));
+
+    // Sensor noise below the epsilon never accumulates into a phantom touch, however long it lasts:
+    // the comparison is against the last FIRING point, which noise never moves.
+    for (int i = 0; i < 100; ++i)
+        CHECK_FALSE(t.update(a, 0, -1.0f + ((i % 2 == 0) ? 0.004f : -0.004f)));
+
+    // A deliberate gesture fires...
+    CHECK(t.update(a, 0, -0.5f));
+    // ...and a SLOW sweep whose per-poll delta is below the epsilon keeps firing every epsilon of
+    // travel, because the reference only moves when the tracker fires.
+    bool firedDuringCreep = false;
+    for (float v = -0.5f; v < -0.4f; v += 0.002f)
+        firedDuringCreep = t.update(a, 0, v) || firedDuringCreep;
+    CHECK(firedDuringCreep);
+
+    // Per-axis state: stick B's stuck channel is untouched by everything stick A did.
+    CHECK_FALSE(t.update(b, 1, -1.0f));
+
+    // TWO UNITS OF ONE MODEL REPORT THE SAME GUID (SDL encodes vendor/product, not a serial), so the
+    // same key at two device indices must hold two independent references. One shared reference
+    // would see two different resting positions as endless motion — the throttle flapping between
+    // them with nobody touching anything, which is the #1358 lockout reintroduced for twin sticks.
+    CHECK_FALSE(t.update(a, 1, 0.3f)); // same key as `a`@0 (ref −0.4…), different device: seeds
+    CHECK_FALSE(t.update(a, 1, 0.3f));
+    CHECK_FALSE(t.update(a, 0, -0.402f)); // and unit 0's reference is undisturbed
+
+    // A device-set change (hot-plug) renumbers indices; a new generation drops every reference so a
+    // stale one cannot bill a departed device's position to whoever now holds its index.
+    t.syncDeviceGeneration(1);
+    CHECK_FALSE(t.update(a, 0, 0.3f)); // reseeded
+    t.syncDeviceGeneration(1);         // same generation: nothing forgotten
+    CHECK(t.update(a, 0, 0.5f));
+
+    t.reset();
+    CHECK_FALSE(t.update(a, 0, 0.9f)); // reseeded, not "moved from 0.5"
+}
+
+TEST_CASE("actionAxis: twin sticks with one GUID cannot flap the throttle (#1358)", "[bindings][axis][device]") {
+    const InputBindings b; // shipped defaults: ThrottleAxis = joystick axis 2, Any device, Absolute
+    const AxisConfigTable axes;
+    MockInput in;
+    MockJoystick joy;
+    // Two units of the SAME model: identical GUIDs, parked at different resting positions (one lever
+    // at idle, one mid-travel). Nobody is touching anything, so the throttle must never assert — a
+    // per-GUID motion reference would ping-pong between −1.0 and 0.0 and read as endless motion.
+    joy.addDevice(kStickA).axes.assign(8, 0.0f);
+    joy.addDevice(kStickA).axes.assign(8, 0.0f);
+    joy.devices[0].axes[kHotasAxisThrottle] = -1.0f;
+    joy.devices[1].axes[kHotasAxisThrottle] = 0.0f;
+    JoystickDevices devices;
+    devices.update(joy);
+    const InputSources src{&in, &joy, &devices, 0};
+
+    AxisMotionTracker motion;
+    for (int i = 0; i < 6; ++i)
+        CHECK_FALSE(actionAxis(src, b, axes, InputAction::ThrottleAxis, &motion).active);
+
+    // Moving the SECOND twin's lever commands the throttle from that unit.
+    joy.devices[1].axes[kHotasAxisThrottle] = 0.5f;
+    const AxisSample s = actionAxis(src, b, axes, InputAction::ThrottleAxis, &motion);
+    CHECK(s.active);
+    CHECK(s.value == Catch::Approx(0.75f));
+}
+
+TEST_CASE("actionAxis: a hot-plug cannot snap the throttle to a stale reference (#1358)", "[bindings][axis][device]") {
+    const InputBindings b;
+    const AxisConfigTable axes;
+    MockInput in;
+    MockJoystick joy;
+    // TWINS on purpose: with equal GUIDs the survivor inherits the departed unit's exact
+    // (key, index) pair after the shift, which is the one case a stale reference can bite.
+    joy.addDevice(kStickA).axes.assign(8, 0.0f);
+    joy.addDevice(kStickA).axes.assign(8, 0.0f);
+    joy.devices[0].axes[kHotasAxisThrottle] = -1.0f; // first unit parked at idle
+    joy.devices[1].axes[kHotasAxisThrottle] = 0.2f;  // second unit parked mid-travel
+    JoystickDevices devices;
+    devices.update(joy);
+    const InputSources src{&in, &joy, &devices, 0};
+
+    AxisMotionTracker motion;
+    CHECK_FALSE(actionAxis(src, b, axes, InputAction::ThrottleAxis, &motion).active); // seed both
+    CHECK_FALSE(actionAxis(src, b, axes, InputAction::ThrottleAxis, &motion).active);
+
+    // Unplug the first unit: SDL erases it and its twin shifts down to index 0. Without the
+    // generation reset, the twin's parked 0.2 would be compared against the departed unit's −1.0
+    // reference at index 0 — a "movement" nobody made, snapping the throttle to 60%.
+    joy.devices.erase(joy.devices.begin());
+    devices.update(joy);
+    CHECK_FALSE(actionAxis(src, b, axes, InputAction::ThrottleAxis, &motion).active);
+
+    // B still works once actually moved.
+    joy.devices[0].axes[fl::kHotasAxisThrottle] = 0.4f;
+    CHECK(actionAxis(src, b, axes, InputAction::ThrottleAxis, &motion).active);
+}
+
+TEST_CASE("JoystickDevices: twin sticks with one GUID keep separate hat histories (#1358)", "[bindings][device]") {
+    MockJoystick joy;
+    auto& a = joy.addDevice(kStickA);
+    a.hats.assign(1, HatPosition::Centered);
+    auto& twin = joy.addDevice(kStickA); // same model, same GUID
+    twin.hats.assign(1, HatPosition::Centered);
+    JoystickDevices devices;
+    devices.update(joy);
+
+    // Hold Up on the SECOND twin. With find-by-guid matching, the twin's `previous` was overwritten
+    // by the first unit's history every frame, so the held hat read as a fresh edge on every single
+    // frame. Claimed-consumption pairing keeps each unit's history its own: one edge, then held.
+    joy.devices[1].hats[0] = HatPosition::Up;
+    devices.update(joy);
+    CHECK(devices.hatJustPressed(1, 0, HatPosition::Up));
+    devices.update(joy);
+    CHECK_FALSE(devices.hatJustPressed(1, 0, HatPosition::Up));
+    devices.update(joy);
+    CHECK_FALSE(devices.hatJustPressed(1, 0, HatPosition::Up));
+
+    // The first unit's hat is untouched throughout — no history bled across.
+    CHECK_FALSE(devices.hatJustPressed(0, 0, HatPosition::Up));
+}
+
+TEST_CASE("actionAxis: an Any binding reads every present stick (#1358)", "[bindings][axis][device]") {
+    const InputBindings b; // shipped defaults: every joystick axis binding is device-Any
+    const AxisConfigTable axes;
+    MockInput in;
+    MockJoystick joy;
+    // Two units of a split HOTAS. The first to enumerate (index 0) sits centered while the player
+    // deflects the SECOND — the exact setup #1358 found unflyable when Any collapsed onto device 0.
+    joy.addDevice(kStickA).axes.assign(8, 0.0f);
+    joy.addDevice(kStickB).axes.assign(8, 0.0f);
+    JoystickDevices devices;
+    devices.update(joy);
+    const InputSources src{&in, &joy, &devices, 0};
+
+    CHECK_FALSE(actionAxis(src, b, axes, InputAction::PitchAxis).active);
+    joy.devices[1].axes[kHotasAxisPitch] = 0.6f;
+    const AxisSample s = actionAxis(src, b, axes, InputAction::PitchAxis);
+    CHECK(s.active);
+    CHECK(s.value > 0.0f);
+
+    // Both sticks centered again: nothing is driving, so the keyboard keeps the control.
+    joy.devices[1].axes[kHotasAxisPitch] = 0.0f;
+    CHECK_FALSE(actionAxis(src, b, axes, InputAction::PitchAxis).active);
+}
+
+TEST_CASE("actionAxis: Any sampling honours a per-device axis config (#1358)", "[bindings][axis][device]") {
+    const InputBindings b;
+    MockInput in;
+    MockJoystick joy;
+    joy.addDevice(kStickA).axes.assign(8, 0.0f);
+    joy.addDevice(kStickB).axes.assign(8, 0.0f);
+    JoystickDevices devices;
+    devices.update(joy);
+    const InputSources src{&in, &joy, &devices, 0};
+
+    // The player inverted pitch ON STICK B specifically. An Any binding sampling stick B must find
+    // that entry (exact GUID beats the wildcard tuning), or dedicating tuning to one stick of a pair
+    // would silently stop working the moment the binding stays wildcard.
+    AxisConfigTable axes;
+    AxisConfig inverted;
+    inverted.deadzone = kHotasDefaultDeadzone;
+    inverted.invert = true;
+    axes.set(AxisKey{BindingSource::JoystickAxis, kHotasAxisPitch, makeDeviceRef(kStickB)}, inverted);
+
+    joy.devices[1].axes[kHotasAxisPitch] = 0.6f;
+    CHECK(actionAxis(src, b, axes, InputAction::PitchAxis).value < 0.0f);
+    joy.devices[1].axes[kHotasAxisPitch] = 0.0f;
+    joy.devices[0].axes[kHotasAxisPitch] = 0.6f; // stick A keeps the wildcard (non-inverted) tuning
+    CHECK(actionAxis(src, b, axes, InputAction::PitchAxis).value > 0.0f);
+}
+
+TEST_CASE("bindingDown / bindingJustPressed: Any reads buttons and hats on every stick (#1358)", "[bindings][device]") {
+    MockInput in;
+    MockJoystick joy;
+    auto& a = joy.addDevice(kStickA);
+    a.buttons.assign(8, false);
+    a.justPressed.assign(8, false);
+    a.hats.assign(1, HatPosition::Centered);
+    auto& bdev = joy.addDevice(kStickB);
+    bdev.buttons.assign(8, false);
+    bdev.justPressed.assign(8, false);
+    bdev.hats.assign(1, HatPosition::Centered);
+    JoystickDevices devices;
+    devices.update(joy);
+    const InputSources src{&in, &joy, &devices, 0};
+
+    // A trigger on the SECOND unit fires an Any-bound action — the split-HOTAS half that used to be
+    // entirely unreachable.
+    CHECK_FALSE(bindingDown(src, jsButton(5)));
+    joy.devices[1].buttons[5] = true;
+    CHECK(bindingDown(src, jsButton(5)));
+    joy.devices[1].justPressed[5] = true;
+    CHECK(bindingJustPressed(src, jsButton(5)));
+
+    // Same for a hat edge, which resolves through the device table's history.
+    joy.devices[1].hats[0] = HatPosition::Up;
+    devices.update(joy);
+    CHECK(bindingDown(src, jsHat(0, HatPosition::Up)));
+    CHECK(bindingJustPressed(src, jsHat(0, HatPosition::Up)));
+
+    // A named binding still reads its one stick only.
+    CHECK_FALSE(bindingDown(src, jsButton(5, kStickA)));
+    CHECK(bindingDown(src, jsButton(5, kStickB)));
 }
 
 TEST_CASE("actionAxis: no hardware means no axis is driving the control", "[bindings][axis]") {
@@ -949,8 +1201,10 @@ TEST_CASE("actionAxis: no hardware means no axis is driving the control", "[bind
     const InputSources empty{};
     CHECK_FALSE(actionAxis(empty, b, axes, InputAction::ThrottleAxis).active);
 
-    // A gamepad axis on a machine with no pad reads a flat 0; for an Absolute config that would look
-    // like an active idle throttle, so presence is checked rather than assumed.
+    // A gamepad axis on a machine with no pad reads a flat 0; presence is checked rather than
+    // assumed, so an absent pad's axes are never even sampled. With the pad there, an Absolute
+    // trigger obeys the same motion gate as a lever (#1358): a resting trigger commands nothing,
+    // a pulled one commands its position.
     MockInput in;
     in.gamepadCount = 0;
     const InputSources noPad{&in, nullptr, nullptr, 0};
@@ -961,9 +1215,14 @@ TEST_CASE("actionAxis: no hardware means no axis is driving the control", "[bind
     abs.mode = AxisMode::Absolute;
     absolutePad.set(AxisKey{BindingSource::GamepadAxis, static_cast<uint32_t>(GamepadAxis::TriggerLeft), DeviceRef{}},
                     abs);
-    CHECK_FALSE(actionAxis(noPad, padOnly, absolutePad, InputAction::ThrottleAxis).active);
+    AxisMotionTracker motion;
+    CHECK_FALSE(actionAxis(noPad, padOnly, absolutePad, InputAction::ThrottleAxis, &motion).active);
     in.gamepadCount = 1;
-    CHECK(actionAxis(noPad, padOnly, absolutePad, InputAction::ThrottleAxis).active);
+    CHECK_FALSE(actionAxis(noPad, padOnly, absolutePad, InputAction::ThrottleAxis, &motion).active);
+    in.axisValues[{0, GamepadAxis::TriggerLeft}] = 0.6f;
+    const AxisSample pulled = actionAxis(noPad, padOnly, absolutePad, InputAction::ThrottleAxis, &motion);
+    CHECK(pulled.active);
+    CHECK(pulled.value == Catch::Approx(0.8f));
 }
 
 TEST_CASE("actionAxis: a digital-only action has no axis", "[bindings][axis]") {

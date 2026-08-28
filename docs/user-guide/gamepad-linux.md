@@ -122,7 +122,7 @@ Axis assignments, deadzone, response curve, inversion and mode are all in
 and folded into `bindings.toml` automatically. See
 [Controls → `config/bindings.toml`](controls.md#configbindingstoml) for the schema.
 
-Default axis layout, applied to whichever stick is connected:
+Default axis layout, applied to **every** connected stick — whichever one you move is in command:
 
 | Axis index | Mapping | Action |
 |---|---|---|

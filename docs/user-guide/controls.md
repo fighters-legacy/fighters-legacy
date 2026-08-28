@@ -17,7 +17,8 @@ A binding names the **device** it belongs to, by its GUID rather than by its pos
 list. That is what lets two joysticks be bound independently, and what makes those bindings survive
 unplugging something: device *indices* are renumbered every time hardware comes or goes, so an
 index-keyed binding would silently start driving a different piece of hardware. The shipped defaults
-name no device at all, which means "whichever stick is plugged in".
+name no device at all, which means "every stick that is plugged in" — whichever one you move is in
+command.
 
 **A binding whose device is not connected is kept, and simply does nothing.** Plug the device back in
 and the control returns, with no re-binding — nothing is ever pruned from your file for being
@@ -243,11 +244,13 @@ Photo mode pauses playback, so the speed keys are dead there and the exposure co
 
 ## Gamepad controls
 
-Standard gamepads (Xbox / PlayStation) are supported in all camera modes. A joystick axis
-overrides the corresponding keyboard control when the axis value exceeds the deadzone.
-Keyboard controls remain active when no gamepad is connected or all axes are within the
-deadzone. Deadzone, response curve, inversion, and axis mapping are configured in
-`config/bindings.toml` — see the **bindings.toml** section below.
+Standard gamepads (Xbox / PlayStation) are supported in all camera modes. A `Centered` axis
+overrides the corresponding keyboard control while it is deflected past its deadzone, and an
+`Absolute` axis (the default throttle mode) while it is being moved — see the **mode** bullet under
+`[[axis_config]]` below. Keyboard controls remain active whenever no axis is driving: no device
+connected, every centered axis inside its deadzone, every absolute axis at rest. Deadzone, response
+curve, inversion, and axis mapping are configured in `config/bindings.toml` — see the
+**bindings.toml** section below.
 
 | Axis | Default mapping | Binding |
 |---|---|---|
@@ -284,7 +287,7 @@ A binding on a cardinal hat direction (`Up`/`Down`/`Left`/`Right`) also fires on
 either side of it, so a four-way POV view control does not go dead when your thumb rolls slightly off.
 A binding on a diagonal (`UpRight`, …) matches only that corner.
 
-Default axis layout, applied to whichever stick is connected:
+Default axis layout, applied to **every** connected stick:
 
 | Default axis index | Mapping | Action |
 |---|---|---|
@@ -294,8 +297,17 @@ Default axis layout, applied to whichever stick is connected:
 | 3 | Rudder (yaw) | `YawAxis` |
 
 For each of the four flight axes the joystick binding is listed **first**, ahead of the gamepad axis:
-for an analog control the first binding past its deadzone wins, so if you have a HOTAS the HOTAS is in
+for an analog control the first binding that is *driving* wins — deflected past its deadzone for a
+`Centered` axis, being moved for an `Absolute` one — so if you are flying on a HOTAS the HOTAS is in
 command. Reorder the list to change that.
+
+**Several sticks at once.** A binding that does not name a `device` reads every connected stick, and
+whichever one you move is in command — a split stick + throttle rig flies out of the box regardless of
+which unit the USB bus enumerated first. The flip side is that the defaults cannot know which unit you
+*mean*: with two sticks connected, axis 1 on either of them is the elevator until you say otherwise.
+The game logs a startup warning in exactly this situation. To dedicate an axis (or button) to one
+stick, copy that stick's GUID from the `[[devices]]` table — or from the `input device connected` log
+lines — into the binding's `device` field.
 
 Deadzone, response curve, inversion and scale for a HOTAS axis are set in `[[axis_config]]` with
 `source = "JoystickAxis"` — the same table the gamepad axes use. The stick axes default to a `0.05`
@@ -336,7 +348,8 @@ pin that binding to that specific stick.
 ### `[bindings]`
 
 One array per action. Every entry in the array is live at the same time; order matters only for analog
-axes, where the first one past its deadzone wins.
+axes, where the first one that is driving wins — past its deadzone for a `Centered` axis, being moved
+for an `Absolute` one.
 
 ```toml
 [bindings]
@@ -371,8 +384,8 @@ EcmToggle = []   # explicitly unbound
 - `direction` applies to `JoystickHat` only: `Up`, `UpRight`, `Right`, `DownRight`, `Down`, `DownLeft`,
   `Left`, `UpLeft`.
 - `negative` applies to axis sources used as an on/off control, and selects the negative half.
-- `device` applies to the `Joystick*` sources; omit it or leave it empty for "whichever stick is
-  plugged in".
+- `device` applies to the `Joystick*` sources; omit it or leave it empty for "every stick that is
+  plugged in" — the binding reads them all, and whichever moves is in command.
 
 An entry the game cannot resolve — an unknown key name, a hat with no direction, a joystick binding
 with no index — makes it reject the whole file and keep the previous bindings rather than guess at a
@@ -415,8 +428,12 @@ invert = false
 - **curve**: `"Linear"` passes through; `"Cubic"` reduces sensitivity near centre.
 - **mode**: `"Centered"` for a spring-return stick or thumbstick — zero is the middle of its travel and
   the value is the control deflection. `"Absolute"` for a lever that stays where you leave it: the full
-  `[-1, 1]` travel maps onto `[0, 1]`, there is no centre deadzone, and it commands the control even at
-  idle (a closed throttle is a command, not an absent input). Use `Absolute` for a HOTAS throttle.
+  `[-1, 1]` travel maps onto `[0, 1]` and there is no centre deadzone. Use `Absolute` for a HOTAS
+  throttle. An `Absolute` axis takes command **when you move it** and yields when it stops, so the
+  keyboard throttle keeps working alongside the lever — the last control you touched wins. Two
+  consequences: after launching (or after rebinding), nudge the lever once to sync the throttle to it;
+  and a lever the game has never seen move — including an unfitted axis a default happens to point at —
+  never commands anything.
 - **invert**: flips the axis. In `Absolute` mode it flips which end of the travel is full power, which
   is what the old `hotas_invert_throttle` did.
 - **scale**: output multiplier applied after the curve (default `1.0`).

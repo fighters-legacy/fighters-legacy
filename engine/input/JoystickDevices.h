@@ -52,7 +52,8 @@ class JoystickDevices {
     }
 
     // The live index for this ref, or kAbsent when the device is not connected. An `Any` ref resolves
-    // to the first present device (which is what the pre-#1061 hardcoded device 0 meant).
+    // to the first present device — a single representative index; the binding queries scan every
+    // present device for `Any` themselves (#1358).
     [[nodiscard]] int resolve(const DeviceRef& ref) const;
 
     [[nodiscard]] bool isPresent(const DeviceRef& ref) const {
@@ -68,6 +69,14 @@ class JoystickDevices {
         return m_changes;
     }
 
+    // Bumped by update() whenever the device set changes. Consumers holding per-device state at a
+    // DIFFERENT cadence than update() — AxisMotionTracker polls at 60 Hz while this reconciles per
+    // frame — cannot watch changes() (it is replaced every frame, so a change between two polls is
+    // invisible); a monotonic counter cannot be missed (#1358).
+    [[nodiscard]] uint64_t generation() const noexcept {
+        return m_generation;
+    }
+
   private:
     struct HatState {
         std::string guid;
@@ -76,8 +85,9 @@ class JoystickDevices {
     };
 
     std::vector<Device> m_devices;
-    std::vector<HatState> m_hats; // keyed by GUID, so an index shift cannot fake an edge
+    std::vector<HatState> m_hats; // paired to devices by GUID with claimed-consumption (see update())
     std::vector<Change> m_changes;
+    uint64_t m_generation{0};
 
     [[nodiscard]] const HatState* hatStateFor(int deviceIndex) const;
 };

@@ -31,11 +31,12 @@ inline constexpr int kDeviceGuidChars = 32;
 // comment on getJoystickGuid already says it is "for persistent binding saves so bindings survive
 // device reconnect"; #1061 is the table taking it up.
 //
-// An EMPTY guid means "any device of this source's class" — the first one present. That is not a
-// convenience, it is what makes a shipped default expressible: the default table is compiled before
-// any device exists, and a fresh install with one stick has to fly without the player rebinding
-// anything. A rebind performed in game stamps the concrete GUID, and that is what lets two sticks be
-// addressed independently and each keep its own bindings across a replug.
+// An EMPTY guid means "any device of this source's class" — EVERY present one, read by the query
+// layer as a scan across the connected devices (#1358; it used to collapse onto whichever enumerated
+// first, which left half of a split HOTAS unbound). That is not a convenience, it is what makes a
+// shipped default expressible: the default table is compiled before any device exists, and a fresh
+// install has to fly without the player rebinding anything, however many sticks are plugged in. A
+// concrete GUID is what dedicates a binding to one stick, and keeps it there across a replug.
 struct DeviceRef {
     char guid[kDeviceGuidChars + 1]{}; // NUL-terminated; empty = any device
 
