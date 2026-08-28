@@ -257,15 +257,32 @@ void main() {
     float roughness = clamp(orm.g * push.roughnessFactor, 0.04, 1.0);
     float metallic  = clamp(orm.b * push.metallicFactor,  0.0,  1.0);
 
-    // Normal mapping — tangent space → world space via TBN
+    // Normal mapping — tangent space → world space via TBN.
+    //
+    // TERRAIN AND SATELLITE TILES ARE EXCLUDED, and that is load-bearing rather than an optimisation
+    // (#1360). Those meshes REPURPOSE the tangent attribute to carry terrain data (#475):
+    // `fragRawTangent` is .x = land-cover class, .y = normalized elevation, .zw = the detail
+    // coordinate IN METRES. So `fragWorldTangent` is not a tangent and `fragTangentHandedness` is not
+    // +/-1 — it is a metre value in the thousands. `B` came out ~1000x oversized, and since the flat
+    // normal map samples (0.48, 0.48, 1.0) rather than exactly (0.5, 0.5, 1.0), that residual -0.03
+    // in x/y was multiplied by a basis vector of length 1000 and swamped the geometric normal ~30:1.
+    // The shading normal ended up roughly perpendicular to the ground: measured dot(geoN, L) = 1.00
+    // at solar noon while NdotL = 0.00, so terrain took ambient light only and rendered near-black,
+    // banded in tile-sized stripes as the detail coordinate ramped and reset across each tile.
+    //
+    // A terrain tile has no normal map of its own anyway — its micro-surface is the detail-noise
+    // perturbation below — so the geometric normal IS the right answer here, as the shading-mode
+    // comment above already said.
     vec3 N = normalize(fragWorldNormal);
-    vec3 T = normalize(fragWorldTangent);
-    T = normalize(T - dot(T, N) * N); // Gram-Schmidt re-orthogonalise
-    vec3 B = cross(N, T) * fragTangentHandedness;
-    mat3 TBN = mat3(T, B, N);
+    if (!isTerrain && !isSatellite) {
+        vec3 T = normalize(fragWorldTangent);
+        T = normalize(T - dot(T, N) * N); // Gram-Schmidt re-orthogonalise
+        vec3 B = cross(N, T) * fragTangentHandedness;
+        mat3 TBN = mat3(T, B, N);
 
-    vec3 normalSample = texture(normalTex, fragUV).rgb * 2.0 - 1.0;
-    N = normalize(TBN * normalSample);
+        vec3 normalSample = texture(normalTex, fragUV).rgb * 2.0 - 1.0;
+        N = normalize(TBN * normalSample);
+    }
 
     // Terrain micro-surface: perturb the normal with finite-differenced detail noise, and roughen
     // slightly with the same field, fading out with distance to avoid shimmer. Keyed on the

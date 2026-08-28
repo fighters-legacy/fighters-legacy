@@ -2,6 +2,7 @@
 #include "weather/WeatherController.h"
 
 #include "flight/LocalFrame.h"      // enuBasis for the geographic sun (#481)
+#include "math/Angles.h"            // kRadToDeg — anchor longitude -> UTC offset (#1359)
 #include "weather/CelestialFrame.h" // sidereal time + equatorial->world (#484)
 #include "weather/LunarPosition.h"  // Moon ephemeris (#484)
 
@@ -326,8 +327,25 @@ void WeatherController::setDate(int year, int month, int day) {
     m_utcDayStartJd = julianDay(year, month, day, 0.0);
 }
 
+void WeatherController::setAnchorLongitude(double lonRad) noexcept {
+    m_anchorLonRad = lonRad;
+}
+
+double WeatherController::utcOffsetHours() const noexcept {
+    // Mean solar time: the sun crosses 15 degrees of longitude per hour, and a place east of
+    // Greenwich reaches local noon EARLIER, so its UTC instant is earlier by lon/15.
+    return -(m_anchorLonRad * kRadToDeg<double>) / 15.0;
+}
+
 double WeatherController::utcJulianDay() const noexcept {
-    return m_utcDayStartJd + static_cast<double>(m_timeOfDay) / 24.0;
+    // m_timeOfDay is LOCAL mean solar time at the anchor (#1359). Converting it here, rather than at
+    // every caller, keeps ONE definition of "what instant is it" — the wire (MsgWeatherState), the
+    // client's geographic sun and the server all read this same function.
+    //
+    // Deliberately NOT wrapped into [0, 24): a Julian Day is a continuous instant, so an offset that
+    // pushes local time either side of midnight simply lands on the neighbouring day, which is
+    // correct. Wrapping it would put the sun a whole day out at longitudes past +/- 180/15 hours.
+    return m_utcDayStartJd + (static_cast<double>(m_timeOfDay) + utcOffsetHours()) / 24.0;
 }
 
 glm::vec3 WeatherController::geographicSunDirection(double jd, glm::dvec3 observerPos, double R) {

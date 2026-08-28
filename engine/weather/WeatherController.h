@@ -71,10 +71,24 @@ class WeatherController {
         return m_timeOfDay;
     }
 
+    // The mission anchor's longitude, in radians east (#1359). `setTimeOfDay` is LOCAL time at the
+    // mission's own location — that is what a mission author writes and what the HUD clock shows —
+    // so the anchor's longitude is what converts it to the UTC instant the sun is computed from.
+    // Unset (0 = Greenwich) leaves local and UTC identical, which is the pre-#1359 behaviour.
+    void setAnchorLongitude(double lonRad) noexcept;
+
+    // Hours to ADD to local time to get UTC: -longitude/15. Mean solar time, not a civil timezone —
+    // there is no tz database here and the sun does not use one.
+    [[nodiscard]] double utcOffsetHours() const noexcept;
+
     // The shared UTC clock as a Julian Day (date + fractional UTC time-of-day). This is what a client
     // needs, together with its own camera latitude/longitude, to compute the geographic sun (#481) —
     // so the day/night terminator moves correctly across longitudes and two players far apart see
     // different local suns. Broadcast in MsgWeatherState.
+    //
+    // ⚠ This is NOT `dayStart + timeOfDay/24`: time-of-day is LOCAL at the anchor, and the conversion
+    // is what #1359 was. Feeding local time in as UTC put the shipped sandbox (lon -115) 7h40m ahead
+    // of itself — `time: {hour: 12}` rendered at 04:20 local, before sunrise, and the world went black.
     [[nodiscard]] double utcJulianDay() const noexcept;
 
     // Instantaneous world-frame wind including the current gust component (m/s).
@@ -117,10 +131,12 @@ class WeatherController {
     WeatherControllerParams m_params{};
 
     WeatherPreset m_preset{WeatherPreset::PartlyCloudy}; // sandbox default
-    float m_timeOfDay{9.f};                              // sandbox default: 09:00 UTC
+    float m_timeOfDay{9.f};                              // sandbox default: 09:00 LOCAL at the anchor
     // Julian Day at 00:00 UTC of the current date; utcJulianDay() = m_utcDayStartJd + m_timeOfDay/24.
     // Advances by one whole day whenever m_timeOfDay wraps past midnight. Default: 2025-06-21 (#481).
     double m_utcDayStartJd{julianDay(2025, 6, 21, 0.0)};
+    // Longitude of the mission anchor, radians east (#1359). 0 = Greenwich, i.e. local time IS UTC.
+    double m_anchorLonRad{0.0};
     float m_dwellRemaining{120.f}; // real seconds until next auto-transition
 
     // Steady wind (meteorological FROM direction)

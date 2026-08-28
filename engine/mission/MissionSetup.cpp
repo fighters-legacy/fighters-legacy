@@ -137,6 +137,14 @@ MissionSetupResult applyMission(const Mission& mission, EntityManager& em, Facti
             weather->setTimeScaleRatio(*mission.timeScale);
         if (mission.weatherPreset)
             weather->setPreset(*mission.weatherPreset);
+        // A mission's `time:` is LOCAL time where the mission happens, not UTC (#1359). Hand the
+        // anchor's longitude over BEFORE the clock so the very first utcJulianDay() is already
+        // converted — the sun is computed from that instant, and a mission that spent one broadcast
+        // at the wrong longitude would light its opening frame from the wrong side of the planet.
+        // No anchor = raw world coordinates at the north pole, where longitude is degenerate and the
+        // 0 default is as meaningful as any other.
+        if (mission.anchor)
+            weather->setAnchorLongitude(mission.anchor->lonRad);
         weather->setTimeOfDay(static_cast<float>(mission.time.hour) + static_cast<float>(mission.time.minute) / 60.f);
         weather->setWind(mission.wind.headingDeg, mission.wind.speedMs);
     }

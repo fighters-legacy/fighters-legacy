@@ -2,6 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include "math/Angles.h" // kDegToRad / kRadToDeg — anchor-local mission clock (#1359)
 #include "weather/Turbulence.h"
 #include "weather/WeatherController.h"
 #include "world/SandboxHome.h"
@@ -492,6 +493,77 @@ TEST_CASE("WeatherController: UTC Julian Day tracks the date and time-of-day (#4
     wc.setTimeOfDay(0.1f);
     // The date should have advanced at least once relative to the pre-midnight instant.
     CHECK(std::floor(wc.utcJulianDay()) >= std::floor(before));
+}
+
+// ---------------------------------------------------------------------------
+// Anchor-local mission clock (#1359)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WeatherController: anchor longitude converts local time-of-day to UTC (#1359)", "[weather][solar]") {
+    WeatherController wc;
+    wc.setDate(2025, 6, 21);
+    wc.setTimeOfDay(12.0f);
+
+    // No anchor: local IS UTC, which is the pre-#1359 behaviour every existing mission relied on.
+    CHECK_THAT(wc.utcOffsetHours(), WithinAbs(0.0, 1e-9));
+    CHECK_THAT(wc.utcJulianDay(), WithinAbs(julianDay(2025, 6, 21, 12.0), 1e-6));
+
+    // 15 degrees of longitude is one hour of mean solar time. West of Greenwich, local noon happens
+    // LATER in UTC, so the offset is positive.
+    wc.setAnchorLongitude(-15.0 * kDegToRad<double>);
+    CHECK_THAT(wc.utcOffsetHours(), WithinAbs(1.0, 1e-9));
+    CHECK_THAT(wc.utcJulianDay(), WithinAbs(julianDay(2025, 6, 21, 13.0), 1e-6));
+
+    // East is the mirror image.
+    wc.setAnchorLongitude(15.0 * kDegToRad<double>);
+    CHECK_THAT(wc.utcOffsetHours(), WithinAbs(-1.0, 1e-9));
+    CHECK_THAT(wc.utcJulianDay(), WithinAbs(julianDay(2025, 6, 21, 11.0), 1e-6));
+
+    // The DISPLAYED clock stays local — the conversion belongs to the UTC instant, not to the
+    // time-of-day the HUD shows and the mission author wrote.
+    CHECK_THAT(static_cast<double>(wc.timeOfDay()), WithinAbs(12.0, 1e-6));
+}
+
+TEST_CASE("WeatherController: the offset crosses midnight instead of wrapping (#1359)", "[weather][solar]") {
+    // A Julian Day is a continuous instant, so an offset that pushes local time past either end of
+    // the day must land on the neighbouring day. Wrapping into [0, 24) would put the sun a whole day
+    // out at far-western longitudes -- the failure this guards is silent and looks like a sun that is
+    // merely "a bit off".
+    WeatherController wc;
+    wc.setDate(2025, 6, 21);
+    wc.setTimeOfDay(20.0f);
+    wc.setAnchorLongitude(-150.0 * kDegToRad<double>); // +10 h -> 06:00 UTC the NEXT day
+    CHECK_THAT(wc.utcJulianDay(), WithinAbs(julianDay(2025, 6, 22, 6.0), 1e-6));
+
+    wc.setTimeOfDay(2.0f);
+    wc.setAnchorLongitude(150.0 * kDegToRad<double>); // -10 h -> 16:00 UTC the PREVIOUS day
+    CHECK_THAT(wc.utcJulianDay(), WithinAbs(julianDay(2025, 6, 20, 16.0), 1e-6));
+}
+
+TEST_CASE("WeatherController: a mission at the sandbox anchor is LIT at midday (#1359)", "[weather][solar]") {
+    // The regression this whole issue was: the shipped sandbox says `time: {hour: 12}` and rendered a
+    // black world, because 12:00 fed in as UTC is 04:20 local at longitude -115 -- before sunrise.
+    // Solar elevation was -4.76 degrees, which takes applySunLighting's night branch and lights the
+    // scene with its dim blue {0.02, 0.02, 0.08}.
+    WeatherController wc;
+    wc.setDate(2025, 6, 21);
+    wc.setAnchorLongitude(kSandboxHomeLonDeg * kDegToRad<double>);
+    wc.setTimeOfDay(12.0f);
+
+    const SolarAngles a =
+        solarAngles(kSandboxHomeLatDeg * kDegToRad<double>, kSandboxHomeLonDeg * kDegToRad<double>, wc.utcJulianDay());
+    INFO("solar elevation at the sandbox at local noon: " << (a.elevationRad * kRadToDeg<double>) << " deg");
+    CHECK(a.elevationRad > 0.0);
+    // Local noon is not merely above the horizon, it is near the day's peak. A loose bound is enough
+    // to catch a sign flip or a factor-of-two in the offset without pinning the ephemeris.
+    CHECK(a.elevationRad * kRadToDeg<double> > 60.0);
+
+    // ... and midnight at the same anchor is still night, so the fix did not simply shift everything
+    // into permanent daylight.
+    wc.setTimeOfDay(0.0f);
+    const SolarAngles midnight =
+        solarAngles(kSandboxHomeLatDeg * kDegToRad<double>, kSandboxHomeLonDeg * kDegToRad<double>, wc.utcJulianDay());
+    CHECK(midnight.elevationRad < 0.0);
 }
 
 TEST_CASE("WeatherController: geographic sun differs by longitude and points up at the sub-solar point",
