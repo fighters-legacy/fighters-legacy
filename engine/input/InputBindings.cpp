@@ -628,6 +628,20 @@ std::vector<InputBindings::DeviceUse> InputBindings::deviceUsage() const {
     return out;
 }
 
+bool InputBindings::joystickBindingsAllWildcard() const {
+    bool sawJoystick = false;
+    for (const auto& list : m_bindings) {
+        for (const Binding& b : list) {
+            if (!sourceUsesDevice(b.source))
+                continue;
+            if (!b.device.isAny())
+                return false;
+            sawJoystick = true;
+        }
+    }
+    return sawJoystick;
+}
+
 // ---------------------------------------------------------------------------
 // Conflicts
 // ---------------------------------------------------------------------------
@@ -684,11 +698,12 @@ std::string InputBindings::serialize() const {
            "#\n"
            "# Each action under [bindings] holds an ARBITRARY-LENGTH list of bindings, all live at once:\n"
            "# a control can be a key, a mouse button, a gamepad button and a button on each of two\n"
-           "# joysticks simultaneously. Order matters only for analog axes, where the first axis past its\n"
-           "# deadzone wins.\n"
+           "# joysticks simultaneously. Order matters only for analog axes, where the first axis that is\n"
+           "# driving wins — past its deadzone for a Centered axis, moving for an Absolute one.\n"
            "#\n"
            "# A joystick binding names its device by GUID (see [[devices]] below). Omit `device`, or leave\n"
-           "# it empty, to mean \"whichever stick is plugged in\" — that is what the shipped defaults do.\n"
+           "# it empty, to read EVERY connected stick — that is what the shipped defaults do, and whichever\n"
+           "# stick you move is in command.\n"
            "# A binding whose device is not connected is KEPT and simply does nothing; plug the device\n"
            "# back in and the control returns, with no re-binding.\n"
            "#\n"

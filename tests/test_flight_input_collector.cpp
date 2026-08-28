@@ -851,47 +851,134 @@ TEST_CASE("FlightInputCollector keyboard Tab and gamepad fireButton set both bit
 // gamepad uses. There is no separate HOTAS block in the collector left to test.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("FlightInputCollector HOTAS throttle axis sets absolute throttle", "[flight_input]") {
+TEST_CASE("FlightInputCollector HOTAS throttle follows the lever when it moves (#1358)", "[flight_input]") {
     MockLogger log;
     CommandRegistry reg;
     GameConsole console(log, reg);
     MockInput inp;
     MockJoystick joy;
     fl::JoystickDevices devices;
-    // Default throttle axis = 2, mode Absolute: raw 0.5 -> (0.5 + 1) / 2 = 0.75.
-    hotasDevice(joy).axes[fl::kHotasAxisThrottle] = 0.5f;
+    auto& dev = hotasDevice(joy);
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
     fl::ManualClock t;
     fic.setClock(t);
+    const auto src = withStick(inp, joy, devices);
 
-    auto r = fic.poll(bridge, cam, console, withStick(inp, joy, devices));
+    // The first poll only seeds the motion reference — a lever that has not been touched is not a
+    // command, wherever it happens to be parked (#1358).
+    fic.poll(bridge, cam, console, src);
+    t.advance(std::chrono::milliseconds(20));
+
+    // Default throttle axis = 2, mode Absolute: raw 0.5 -> (0.5 + 1) / 2 = 0.75.
+    dev.axes[fl::kHotasAxisThrottle] = 0.5f;
+    auto r = fic.poll(bridge, cam, console, src);
     REQUIRE(r.has_value());
     CHECK(r->throttle == Catch::Approx(0.75f));
+
+    // Pulling it to the stop is a movement too: idle means idle.
+    t.advance(std::chrono::milliseconds(20));
+    dev.axes[fl::kHotasAxisThrottle] = -1.0f;
+    r = fic.poll(bridge, cam, console, src);
+    REQUIRE(r.has_value());
+    CHECK(r->throttle == Catch::Approx(0.0f));
 }
 
-TEST_CASE("FlightInputCollector HOTAS throttle at idle still overrides the keyboard", "[flight_input]") {
+TEST_CASE("FlightInputCollector: a dead Absolute channel cannot lock the keyboard throttle out (#1358)",
+          "[flight_input]") {
     MockLogger log;
     CommandRegistry reg;
     GameConsole console(log, reg);
     MockInput inp;
     MockJoystick joy;
     fl::JoystickDevices devices;
-    hotasDevice(joy).axes[fl::kHotasAxisThrottle] = -1.0f; // lever closed
+    // The #1358 hardware: the default throttle axis (2) is an unfitted channel reading a constant
+    // −1.0. Under "Absolute = always active" this latched the throttle at idle AND swallowed the
+    // keyboard's ThrottleUp — a HOTAS plugged in made the game unflyable, with a clean log.
+    hotasDevice(joy).axes[fl::kHotasAxisThrottle] = -1.0f;
+    inp.held.insert(Key::PageUp); // the keyboard throttle, ramping the shared accumulator
     CameraInput cam;
-    cam.setThrottle(0.6f); // whatever the keyboard had built up
+    fl::SimRenderBridge bridge;
+    FlightInputCollector fic;
+    fl::ManualClock t;
+    fic.setClock(t);
+    const auto src = withStick(inp, joy, devices);
+
+    fic.poll(bridge, cam, console, src);
+    t.advance(std::chrono::milliseconds(100));
+    const auto r = fic.poll(bridge, cam, console, src);
+    REQUIRE(r.has_value());
+    CHECK(r->throttle > 0.0f); // the keyboard is in command; the stuck channel never was
+}
+
+TEST_CASE("FlightInputCollector: keyboard and lever drive one throttle, last mover wins (#1358)", "[flight_input]") {
+    MockLogger log;
+    CommandRegistry reg;
+    GameConsole console(log, reg);
+    MockInput inp;
+    MockJoystick joy;
+    fl::JoystickDevices devices;
+    auto& dev = hotasDevice(joy);
+    CameraInput cam;
+    fl::SimRenderBridge bridge;
+    FlightInputCollector fic;
+    fl::ManualClock t;
+    fic.setClock(t);
+    const auto src = withStick(inp, joy, devices);
+
+    // Lever parked at idle when the session starts, then moved to half travel: the throttle snaps
+    // to the lever.
+    dev.axes[fl::kHotasAxisThrottle] = -1.0f;
+    fic.poll(bridge, cam, console, src);
+    t.advance(std::chrono::milliseconds(20));
+    dev.axes[fl::kHotasAxisThrottle] = 0.0f;
+    auto r = fic.poll(bridge, cam, console, src);
+    REQUIRE(r.has_value());
+    CHECK(r->throttle == Catch::Approx(0.5f));
+
+    // Lever now STILL: the keyboard trims from the lever's position instead of being locked out —
+    // John's requirement on #1358 is that both are usable at the same time.
+    inp.held.insert(Key::PageUp);
+    t.advance(std::chrono::milliseconds(50));
+    r = fic.poll(bridge, cam, console, src);
+    REQUIRE(r.has_value());
+    CHECK(r->throttle > 0.5f);
+    const float trimmed = r->throttle;
+
+    // The lever moves again: it takes the control back at its position.
+    inp.held.erase(Key::PageUp);
+    t.advance(std::chrono::milliseconds(20));
+    dev.axes[fl::kHotasAxisThrottle] = 0.5f;
+    r = fic.poll(bridge, cam, console, src);
+    REQUIRE(r.has_value());
+    CHECK(r->throttle == Catch::Approx(0.75f));
+    CHECK(r->throttle != Catch::Approx(trimmed));
+}
+
+TEST_CASE("FlightInputCollector: a split HOTAS flies from whichever unit the player moves (#1358)", "[flight_input]") {
+    MockLogger log;
+    CommandRegistry reg;
+    GameConsole console(log, reg);
+    MockInput inp;
+    MockJoystick joy;
+    fl::JoystickDevices devices;
+    // Two units; the FIRST to enumerate is the one the flight stick is NOT on — the enumeration
+    // order that made #1358's rig unflyable when `Any` collapsed onto device 0.
+    auto& unitA = joy.addDevice("03000000a1b2c3d4000000000000aaaa", "Throttle Unit");
+    unitA.axes.assign(8, 0.0f);
+    auto& unitB = joy.addDevice("03000000a1b2c3d4000000000000bbbb", "Flight Stick");
+    unitB.axes.assign(8, 0.0f);
+    CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
     fl::ManualClock t;
     fic.setClock(t);
 
-    auto r = fic.poll(bridge, cam, console, withStick(inp, joy, devices));
+    unitB.axes[fl::kHotasAxisPitch] = 0.6f;
+    const auto r = fic.poll(bridge, cam, console, withStick(inp, joy, devices));
     REQUIRE(r.has_value());
-    // An absolute lever is in command even when it reads zero. If it were treated as "inactive because
-    // the value is 0" the keyboard throttle would win and the aircraft would fly at 60% with the
-    // throttle shut.
-    CHECK(r->throttle == Catch::Approx(0.0f));
+    CHECK(r->elevator > 0.0f);
 }
 
 TEST_CASE("FlightInputCollector HOTAS elevator axis overrides keyboard", "[flight_input]") {

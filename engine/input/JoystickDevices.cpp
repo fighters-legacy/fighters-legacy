@@ -31,19 +31,35 @@ void JoystickDevices::update(const IJoystick& js) {
             m_changes.push_back({d.guid, d.name, false});
     }
 
+    // One of two IDENTICAL units unplugging is invisible to the guid diff above — its guid is still
+    // present on the twin — so the generation also watches the count. The index renumbering the
+    // generation guards against happens either way.
+    if (!m_changes.empty() || live.size() != m_devices.size())
+        ++m_generation;
+
     m_devices = std::move(live);
 
     // Hat state: roll current -> previous for devices we already knew, and sample the live positions.
     // Keyed by GUID so a removal in the middle of the list cannot shift one stick's history onto
-    // another's and manufacture an edge.
+    // another's and manufacture an edge — but matched with CLAIMED CONSUMPTION, because two units of
+    // one model report the IDENTICAL GUID (SDL encodes vendor/product, not a serial). A plain
+    // find-by-guid hands both twins the FIRST one's history, and the second one's held hat then
+    // reads as a fresh edge every single frame (#1358). Pairing old to new in order keeps each
+    // twin's history its own; the pairing is ambiguous only for the one frame in which one of two
+    // identical units is unplugged.
     std::vector<HatState> hats;
     hats.reserve(m_devices.size());
+    std::vector<bool> claimed(m_hats.size(), false);
     for (const auto& d : m_devices) {
         HatState st;
         st.guid = d.guid;
-        const auto it = std::find_if(m_hats.begin(), m_hats.end(), [&](const HatState& h) { return h.guid == d.guid; });
-        if (it != m_hats.end())
-            st.previous = it->current;
+        for (size_t i = 0; i < m_hats.size(); ++i) {
+            if (claimed[i] || m_hats[i].guid != d.guid)
+                continue;
+            claimed[i] = true;
+            st.previous = m_hats[i].current;
+            break;
+        }
         const int hatCount = js.getHatCount(d.index);
         st.current.resize(static_cast<size_t>(hatCount > 0 ? hatCount : 0), HatPosition::Centered);
         st.previous.resize(st.current.size(), HatPosition::Centered);
@@ -57,8 +73,9 @@ void JoystickDevices::update(const IJoystick& js) {
 int JoystickDevices::resolve(const DeviceRef& ref) const {
     if (m_devices.empty())
         return kAbsent;
-    // `Any` means "whichever stick is plugged in": the first one. That is the pre-#1061 hardcoded
-    // device 0, promoted from an assumption to a stated rule.
+    // `Any` resolves to the FIRST present device here because this returns one index. The binding
+    // queries do not use this for `Any` — they scan every present device (#1358); this single-index
+    // form serves callers that need a representative device, and presence tests.
     if (ref.isAny())
         return m_devices.front().index;
     for (const auto& d : m_devices)

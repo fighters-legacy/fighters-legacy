@@ -170,11 +170,20 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
         // on device 0 — unrebindable, invisible to the conflict checker, and carrying its own
         // hand-rolled deadzone and invert logic. Now the axes are ordinary bindings and actionAxis()
         // walks the action's list, taking the first one that is actually driving the control. The
-        // shipped order puts the joystick first, which reproduces the old "HOTAS wins" precedence.
+        // shipped order puts the joystick first, which reproduces the old "HOTAS wins" precedence,
+        // and an `Any` binding reads every connected stick, so a split HOTAS works whichever unit
+        // enumerated first (#1358).
         //
-        // `active` is not "non-zero": an ABSOLUTE throttle lever parked at idle reads 0.0 and is still
-        // in command, which is why a closed HOTAS throttle correctly overrides the keyboard.
-        auto axis = [&](fl::InputAction a) { return fl::actionAxis(sources, m_bindings, m_axisConfig, a); };
+        // THE THROTTLE IS A SHARED ACCUMULATOR AND THE LAST MOVER WINS (#1358). The keyboard is a
+        // rate (ThrottleUp/Down integrate into camInput above); a lever is a position. An Absolute
+        // axis asserts only while it is MOVING — m_axisMotion remembers where every axis sat — so a
+        // moving lever snaps the accumulator to its position, a still one leaves the keyboard free to
+        // trim from there, and a dead channel stuck at −1.0 never latches the control at idle. The
+        // old rule, Absolute = always in command, made any Absolute binding kill the keyboard
+        // throttle outright — on a stuck channel, an unflyable aircraft with a clean log.
+        auto axis = [&](fl::InputAction a) {
+            return fl::actionAxis(sources, m_bindings, m_axisConfig, a, &m_axisMotion);
+        };
 
         if (const fl::AxisSample thr = axis(fl::InputAction::ThrottleAxis); thr.active) {
             camInput.setThrottle(std::clamp(thr.value, 0.0f, 1.0f));
@@ -229,12 +238,16 @@ void FlightInputCollector::setClock(const fl::IClock& clock) {
 void FlightInputCollector::setBindings(fl::InputBindings bindings) {
     m_bindings = std::move(bindings);
     // A rebind mid-session must not leave a stale edge behind: the old key may have been held when
-    // it stopped being this action's binding, which would swallow the next press.
+    // it stopped being this action's binding, which would swallow the next press. Same for the axis
+    // motion references — a re-mapped axis's old resting place is not evidence about the new map.
     m_edges.reset();
+    m_axisMotion.reset();
 }
 
 void FlightInputCollector::setAxisConfig(fl::AxisConfigTable cfg) {
     m_axisConfig = std::move(cfg);
+    // A mode change (Centered <-> Absolute) changes what the stored reference means; reseed.
+    m_axisMotion.reset();
 }
 
 } // namespace fl

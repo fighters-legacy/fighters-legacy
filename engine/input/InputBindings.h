@@ -132,6 +132,12 @@ class InputBindings {
     // ("any device") bindings are not listed: they are not waiting for a particular stick.
     [[nodiscard]] std::vector<DeviceUse> deviceUsage() const;
 
+    // True when the table has at least one joystick-class binding and none of them names a concrete
+    // device — the shipped-defaults shape. With several sticks connected that is worth a startup
+    // warning (#1358): every wildcard binding reads all of them at once, and only a GUID in the
+    // binding dedicates an axis to one stick.
+    [[nodiscard]] bool joystickBindingsAllWildcard() const;
+
     // --- Conflicts -----------------------------------------------------------
 
     // Returns the first action that already uses the given binding IN AN OVERLAPPING CONTEXT

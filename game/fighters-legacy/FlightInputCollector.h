@@ -137,6 +137,10 @@ class FlightInputCollector {
 
     InputBindings m_bindings{};     // default: the shipped key map
     AxisConfigTable m_axisConfig{}; // default: deadzone=0.1, Linear, no invert, scale=1
+    // Where every observed axis sat last poll, so an Absolute lever commands the throttle only while
+    // it is the thing being moved and the keyboard stays usable beside it (#1358). Poll-cadence state
+    // for the same reason m_edges is.
+    AxisMotionTracker m_axisMotion{};
 };
 
 } // namespace fl

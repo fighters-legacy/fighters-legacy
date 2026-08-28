@@ -939,6 +939,22 @@ void Game::reconcileInputDevices() {
                                   "GUID can be used in a binding (the file was rewritten)");
     }
 
+    // Several sticks on a pure-wildcard map: every joystick binding reads ALL of them, so the flight
+    // axes respond to whichever unit the player moves (#1358). That flies, but a split stick+throttle
+    // rig almost always wants its axes dedicated — say so, and say how, because with no rebind UI the
+    // GUIDs in this log and in [[devices]] are the only route. Before #1358 this exact setup was
+    // silently unflyable: every axis landed on whichever unit enumerated first.
+    if (d.services.joystickDevices.present().size() > 1 && d.services.inputBindings.joystickBindingsAllWildcard()) {
+        char msg[320];
+        std::snprintf(msg, sizeof(msg),
+                      "%zu joysticks are connected and every joystick binding applies to any of them, so each "
+                      "axis and button reads all %zu sticks. To dedicate a binding to one stick, add its "
+                      "device GUID (logged above, and recorded in bindings.toml's [[devices]] table) to the "
+                      "binding's `device` field.",
+                      d.services.joystickDevices.present().size(), d.services.joystickDevices.present().size());
+        d.services.rawLogger->log(LogLevel::Warn, __FILE__, __LINE__, msg);
+    }
+
     // A binding whose device is absent is PRESERVED and INERT, never pruned: destroying a player's
     // HOTAS map the first time they launch without the stick plugged in is the worse failure. It is
     // reported ONCE PER DEVICE rather than once per binding, so a fully mapped stick does not produce

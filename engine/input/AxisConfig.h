@@ -32,9 +32,12 @@ enum class AxisMode : uint8_t {
 // One processed axis reading.
 //
 // `active` answers "is this axis driving the control right now?", which is a different question from
-// "is the value non-zero". An absolute throttle lever parked at idle reads 0.0 and is still very much
-// in command — treating that as inactive is how a keyboard throttle would fight a HOTAS that the
-// player had deliberately closed.
+// "is the value non-zero". A centered stick at 0.3 deflection is driving; the same stick inside its
+// deadzone is not, whatever its exact value reads. For an ABSOLUTE axis the question cannot be
+// answered from the value at all — every point of a lever's travel is a valid setting — so apply()
+// reports it provisionally and actionAxis() gates it on MOTION via AxisMotionTracker (#1358): the
+// lever commands when the player moves it and yields when it stops, which keeps the keyboard throttle
+// usable beside it and stops an unfitted channel stuck at −1.0 from latching the control forever.
 struct AxisSample {
     float value{0.0f};
     bool active{false};
@@ -48,7 +51,8 @@ struct AxisConfig {
     float scale{1.0f};
 
     // Centered: deadzone → rescale → curve → invert → scale, active past the deadzone.
-    // Absolute: invert → [-1, 1] remapped to [0, 1] → scale, always active.
+    // Absolute: invert → [-1, 1] remapped to [0, 1] → scale; `active` is PROVISIONAL — the axis has
+    // no rest position to gate on, so actionAxis() replaces it with a motion gate (#1358).
     [[nodiscard]] AxisSample apply(float raw) const;
 };
 
