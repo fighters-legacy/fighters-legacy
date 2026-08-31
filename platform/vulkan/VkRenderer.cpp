@@ -900,12 +900,104 @@ bool VkRenderer::setCaptureSink(std::function<void(const CaptureFrame&)> sink) {
     return true;
 }
 
+// Allocate (or re-allocate) the cached readback staging buffer so it holds at least `bytes`, and
+// leave it persistently mapped in m_readbackMapped. Returns false if the buffer is unavailable.
+//
+// Sizing is exact-match rather than grow-only: the extent changes on a resize, not per frame, so a
+// shrink costs one reallocation and keeps the mapped span equal to the copy region — a grow-only
+// buffer would leave the tail of a previous, larger frame readable past the current image.
+bool VkRenderer::ensureReadbackStaging(VkDeviceSize bytes) {
+    if (bytes == 0)
+        return false;
+    if (m_readbackBuf != VK_NULL_HANDLE && m_readbackBytes == bytes && m_readbackMapped != nullptr)
+        return true;
+
+    destroyReadbackStaging();
+
+    VkBufferCreateInfo bci{};
+    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.size = bytes;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(m_device, &bci, nullptr, &m_readbackBuf) != VK_SUCCESS) {
+        m_readbackBuf = VK_NULL_HANDLE;
+        return false;
+    }
+    VkMemoryRequirements memReq{};
+    vkGetBufferMemoryRequirements(m_device, m_readbackBuf, &memReq);
+    VkMemoryAllocateInfo mai{};
+    mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    mai.allocationSize = memReq.size;
+    // ⚠ HOST_CACHED is the flag that matters here, and it is easy to lose (#1375). readbackImageRgba
+    // READS every pixel back through the mapped pointer to swizzle it, and on a discrete GPU the
+    // first HOST_VISIBLE|HOST_COHERENT type is the DEVICE_LOCAL BAR heap — write-combined memory
+    // whose CPU reads cross PCIe uncached. That read loop measured **80.9% of the recorder's
+    // main-thread time** and pinned it at 2.6 FPS. HOST_CACHED puts the staging copy in ordinary
+    // cached system RAM instead. It is not a guaranteed memory type, so fall back to plain COHERENT
+    // — correct either way, just slow again. Do not "simplify" this back to one findMemoryType call.
+    constexpr VkMemoryPropertyFlags kHostRW =
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    uint32_t memType =
+        findMemoryTypeOrNone(m_physicalDevice, memReq.memoryTypeBits, kHostRW | VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+    if (memType == kNoMemoryType)
+        memType = findMemoryType(m_physicalDevice, memReq.memoryTypeBits, kHostRW);
+    mai.memoryTypeIndex = memType;
+    if (vkAllocateMemory(m_device, &mai, nullptr, &m_readbackMem) != VK_SUCCESS) {
+        m_readbackMem = VK_NULL_HANDLE;
+        destroyReadbackStaging();
+        return false;
+    }
+    vkBindBufferMemory(m_device, m_readbackBuf, m_readbackMem, 0);
+    if (vkMapMemory(m_device, m_readbackMem, 0, bytes, 0, &m_readbackMapped) != VK_SUCCESS) {
+        m_readbackMapped = nullptr;
+        destroyReadbackStaging();
+        return false;
+    }
+
+    // Reusable one-shot command buffer, recorded fresh on every readback. Allocated from the
+    // renderer's own pool, which shutdown() destroys after this is freed.
+    if (m_readbackCmd == VK_NULL_HANDLE && m_commandPool != VK_NULL_HANDLE) {
+        VkCommandBufferAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        ai.commandPool = m_commandPool;
+        ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        ai.commandBufferCount = 1;
+        if (vkAllocateCommandBuffers(m_device, &ai, &m_readbackCmd) != VK_SUCCESS)
+            m_readbackCmd = VK_NULL_HANDLE; // fall back to m_resources.beginOneShot() below
+    }
+
+    m_readbackBytes = bytes;
+    return true;
+}
+
+void VkRenderer::destroyReadbackStaging() {
+    if (m_readbackMapped != nullptr && m_readbackMem != VK_NULL_HANDLE) {
+        vkUnmapMemory(m_device, m_readbackMem);
+        m_readbackMapped = nullptr;
+    }
+    if (m_readbackBuf != VK_NULL_HANDLE) {
+        vkDestroyBuffer(m_device, m_readbackBuf, nullptr);
+        m_readbackBuf = VK_NULL_HANDLE;
+    }
+    if (m_readbackMem != VK_NULL_HANDLE) {
+        vkFreeMemory(m_device, m_readbackMem, nullptr);
+        m_readbackMem = VK_NULL_HANDLE;
+    }
+    m_readbackBytes = 0;
+}
+
 // Copy `srcImage` (in `srcLayout`) into a host-visible buffer and swizzle to tightly packed RGBA8
 // (opaque alpha) in `outRgba`, restoring the image to `restoreLayout`. This is the single readback path
 // behind both --screenshot (PNG) and the per-frame capture sink (#912), and is reused headless (#913)
-// with the owned present-target image + its layout. Synchronous (a full queue wait) — the recorder runs
-// offline at a reduced time-rate, so the per-frame stall is irrelevant and buys correctness + simplicity
-// over a zero-stall readback ring that cannot be verified without a GPU.
+// with the owned present-target image + its layout.
+//
+// Synchronous (a full queue wait): the recorder runs offline at a reduced time-rate, so a drain buys
+// correctness + simplicity over a zero-stall readback ring that cannot be verified without a GPU.
+// ⚠ That trade covers the *wait* only — measured GPU work here is ~1.9 ms, so draining is cheap. It
+// does NOT extend to allocating: creating/mapping/destroying the staging buffer per frame cost ~393 ms
+// of a 395 ms frame and pinned the recorder at 2.6 FPS, under its own --record-fps, so the sink
+// duplicated frames until --record-max-dup failed every run (#1375). The staging buffer and the
+// command buffer are therefore cached across frames; keep them that way.
 bool VkRenderer::readbackImageRgba(VkImage srcImage, VkImageLayout srcLayout, VkImageLayout restoreLayout,
                                    std::vector<uint8_t>& outRgba, uint32_t& outW, uint32_t& outH) {
     vkQueueWaitIdle(m_graphicsQueue);
@@ -914,60 +1006,53 @@ bool VkRenderer::readbackImageRgba(VkImage srcImage, VkImageLayout srcLayout, Vk
     const uint32_t h = m_swapchainExtent.height;
     const VkDeviceSize bytes = static_cast<VkDeviceSize>(w) * h * 4;
 
-    // Host-visible destination buffer.
-    VkBuffer buf = VK_NULL_HANDLE;
-    VkDeviceMemory mem = VK_NULL_HANDLE;
-    VkBufferCreateInfo bci{};
-    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bci.size = bytes;
-    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    if (vkCreateBuffer(m_device, &bci, nullptr, &buf) != VK_SUCCESS)
+    if (!ensureReadbackStaging(bytes))
         return false;
-    VkMemoryRequirements memReq{};
-    vkGetBufferMemoryRequirements(m_device, buf, &memReq);
-    VkMemoryAllocateInfo mai{};
-    mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    mai.allocationSize = memReq.size;
-    mai.memoryTypeIndex = findMemoryType(m_physicalDevice, memReq.memoryTypeBits,
-                                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    if (vkAllocateMemory(m_device, &mai, nullptr, &mem) != VK_SUCCESS) {
-        vkDestroyBuffer(m_device, buf, nullptr);
-        return false;
-    }
-    vkBindBufferMemory(m_device, buf, mem, 0);
 
-    // One-shot command buffer: srcLayout -> TRANSFER_SRC, copy, TRANSFER_SRC -> restoreLayout.
-    // m_resources was initialised against this same pool and queue, so its begin/endOneShot pair is
-    // the block that used to be open-coded here (#1265).
-    VkCommandBuffer cmd = m_resources.beginOneShot();
+    // srcLayout -> TRANSFER_SRC, copy, TRANSFER_SRC -> restoreLayout. The cached command buffer is
+    // reset and re-recorded each call; if it could not be allocated, fall back to the shared
+    // begin/endOneShot pair (#1265), which allocates and frees one per call.
+    const bool ownCmd = (m_readbackCmd != VK_NULL_HANDLE);
+    VkCommandBuffer cmd = m_readbackCmd;
+    if (ownCmd) {
+        vkResetCommandBuffer(cmd, 0);
+        VkCommandBufferBeginInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(cmd, &bi);
+    } else {
+        cmd = m_resources.beginOneShot();
+    }
+
     imageBarrier(cmd, srcImage, srcLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 0, VK_ACCESS_TRANSFER_READ_BIT,
                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
     VkBufferImageCopy region{};
     region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     region.imageExtent = {w, h, 1};
-    vkCmdCopyImageToBuffer(cmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf, 1, &region);
+    vkCmdCopyImageToBuffer(cmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, m_readbackBuf, 1, &region);
     imageBarrier(cmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, restoreLayout, VK_ACCESS_TRANSFER_READ_BIT, 0,
                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
-    m_resources.endOneShot(cmd);
 
-    bool ok = false;
-    void* mapped = nullptr;
-    if (vkMapMemory(m_device, mem, 0, bytes, 0, &mapped) == VK_SUCCESS) {
-        outRgba.resize(static_cast<std::size_t>(bytes));
-        const auto* src = static_cast<const uint8_t*>(mapped);
-        const bool bgra =
-            (m_swapchainFormat == VK_FORMAT_B8G8R8A8_SRGB || m_swapchainFormat == VK_FORMAT_B8G8R8A8_UNORM);
-        captureSwizzleToRgba(src, w * h, bgra, outRgba.data());
-        vkUnmapMemory(m_device, mem);
-        outW = w;
-        outH = h;
-        ok = true;
+    if (ownCmd) {
+        vkEndCommandBuffer(cmd);
+        VkSubmitInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &cmd;
+        vkQueueSubmit(m_graphicsQueue, 1, &si, VK_NULL_HANDLE);
+        vkQueueWaitIdle(m_graphicsQueue);
+    } else {
+        m_resources.endOneShot(cmd);
     }
 
-    vkDestroyBuffer(m_device, buf, nullptr);
-    vkFreeMemory(m_device, mem, nullptr);
-    return ok;
+    // HOST_COHERENT, so the copy is visible without an explicit invalidate.
+    outRgba.resize(static_cast<std::size_t>(bytes));
+    const auto* src = static_cast<const uint8_t*>(m_readbackMapped);
+    const bool bgra = (m_swapchainFormat == VK_FORMAT_B8G8R8A8_SRGB || m_swapchainFormat == VK_FORMAT_B8G8R8A8_UNORM);
+    captureSwizzleToRgba(src, w * h, bgra, outRgba.data());
+    outW = w;
+    outH = h;
+    return true;
 }
 
 void VkRenderer::writeSwapchainPng(const std::string& path) {
@@ -1033,6 +1118,7 @@ void VkRenderer::shutdown() {
 
     destroyOverlayResources();
     destroyParticleResources();
+    destroyReadbackStaging(); // #1375: cached capture staging, unmapped before the device goes
     m_resources.shutdown();
 
     if (m_timestampPool != VK_NULL_HANDLE) {
@@ -1187,6 +1273,10 @@ void VkRenderer::shutdown() {
     m_renderFinished.clear();
 
     if (m_commandPool != VK_NULL_HANDLE) {
+        if (m_readbackCmd != VK_NULL_HANDLE) { // #1375: allocated from this pool, so free it first
+            vkFreeCommandBuffers(m_device, m_commandPool, 1, &m_readbackCmd);
+            m_readbackCmd = VK_NULL_HANDLE;
+        }
         vkDestroyCommandPool(m_device, m_commandPool, nullptr);
         m_commandPool = VK_NULL_HANDLE;
     }

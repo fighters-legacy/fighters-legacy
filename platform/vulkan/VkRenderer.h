@@ -583,6 +583,20 @@ class VkRenderer : public IRenderer {
     // zero-stall ring, since the recorder runs offline at a reduced time-rate (see VkRenderer.cpp).
     std::function<void(const CaptureFrame&)> m_captureSink;
     std::vector<uint8_t> m_captureBuf; // reused RGBA scratch for the sink (avoids per-frame realloc)
+    // Readback staging, cached across frames (#1375). The sink calls readbackImageRgba once per
+    // recorded frame; creating and destroying the host-visible buffer + its allocation *inside* that
+    // call cost ~393 ms of every 395 ms frame (GPU work: 1.88 ms) and held the recorder to 2.6 FPS,
+    // below its own --record-fps, so the sink duplicated frames until --record-max-dup failed the
+    // run. Allocated on first use, reused while the extent is unchanged, and persistently mapped —
+    // the memory is HOST_COHERENT, so no flush/invalidate is needed around the map.
+    VkBuffer m_readbackBuf{VK_NULL_HANDLE};
+    VkDeviceMemory m_readbackMem{VK_NULL_HANDLE};
+    VkDeviceSize m_readbackBytes{0};
+    void* m_readbackMapped{nullptr};
+    VkCommandBuffer m_readbackCmd{VK_NULL_HANDLE}; // reused one-shot, re-recorded each readback
+    // Ensure the cached staging buffer holds at least `bytes`, reallocating only on a size change.
+    bool ensureReadbackStaging(VkDeviceSize bytes);
+    void destroyReadbackStaging();
     // Copy `srcImage` (currently in `srcLayout`) into a host buffer and swizzle to tightly packed RGBA8
     // (opaque alpha) in `outRgba`; restores the image to `restoreLayout`. Returns false on failure.
     bool readbackImageRgba(VkImage srcImage, VkImageLayout srcLayout, VkImageLayout restoreLayout,
