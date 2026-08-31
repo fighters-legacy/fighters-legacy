@@ -32,6 +32,12 @@ struct ShotPose {
     float fovYDeg{60.f};
     int shotIndex{-1};
     bool active{false};
+    // False when this pose is the dead/unresolvable-target FALLBACK rather than a freshly evaluated
+    // one — the camera is holding a stale pose and the footage is frozen (#1381). The hold itself is
+    // deliberate (never snap to origin), but a caller that cannot tell records frozen video and calls
+    // it a success: demo-night-patrol shipped 21.6 s of an identical frame this way, and the recorder
+    // reported "[OK]". Callers must surface this, not just consume the pose.
+    bool resolved{true};
 };
 
 // Resolve a mission object id to its current world pose. Returns false when the entity is not
