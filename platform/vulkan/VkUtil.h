@@ -11,13 +11,24 @@ namespace fl {
 // Pick a memory type satisfying `props` from the ones `filter` permits. Falls back to index 0 when
 // nothing matches, which is what every caller has always relied on: the allocation then fails at
 // vkAllocateMemory with a real Vulkan error rather than here with a silent one.
-inline uint32_t findMemoryType(VkPhysicalDevice physDevice, uint32_t filter, VkMemoryPropertyFlags props) {
+inline constexpr uint32_t kNoMemoryType = UINT32_MAX;
+
+// Like findMemoryType, but reports "nothing matched" instead of falling back to index 0, so a caller
+// can ask for a preferred property set and then settle for a weaker one. Needed because the flags
+// that matter for performance are not the flags that matter for correctness: a readback buffer is
+// correct on any HOST_VISIBLE|HOST_COHERENT type but is only *fast* on a HOST_CACHED one (#1375).
+inline uint32_t findMemoryTypeOrNone(VkPhysicalDevice physDevice, uint32_t filter, VkMemoryPropertyFlags props) {
     VkPhysicalDeviceMemoryProperties memProps{};
     vkGetPhysicalDeviceMemoryProperties(physDevice, &memProps);
     for (uint32_t i = 0; i < memProps.memoryTypeCount; ++i)
         if ((filter & (1u << i)) && (memProps.memoryTypes[i].propertyFlags & props) == props)
             return i;
-    return 0;
+    return kNoMemoryType;
+}
+
+inline uint32_t findMemoryType(VkPhysicalDevice physDevice, uint32_t filter, VkMemoryPropertyFlags props) {
+    const uint32_t idx = findMemoryTypeOrNone(physDevice, filter, props);
+    return idx == kNoMemoryType ? 0 : idx;
 }
 
 // One image memory barrier. VkRenderer.cpp and VkResources.cpp each held a file-static copy (one
