@@ -219,7 +219,9 @@ must raise them (the runner writes this automatically):
 
 The server-side sim-tick CPU parallelism is set by `[world] sim_worker_threads` (0 = auto, 1 =
 serial), overridable per-run with `fl-server --sim-worker-threads <n>` — distinct from the harness's
-own `--threads`. To measure the data-parallel sim ([#511], [#512]), sweep `--sim-worker-threads`
+own `--threads`. Both auto-size from the CPU budget the OS granted the process — affinity mask and
+cgroup quota, not the host's core count ([#1380]) — so a run pinned with `taskset` is measured by a
+harness that was also pinned, and each states its budget on startup. To measure the data-parallel sim ([#511], [#512]), sweep `--sim-worker-threads`
 (e.g. `1, 2, 4, 8`) at a fixed client count and pattern and watch the authoritative `server_tick`
 block: the `integrate`, `ai`, **and `serialize`** per-phase wall-times should drop with worker count
 (`serialize` is now the parallel per-peer snapshot build, [#512]), and the weave/aggressive tick-Hz
@@ -783,3 +785,4 @@ keeps firing on *later, unrelated* PRs and stops being a signal.
 
 [#1377]: https://github.com/fighters-legacy/fighters-legacy/issues/1377
 [#1379]: https://github.com/fighters-legacy/fighters-legacy/issues/1379
+[#1380]: https://github.com/fighters-legacy/fighters-legacy/issues/1380

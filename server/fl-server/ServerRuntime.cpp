@@ -2425,15 +2425,19 @@ bool ServerRuntime::Impl::initAdmin() {
 
     // Data-parallel sim tick: the worker pool that parallelises the per-entity AI + integrate
     // passes. Constructed before gameLoop.start() and outlives it (declared here in main's scope).
-    // 0 = auto (hardware_concurrency), 1 = serial. Injected into the broadcaster below.
+    // 0 = auto (the CPU budget the OS granted us), 1 = serial. Injected into the broadcaster below.
     m_jobSystem = std::make_unique<fl::JobSystem>(cfg.world.simWorkerThreads);
     [[maybe_unused]] auto& jobSystem = *m_jobSystem;
     broadcaster.setJobSystem(jobSystem);
     {
-        char wbuf[96];
-        std::snprintf(wbuf, sizeof(wbuf), "sim worker pool: %u background worker(s) (sim_worker_threads=%u)",
-                      jobSystem.workerCount(), cfg.world.simWorkerThreads);
-        log->log(LogLevel::Info, __FILE__, __LINE__, wbuf);
+        // State the resolved count AND the constraint that produced it (#1380). An operator who
+        // pinned this server, or gave the pod a CPU limit, can see that the server understood its
+        // budget; a silent 3x oversubscription onto cores it may not use is the failure mode.
+        const std::string line =
+            "sim worker pool: " + std::to_string(jobSystem.workerCount()) +
+            " background worker(s) (sim_worker_threads=" + std::to_string(cfg.world.simWorkerThreads) + "; " +
+            fl::describeCpuBudget(jobSystem.cpuBudget()) + ")";
+        log->log(LogLevel::Info, __FILE__, __LINE__, line.c_str());
     }
     return true;
 }

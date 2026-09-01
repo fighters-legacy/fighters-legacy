@@ -24,6 +24,7 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <job/CpuBudget.h>
 #include <memory>
 #include <net/NetworkFactory.h>
 #include <string>
@@ -300,10 +301,14 @@ int main(int argc, char** argv) {
     }
     std::printf("[INFO ] transport: %s (%s)\n", cfg.transport.c_str(), networkBackendVersion(transport));
 
-    // Worker thread count.
+    // Worker thread count. Sized from the CPUs this process may actually USE -- affinity mask and
+    // cgroup quota, not the machine's online count (#1380). A load test pinned with `taskset` (how
+    // #1379 was investigated) otherwise oversubscribes the generator against the server it is
+    // measuring, which is the one process that must not be a source of tail latency.
+    const fl::CpuBudget cpuBudget = fl::detectCpuBudget();
     int threads = cfg.threads;
     if (threads <= 0) {
-        unsigned hw = std::thread::hardware_concurrency();
+        unsigned hw = fl::resolveCpuBudget(cpuBudget);
         if (hw == 0)
             hw = 4;
         const int byLoad = (cfg.clients + 31) / 32; // ceil(clients/32)
@@ -311,6 +316,8 @@ int main(int argc, char** argv) {
     }
     threads = std::min(threads, cfg.clients);
     threads = std::max(threads, 1);
+
+    std::printf("[INFO ] worker threads: %d (%s)\n", threads, fl::describeCpuBudget(cpuBudget).c_str());
 
     raiseFdLimit(cfg.clients);
 

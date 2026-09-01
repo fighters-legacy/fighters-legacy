@@ -112,7 +112,10 @@ if(TARGET platform-enet)
         bot_swarm/BotClient.cpp
         bot_swarm/LossyProxy.cpp
     )
-    target_link_libraries(bot_swarm PRIVATE platform-net platform-hal engine-protocol Threads::Threads)
+    # engine-job for CpuBudget (#1380): the swarm sized its own worker threads from the host's
+    # online CPU count too, so a load test pinned with `taskset` oversubscribed the generator while
+    # measuring the server. engine-job is pure ISO C++ (no backend), so this adds no dependency.
+    target_link_libraries(bot_swarm PRIVATE platform-net platform-hal engine-protocol engine-job Threads::Threads)
     target_include_directories(bot_swarm PRIVATE
         "${CMAKE_SOURCE_DIR}/platform/net"
         "${CMAKE_CURRENT_SOURCE_DIR}/common"

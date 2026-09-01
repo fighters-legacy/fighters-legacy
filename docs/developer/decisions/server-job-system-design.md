@@ -181,6 +181,15 @@ turbulence; `tsan.yml` proves the region is race-free.
 - `[world] sim_worker_threads` in `server.toml` — total sim-tick parallelism including the sim
   thread. `0` = auto, `1` = serial, `N` = fixed. Range `[0, 256]`. **A CPU-parallelism knob, not a
   capacity guarantee.**
+- **Auto resolves against the granted CPU budget, not `hardware_concurrency()`** ([#1380]).
+  `engine/job/CpuBudget.{h,cpp}` reports the minimum of the process affinity mask, the cgroup CPU
+  quota and the online CPU count; `JobSystem` takes an injectable `CpuBudget` so the sizing is
+  unit-tested without an affinity mask or a container. `hardware_concurrency()` sees neither
+  constraint, so `taskset -c 0-7` produced 23 background workers on 8 usable CPUs — a 3× fork-join
+  oversubscription the server had no idea about, in exactly the environments Phase 5 targets
+  (k8s/OpenShift CPU limits, pinned or shared hosts).
+
+[#1380]: https://github.com/fighters-legacy/fighters-legacy/issues/1380
 - `fl-server --sim-worker-threads <n>` overrides the config (mirrors `--metrics-json`), so the
   load harness can sweep worker counts without rewriting config.
 - Single-player: `LocalServer` launches the embedded `fl-server` with `--sim-worker-threads 1`
@@ -199,7 +208,10 @@ turbulence; `tsan.yml` proves the region is race-free.
   under-utilised. Acceptable for v1 (Linux is the primary 128+ self-host target); tracked as a
   follow-on.
 - No in-process thread pinning on any OS — CPU pinning stays external (`taskset` / the reference
-  env).
+  env). External pinning is now *observed*, though: the pool sizes to the mask it was given.
+- Windows process affinity (`GetProcessAffinityMask`) is deliberately not read: it is not the
+  container case, the processor-group limit above dominates on a large Windows host, and inventing
+  a second untested path buys nothing today.
 
 ## Graceful overrun handling ([#514])
 
