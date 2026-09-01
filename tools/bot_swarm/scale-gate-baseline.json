@@ -1,18 +1,18 @@
 {
   "kbs": {
     "pr/weave": 4.0,
-    "reference-enet/aggressive": 66.348,
-    "reference-enet/idle": 64.46,
-    "reference-enet/weave": 64.747,
+    "reference-enet/aggressive": 3.344,
+    "reference-enet/idle": 3.367,
+    "reference-enet/weave": 3.402,
     "reference/aggressive": 3.488,
     "reference/idle": 3.453,
     "reference/weave": 3.486
   },
   "wire_kbs": {
     "pr/weave": 2.8,
-    "reference-enet/aggressive": 69.1262,
-    "reference-enet/idle": 66.934,
-    "reference-enet/weave": 68.8774,
+    "reference-enet/aggressive": 2.8131,
+    "reference-enet/idle": 2.734,
+    "reference-enet/weave": 2.81,
     "reference/aggressive": 5.2925,
     "reference/idle": 5.292,
     "reference/weave": 5.2954
