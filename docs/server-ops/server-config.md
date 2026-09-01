@@ -750,9 +750,25 @@ are rejected with a Warn and the default is used. **Hot-reloadable** via `reload
 | integer | `0` | `[0, 256]` |
 
 Total CPU parallelism for the sim tick — the number of threads (including the sim thread) that
-share the per-entity AI + integration work each tick. `0` = auto (sized from the host's logical
-core count), `1` = serial (no worker pool). The parallel path is serial-equivalent (bit-identical
-results), so this only affects CPU usage and throughput, never simulation outcome.
+share the per-entity AI + integration work each tick. `0` = auto, `1` = serial (no worker pool).
+The parallel path is serial-equivalent (bit-identical results), so this only affects CPU usage and
+throughput, never simulation outcome.
+
+**Auto sizes to the CPU budget the OS granted this process, not the host's core count** (#1380): on
+Linux the smallest of the process affinity mask (`sched_getaffinity`), the cgroup CPU quota
+(v2 `cpu.max`, or v1 `cpu.cfs_quota_us`/`cpu.cfs_period_us`, rounded up), and the online CPU count.
+A container CPU `limit` is a cgroup quota that leaves the node's core count unchanged, so a pod on a
+24-core node with `limit: 4` would otherwise build a 23-worker pool for 4 usable CPUs — and
+oversubscribing a fork-join pass is worse than undersubscribing it, because every barrier then waits
+on threads competing for the same cores. Windows and macOS size from the online count as before;
+neither has the cgroup problem. The startup line states the resolved count **and the constraint that
+produced it**, so an operator can confirm the server understood its budget:
+
+    [INFO ] sim worker pool: 7 background worker(s) (sim_worker_threads=0; online 24, affinity 8,
+            cgroup unlimited -> 8 usable, limited by affinity)
+
+An explicit `sim_worker_threads` (or `--sim-worker-threads`) is honoured verbatim and ignores the
+budget entirely — an operator who sets a number knows something the process does not.
 
 > **A CPU-parallelism knob, not a capacity guarantee.** Raising it lets the sim use more cores; it
 > does not by itself raise the player ceiling — see Epic A / `docs/developer/decisions/server-job-system-design.md`.

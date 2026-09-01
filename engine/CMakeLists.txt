@@ -423,6 +423,7 @@ set_source_files_properties(campaign/FrontlinePng.cpp PROPERTIES
 # Data-parallel task scheduler: persistent worker pool + blocking parallel_for. Declared before
 # engine-net so the broadcaster can link it for the parallel sim tick.
 add_library(engine-job STATIC
+    job/CpuBudget.cpp
     job/JobSystem.cpp
 )
 target_include_directories(engine-job PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

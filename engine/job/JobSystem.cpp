@@ -17,8 +17,13 @@ unsigned resolveWorkerCount(unsigned requested, unsigned detected) noexcept {
     return (d > 1u) ? (d - 1u) : 0u;
 }
 
-JobSystem::JobSystem(unsigned workerCount) {
-    const unsigned n = resolveWorkerCount(workerCount, std::thread::hardware_concurrency());
+JobSystem::JobSystem(unsigned workerCount) : JobSystem(workerCount, detectCpuBudget()) {}
+
+JobSystem::JobSystem(unsigned workerCount, const CpuBudget& budget) : m_budget(budget) {
+    // The auto count comes from the CPUs this process may actually run on, not from the machine's
+    // online count (#1380): affinity mask, cgroup quota and online CPUs, whichever is tightest.
+    // An explicit workerCount is honoured verbatim and ignores the budget entirely.
+    const unsigned n = resolveWorkerCount(workerCount, resolveCpuBudget(m_budget));
     m_workers.reserve(n);
     for (unsigned i = 0; i < n; ++i)
         m_workers.emplace_back([this] { workerLoop(); });

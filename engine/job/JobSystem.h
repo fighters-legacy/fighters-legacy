@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "job/CpuBudget.h"
+
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
@@ -22,7 +24,8 @@ namespace fl {
 //   N>=2 -> N-1 background (N total).
 //   0    -> auto: (detected>0?detected:4) - 1, i.e. leave the calling thread one core's worth.
 //           A single-core host (detected<=1) degenerates to inline (0 background).
-// `detected` is std::thread::hardware_concurrency() (may be 0 when the platform can't report it).
+// `detected` is the USABLE CPU count -- resolveCpuBudget(detectCpuBudget()), not
+// hardware_concurrency() (#1380) -- and may be 0 when nothing could be detected.
 //
 // Pure function (no threads) so the auto/fallback branches are unit-testable directly.
 [[nodiscard]] unsigned resolveWorkerCount(unsigned requested, unsigned detected) noexcept;
@@ -39,8 +42,14 @@ namespace fl {
 class JobSystem {
   public:
     // workerCount = desired total parallelism including the calling thread.
-    // 0 = auto (from hardware_concurrency), 1 = serial/inline. See resolveWorkerCount().
+    // 0 = auto (from the CPU budget the OS granted this process), 1 = serial/inline.
+    // See resolveWorkerCount() and CpuBudget.h.
     explicit JobSystem(unsigned workerCount = 0);
+
+    // Same, against an injected budget instead of the live one -- the seam the unit tests size a
+    // pool through without an affinity mask or a container.
+    JobSystem(unsigned workerCount, const CpuBudget& budget);
+
     ~JobSystem();
 
     JobSystem(const JobSystem&) = delete;
@@ -70,11 +79,19 @@ class JobSystem {
         return static_cast<unsigned>(m_workers.size());
     }
 
+    // The CPU budget this pool was sized against -- what the startup line reports, so an operator
+    // can see WHY the pool is the size it is. A silent 3x oversubscription is the failure mode to
+    // design against (#1380).
+    [[nodiscard]] const CpuBudget& cpuBudget() const noexcept {
+        return m_budget;
+    }
+
   private:
     void dispatch(std::size_t count, std::size_t grain, std::function<void(std::size_t, std::size_t)> fn);
     void workerLoop();
     void runChunks(); // claim and run chunks of the current batch (workers + caller)
 
+    CpuBudget m_budget;
     std::vector<std::thread> m_workers;
 
     std::mutex m_mx;
