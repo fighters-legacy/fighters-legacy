@@ -805,6 +805,17 @@ void Game::driveRecorderCamera() {
     const fl::ShotPose sp = rec.director->evaluate(simTime, poseOf);
     d.services.cameraController.setMode(fl::CameraMode::Free); // the recorder owns the pose
     d.services.cameraController.setPose(sp.eye, sp.fwd, sp.up);
+    // Report that same eye as this client's viewpoint (#1381). The recorder joins as an OBSERVER, and
+    // an entity-less peer's interest management centres on the `cameraEye` the client sends each frame
+    // (#858) — sourced from CameraInput, NOT from the camera controller the recorder drives. Without
+    // this the client kept reporting CameraInput's default eye (0, 2000, 0), two kilometres from the
+    // CENTRE OF THE EARTH: on any mission using `anchor:` the world sits ~6371 km away, far outside the
+    // 200 km interest radius, so the join's full state arrived and then every entity went interest-out
+    // and the snapshot emptied. The recording then showed an EMPTY WORLD — which is why an orbit shot
+    // froze (its target was gone) and a static shot recorded duplicate frames until it tripped
+    // --record-max-dup. Only the two `anchor: home` demos were affected; the eight that spawn near the
+    // world origin sat inside the radius and hid the bug.
+    d.services.camInput.setFlyEye(sp.eye);
     rec.curFovDeg = sp.fovYDeg;
 }
 

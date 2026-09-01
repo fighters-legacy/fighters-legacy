@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "mission/ShotDirector.h"
 
+#include "flight/CentralGravityField.h" // geodeticUp — the world is a sphere, so "up" depends on WHERE (#1381)
+
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <numbers>
 
@@ -12,13 +15,27 @@ namespace {
 constexpr float kFovMin = 20.f;
 constexpr float kFovMax = 120.f;
 
-// Build an approximate up vector for a look direction: world +Y, unless the look is near-vertical
-// (looking straight up/down), where +Y degenerates — then fall back to a horizontal reference.
-glm::vec3 upFor(const glm::vec3& fwd) {
+// Local "up" for a cinematic camera at `eye`. The world is a SPHERE (#468) whose centre sits at
+// (0, -R, 0), so world +Y is the true vertical only at the origin. On a mission placed with
+// `anchor:` the vertical is the radial direction, and using +Y there cants the horizon by the
+// anchor's angular distance from the origin — demo-atc-scramble framed a diagonal ground plane with
+// its airfield out of frame entirely (#1381).
+//
+// geodeticUp returns exactly (0,1,0) at the origin and degenerates to it at the planet centre, so
+// missions authored without an `anchor:` (which spawn near the origin) are unchanged.
+glm::vec3 upFor(const glm::dvec3& eye, const glm::vec3& fwd) {
+    const double p[3] = {eye.x, eye.y, eye.z};
+    const std::array<float, 3> gu = CentralGravityField::earthInstance().geodeticUp(p);
+    glm::vec3 up(gu[0], gu[1], gu[2]);
     const glm::vec3 f = glm::length(fwd) > 1e-6f ? glm::normalize(fwd) : glm::vec3(0.f, 0.f, -1.f);
-    if (std::fabs(f.y) > 0.999f)
-        return glm::vec3(0.f, 0.f, -1.f);
-    return glm::vec3(0.f, 1.f, 0.f);
+    // Looking (near) straight up or down the local vertical: `up` is degenerate as a basis vector,
+    // so re-derive one perpendicular to the view instead of returning a parallel vector.
+    if (std::fabs(glm::dot(f, up)) > 0.999f) {
+        const glm::vec3 alt = std::fabs(up.y) < 0.9f ? glm::vec3(0.f, 1.f, 0.f) : glm::vec3(0.f, 0.f, -1.f);
+        const glm::vec3 ortho = alt - up * glm::dot(alt, up);
+        up = glm::length(ortho) > 1e-6f ? glm::normalize(ortho) : glm::vec3(0.f, 0.f, -1.f);
+    }
+    return up;
 }
 
 // Catmull-Rom interpolation of one component across p1→p2 (u in [0,1]); p0/p3 are the neighbours.
@@ -139,7 +156,7 @@ bool ShotDirector::evaluateShot(const MissionShot& shot, int idx, double localSe
         out.fwd = glm::vec3(0.f, 0.f, -1.f); // eye coincides with look point — keep a sane forward
     else
         out.fwd = glm::normalize(glm::vec3(dir));
-    out.up = upFor(out.fwd);
+    out.up = upFor(out.eye, out.fwd);
     return true;
 }
 
@@ -191,10 +208,12 @@ ShotPose ShotDirector::evaluate(double t, const EntityPoseFn& poseOf) {
         pose = m_lastPose; // dead/unresolvable target — hold the last valid pose
         pose.shotIndex = active ? idx : -1;
         pose.active = active;
+        pose.resolved = false; // holding a stale pose: the frame is frozen (#1381)
     } else {
         // No prior valid pose to fall back on: neutral default, never a snap-to-origin look.
         pose.shotIndex = active ? idx : -1;
         pose.active = active;
+        pose.resolved = false;
     }
 
     m_lastEvalT = t;

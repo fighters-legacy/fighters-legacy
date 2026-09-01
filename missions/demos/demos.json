@@ -8,7 +8,7 @@
     { "id": "demo-gallery-flyover",   "mission_file": "demo-gallery-flyover.yaml",   "out_name": "demo-gallery-flyover",   "expected_duration": 38 },
     { "id": "demo-bomber-defense",    "mission_file": "demo-bomber-defense.yaml",    "out_name": "demo-bomber-defense",    "expected_duration": 44 },
     { "id": "demo-carrier-swarm",     "mission_file": "demo-carrier-swarm.yaml",     "out_name": "demo-carrier-swarm",     "expected_duration": 46 },
-    { "id": "demo-atc-scramble",      "mission_file": "demo-atc-scramble.yaml",      "out_name": "demo-atc-scramble",      "expected_duration": 44 },
+    { "id": "demo-atc-scramble",      "mission_file": "demo-atc-scramble.yaml",      "out_name": "demo-atc-scramble",      "expected_duration": 128 },
     { "id": "demo-ejection",          "mission_file": "demo-ejection.yaml",          "out_name": "demo-ejection",          "expected_duration": 44 },
     { "id": "demo-night-patrol",      "mission_file": "demo-night-patrol.yaml",      "out_name": "demo-night-patrol",      "expected_duration": 40 }
   ]
