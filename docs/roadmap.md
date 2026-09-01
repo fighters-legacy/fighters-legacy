@@ -13,7 +13,7 @@ drifted from reality during Phase 2. Ordering constraints are listed instead.
 | 1 — Engine Foundation ✓ | HAL, content system, CI/CD | — |
 | 2 — Modern-Particles Engine ✓ | Game loop, flight model, networking, renderer, spherical Earth | Phase 1 complete |
 | 3 — Engine Systems ✓ | Spatial partitioning, AI framework, interest management, bindings, quality settings, **scaling seams** (transport replacement, sim job system, wire quantization, load harness) | Phase 2 complete |
-| 4 — Content & Gameplay | fl-base-pack content, weapons/ballistics + sensor framework, mission & campaign runtime, **MP gameplay framework**, avionics/HUD, gameplay audio, advanced vehicle models, replay, agentic-AI substrate + campaign director (Epics M–O start), **consolidation program** (protocol hardening + interface consolidation) | Phase 3 complete + fl-base-pack substantially ready |
+| 4 — Content & Gameplay ✓ | fl-base-pack content, weapons/ballistics + sensor framework, mission & campaign runtime, **MP gameplay framework**, avionics/HUD, gameplay audio, advanced vehicle models, replay, agentic-AI substrate + campaign director (Epics M–O start), **consolidation program** (protocol hardening + interface consolidation) | Phase 3 complete + fl-base-pack substantially ready |
 | 5 — Multiplayer at Scale & Live Services | Server-side identity/auth, anti-cheat, persistence, ops/observability, k8s/OpenShift operator, deployment artifacts (container image, systemd unit — moved from Phase 7) | Phase 4 complete |
 | 6 — UI Layer & Tooling | IGui HAL + Dear ImGui, in-game mission editor, welcome screen | Phase 5 complete |
 | 7 — Platform Release | macOS/Linux/Windows packages, Flathub, crash reporting | Phase 6 complete |
@@ -25,9 +25,19 @@ drifted from reality during Phase 2. Ordering constraints are listed instead.
 > a conscious choice). Scaling seams were folded into Phases 3–4. See the
 > [decision record](developer/architecture.md#decision-records) and the cross-cutting initiative below.
 
-> **Phase 3 gated at `v0.3.0` (2026-07-10); milestone closed 0 open / 143 closed.** Phase 4 is
-> the active milestone. The scaling spine (Epics A/B/I/L) landed in Phase 3; the `v0.3.x` series
-> ships interim patches while Phase 4 content is in development.
+> **Phase 4 gated at `v0.4.0` (2026-09-01); milestone closed 0 open / 747 closed.** Phase 5 is
+> the active milestone, with its execution plan filed as #1366. The `v0.4.x` series ships interim
+> patches while Phase 5 is in development.
+>
+> ⚠ **Three Phase 4 criteria were amended at the gate rather than met, and the release says so.**
+> Voice relay was removed from the scale criterion (never exercised in any run — the load harness
+> has no voice generator); the `≤ 16.6 ms p99` tick assert is advisory on a virtualized runner
+> (the engine measures 4.72 ms on bare metal, the VM's own noise floor is ~24 ms — #1379); and the
+> demo-video line was dropped (the set records but is not publishable — #1378). The gameplay
+> audit's hands-on half was also not completed: six of nine items were never exercised (#1065).
+>
+> **Phase 3 gated at `v0.3.0` (2026-07-10); milestone closed 0 open / 143 closed.** The scaling
+> spine (Epics A/B/I/L) landed there.
 
 > **2026-07-30 strategic review.** A **consolidation program** lands inside Phase 4, before the
 > gate, as new stages of the #1036 plan (Stages 1–3 shipped as v0.3.11–v0.3.13): protocol
@@ -217,15 +227,16 @@ multi-crew aircraft (#966); the replay core with its determinism gate (#588, #64
 agentic-AI substrate (Epic M #589 stages). Chains 1–4 of the previous revision are fully closed
 and have been pruned per the phase-gate close checklist above.
 
-**One chain remains open toward `v0.4.0`:**
+**Landed (Phase 4 gate, `v0.4.0`):** fl-base-pack gating content (#54, 13 issues, rollup 19/19)
+∥ the consolidation program (#1036 Stages 5–9: protocol hardening #1063, interface consolidation
+#1064, shipped as `v0.3.14`–`v0.3.20`) → both pre-gate audits (documentation #1047, gameplay
+#1065) → the Phase 4 gate (#729). Every chain of the previous revision is closed and pruned per
+the phase-gate close checklist above.
 
-1. **fl-base-pack gating content (#54 — 13 issues: terrain, missions, audio, AI scripts, crew
-   voice, campaign seed, training set, sensor defs, red air) ∥ the consolidation program
-   (#1036 Stages 5–9: protocol hardening #1063, interface consolidation #1064; interim releases
-   `v0.3.14+`) → pre-gate audits (documentation #1047 ✓, **gameplay #1065 last**) → Phase 4 gate
-   (#729) → `v0.4.0`.** The two run in parallel — content lives in fl-base-pack, consolidation in
-   the engine — and #54's sub-issue rollup is the cross-repo readiness gauge, now containing
-   exactly the gating set.
+**Open toward `v0.5.0`:** see the M5.0 execution plan (#1366) — persistence and the first Go
+service (#1367) → identity and accounts (#1368) → anti-cheat (#1369) → observability and the
+admin plane (#1370) → deployment artifacts and the fleet operator (#1371), with the agentic-AI
+and content-expansion lanes (#1372, #1373) running alongside.
 
 **Later phases:** IGui HAL (#156) → in-game mission editor (#49) + subtitles (#165) + crash
 overlay (#236) [P6]; persistence (Epic H) → identity (Epic C) → anti-cheat (Epic D) + operator
@@ -321,7 +332,7 @@ Phase 3 acceptance is a **complete engine layer** — all features testable with
   updated.
 - All three CI platforms green.
 
-### Phase 4 — Content & Gameplay
+### Phase 4 — Content & Gameplay ✓
 
 Phase 4 acceptance requires a content pack (fl-base-pack) and is gated on Phase 3 completion.
 
