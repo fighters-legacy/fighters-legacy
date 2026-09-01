@@ -275,6 +275,17 @@ Releases are `chore(release): vX.Y.Z` PRs, then a tag on the merge commit. The t
    Expect `1`. If it is `0`, the workflow has not run yet (give it a minute) or the release has
    no `stats.md` asset — re-run it with `gh workflow run "Release statistics" -f tag=vX.Y.0`.
 
+9. **Close the phase-gate release Task by hand, then the milestone — in that order.** The release
+   Task is the interlock that keeps the milestone open until the release actually exists, so it is
+   the last issue to close in its milestone and **nothing closes it automatically**. The
+   `auto-close-epics` workflow explicitly skips any `release`-labelled parent ([#1384]): a release
+   task's sub-issues are the *pre-gate audits*, which finish before the release is cut, so
+   sub-issue arithmetic would close it at exactly the moment the release work begins. It did, at
+   the v0.4.0 gate — #729 closed with no tag and no release, and M4.0 then closed 96 seconds
+   *before* the tag existed. Close both only after step 7 has read the body back on the tag.
+
+[#1384]: https://github.com/fighters-legacy/fighters-legacy/issues/1384
+
 ### Application statistics (milestone gates)
 
 `tools/code_stats.py` reports what the release *is*: composition by category — production code,

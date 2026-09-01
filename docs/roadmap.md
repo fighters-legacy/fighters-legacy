@@ -64,7 +64,10 @@ Task #729.
 Each phase gate is tracked by a `release`-labeled Task in the phase's milestone. It sits at
 milestone level rather than under an epic — a phase-gate release serves every epic in the
 phase — and it is deliberately the last issue to close in its milestone, so a milestone
-cannot close before its release ships.
+cannot close before its release ships. It is closed **by hand**, once the release exists and its
+notes have been read back on the tag; `auto-close-epics` skips `release`-labelled parents for
+exactly this reason, since a gate task's sub-issues are the pre-gate audits and always close
+first.
 
 **Runbook:** `./scripts/cut-release.sh vX.Y.Z` (release branch + CHANGELOG section generated from
 commit subjects + CMake version bump) → read the generated section and check its scope →
@@ -72,7 +75,7 @@ the release PR merges → `./scripts/tag-release.sh vX.Y.Z` → the tag push run
 (Windows/Linux/macOS artifacts) → **wait for that workflow to complete** → verify the attached
 artifacts → **hand-author the release notes and read the body back on that tag** →
 **at a phase gate (`v0.N.0`), record + review the phase's demo videos and attach them to the
-Release** → close the milestone. Full procedure and the defect each step prevents:
+Release** → close the release Task → close the milestone. Full procedure and the defect each step prevents:
 [project-management.md → *Cutting a release*](developer/project-management.md#cutting-a-release).
 
 **Demo videos (phase gates, epic #909):** record the phase's demo set headless — locally via

@@ -10,6 +10,15 @@ name: Auto-close epics
 #   * the `epic` label            (personal edition — the epic marker), OR
 #   * the "Epic" issue type       (org edition — the source of truth)
 # so the same workflow ships in both editions.
+#
+# ...EXCEPT a `release`-labelled parent, which is never auto-closed (#1384). A phase-gate release
+# Task is the interlock that keeps a milestone open until the release actually ships, and its
+# sub-issues are the PRE-gate audits — they close by definition BEFORE the release is cut. So its
+# sub-issue count reaches zero at exactly the moment the release work begins, and sub-issue
+# arithmetic closes it with nothing shipped. That is what happened to #729: closed at
+# 2026-09-01T01:54:44Z with no v0.4.0 tag and no release, leaving M4.0 showing 1 open issue while
+# its release did not exist. It matched on the "Epic" TYPE, not the `epic` label. A release task is
+# closed by a human, after the notes are read back — see docs/project-management.md.
 
 on:
   issues:
@@ -64,11 +73,16 @@ jobs:
           done=$(jq -r '.subIssuesSummary.completed' <<<"$parent")
           has_label=$(jq -r '[.labels.nodes[].name] | index("epic") != null' <<<"$parent")
           is_type=$(jq -r '(.issueType.name // "") == "Epic"' <<<"$parent")
+          is_release=$(jq -r '[.labels.nodes[].name] | index("release") != null' <<<"$parent")
 
-          echo "Parent #$pnum: state=$pstate epic-label=$has_label epic-type=$is_type sub-issues=$done/$total"
+          echo "Parent #$pnum: state=$pstate epic-label=$has_label epic-type=$is_type release=$is_release sub-issues=$done/$total"
 
           if [ "$pstate" != "OPEN" ]; then
             echo "Parent already closed — skipping."; exit 0
+          fi
+          if [ "$is_release" = "true" ]; then
+            echo "Parent is a 'release' task — it closes by hand when the release ships (#1384); skipping."
+            exit 0
           fi
           if [ "$has_label" != "true" ] && [ "$is_type" != "true" ]; then
             echo "Parent is neither labelled 'epic' nor typed Epic — skipping."; exit 0
