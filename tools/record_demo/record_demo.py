@@ -22,6 +22,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -30,6 +31,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
 from fl_ports import BindFailure, looks_like_bind_failure, with_free_port  # noqa: E402
 
+try:
+    import yaml
+except ImportError:  # pragma: no cover - --help and the pure unit tests must work without it
+    yaml = None
+
 DEFAULT_ICD = "/usr/share/vulkan/icd.d/lvp_icd.x86_64.json"
 
 # wait_for_listening outcomes. A bind failure is distinguished from a timeout because only the
@@ -37,6 +43,45 @@ DEFAULT_ICD = "/usr/share/vulkan/icd.d/lvp_icd.x86_64.json"
 LISTEN_READY = "ready"
 LISTEN_BIND_FAILED = "bind-failed"
 LISTEN_TIMEOUT = "timeout"
+
+# The frame-difference floor, in signalstats YDIF units (mean absolute Y difference, 0-255 scale),
+# at or below which consecutive frames count as the same picture (#1378).
+#
+# This is measured directly rather than through ffmpeg's `freezedetect`, because freezedetect's
+# response to its own noise threshold is NOT MONOTONE on real footage and so cannot be calibrated.
+# Sweeping `n` over one demo-sam-strike recording:
+#
+#   n=0.1 -> 0.0s   n=0.01 -> 25.7s   n=0.001 -> 0.0s   n=0.0002 -> 6.6s   n=0.000005 -> 0.0s
+#
+# A tighter threshold reporting MORE frozen time, twice, in both directions. Whatever value you pick
+# you cannot say what it means, and the shipped default (0.001) sat above even demo-dogfight's median
+# frame difference -- above the busiest demo in the set -- so every quieter demo read as frozen while
+# its picture was moving. The tell was that the verdict depended on `--time-rate`, a recording SPEED
+# knob: the identical shot list measured 0.0s frozen at `normal` and 93.8s at `quarter`, because the
+# sky animates on wall clock and advances four times further per video frame at the faster rate.
+#
+# A run of frames below a YDIF floor is monotone by construction and separates cleanly on measured
+# medians over 6 s windows:
+#
+#   footage                                                  YDIF median
+#   demo-atc-scramble, cameras 2 km out over empty ground       0.000094   <- genuinely dead
+#   demo-night-patrol, a deliberate static hold                 0.00014    <- genuinely still
+#   demo-atc-scramble, cameras 60 m off the measured track      0.0035     <- MOVING
+#   demo-dogfight, the busiest demo in the set                  0.21       <- moving, loudly
+#
+# 0.0005 sits ~5x above the dead footage and ~7x below real motion. A recording of one repeated frame
+# -- the #1347 failure this check exists for -- measures exactly 0 and is caught with the whole margin
+# to spare. Re-measure with `signalstats,metadata=print:key=lavfi.signalstats.YDIF` before changing
+# it: this number IS the check.
+FREEZE_YDIF = 0.0005
+
+# A run of still frames shorter than this is not reported: a slow pan over smooth sky legitimately
+# repeats a few frames, and the question is whether a shot rendered NOTHING, not whether two frames
+# matched.
+FREEZE_MIN_S = 2.0
+
+_PTS_TIME_RE = re.compile(r"pts_time:([0-9.]+)")
+_YDIF_RE = re.compile(r"signalstats\.YDIF=([0-9.eE+-]+)")
 
 
 def load_manifest(path):
@@ -49,6 +94,56 @@ def load_manifest(path):
             if key not in d:
                 raise ValueError(f"demo entry missing '{key}': {d!r}")
     return demos
+
+
+def shot_list_end(mission):
+    """The sim second a mission's camera shot list ends at: max(start + duration). Pure.
+
+    A mission with no shots ends at 0 -- there is nothing to record, which manifest_drift reports
+    rather than silently treating as agreement.
+    """
+    shots = ((mission or {}).get("cameras") or {}).get("shots") or []
+    end = 0.0
+    for shot in shots:
+        end = max(end, float(shot.get("start", 0.0)) + float(shot.get("duration", 0.0)))
+    return end
+
+
+def manifest_drift(demos, demos_dir):
+    """Every demo whose declared `expected_duration` disagrees with its own shot list (#1378).
+
+    The two numbers are load-bearing in DIFFERENT places, which is why they must agree: since #1347
+    the recorder derives `--record-max-sec` from the shot list, while the acceptance window comes
+    from `demos.json`. demo-atc-scramble's shots ran to 128 s while the manifest still declared the
+    44 s it had carried unchanged since #909 -- so a successful 128 s recording would have failed
+    its own duration gate, and the recorder capped the run instead. Reviewing the pair kept them
+    honest for exactly as long as somebody looked; a check does not get bored.
+
+    Returns a list of human-readable mismatch strings, empty when the set is clean.
+    """
+    if yaml is None:
+        raise RuntimeError("PyYAML is required to check demos.json against the shot lists "
+                           "(pip install pyyaml)")
+    problems = []
+    for demo in demos:
+        path = Path(demos_dir) / demo["mission_file"]
+        if not path.is_file():
+            problems.append(f"{demo['id']}: mission file not found: {path}")
+            continue
+        try:
+            mission = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as e:
+            problems.append(f"{demo['id']}: {demo['mission_file']} is not valid YAML: {e}")
+            continue
+        end = shot_list_end(mission)
+        declared = float(demo["expected_duration"])
+        if end <= 0.0:
+            problems.append(f"{demo['id']}: {demo['mission_file']} declares no camera shots, but "
+                            f"demos.json expects {declared:g}s")
+        elif abs(end - declared) > 0.001:
+            problems.append(f"{demo['id']}: shots end at {end:g}s but demos.json says {declared:g}s "
+                            f"({demo['mission_file']})")
+    return problems
 
 
 def duration_ok(actual, expected, floor_frac=0.3, ceil_slack=6.0):
@@ -93,24 +188,105 @@ def wall_clock_cap(expected_duration, time_rate, requested=0, slack=1.5, fixed_s
 
 
 def parse_content_probe(stderr_text):
-    """Sum the black and frozen seconds ffmpeg's blackdetect/freezedetect reported. Pure — unit-tested.
+    """Black seconds from ffmpeg's blackdetect, plus the frozen runs measured from YDIF. Pure.
 
-    Returns (black_s, frozen_s). blackdetect prints `black_start:N black_end:N black_duration:N`;
-    freezedetect prints `lavfi.freezedetect.freeze_duration: N` per frozen run."""
+    Returns (black_s, frozen_s, frozen_runs). blackdetect prints
+    `black_start:N black_end:N black_duration:N`; the frozen half is measured here from the
+    per-frame difference rather than taken from `freezedetect`, whose response to its own threshold
+    is not monotone (see FREEZE_YDIF)."""
     black = 0.0
-    frozen = 0.0
     for line in stderr_text.splitlines():
         if "black_duration:" in line:
             try:
                 black += float(line.split("black_duration:")[1].split()[0])
             except (IndexError, ValueError):
                 pass
-        if "freeze_duration" in line:
+    runs = frozen_runs(parse_ydif_series(stderr_text))
+    return black, sum(d for _, d in runs), runs
+
+
+def parse_ydif_series(stderr_text):
+    """[(pts_time, YDIF), ...] from one `signalstats,metadata=print` pass. Pure.
+
+    ffmpeg prints the frame's `pts_time:` on one line and its `lavfi.signalstats.YDIF=` on the next;
+    a value without a preceding time is dropped rather than guessed at.
+    """
+    series = []
+    time = None
+    for line in stderr_text.splitlines():
+        m = _PTS_TIME_RE.search(line)
+        if m:
             try:
-                frozen += float(line.rsplit(":", 1)[1].strip())
-            except (IndexError, ValueError):
+                time = float(m.group(1))
+            except ValueError:
+                time = None
+            continue
+        m = _YDIF_RE.search(line)
+        if m and time is not None:
+            try:
+                series.append((time, float(m.group(1))))
+            except ValueError:
                 pass
-    return black, frozen
+            time = None
+    return series
+
+
+def frozen_runs(series, floor=FREEZE_YDIF, min_s=FREEZE_MIN_S):
+    """[(start_s, duration_s), ...] for every run of frames at or below `floor` lasting >= min_s. Pure.
+
+    The run starts at the PREVIOUS frame's timestamp -- the first still frame is still evidence about
+    the interval that produced it -- and ends at the frame that finally moved.
+    """
+    runs = []
+    start = None
+    for i, (time, ydif) in enumerate(series):
+        if ydif <= floor:
+            if start is None:
+                start = series[i - 1][0] if i else time
+        elif start is not None:
+            if time - start >= min_s:
+                runs.append((start, time - start))
+            start = None
+    if start is not None and series and series[-1][0] - start >= min_s:
+        runs.append((start, series[-1][0] - start))
+    return runs
+
+
+def shot_windows(mission):
+    """[(start, end, type), ...] for a parsed mission's camera shots, in authored order. Pure."""
+    shots = ((mission or {}).get("cameras") or {}).get("shots") or []
+    windows = []
+    for shot in shots:
+        start = float(shot.get("start", 0.0))
+        windows.append((start, start + float(shot.get("duration", 0.0)), str(shot.get("type", "?"))))
+    return windows
+
+
+def frozen_shot_problems(intervals, windows, min_s=2.0, still_types=("static",)):
+    """Frozen stretches that a MOVING shot is responsible for. Pure. Returns a list of strings.
+
+    The recorder's timeline is the shot list's, so a freeze timestamp in the video indexes straight
+    into the shot that produced it. That is what turns "8.2s frozen" -- a number the coarse
+    half-the-run check happily passes -- into "the orbit shot rendered a still image", which is a
+    defect every time: an orbiting or moving camera changes the picture by definition, so a frozen
+    one means the shot has nothing in it, its target is gone (#1381), or the scene is not lit.
+
+    A `static` shot is exempt: holding a quiet scene still is what it is for. Runs shorter than
+    `min_s` are ignored -- a slow pan over a smooth sky legitimately produces a few identical frames,
+    and freezedetect is already only called with d=2.
+    """
+    problems = []
+    for start, dur in intervals:
+        if dur < min_s:
+            continue
+        end = start + dur
+        covering = [(ws, we, wt) for ws, we, wt in windows if start < we and end > ws]
+        moving = [w for w in covering if w[2] not in still_types]
+        if not covering or not moving:
+            continue
+        names = ", ".join(f"{wt} shot at {ws:g}-{we:g}s" for ws, we, wt in moving)
+        problems.append(f"{dur:.1f}s frozen at {start:.1f}s, over the {names}")
+    return problems
 
 
 def content_ok(duration, black_s, frozen_s, share=0.5):
@@ -146,21 +322,23 @@ def distinct_frames_ok(hashes, min_distinct=8):
 
 
 def probe_content(path, ffmpeg="ffmpeg"):
-    """Decode `path` once through blackdetect+freezedetect. Returns (black_s, frozen_s).
+    """Decode `path` once for black frames and per-frame difference. Returns (black_s, frozen_s, runs).
 
-    Both filters are cheap next to the recording itself, and one decode pass answers both questions.
-    A missing/broken ffmpeg returns (0, 0) — the duration check still applies, and openFfmpeg would
-    have failed the recording long before this."""
+    One decode pass answers both questions, and it is cheap next to the recording itself. A
+    missing/broken ffmpeg returns (0, 0, []) — the duration check still applies, and openFfmpeg would
+    have failed the recording long before this. `runs` is where each still stretch sits, which is what
+    lets one be attributed to the shot that produced it (#1378)."""
     try:
         out = subprocess.run(
             [ffmpeg, "-v", "info", "-nostats", "-i", path,
-             "-vf", "blackdetect=d=1:pix_th=0.03,freezedetect=n=0.001:d=2",
+             "-vf", "blackdetect=d=1:pix_th=0.03,signalstats,"
+                    "metadata=print:key=lavfi.signalstats.YDIF",
              "-an", "-f", "null", "-"],
             capture_output=True, text=True, timeout=300,
         )
         return parse_content_probe(out.stderr)
     except (subprocess.SubprocessError, FileNotFoundError):
-        return 0.0, 0.0
+        return 0.0, 0.0, []
 
 
 def ffprobe_duration(path, ffprobe="ffprobe"):
@@ -202,6 +380,15 @@ def record_one(args, demo, env):
     mission = str(Path(args.demos_dir) / demo["mission_file"])
     if not Path(mission).is_file():
         return False, f"mission file not found: {mission}"
+    # The shot list, for attributing a frozen stretch to the shot that produced it (#1378). Without
+    # PyYAML the recording still runs and is still checked; only that attribution is skipped, and
+    # main() has already said so once.
+    mission_doc = None
+    if yaml is not None:
+        try:
+            mission_doc = yaml.safe_load(Path(mission).read_text(encoding="utf-8"))
+        except (yaml.YAMLError, OSError):
+            mission_doc = None
     # The recorder's cap is WALL CLOCK and the shot list is SIM time; --time-rate is the ratio, so
     # the cap has to be derived from both or it silently truncates every demo to the same length
     # (#1347). --max-sec still overrides it, and the subprocess timeout follows the cap.
@@ -279,9 +466,18 @@ def record_one(args, demo, env):
         ok, reason = duration_ok(dur, float(demo["expected_duration"]))
         if not ok:
             return False, f"{out_path}: {reason}"
-        black_s, frozen_s = probe_content(out_path, args.ffmpeg)
+        black_s, frozen_s, freezes = probe_content(out_path, args.ffmpeg)
         content, creason = content_ok(dur, black_s, frozen_s)
-        return content, f"{out_path}: {reason}; {creason}"
+        if not content:
+            return False, f"{out_path}: {reason}; {creason}"
+        # Attribute each frozen stretch to the shot that produced it (#1378). content_ok is a
+        # half-the-run envelope; it passes a demo whose orbit shot rendered a still image, and that
+        # is a defect every time -- a moving camera changes the picture by definition.
+        moving = frozen_shot_problems(freezes, shot_windows(mission_doc)) if mission_doc else []
+        if moving:
+            return False, f"{out_path}: {reason}; {creason}; still picture on a moving shot: " + \
+                          "; ".join(moving)
+        return True, f"{out_path}: {reason}; {creason}"
 
     try:
         return with_free_port(attempt)
@@ -333,6 +529,20 @@ def main(argv=None):
     else:
         print("specify --mission <id> or --all", file=sys.stderr)
         return 2
+
+    # Fail before recording anything, not after (#1378). A shot list and its manifest entry that
+    # disagree cost a full run to discover: the recording is capped by one number and then judged
+    # against the other, so it fails a gate it was never given the wall clock to pass.
+    if yaml is None:
+        print("[WARN] PyYAML not installed: cannot check demos.json against the shot lists",
+              file=sys.stderr)
+    else:
+        drift = manifest_drift(selected, args.demos_dir)
+        if drift:
+            print("demos.json disagrees with the shot lists it describes:", file=sys.stderr)
+            for problem in drift:
+                print(f"  {problem}", file=sys.stderr)
+            return 2
 
     env = build_env(args.headless)
     failures = 0

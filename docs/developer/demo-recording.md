@@ -52,18 +52,68 @@ picture in it, or the encoder failed — **bad video is loud, never silently shi
 
 ### What the acceptance check actually checks
 
-Two things, because for a while it was one ([#1347]):
+Four things, because for a while it was one ([#1347], [#1378]):
 
 | Check | What fails it |
 |---|---|
+| **Manifest** — the shot list vs `demos.json`, *before anything is recorded* | a mission whose shots end at a different second than its `expected_duration`, or that declares no shots |
 | **Envelope** — `ffprobe` container duration | zero-length, far shorter than the shot list, or longer than it |
-| **Payload** — one `ffmpeg` decode pass through `blackdetect` + `freezedetect` | more than half the run black, or more than half of it a single frozen frame |
+| **Payload** — one `ffmpeg` decode pass: `blackdetect` + per-frame `signalstats` YDIF | more than half the run black, or more than half of it a still picture |
+| **Attribution** — each frozen stretch against the shot that produced it | a still picture lasting ≥ 2 s on a shot that is not `static` |
 
 A duration bound cannot fail on an empty video, and it did not: a windowed recording that captured
 **pure black for its whole length** printed `[OK] … 22.6s within [3.0, N]` and reported "1/1 demo(s)
 recorded successfully". A gate that checks the envelope and never the payload is not evidence. The
 PNG path has no image dependency, so it counts **distinct frame hashes** instead — one repeated black
 frame hashes to one value however many files it wrote.
+
+**The manifest check runs first and fails the whole run**, because the two numbers are load-bearing
+in *different* places: the recorder derives `--record-max-sec` from the **shot list**, while the
+acceptance window comes from **`demos.json`**. When they drift, a demo is capped by one number and
+then judged against the other — `demo-atc-scramble` ran to 128 s of shots while the manifest still
+declared the 44 s it had carried since [#909], so a complete recording would have failed its own
+duration gate. `tests/test_record_demo.py` asserts the committed set agrees, so drift fails in CI
+rather than on the next hands-on pass. It needs PyYAML; without it the recorder warns and records
+anyway.
+
+**Attribution is what the payload check cannot see.** "More than half the run frozen" is an
+envelope too: it passes a demo whose orbit shot rendered one still image for its entire length, and
+that is a defect every time — an orbiting or moving camera changes the picture *by definition*, so a
+frozen one means the shot frames nothing, its target is gone ([#1381]), or the scene is not lit. A
+`static` shot is exempt: holding a quiet scene still is what it is for. The recorder's timeline is
+the shot list's, so a freeze timestamp indexes straight into the shot that produced it.
+
+**The still-picture floor is the check, and it is measured directly.** The gate used ffmpeg's
+`freezedetect`, whose response to its own noise threshold is **not monotone** on real footage —
+sweeping one `demo-sam-strike` recording gave `0.0s` at `n=0.1`, `25.7s` at `n=0.01`, `0.0s` at
+`n=0.001`, `6.6s` at `n=0.0002` and `0.0s` at `n=0.000005`. A tighter threshold reporting *more*
+frozen time, twice, in both directions: whatever value you pick you cannot say what it means. The
+payload check now measures the per-frame difference itself (`signalstats` YDIF) and calls a run of
+frames at or below `FREEZE_YDIF` for ≥ 2 s a still stretch, which is monotone by construction.
+
+The shipped `freezedetect` default (`0.001`) also sat **above even `demo-dogfight`'s median frame
+difference** — above the busiest demo in the set — so every quieter demo was reported frozen while
+its picture was moving:
+
+    footage                                                  YDIF median   normalised
+    demo-atc-scramble, cameras 2 km out over empty ground       0.000094      3.7e-7   genuinely dead
+    demo-night-patrol, a deliberate static hold                 0.00014       5.6e-7   genuinely still
+    demo-atc-scramble, cameras 60 m off the measured track      0.0035        1.4e-5   MOVING
+    demo-dogfight, the busiest demo in the set                  0.21          8.3e-4   moving, loudly
+
+The tell was that the verdict depended on **`--time-rate`**, a recording *speed* knob: the identical
+shot list measured **0.0 s frozen at `normal` and 93.8 s at `quarter`**, because the sky animates on
+wall clock and advances four times further per video frame at the faster rate. A content check whose
+answer changes with how fast you recorded is not measuring the content.
+
+`FREEZE_YDIF = 0.0005` sits ~5× above the dead footage and ~7× below real motion, and a recording of
+one repeated frame — the [#1347] failure the check exists for — measures exactly `0` and is caught
+with the whole margin to spare. Verified both ways on the same clips: **40.0 s** still on the old
+`demo-atc-scramble` recording (attributed to its `move` shot), **0.0 s** on the re-framed one.
+
+⚠ **None of the four can see COMPOSITION.** A demo can pass all of them while its subject is a speck,
+its carrier is out of frame, or its aircraft is one dot against an empty sky. Extract a frame and
+look before believing a green demo gate.
 
 ### The recording cap is wall clock; the shot list is sim time
 
@@ -79,6 +129,9 @@ said ([#1347]). Two things follow, and both are now true:
   is not the same fact as a short demo, and only one of them is a successful recording.
 
 [#1347]: https://github.com/fighters-legacy/fighters-legacy/issues/1347
+[#1378]: https://github.com/fighters-legacy/fighters-legacy/issues/1378
+[#1381]: https://github.com/fighters-legacy/fighters-legacy/issues/1381
+[#909]: https://github.com/fighters-legacy/fighters-legacy/issues/909
 
 ## The honesty mechanism
 
@@ -88,6 +141,13 @@ more than one boundary between renders — the missed boundaries are filled with
 counted. `--record-max-dup` fails the run when duplicates exceed the cap. The fix is not to hide the
 drop but to **slow the server**: `--time-rate quarter` or `eighth` gives a slow (lavapipe) client more
 wall time per boundary.
+
+⚠ **A duplicated frame is a PACING duplicate, not a visually identical one.** It means the client did
+not render in time, never that the picture did not change. A long `static` shot over a quiet scene
+therefore costs nothing against the cap — the renderer keeps producing frames whether or not the
+image moves — and no shot length is unrecordable "by construction" ([#1378] argued otherwise, from a
+run whose duplicates were the 2.6 FPS capture sink of [#1375]). A still *picture* is what the
+attribution check above is for; the two failure modes look alike in a video and share nothing.
 
 ## Verify by hand
 
@@ -174,3 +234,5 @@ DO exist since #1335 — `builtin:helicopter` / `builtin:multirotor`, on display
 `builtin:shape-gallery` — but no rotorcraft-aware AI controller flies them beyond a loiter, so a
 rotorcraft showcase demo waits on that.) Deck-ops demos follow once a content pack provides
 carrier-capable aircraft.
+
+[#1375]: https://github.com/fighters-legacy/fighters-legacy/issues/1375
