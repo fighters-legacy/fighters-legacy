@@ -455,6 +455,13 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: python3 -m pytest tests/test_coverage_gate.py -v
 
+      # The auto-close predicate is only exercised for real when a phase gate closes (#730-#735),
+      # so the guard that keeps a `release` task open until its release ships (#1384) is tested
+      # here instead. Runs the workflow's own shell against a stub `gh`, not a re-implementation.
+      - name: Unit test auto-close-epics.yml (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 -m pytest tests/test_auto_close_epics.py -v
+
       - name: Unit test lint_test_names.py (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         run: python3 -m pytest tests/test_lint_test_names.py -v
