@@ -699,8 +699,10 @@ void VkRenderer::writeFrameUBOs(const FrameScene& scene) {
     {
         const auto& env = scene.environment;
         const float cloudCov = env.cloudCoverage;
-        // Warmth driven by sun elevation (warm near horizon, cool blue at midday).
-        const float elevation = env.sunDirection.y; // [-1,1]
+        // Warmth driven by sun elevation (warm near horizon, cool blue at midday). The LOCAL
+        // elevation (#1391), not sunDirection.y -- world +Y is the polar axis, so on any anchored
+        // mission the world-Y is the sun's declination and does not change over a day at all.
+        const float elevation = env.sunElevationSin; // [-1,1]
         const float warmth = 1.0f - glm::clamp(elevation / 0.3f, 0.0f, 1.0f);
         const glm::vec3 horizonDay{0.40f, 0.55f, 0.75f};
         const glm::vec3 horizonDusk{0.85f, 0.55f, 0.25f};
@@ -717,7 +719,9 @@ void VkRenderer::writeFrameUBOs(const FrameScene& scene) {
         // the sun drops below the horizon; celestialValid gates the whole thing (0 = legacy day sky).
         const auto& env = scene.environment;
         sky.moonDirection = glm::vec4(env.moonDirection, env.moonAngularRadius);
-        const float nightFactor = glm::clamp((-env.sunDirection.y + 0.10f) / 0.18f, 0.0f, 1.0f);
+        // Local elevation again (#1391): keyed off sunDirection.y this was pinned at 0 for every
+        // anchored mission, so the Moon and the star field never appeared on one.
+        const float nightFactor = glm::clamp((-env.sunElevationSin + 0.10f) / 0.18f, 0.0f, 1.0f);
         sky.moonParams = glm::vec4(env.moonIllumination, nightFactor, env.celestialValid ? 1.0f : 0.0f, 0.0f);
         sky.worldToCelestial = glm::mat4(env.worldToCelestial);
     }

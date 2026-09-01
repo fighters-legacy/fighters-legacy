@@ -275,6 +275,17 @@ struct RenderItem {
 // ---------------------------------------------------------------------------
 struct EnvironmentState {
     glm::vec3 sunDirection{0.0f, -1.0f, 0.0f}; // world-space, points toward sun
+    // sin(LOCAL solar elevation) at the observer, in [-1, 1] (#1391). Set by
+    // WeatherController::applySunLighting, i.e. by every path that writes sunDirection.
+    //
+    // NOT interchangeable with sunDirection.y. The world origin is the NORTH POLE (Geodetic.h: the
+    // planet centre is {0, -R, 0} and world +Y is the polar axis), so at an anchored mission
+    // sunDirection.y is the sun's DECLINATION -- measured +0.378 at EVERY hour at the sandbox anchor,
+    // while the true local elevation ran +0.96 at noon and -0.42 at 22:30. The sky pass derived its
+    // day/dusk mix and its night factor from the world-Y and so painted a day sky and gated off the
+    // #484 Moon and star field at every hour of every anchored mission. Equal at the world origin,
+    // which is why it was right for as long as everything shipped sat there (#1211).
+    float sunElevationSin{-1.0f}; // matches the default sunDirection.y above
     glm::vec3 sunColor{1.0f, 0.95f, 0.8f};
     glm::vec3 ambientColor{0.1f, 0.12f, 0.15f};
     float fogDensity{0.0f};

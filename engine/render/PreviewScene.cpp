@@ -58,6 +58,9 @@ PreviewScene::PreviewScene(IRenderer& renderer, AssetManager* assets, ILogger* l
     : m_renderer(renderer), m_assets(assets), m_logger(logger) {
     // Deterministic, golden-friendly lighting.
     m_env.sunDirection = glm::normalize(glm::vec3{0.6f, 1.0f, 0.4f});
+    // The preview is posed at the world origin, where world +Y IS the local up, so the elevation is
+    // just the sun's Y (#1391). Stated rather than left at the default so the sky keeps its look.
+    m_env.sunElevationSin = m_env.sunDirection.y;
     m_env.sunColor = glm::vec3{1.0f, 0.97f, 0.9f};
     m_env.ambientColor = glm::vec3{0.18f, 0.20f, 0.24f};
     m_env.fogDensity = 0.0f;

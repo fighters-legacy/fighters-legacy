@@ -68,6 +68,10 @@ inline float wrapHours(float h) {
 // env.ambientColor. Shared by the legacy planar path (applyPresetToEnv) and the geographic sun
 // (applyGeographicSun) so both light the scene identically for a given elevation (#481).
 void applySunLighting(EnvironmentState& env, float elev) {
+    // Publish the elevation every caller already computed (#1391). This is the ONE place that knows
+    // it -- the planar path passes the world-Y proxy, the geographic path passes the true local
+    // sin(elevation) -- so the renderer reading it back can never re-derive a different number.
+    env.sunElevationSin = elev;
     if (elev > 0.f) {
         float t = glm::clamp(elev, 0.f, 1.f);
         // Low elevation → warm orange; high elevation → near white
