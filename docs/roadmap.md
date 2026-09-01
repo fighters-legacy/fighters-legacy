@@ -342,10 +342,21 @@ Phase 4 acceptance requires a content pack (fl-base-pack) and is gated on Phase 
 - Sensor framework (Epic F): radar search/track + IFF + a shared team track picture function
   against fl-base-pack content.
 - Scale proven: Epics A/B/I demonstrate the 128-client tick + bandwidth gate (see the
-  cross-cutting initiative), and the `reference` profile passes **with sensor content loaded and
-  datalink + voice relay active** — the shipped 128-client claim describes a populated battlespace,
+  cross-cutting initiative), and the `reference` profile passes **with sensor content loaded** —
+  bots fly `builtin:sensor-fighter` against live hostiles, so contact tables populate and datalink
+  team fusion actually runs (#1089). The shipped 128-client claim describes a populated battlespace,
   not a hollow world. Builtin sensors satisfy this, so the gate never blocks on pack content. A
   prerequisite for Phase 4 multiplayer acceptance.
+  - ⚠ **Voice relay is NOT part of this gate**, though it was claimed here until the v0.4.0 audit.
+    `bot_swarm` has no voice generator, so every reference run has reported
+    `voice_relay_sends: 0` and the clause was never once exercised. The server-side counter exists
+    (#1090); the load generator does not. Building it is M5.0 work, tracked in #1379 — and the
+    criterion now describes what is measured rather than what was intended.
+  - ⚠ **The `≤ 16.6 ms p99` tick assertion is advisory on a virtualized reference runner** and is
+    hard-gated only on bare metal (#1379). The VM's own noise floor is ~24 ms — larger than the
+    threshold — so it measures the hypervisor, not the engine; the same load on bare metal measures
+    4.72 ms. Bandwidth, admission and the KB/s baseline are machine-independent and stay hard-gated
+    everywhere. A dedicated non-virtualized reference box is the open follow-on under #496.
 - Connect-path and message hygiene: every client→server message type is rate-limited or
   one-shot-gated, and no unauthenticated request produces an amplified reply (2026-07-30 review;
   epic #1063).
@@ -376,9 +387,17 @@ Phase 4 acceptance requires a content pack (fl-base-pack) and is gated on Phase 
 - Per-engine failure simulation: L/R bits produce asymmetric thrust effects in cockpit.
 - Afterburner envelope limits enforced per aircraft TOML definition.
 - Lua scripting API documented (`docs/modding/ai.md`).
-- **Demo videos (#909):** the v0.4.0 cinematic demo set (`missions/demos/`) records headless and is
-  reviewed + attached to the `v0.4.0` Release. Every subsequent phase gate satisfies the same line
-  with its own demo set (the pipeline is reused; only new missions/shots are authored per gate).
+- ~~**Demo videos (#909):** the v0.4.0 cinematic demo set (`missions/demos/`) records headless and is
+  reviewed + attached to the `v0.4.0` Release.~~ **Dropped from the v0.4.0 gate (owner, 2026-08-31).**
+  The recorder's engine defects are fixed (#1381 — an observer's interest centre never followed the
+  camera, so anchored missions recorded an *empty world*; and a flat-Earth camera up vector canted
+  their horizon), and 9 of 10 demos now record clean. But reviewing one frame from each showed the
+  set is not release-quality: subjects are specks on the horizon, the carrier is not visible in
+  `demo-carrier-swarm`, the SAM site is not visible in `demo-sam-strike`, and `demo-formation-tour`
+  shows a single aircraft. **Nine of those pass duration + blackdetect + freezedetect**, because
+  those checks measure liveness, not composition — no threshold closes that gap, and only looking
+  does. Reframing the shots is authoring work (#1378), not debugging, and is M5.0.
+  A later phase gate re-adopts this line once the set is worth publishing.
 - CI green on all three platforms.
 
 ### Phase 5 — Multiplayer at Scale & Live Services

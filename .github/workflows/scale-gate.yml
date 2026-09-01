@@ -144,8 +144,28 @@ jobs:
           echo "legs=$legs" >> "$GITHUB_OUTPUT"
           echo "Selected legs: $legs"
 
-  # Strict tier on the self-hosted 8-core/16GB reference VM (#569): full 128-client reference / soak
-  # runs where the `≤ 16.6 ms p99` tick gate is meaningful, so `--strict` is UNCONDITIONAL here.
+  # Strict tier on the self-hosted 8-core/16GB reference runner (#569): full 128-client reference /
+  # soak runs.
+  #
+  # ⚠ `--strict` (the `≤ 16.6 ms p99` tick assert) is NOT unconditional — it is armed only by
+  # `vars.FL_REFERENCE_RUNNER_BAREMETAL`, because a VM cannot measure this metric (#1379). Measured on
+  # one machine, same load, same binaries, 128 clients sensor-loaded:
+  #
+  #     VM, vCPUs unpinned .................. tick p99 23.80 - 25.82 ms
+  #     VM, vCPUs pinned to E-cores ......... tick p99 60.17 - 61.82 ms
+  #     VM, vCPUs pinned to physical P-cores  tick p99 23.89 - 24.78 ms
+  #     BARE METAL, same host ...............	tick p99          4.72 ms
+  #
+  # The VM's floor sits ~24 ms against a 16.6 ms threshold, so on a VM this assert reports the
+  # hypervisor, not the engine. Pinning does not rescue it (only E-core pinning moved the number, and
+  # only downward): the sensing phase is a fork-join over the worker pool, and guest wake latency
+  # through KVM dominates its barrier — mean 2.4 ms and p95 1.87 ms are healthy, then a thin tail of
+  # ~35 ticks costs 24-50 ms. The machine-INDEPENDENT gates (bandwidth, admission, KB/s baseline) stay
+  # hard on any runner; only CPU timing degrades to advisory, exactly as the `pr` tier already does
+  # and for the same reason.
+  #
+  # Set FL_REFERENCE_RUNNER_BAREMETAL=true ONLY on a non-virtualized reference box, and re-measure the
+  # noise floor before trusting it. Acquiring that box is the open follow-on under #496.
   #
   # SECURITY INVARIANT (self-hosted runner on a PUBLIC repo): this job must never execute fork-PR
   # code. It is gated to `workflow_dispatch` (only write-access holders can trigger) on the canonical
@@ -204,13 +224,28 @@ jobs:
       - name: Build fl-server + bot_swarm
         run: cmake --build --preset release-headless-gns --target fl-server bot_swarm
 
-      - name: Run scale gate (strict)
+      # --strict only where CPU timing is trustworthy (#1379 — see the header comment). Everywhere
+      # else the tick-ms threshold is reported as advisory and the machine-independent gates still
+      # hard-fail. The flag is assembled in the shell rather than with an `if:` on a second step, so
+      # there is exactly ONE invocation to keep in sync.
+      - name: Run scale gate
+        env:
+          FL_BAREMETAL: ${{ vars.FL_REFERENCE_RUNNER_BAREMETAL }}
         run: |
+          strict=""
+          if [ "$FL_BAREMETAL" = "true" ]; then
+            strict="--strict"
+            echo "::notice::Bare-metal reference runner: the tick-ms p99 gate is ENFORCED."
+          else
+            echo "::warning::Virtualized reference runner: tick-ms p99 is ADVISORY (#1379) —" \
+                 "the measured noise floor is ~24 ms against a 16.6 ms threshold, so this box" \
+                 "cannot certify that number. Bandwidth, admission and the KB/s baseline still gate."
+          fi
           python3 tools/bot_swarm/scale_gate.py \
             --profile "${{ matrix.leg.profile }}" \
             --build-dir build/release-headless-gns \
             --baseline tools/bot_swarm/scale-gate-baseline.json \
-            --strict
+            $strict
 
       - name: Upload reports
         if: always()
