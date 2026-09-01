@@ -907,3 +907,128 @@ def test_ai_entity_count_populates_the_world_without_an_entity_count_assert():
         flags = r["flags"] if isinstance(r, dict) else r.flags
         assert env.get("FL_TEST_SPAWN_AI") == "64"
         assert "--assert-min-entities" not in flags
+
+
+# ---- #1377: a failed measurement is not a missing measurement -------------------------------------
+class _FakeProc:
+    def __init__(self, returncode):
+        self.returncode = returncode
+
+
+def _fake_runner(monkeypatch, returncode, writes_report):
+    """Stand in for run_loadtest.sh: exits `returncode`, writes the pinned report or not."""
+    def fake_run(cmd, env=None, check=False):  # noqa: ARG001
+        if writes_report:
+            Path(env["FL_LOADTEST_REPORT"]).write_text(json.dumps(_report()), encoding="utf-8")
+        return _FakeProc(returncode)
+
+    monkeypatch.setattr(sg.subprocess, "run", fake_run)
+
+
+def test_run_pattern_keeps_the_report_when_the_runners_asserts_fail(tmp_path, monkeypatch):
+    """The exit code says whether the run held; the file says whether it measured anything.
+
+    bot_swarm exits non-zero when its own --assert-* thresholds fail — the gate's primary purpose —
+    having written a complete report. Discarding it on the exit code alone is #1377.
+    """
+    _fake_runner(monkeypatch, returncode=1, writes_report=True)
+    report = tmp_path / "r.json"
+    code, path = sg.run_pattern("build", 64, 30, "weave", [], "run_loadtest.sh", 4793, report)
+    assert code == 1
+    assert path == report
+
+
+def test_run_pattern_returns_no_report_when_the_runner_never_started(tmp_path, monkeypatch):
+    _fake_runner(monkeypatch, returncode=1, writes_report=False)
+    code, path = sg.run_pattern("build", 64, 30, "weave", [], "run_loadtest.sh", 4793,
+                                tmp_path / "r.json")
+    assert code == 1
+    assert path is None
+
+
+def _run_main_capturing_summary(tmp_path, monkeypatch, *, report, runner_code, extra_argv=()):
+    """Run main() against a monkeypatched runner and return (exit_code, rendered summary)."""
+    cfg = _write_config(tmp_path)
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps({"kbs": {"reference/idle": 66.0, "reference/weave": 66.0}}),
+                        encoding="utf-8")
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    if report is None:
+        monkeypatch.setattr(sg, "run_pattern", lambda *a, **k: (runner_code, None))
+    else:
+        report_path = tmp_path / "report.json"
+        report_path.write_text(json.dumps(report), encoding="utf-8")
+        monkeypatch.setattr(sg, "run_pattern", lambda *a, **k: (runner_code, report_path))
+    rc = sg.main(["--profile", "reference", "--build-dir", "x", "--config", str(cfg),
+                  "--baseline", str(baseline), "--strict", *extra_argv])
+    return rc, (summary.read_text(encoding="utf-8") if summary.exists() else "")
+
+
+def test_main_summary_names_the_failing_check_when_the_asserts_fail(tmp_path, monkeypatch):
+    """The whole point of #1377: the summary must say WHAT failed and by how much.
+
+    Before the fix this rendered `runner: no report (exit 1)` with `n/a` baselines, about a report
+    the run had just printed the path of.
+    """
+    rc, summary = _run_main_capturing_summary(
+        tmp_path, monkeypatch, report=_report(tick_p99=29.60), runner_code=1)
+    assert rc == 1
+    assert "server_tick.tick_ms.p99" in summary
+    assert "29.60 <= 16.60 ms" in summary          # measured value against the threshold
+    assert "measurement failed" in summary
+    assert "no report" not in summary
+    assert "n/a" not in summary                    # the baseline column carries real numbers
+
+
+def test_main_summary_still_says_no_report_when_the_runner_cannot_start(tmp_path, monkeypatch):
+    """The other half: a genuinely absent report must stay distinct, not be dressed up as data."""
+    rc, summary = _run_main_capturing_summary(tmp_path, monkeypatch, report=None, runner_code=1)
+    assert rc == 1
+    assert "runner failed to produce a report (exit 1)" in summary
+    assert "measurement failed" not in summary
+
+
+def test_main_names_the_exit_code_even_when_no_mirrored_check_failed(tmp_path, monkeypatch):
+    """bot_swarm can assert on things this driver does not mirror; the summary must not go silent."""
+    rc, summary = _run_main_capturing_summary(
+        tmp_path, monkeypatch, report=_report(tick_p99=1.0), runner_code=1)
+    assert rc == 1
+    assert "does not mirror" in summary
+    assert "exit 1" in summary
+
+
+def test_main_update_baseline_refuses_a_failed_measurement(tmp_path, monkeypatch, capsys):
+    """No data and bad data both refuse — but they are different problems and must read as such.
+
+    Blessing a baseline from a run that failed its own thresholds is how a wrong number becomes the
+    reference. The pre-#1377 guard only ever saw "a run failed", which is why the stale 19x
+    reference baseline behind #1379 was self-sealing.
+    """
+    cfg = _write_config(tmp_path)
+    baseline = tmp_path / "bl.json"
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(_report(tick_p99=29.60)), encoding="utf-8")
+    monkeypatch.setattr(sg, "run_pattern", lambda *a, **k: (1, report_path))
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    rc = sg.main(["--profile", "reference", "--build-dir", "x", "--config", str(cfg),
+                  "--baseline", str(baseline), "--strict", "--update-baseline"])
+    assert rc == 1
+    assert not baseline.exists()
+    err = capsys.readouterr().err
+    assert "failed its own thresholds" in err
+    assert "no report" not in err
+
+
+def test_main_unreadable_report_is_no_data_not_bad_data(tmp_path, monkeypatch):
+    """A report killed mid-write used to be hidden behind the exit code; it must read as no data."""
+    cfg = _write_config(tmp_path)
+    truncated = tmp_path / "report.json"
+    truncated.write_text('{"clients_requested": 128, "downstr', encoding="utf-8")
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setattr(sg, "run_pattern", lambda *a, **k: (1, truncated))
+    rc = sg.main(["--profile", "reference", "--build-dir", "x", "--config", str(cfg),
+                  "--baseline", str(tmp_path / "none.json"), "--strict"])
+    assert rc == 1
+    assert "report unreadable" in summary.read_text(encoding="utf-8")

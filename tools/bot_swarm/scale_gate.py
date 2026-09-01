@@ -583,6 +583,13 @@ def run_pattern(build_dir, clients, duration_s, pattern, flags, runner, port, re
     nothing buffered for a multi-hour soak), and a distinct FL_LOADTEST_PORT per run avoids the UDP
     rebind race when servers are launched back-to-back. `extra_env` (entity-scale FL_TEST_SPAWN_AI /
     FL_SIM_WORKER_THREADS) is merged into the child environment. Output streams live to the console.
+
+    The two return values are INDEPENDENT (#1377): the exit code says whether the run held, the
+    path says whether it measured anything. `bot_swarm` exits non-zero when its own --assert-*
+    thresholds fail — the gate's primary purpose — and that run has written a complete report whose
+    numbers are the entire point. Discarding it on the exit code alone made a threshold failure
+    indistinguishable from a crash, so the summary could only say `no report` about a file it had
+    just printed the path of. `None` now means one thing only: the file is not there.
     """
     runner_path = SCRIPT_DIR / runner
     env = dict(os.environ)
@@ -599,9 +606,7 @@ def run_pattern(build_dir, clients, duration_s, pattern, flags, runner, port, re
     print(f"[scale_gate] $ FL_LOADTEST_PORT={port} {' '.join(cmd)}", flush=True)
     proc = subprocess.run(cmd, env=env, check=False)
     report = Path(report_path)
-    if proc.returncode != 0 or not report.is_file():
-        return proc.returncode, None
-    return proc.returncode, report
+    return proc.returncode, report if report.is_file() else None
 
 
 def write_summary(text):
@@ -650,7 +655,8 @@ def main(argv=None):
 
     runs = expand_runs(profile)
     results = []
-    any_runner_failed = False
+    any_runner_failed = False   # no measurement at all (missing/unreadable report)
+    any_asserts_failed = False  # a complete measurement that failed its own thresholds
     new_baseline = dict(baseline)
     new_wire_baseline = dict(wire_baseline)
     for idx, run in enumerate(runs):
@@ -661,24 +667,51 @@ def main(argv=None):
         # query port is derived as GAME PORT + 1 (server/fl-server/main.cpp). With a stride of 1,
         # run n+1's game port IS run n's query port, so the second pattern of every multi-pattern
         # profile raced the previous server's still-open query socket and died with
-        # "bind failed: CreateListenSocketIP failed" — which the gate reports as `no report (exit 1)`,
-        # not as a port clash. It cost the `reference` profile its `weave` leg every run.
+        # "bind failed: CreateListenSocketIP failed" — which the gate can only report as a runner
+        # failure, not as a port clash. It cost the `reference` profile its `weave` leg every run.
         port = base_port + idx * 2
         report_path = RESULTS_DIR / f"loadtest_{profile['clients']}c_{label}_{args.profile}.json"
         code, report_path = run_pattern(args.build_dir, profile["clients"], profile["duration_s"],
                                         pattern, flags + run["flags"], runner, port, report_path,
                                         extra_env=run["env"])
+        # Two opposite outcomes, told apart by the report FILE and never by the exit code (#1377):
+        # the runner could not run (nothing to say), or the runner ran and the measurement failed
+        # its thresholds (a complete report exists, and its numbers are the whole point).
         if report_path is None:
             any_runner_failed = True
-            print(f"[scale_gate] ERROR: '{label}' run failed (exit {code}, no report)",
+            print(f"[scale_gate] ERROR: '{label}' runner failed to produce a report (exit {code})",
                   file=sys.stderr)
             results.append({"pattern": label, "passed": False,
                             "checks": [{"name": "runner", "ok": False,
-                                        "detail": f"no report (exit {code})", "advisory": False}],
+                                        "detail": f"runner failed to produce a report (exit {code})",
+                                        "advisory": False}],
                             "baseline": {"regressed": False, "detail": "n/a"}})
             continue
-        report = json.loads(report_path.read_text(encoding="utf-8"))
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as e:
+            # A report killed mid-write is "no data" too — the exit code used to hide this case.
+            any_runner_failed = True
+            print(f"[scale_gate] ERROR: '{label}' report is unreadable (exit {code}): {e}",
+                  file=sys.stderr)
+            results.append({"pattern": label, "passed": False,
+                            "checks": [{"name": "runner", "ok": False,
+                                        "detail": f"report unreadable (exit {code}): {e}",
+                                        "advisory": False}],
+                            "baseline": {"regressed": False, "detail": "n/a"}})
+            continue
         evaluation = evaluate_report(report, profile, args.strict)
+        if code != 0:
+            # The runner's own asserts failed. Keep the non-zero exit authoritative for pass/fail,
+            # but say so as a check of its own so a summary is never silent about the exit code —
+            # bot_swarm can assert on things this driver does not mirror.
+            any_asserts_failed = True
+            failing = [c["name"] for c in evaluation["checks"] if not c["ok"] and not c["advisory"]]
+            detail = ("measurement failed: " + ", ".join(failing)) if failing else \
+                     "measurement failed a bot_swarm assert this driver does not mirror"
+            print(f"[scale_gate] ERROR: '{label}' {detail} (exit {code})", file=sys.stderr)
+            evaluation["checks"].append({"name": "runner", "ok": False,
+                                         "detail": f"{detail} (exit {code})", "advisory": False})
         wire_cmp = {"regressed": False, "detail": f"{wire_kbs(report):.1f} KB/s (not baselined)"}
         if baselined:
             key = baseline_key(args.profile, pattern)
@@ -699,9 +732,18 @@ def main(argv=None):
                         "checks": evaluation["checks"], "baseline": cmp, "wire": wire_cmp})
 
     if args.update_baseline:
+        # The refusal guard has to tell NO DATA from BAD DATA (#1377). Both refuse — a baseline is
+        # only ever blessed from a clean run — but they are different problems and a guard that
+        # says "a run failed" for either sends the reader looking for the wrong thing. The stale
+        # 19x baseline behind #1379 survived four weeks partly because this refusal could not.
         if any_runner_failed:
-            print("[scale_gate] ERROR: a run failed; refusing to write a partial baseline",
-                  file=sys.stderr)
+            print("[scale_gate] ERROR: a run produced no report; refusing to write a partial "
+                  "baseline", file=sys.stderr)
+            return 1
+        if any_asserts_failed:
+            print("[scale_gate] ERROR: a run failed its own thresholds; refusing to bless a "
+                  "baseline from a failed measurement (see the checks above; re-run once the run "
+                  "is clean)", file=sys.stderr)
             return 1
         Path(args.baseline).write_text(
             json.dumps({"kbs": new_baseline, "wire_kbs": new_wire_baseline},
@@ -711,7 +753,7 @@ def main(argv=None):
 
     write_summary(render_summary(args.profile, results))
 
-    ok = not any_runner_failed and all(r["passed"] for r in results)
+    ok = not any_runner_failed and not any_asserts_failed and all(r["passed"] for r in results)
     return 0 if ok else 1
 
 

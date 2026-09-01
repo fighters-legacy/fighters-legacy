@@ -755,12 +755,23 @@ change (e.g. Epic B budgeting) with:
     python3 tools/bot_swarm/scale_gate.py --profile reference      --build-dir build/release-headless --update-baseline
     python3 tools/bot_swarm/scale_gate.py --profile reference-enet --build-dir build/release-headless --update-baseline
 
-The payload KB/s baseline is machine-independent, so it can be regenerated from any box (a failed run
-aborts the update rather than committing a partial baseline). That independence is measured, not
+The payload KB/s baseline is machine-independent, so it can be regenerated from any box. A run that
+misbehaves aborts the update rather than committing a bad baseline, and the two ways it can misbehave
+refuse separately ([#1377]): **no data** (the runner produced no report — nothing to write) and **bad
+data** (the runner ran and the measurement failed its own `--assert-*` thresholds — a number exists,
+but blessing it would make a failed run the reference). Fix the run, or drop `--strict` if the
+failing check is the advisory tick gate on a runner that cannot measure it ([#1379]). That independence is measured, not
 assumed: the values committed in #766 were produced on the 8-core reference VM and the hosted PR
 runner independently measured the same `pr/weave` figure to within 0.1 KB/s (71.4 vs 71.379). Prefer
 the reference VM anyway, so every key in the file comes from one box (the wire baseline additionally
 *depends* on the loopback path being comparable, so treat it as reference-VM-only).
+
+**A failing gate says which check failed and by how much.** `bot_swarm` exits non-zero when its own
+asserts fail, which is the normal way a gate run fails; the driver still parses and evaluates the
+report it wrote, so the summary reads `measurement failed: server_tick.tick_ms.p99` with the measured
+value beside the threshold. `runner failed to produce a report` is reserved for a run that genuinely
+could not produce one (a bind failure, a crash before the report was written, a truncated file) —
+before [#1377] the two were indistinguishable and every threshold failure was reported as the latter.
 
 **When the gate fires, decide which kind of change it caught.** The tolerance band is a *regression
 detector*, not a capacity limit — the real capacity gate is the wire ceiling (`assert_max_wire_kbs`,
@@ -769,3 +780,6 @@ roughly 2× headroom on the shipping transport. So a baseline breach means "byte
 out of budget". If the move is unintended, fix the code; if it is a reviewed, accepted
 cost (as #725's shared-origin encode-once was), regenerate the baseline — otherwise the stale band
 keeps firing on *later, unrelated* PRs and stops being a signal.
+
+[#1377]: https://github.com/fighters-legacy/fighters-legacy/issues/1377
+[#1379]: https://github.com/fighters-legacy/fighters-legacy/issues/1379
