@@ -4,17 +4,17 @@
     "reference-enet/aggressive": 66.348,
     "reference-enet/idle": 64.46,
     "reference-enet/weave": 64.747,
-    "reference/aggressive": 65.744,
-    "reference/idle": 64.693,
-    "reference/weave": 65.995
+    "reference/aggressive": 3.488,
+    "reference/idle": 3.453,
+    "reference/weave": 3.486
   },
   "wire_kbs": {
     "pr/weave": 2.8,
     "reference-enet/aggressive": 69.1262,
     "reference-enet/idle": 66.934,
     "reference-enet/weave": 68.8774,
-    "reference/aggressive": 70.4246,
-    "reference/idle": 69.5707,
-    "reference/weave": 70.7262
+    "reference/aggressive": 5.2925,
+    "reference/idle": 5.292,
+    "reference/weave": 5.2954
   }
 }
