@@ -1735,6 +1735,66 @@ documented in [docs/developer/load-testing.md](../developer/load-testing.md#auth
 `bot_swarm --server-metrics <path>` consumes this file; the #520 CI gate asserts on its
 `tick_ms.p99`.
 
+## [persistence] — The durable store (#533)
+
+Bans, accounts and match statistics that survive a restart, in a SQL database the server owns.
+Before this existed the server's only durable state was a flat `banlist.txt` rewritten in full on
+every ban, and a campaign save file.
+
+**Enabled by default, and a store that cannot be opened stops the server starting.** That is
+deliberate and it is the one place this section departs from every other optional surface in this
+file. The alternative — warn, fall back to nothing, carry on — produces a server that runs
+perfectly while persisting nothing, and an operator finds out weeks later when a ban they set does
+not survive a restart. If you genuinely want a throwaway server, say so with `enabled = false` and
+the log line at startup will say so too.
+
+**Upgrading an existing deployment:** the store is created at `cache/fl-server.db` on first start,
+so the directory fl-server runs from must be writable. A read-only or missing `cache/` that worked
+before this release will now refuse the start with a message naming the path.
+
+```toml
+[persistence]
+enabled = true
+backend = "sqlite"                 # sqlite | postgres
+sqlite_path = "cache/fl-server.db"
+postgres_dsn = ""                  # libpq connection string; needs -DFL_WITH_POSTGRES=ON
+busy_timeout_ms = 5000
+write_queue_max = 4096
+```
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `true` | `false` runs with no store at all — nothing survives a restart, and startup says so |
+| `backend` | string | `"sqlite"` | `sqlite` \| `postgres`. An unrecognised name warns and keeps `sqlite` |
+| `sqlite_path` | string | `"cache/fl-server.db"` | Created with its parent directory. An in-memory path is **refused**: a store that persists nothing is not a configuration anyone means to have |
+| `postgres_dsn` | string | `""` | libpq connection string or URI. It carries a password, so keep this file readable only by the server's user; it is **redacted** in logs, in `reload_config` output and on the admin surface |
+| `busy_timeout_ms` | int | `5000` | How long a statement waits on a locked database; `[100, 60000]` |
+| `write_queue_max` | int | `4096` | Pending-write cap; `[16, 1048576]`. Reaching it **blocks the caller until the queue drains — writes are never dropped** — and logs once naming this key |
+
+### Backends
+
+**SQLite** is the default and needs no external service. It is vendored into fl-server (one pinned
+version on every platform, so the store behaves identically everywhere) and runs in WAL mode with
+`synchronous=NORMAL`: durable across a server crash, at risk only from an OS or power loss.
+
+**PostgreSQL** is for several fl-servers sharing one store. It is a build-time option — a stock
+fl-server does not contain it, and asking for `backend = "postgres"` on such a build fails at
+startup with a message saying so rather than pretending the database is unreachable. Build it with:
+
+    cmake -S . -B build -DFL_WITH_POSTGRES=ON
+
+### Durability and schema
+
+Writes are applied on a dedicated thread, so the simulation never blocks on the database. A write
+call returns once the work is **queued**; it is on disk once the server flushes, which it does on
+the shutdown path. A failed write is logged at `Error` and counted — it is never silently dropped.
+
+The schema is versioned and migrations are **forward-only**. Starting an older fl-server against a
+database a newer one has already migrated is **refused**, naming both versions: carrying on would
+have the old binary write against a shape it is guessing at. There is no down-migration, so the
+recovery path from a bad upgrade is a backup — take one before upgrading a server whose bans and
+statistics matter.
+
 ## [wind] — Altitude wind profile (#489)
 
 Sets a per-theater wind that varies with altitude, instead of a single ground-level wind. Aircraft
@@ -2150,6 +2210,12 @@ individual keys; this is what the server actually does.
 | `http_admin.lockout_seconds` | Restart |
 | `metrics.tick_json_path` | Restart |
 | `metrics.tick_json_interval_ms` | Restart |
+| `persistence.enabled` | Restart |
+| `persistence.backend` | Restart |
+| `persistence.sqlite_path` | Restart |
+| `persistence.postgres_dsn` | Restart |
+| `persistence.busy_timeout_ms` | Restart |
+| `persistence.write_queue_max` | Restart |
 | `wind.profile_path` | Restart |
 | `trace.input_trace_dir` | Restart |
 | `replay.enabled` | Restart |

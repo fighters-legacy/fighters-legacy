@@ -20,10 +20,12 @@
 // Lobby registration ships (#143); the reference lobby service is #999.
 #include "GameModeSource.h"
 #include "HttpAdminServer.h"
+#include "IPersistence.h"
 #include "IpListFile.h"
 #include "MatchTeams.h"
 #include "MissionSource.h"
 #include "NetworkFactory.h"
+#include "PersistenceSetup.h"
 #include "RconServer.h"
 #include "ReplayRecorder.h"
 #include "ServerCommands.h"
@@ -316,6 +318,10 @@ struct ServerRuntime::Impl {
     fl::WorldEvolutionSinks m_aiSinks;
     fl::StdinCommandReader m_stdinReader;
     ChurnState m_churnState;
+    // The durable store (#533). Opened in initConfig -- the earliest phase that knows the config --
+    // so a store that cannot be opened refuses the start before a port is bound or a pack is
+    // mounted, rather than after the operator has watched the server come up.
+    std::unique_ptr<fl::persist::IPersistence> m_store;
 
     // The phases, in call order.
     [[nodiscard]] bool initConfig();
@@ -325,6 +331,7 @@ struct ServerRuntime::Impl {
     [[nodiscard]] bool initMission();
     [[nodiscard]] bool initAdmin();
     [[nodiscard]] bool initSystems();
+    [[nodiscard]] bool openPersistenceStore();
     [[nodiscard]] int mainLoop();
 };
 
@@ -435,6 +442,32 @@ bool ServerRuntime::Impl::initConfig() {
                       cfg.mods.stack.size());
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
     }
+
+    // The persistence store (#533, D24). Opened here, at the end of the config phase, because a
+    // refusal has to happen before the server looks like it is starting.
+    if (!openPersistenceStore())
+        return false;
+
+    return true;
+}
+
+// Open the store described by [persistence], or refuse the start.
+//
+// REFUSING IS THE POINT. Persistence is on by default, so the alternative -- log a warning, fall
+// back to the null store, carry on -- would produce a server that runs perfectly while quietly
+// persisting nothing, and an operator would find out weeks later when a ban they set did not
+// survive a restart. The message names the path and the escape hatch, because the operator's next
+// action is to fix a permission or to set enabled = false deliberately.
+bool ServerRuntime::Impl::openPersistenceStore() {
+    // The decision itself lives in PersistenceSetup so it can be tested without running a server —
+    // it decides whether this server starts at all.
+    auto opened = openConfiguredStore(m_cfg, m_log);
+    if (!opened.ok()) {
+        m_log->log(LogLevel::Error, __FILE__, __LINE__, opened.error.c_str());
+        m_exitCode = 1;
+        return false;
+    }
+    m_store = std::move(opened.store);
     return true;
 }
 
@@ -3373,6 +3406,18 @@ int ServerRuntime::Impl::mainLoop() {
     log->log(LogLevel::Info, __FILE__, __LINE__, "shutting down");
     net->disconnect();
     net->shutdown();
+
+    // The store last: everything above may still have been writing to it, and a write that is only
+    // queued when the process exits is a write that did not happen. flush() reports the first error
+    // of the shutdown window, which is the operator's one chance to hear about it.
+    if (m_store) {
+        if (const auto flushed = m_store->flush(); !flushed) {
+            char buf[512];
+            std::snprintf(buf, sizeof(buf), "persistence: a write failed during shutdown: %s", flushed.error.c_str());
+            log->log(LogLevel::Error, __FILE__, __LINE__, buf);
+        }
+        m_store->close();
+    }
 
     return 0;
 }

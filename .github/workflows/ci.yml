@@ -657,6 +657,89 @@ jobs:
           EOF
 
   # ---------------------------------------------------------------------------
+  # ---------------------------------------------------------------------------
+  # The PostgreSQL backend of the persistence store (#533, D24).
+  #
+  # Linux-only and its own job on purpose. FL_WITH_POSTGRES is OFF everywhere else, which is what
+  # keeps libpq off the Windows and macOS build matrix -- but an optional backend nothing ever
+  # builds is an optional backend that is broken, and one nothing ever RUNS is a set of queries
+  # that compile and do not work. This lane does both, against a real server in a service
+  # container. The SQLite half needs no lane: it is vendored, so every leg of `build` already
+  # compiles and tests it.
+  # ---------------------------------------------------------------------------
+  persistence-postgres:
+    needs: [lint]
+    name: Persistence (PostgreSQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: fl
+          POSTGRES_PASSWORD: fl
+          POSTGRES_DB: fl_test
+        ports:
+          - 5432:5432
+        # Without the health check the build can reach the tests before the server accepts
+        # connections, and the failure reads as a broken backend rather than a race.
+        options: >-
+          --health-cmd "pg_isready -U fl"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        uses: ./.github/actions/install-linux-deps
+        with:
+          gcc: 'true'
+          extra_packages: 'libpq-dev postgresql-client'
+
+      - name: Configure
+        run: |
+          # No GNS and no Vulkan: this lane builds the persistence library and its tests, not a
+          # server product. Keeping it lean is what makes it a 30-minute job instead of a 90.
+          cmake -S . -B build/pg -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_COMPILE_WARNING_AS_ERROR=ON \
+            -DFL_WITH_POSTGRES=ON \
+            -DFL_ENABLE_GNS=OFF \
+            -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON
+
+      - name: Build
+        run: cmake --build build/pg --target test_persistence test_persistence_setup --parallel
+
+      # The binaries are run DIRECTLY, not through `ctest -R persistence`, and that is a scar.
+      #
+      # ctest -R matches TEST NAMES, and Catch2 test names are the TEST_CASE strings -- none of
+      # which contain the word "persistence". So the selector matched nothing, ctest printed
+      # "No tests were found!!!", exited 0, and this lane reported PASS having run zero tests. It
+      # compiled the PostgreSQL backend and exercised none of it.
+      #
+      # Naming the executables removes the selector entirely: there is nothing left to silently
+      # match nothing. Catch2 itself exits non-zero if its own filter selects no test, and
+      # FL_TEST_POSTGRES_REQUIRED below turns a skip into a failure, so all three ways this lane
+      # could go quietly green are closed.
+      - name: Test
+        env:
+          FL_TEST_POSTGRES_DSN: postgresql://fl:fl@localhost:5432/fl_test
+          # This lane exists to reach a real server. If it cannot -- no DSN, no service container,
+          # a build without the backend -- that is a FAILURE here, not a skip. On a developer's box
+          # the variable is unset and the same cases skip, which is what keeps the suite runnable.
+          FL_TEST_POSTGRES_REQUIRED: '1'
+        run: |
+          ./build/pg/tests/test_persistence
+          ./build/pg/tests/test_persistence_setup
+          # And prove the postgres cases actually ran, rather than trusting the exit code of a
+          # binary that would also be 0 if the tag matched nothing.
+          ./build/pg/tests/test_persistence '[postgres]' --success | tail -5
+
   # libFuzzer per-PR smoke (#708). fuzz-changes gates on touched paths and emits
   # a JSON matrix of harnesses; fuzz-run builds+smokes each; fuzz-smoke is the
   # single stable required check (green even when fuzz-run is skipped).

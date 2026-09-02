@@ -35,6 +35,14 @@
 #   7. Platform floor (transitive): no `platform-*` target may reach an `engine-*` target. platform/
 #      is the HAL — it defines interfaces the engine consumes, so an edge back into the engine
 #      inverts the layering. This rule was policy in docs and in review only; it is a mechanism now.
+#   8. Persistence confinement (transitive, #533 / D24): no `engine-*` target may reach a SQL engine
+#      or the store built on one, and `fl-server-persistence` reaches neither a client backend nor
+#      either product library. D24's ruling is that persistence is a SERVER-SIDE library, not a
+#      platform HAL: nothing in engine/ consumes it, and an engine target that could open a database
+#      would make the simulation stateful in a way the whole split-ready model assumes it is not.
+#      The second half keeps the store a leaf — it takes option structs, never a ServerConfig — which
+#      is what lets it be tested without standing up a server. It may still reach `engine-*` headers
+#      (the #534 stats schema reuses the PilotLogbook taxonomy), so that edge is deliberately allowed.
 #
 # fl_assert_layering() is armed from the root CMakeLists.txt via cmake_language(DEFER CALL ...) so
 # it runs after every add_subdirectory() — all targets exist, including conditional ones
@@ -305,6 +313,40 @@ function(fl_assert_layering)
             endif()
         endif()
     endforeach()
+
+    # Rule 8 — persistence confinement (#533, D24). Two halves: the SQL engine never reaches engine/,
+    # and the store stays a leaf that neither product library can be reached FROM.
+    set(_sql_deny "^(fl-sqlite3|fl-libpq|fl-server-persistence)$|^PostgreSQL::")
+    # The rule is only worth anything if the pattern still names a real target. A rename that made
+    # this regex match nothing would leave a rule that passes forever while enforcing nothing, which
+    # is the failure mode the walker self-test exists to prevent for the other rules.
+    if(NOT TARGET fl-sqlite3)
+        message(FATAL_ERROR
+            "[persistence confinement] rule 8 names fl-sqlite3, which does not exist — the SQL "
+            "target was renamed and this rule is now a no-op. Update _sql_deny in cmake/layering.cmake.")
+    endif()
+    foreach(_t IN LISTS _all)
+        if(_t MATCHES "^engine-")
+            _fl_assert_reaches_none("${_t}" "${_sql_deny}" 0 _chain)
+            if(_chain)
+                list(APPEND _violations
+                    "[persistence confinement] engine targets must not reach a SQL engine: ${_chain}")
+            endif()
+        endif()
+    endforeach()
+    if(TARGET fl-server-persistence)
+        _fl_assert_reaches_none(fl-server-persistence "${_client_deny}" 0 _chain)
+        if(_chain)
+            list(APPEND _violations
+                "[persistence confinement] fl-server-persistence must not reach a client backend: ${_chain}")
+        endif()
+        _fl_assert_reaches_none(fl-server-persistence "^(fl-server-lib|game-client)$" 0 _chain)
+        if(_chain)
+            list(APPEND _violations
+                "[persistence confinement] fl-server-persistence must stay a leaf — it takes option "
+                "structs, not a ServerConfig: ${_chain}")
+        endif()
+    endif()
 
     if(_violations)
         set(_msg "Module-boundary layering violation(s) detected:\n")

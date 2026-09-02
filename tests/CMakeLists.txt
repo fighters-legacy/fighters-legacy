@@ -428,12 +428,32 @@ if(TARGET platform-gns)
     catch_discover_tests(test_gns_network)
 endif()
 
+# The persistence store (#533). Outside the platform-enet guard on purpose: fl-server-persistence
+# links no transport and configures in every build, so its tests must run in every build too --
+# including the lean ones where fl-server itself is not built.
+fl_add_test(test_persistence LIBS fl-server-persistence INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
+if(MSVC)
+    # std::getenv reads FL_TEST_POSTGRES_DSN. MSVC deprecates it (C4996) and /WX makes that fatal;
+    # fl-server-lib defines the same macro for the same reason (ServerRuntime reads FL_PORT and
+    # friends through std::getenv). The "safe" _dupenv_s is Windows-only, so using it here would
+    # mean an #ifdef in a test for no behavioural gain.
+    target_compile_definitions(test_persistence PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+
 if(TARGET platform-enet)
 
     add_executable(test_server_config test_server_config.cpp)
     target_link_libraries(test_server_config PRIVATE Catch2::Catch2WithMain fl-server-config)
     target_include_directories(test_server_config PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     catch_discover_tests(test_server_config)
+
+    # [persistence] -> a store or a refusal (#533). Links the server library: the decision maps a
+    # ServerConfig onto the persistence library's option structs, which is exactly the seam
+    # cmake/layering.cmake rule 8 keeps the store itself on the far side of.
+    add_executable(test_persistence_setup test_persistence_setup.cpp)
+    target_link_libraries(test_persistence_setup PRIVATE Catch2::Catch2WithMain fl-server-lib)
+    target_include_directories(test_persistence_setup PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    catch_discover_tests(test_persistence_setup)
 
     # The per-key reload-class table (#1081). Links the server library because the table's hot rows
     # carry the code that applies them.

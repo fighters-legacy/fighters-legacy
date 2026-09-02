@@ -1300,7 +1300,13 @@ TEST_CASE("parseServerConfig: default template parses with the [metrics] section
 //
 // This asserts on the TEMPLATE, not the parse result: the failure being guarded is a key reappearing
 // in the file the server writes, which is the surface an operator actually reads.
-TEST_CASE("defaultServerConfigToml: ships no persistence keys, which have no implementation", "[server_config]") {
+// The keys named here are the WORLD-STATE persistence that `--persistent` still only stubs -- not
+// the [persistence] store, which does ship keys and does implement them (#533). Renamed when that
+// landed: a case called "ships no persistence keys" sitting next to a shipped [persistence] section
+// reads as a contradiction, and the next person to see it would have had to open it to find out
+// which of the two was wrong.
+TEST_CASE("defaultServerConfigToml: ships no WORLD-STATE persistence keys, which have no implementation",
+          "[server_config]") {
     const std::string_view toml = defaultServerConfigToml();
     CHECK(toml.find("save_path") == std::string_view::npos);
     CHECK(toml.find("autosave_interval_s") == std::string_view::npos);
@@ -1437,4 +1443,64 @@ TEST_CASE("parseWindProfile: empty/no-profile input yields no knots", "[server_c
     MockLogger log;
     CHECK(fl::parseWindProfile("[server]\nport = 4778\n", &log).empty());
     CHECK(fl::parseWindProfile("", &log).empty());
+}
+
+// ---------------------------------------------------------------------------
+// [persistence] (#533)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("parseServerConfig: [persistence] defaults to an enabled sqlite store", "[server_config]") {
+    // The default is the assertion. Persistence is the one optional surface in this file that is ON
+    // out of the box (#533), because the acceptance clause is that bans and stats survive a restart
+    // on a SERVER, not on a server whose operator read the release notes.
+    MockLogger log;
+    auto cfg = parseServerConfig("", &log);
+
+    CHECK(cfg.persistence.enabled);
+    CHECK(cfg.persistence.backend == "sqlite");
+    CHECK(cfg.persistence.sqlitePath == "cache/fl-server.db");
+    CHECK(cfg.persistence.postgresDsn.empty());
+    CHECK(cfg.persistence.busyTimeoutMs == 5000);
+    CHECK(cfg.persistence.writeQueueMax == 4096);
+}
+
+TEST_CASE("parseServerConfig: [persistence] keys are read", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[persistence]\n"
+                                 "enabled = false\n"
+                                 "backend = \"postgres\"\n"
+                                 "sqlite_path = \"/var/lib/fl/server.db\"\n"
+                                 "postgres_dsn = \"host=db user=fl password=secret\"\n"
+                                 "busy_timeout_ms = 250\n"
+                                 "write_queue_max = 128\n",
+                                 &log);
+
+    CHECK_FALSE(cfg.persistence.enabled);
+    CHECK(cfg.persistence.backend == "postgres");
+    CHECK(cfg.persistence.sqlitePath == "/var/lib/fl/server.db");
+    CHECK(cfg.persistence.postgresDsn == "host=db user=fl password=secret");
+    CHECK(cfg.persistence.busyTimeoutMs == 250);
+    CHECK(cfg.persistence.writeQueueMax == 128);
+}
+
+TEST_CASE("parseServerConfig: an unknown persistence backend warns and keeps sqlite", "[server_config]") {
+    // A typo is a CONFIG error and is named as one here. Passing it through to the store factory
+    // would report it as a failure to open a database, which sends the operator to look at a
+    // service instead of at this line of their config.
+    MockLogger log;
+    auto cfg = parseServerConfig("[persistence]\nbackend = \"mysql\"\n", &log);
+
+    CHECK(cfg.persistence.backend == "sqlite");
+    CHECK(log.count(LogLevel::Warn, "persistence.backend") == 1);
+}
+
+TEST_CASE("parseServerConfig: persistence numeric keys are clamped to their documented ranges", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[persistence]\nbusy_timeout_ms = 0\nwrite_queue_max = 0\n", &log);
+    CHECK(cfg.persistence.busyTimeoutMs == 5000);
+    CHECK(cfg.persistence.writeQueueMax == 4096);
+
+    auto high = parseServerConfig("[persistence]\nbusy_timeout_ms = 999999\nwrite_queue_max = 99999999\n", &log);
+    CHECK(high.persistence.busyTimeoutMs == 5000);
+    CHECK(high.persistence.writeQueueMax == 4096);
 }
