@@ -88,9 +88,28 @@ Result runMigrations(IMigrationTarget& target, std::span<const Migration> migrat
         if (m.version <= current)
             continue;
         // Each step is its own transaction: a set that fails halfway leaves the store at the last
-        // COMPLETE version rather than in a state no migration describes.
-        if (auto r = target.exec("BEGIN;"); !r)
+        // COMPLETE version rather than in a state no migration describes. EXCLUSIVE from the first
+        // statement -- see beginExclusiveSql() for why a plain BEGIN loses a race that ordinary
+        // operation reaches.
+        if (auto r = target.exec(target.beginExclusiveSql()); !r)
             return Result::failure("beginning the migration transaction: " + r.error);
+
+        // Re-read INSIDE the transaction. The version read before the loop is a hint; this is the
+        // decision. Another process may have applied this very migration between the two reads, and
+        // it holds whether we waited on the lock for microseconds or for seconds.
+        int applied_version = 0;
+        if (auto r = target.currentVersion(applied_version); !r) {
+            target.exec("ROLLBACK;");
+            return Result::failure("re-reading the schema version: " + r.error);
+        }
+        if (m.version <= applied_version) {
+            // Someone else got there first. That is a success, not a conflict.
+            if (auto r = target.exec("COMMIT;"); !r)
+                return Result::failure("committing the migration transaction: " + r.error);
+            current = applied_version;
+            continue;
+        }
+
         Result applied = target.exec(m.sql);
         if (applied)
             applied = target.recordVersion(m.version, m.name);
@@ -102,6 +121,7 @@ Result runMigrations(IMigrationTarget& target, std::span<const Migration> migrat
         }
         if (auto r = target.exec("COMMIT;"); !r)
             return Result::failure("committing the migration transaction: " + r.error);
+        current = m.version;
 
         char buf[128];
         std::snprintf(buf, sizeof(buf), "persistence: applied migration %d (%s)", m.version, m.name);

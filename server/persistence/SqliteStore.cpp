@@ -100,6 +100,13 @@ class SqliteMigrationTarget final : public IMigrationTarget {
                ") STRICT;";
     }
 
+    [[nodiscard]] const char* beginExclusiveSql() const override {
+        // IMMEDIATE, not DEFERRED (which is what a bare BEGIN gives): it acquires the write lock
+        // straight away, and -- unlike a journal-mode change -- the busy handler DOES apply, so a
+        // second server waits for its turn instead of proceeding on a stale version read.
+        return "BEGIN IMMEDIATE;";
+    }
+
   private:
     sqlite3* mDb;
 };

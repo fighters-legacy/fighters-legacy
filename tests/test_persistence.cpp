@@ -175,6 +175,9 @@ TEST_CASE("a store migrated by a newer build is refused, not opened", "[persiste
         [[nodiscard]] const char* versionTableDdl() const override {
             return "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER);";
         }
+        [[nodiscard]] const char* beginExclusiveSql() const override {
+            return "BEGIN IMMEDIATE;";
+        }
     } target;
 
     const Result r = runMigrations(target, sqliteMigrations(), &log);
@@ -206,6 +209,9 @@ TEST_CASE("a failing migration rolls back and reports which step failed", "[pers
         }
         [[nodiscard]] const char* versionTableDdl() const override {
             return "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER);";
+        }
+        [[nodiscard]] const char* beginExclusiveSql() const override {
+            return "BEGIN IMMEDIATE;";
         }
     } target;
 
@@ -396,6 +402,56 @@ TEST_CASE("an unopenable path fails with the path in the message", "[persistence
     CHECK(error.find(target) != std::string::npos);
 
     std::filesystem::permissions(readOnly, std::filesystem::perms::owner_all);
+}
+
+TEST_CASE("stores racing a FRESH database all migrate it exactly once", "[persistence]") {
+    // The regression this exists for, found by running 16 fl-servers at once in one directory:
+    // three of them REFUSED TO START with "migration 1 (blobs) failed: recording schema version:
+    // UNIQUE constraint failed". Two processes both read version 0, both applied the migration, and
+    // the second one's bookkeeping INSERT hit the primary key -- because a bare BEGIN is DEFERRED
+    // and takes no write lock until its first write, so the check and the act were not one step.
+    //
+    // Two servers starting together against a fresh database is ordinary: a restart, a test suite
+    // running ctest in parallel, a second server in the same directory. Under the refuse-to-start
+    // policy it turned an ordinary race into a server that does not come up, so it is pinned with
+    // threads racing the open rather than left to the process-level reproduction that found it.
+    TempDir dir;
+    NullLogger log;
+    const std::string path = dir.db("race.db");
+
+    constexpr int kRacers = 12;
+    std::vector<std::unique_ptr<IPersistence>> stores(kRacers);
+    std::vector<std::string> errors(kRacers);
+    std::vector<std::thread> threads;
+    std::atomic<int> ready{0};
+
+    for (int i = 0; i < kRacers; ++i) {
+        threads.emplace_back([&, i] {
+            // Line them all up so they contend on the very first statement rather than trickling in.
+            ++ready;
+            while (ready.load() < kRacers)
+                std::this_thread::yield();
+            stores[static_cast<std::size_t>(i)] =
+                openSqliteStore(SqliteOptions{path, 5000, 64}, &log, errors[static_cast<std::size_t>(i)]);
+        });
+    }
+    for (auto& t : threads)
+        t.join();
+
+    for (int i = 0; i < kRacers; ++i) {
+        INFO("racer " << i << ": " << errors[static_cast<std::size_t>(i)]);
+        REQUIRE(stores[static_cast<std::size_t>(i)] != nullptr);
+        CHECK(stores[static_cast<std::size_t>(i)]->health().schemaVersion == kSchemaHeadVersion);
+    }
+
+    // Exactly one row per migration: the losers observed the winner's version and skipped rather
+    // than re-applying or duplicating.
+    stores[0]->blobs().put("after/race", bytes("ok"));
+    REQUIRE(stores[0]->flush().ok);
+    CHECK(stores[0]->health().writesFailed == 0);
+    auto seen = stores[kRacers - 1]->blobs().get("after/race");
+    REQUIRE(seen.has_value());
+    CHECK(text(*seen) == "ok");
 }
 
 TEST_CASE("several stores open the same database without any of them refusing to start", "[persistence]") {

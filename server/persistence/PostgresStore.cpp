@@ -189,6 +189,13 @@ class PostgresMigrationTarget final : public IMigrationTarget {
                ");";
     }
 
+    [[nodiscard]] const char* beginExclusiveSql() const override {
+        // Postgres has no BEGIN IMMEDIATE; the equivalent is to take the table lock explicitly.
+        // Without it two servers in READ COMMITTED both see version 0 and both insert, which is
+        // the same race, reported as a duplicate key instead of a UNIQUE constraint.
+        return "BEGIN; LOCK TABLE schema_version IN EXCLUSIVE MODE;";
+    }
+
   private:
     PGconn* mConn;
 };

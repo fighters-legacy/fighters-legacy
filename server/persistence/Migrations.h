@@ -51,10 +51,22 @@ class IMigrationTarget {
     // The DDL that creates the bookkeeping table itself, run before currentVersion(). Per-backend
     // for the same reason the rest is.
     [[nodiscard]] virtual const char* versionTableDdl() const = 0;
+
+    // Begin a transaction that holds the WRITE lock from the first statement, not from the first
+    // write. This is load-bearing, and a plain BEGIN is not good enough: two servers starting at
+    // once both read version 0, both apply migration 1, and the second one's bookkeeping INSERT
+    // violates the primary key -- so it reports a failed migration and, under the refuse-to-start
+    // policy, does not come up. Two fl-servers starting simultaneously against one fresh database
+    // is an ordinary thing (a restart, a test suite, a second server in the same directory), so the
+    // check-then-act has to be atomic rather than merely usually-atomic.
+    [[nodiscard]] virtual const char* beginExclusiveSql() const = 0;
 };
 
-// Apply every migration newer than the store's current version, each inside its own transaction,
-// in ascending order. Idempotent: a store already at head is untouched.
+// Apply every migration newer than the store's current version, each inside its own EXCLUSIVE
+// transaction, in ascending order, re-reading the applied version inside that transaction so the
+// decision and the write cannot be separated by another process. Idempotent, and safe to run
+// concurrently from several processes against one database: the losers of the race observe the
+// winner's version and skip.
 //
 // HARD-ERRORS when the store's version is NEWER than the highest migration this binary knows.
 // That case is an operator running an old fl-server against a database a newer one has already
