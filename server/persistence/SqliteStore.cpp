@@ -112,33 +112,44 @@ class SqliteStore final : public IPersistence, private IBlobRepository {
         close();
     }
 
-    Result openConnections(const SqliteOptions& options) {
+    // Open the WRITE connection and configure it. The read connection deliberately comes later, in
+    // openReadConnection() after migrations have run -- see the comment there.
+    Result openWriteConnection(const SqliteOptions& options) {
         mPath = options.path;
-        // Two connections, on purpose. The writer thread owns one for the whole process lifetime;
-        // readers share the other under a mutex. With WAL that gives readers a consistent snapshot
-        // that a concurrent write does not block, which is the property the admin surfaces need --
-        // an operator listing bans must not wait on a campaign save.
         const int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE;
         // The path is added by the caller (see withPath in openSqliteStore), so it appears exactly
         // once however deep in the open sequence the failure was.
         if (sqlite3_open_v2(mPath.c_str(), &mWriteDb, flags, nullptr) != SQLITE_OK)
             return Result::failure(mWriteDb ? sqlite3_errmsg(mWriteDb) : "out of memory");
-        if (sqlite3_open_v2(mPath.c_str(), &mReadDb, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
-            // READONLY cannot create the file, so this can only fail after the write handle
-            // succeeded if something is badly wrong with the path.
-            return Result::failure(std::string("opening for reading: ") +
-                                   (mReadDb ? sqlite3_errmsg(mReadDb) : "out of memory"));
-        }
 
-        for (sqlite3* db : {mWriteDb, mReadDb}) {
-            sqlite3_busy_timeout(db, options.busyTimeoutMs);
-            if (auto r = execRaw(db, "PRAGMA foreign_keys=ON;"); !r)
-                return r;
-        }
-        // WAL is a property of the DATABASE, not the connection, and it persists in the file --
-        // setting it on the writer is enough and it survives restarts.
-        if (auto r = execRaw(mWriteDb, "PRAGMA journal_mode=WAL;"); !r)
+        // Set BEFORE anything that can contend, so the very first statement already waits rather
+        // than failing instantly against another process holding the file.
+        sqlite3_busy_timeout(mWriteDb, options.busyTimeoutMs);
+        if (auto r = execRaw(mWriteDb, "PRAGMA foreign_keys=ON;"); !r)
             return r;
+
+        // WAL IS AN OPTIMIZATION, NOT A CORRECTNESS REQUIREMENT, AND A FAILURE HERE MUST NOT STOP
+        // THE SERVER STARTING.
+        //
+        // It gives readers a snapshot a concurrent write does not block -- an operator listing bans
+        // should not wait on a campaign save. But the journal mode is a property of the DATABASE
+        // FILE, and the delete->wal transition needs a brief exclusive lock. SQLite returns
+        // SQLITE_BUSY for that when another connection has the file open, and it does NOT invoke
+        // the busy handler for a journal-mode change -- so the busy_timeout above does not cover
+        // it. Several fl-servers sharing a working directory (which is exactly what the test suite
+        // does, and what a developer running two servers does) can therefore lose this race.
+        //
+        // Refusing to start over it would be absurd: the store is fully functional in the rollback
+        // journal mode SQLite falls back to, only less concurrent. So this warns and carries on,
+        // and says which mode it ended up in rather than leaving the operator to guess.
+        if (auto r = execRaw(mWriteDb, "PRAGMA journal_mode=WAL;"); !r && mLog) {
+            char buf[384];
+            std::snprintf(buf, sizeof(buf),
+                          "persistence: could not switch %s to WAL (%s); continuing in its current "
+                          "journal mode -- reads may block behind a write",
+                          mPath.c_str(), r.error.c_str());
+            mLog->log(LogLevel::Warn, __FILE__, __LINE__, buf);
+        }
         // NORMAL under WAL: durable across a process crash (which is what `kill -9` in the
         // acceptance test is), at risk only from an OS/power loss, and an order of magnitude
         // cheaper than FULL. The acceptance bullet is process-crash survival, so this is the
@@ -146,6 +157,21 @@ class SqliteStore final : public IPersistence, private IBlobRepository {
         if (auto r = execRaw(mWriteDb, "PRAGMA synchronous=NORMAL;"); !r)
             return r;
         return Result::success();
+    }
+
+    // The READ connection, opened after migrations.
+    //
+    // Two connections exist so the writer thread owns one for the process lifetime while readers
+    // share the other under a mutex. This one is READONLY, which cannot create the file -- so it
+    // has to be opened once the write connection and the migrations have certainly produced one.
+    // Opening it first left a window whose failure mode was "the server will not start" on a
+    // perfectly good machine, which is far too severe a consequence for an ordering detail.
+    Result openReadConnection(const SqliteOptions& options) {
+        if (sqlite3_open_v2(mPath.c_str(), &mReadDb, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK)
+            return Result::failure(std::string("opening for reading: ") +
+                                   (mReadDb ? sqlite3_errmsg(mReadDb) : "out of memory"));
+        sqlite3_busy_timeout(mReadDb, options.busyTimeoutMs);
+        return execRaw(mReadDb, "PRAGMA foreign_keys=ON;");
     }
 
     Result migrate() {
@@ -362,13 +388,18 @@ std::unique_ptr<IPersistence> openSqliteStore(const SqliteOptions& options, ILog
     const auto withPath = [&options](const std::string& detail) { return options.path + ": " + detail; };
 
     auto store = std::make_unique<SqliteStore>(options.writeQueueMax, log);
-    if (auto r = store->openConnections(options); !r) {
+    if (auto r = store->openWriteConnection(options); !r) {
         error = withPath(r.error);
         return nullptr;
     }
     // Migrations run here, synchronously, before the writer thread exists -- so nothing else can
     // be touching the connection while the schema changes under it.
     if (auto r = store->migrate(); !r) {
+        error = withPath(r.error);
+        return nullptr;
+    }
+    // Only now: the file certainly exists and is at head, so a READONLY handle can attach.
+    if (auto r = store->openReadConnection(options); !r) {
         error = withPath(r.error);
         return nullptr;
     }

@@ -1300,7 +1300,13 @@ TEST_CASE("parseServerConfig: default template parses with the [metrics] section
 //
 // This asserts on the TEMPLATE, not the parse result: the failure being guarded is a key reappearing
 // in the file the server writes, which is the surface an operator actually reads.
-TEST_CASE("defaultServerConfigToml: ships no persistence keys, which have no implementation", "[server_config]") {
+// The keys named here are the WORLD-STATE persistence that `--persistent` still only stubs -- not
+// the [persistence] store, which does ship keys and does implement them (#533). Renamed when that
+// landed: a case called "ships no persistence keys" sitting next to a shipped [persistence] section
+// reads as a contradiction, and the next person to see it would have had to open it to find out
+// which of the two was wrong.
+TEST_CASE("defaultServerConfigToml: ships no WORLD-STATE persistence keys, which have no implementation",
+          "[server_config]") {
     const std::string_view toml = defaultServerConfigToml();
     CHECK(toml.find("save_path") == std::string_view::npos);
     CHECK(toml.find("autosave_interval_s") == std::string_view::npos);

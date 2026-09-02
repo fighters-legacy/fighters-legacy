@@ -432,6 +432,13 @@ endif()
 # links no transport and configures in every build, so its tests must run in every build too --
 # including the lean ones where fl-server itself is not built.
 fl_add_test(test_persistence LIBS fl-server-persistence INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
+if(MSVC)
+    # std::getenv reads FL_TEST_POSTGRES_DSN. MSVC deprecates it (C4996) and /WX makes that fatal;
+    # fl-server-lib defines the same macro for the same reason (ServerRuntime reads FL_PORT and
+    # friends through std::getenv). The "safe" _dupenv_s is Windows-only, so using it here would
+    # mean an #ifdef in a test for no behavioural gain.
+    target_compile_definitions(test_persistence PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
 
 if(TARGET platform-enet)
 

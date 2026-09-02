@@ -390,6 +390,36 @@ TEST_CASE("an unopenable path fails with the path in the message", "[persistence
     std::filesystem::permissions(readOnly, std::filesystem::perms::owner_all);
 }
 
+TEST_CASE("several stores open the same database without any of them refusing to start", "[persistence]") {
+    // The test suite itself is this scenario: ctest runs in parallel, several of its cases spawn a
+    // real fl-server, and they share a working directory -- so they share cache/fl-server.db. A
+    // developer running two servers from one directory is the same shape.
+    //
+    // The failure this guards is severe out of all proportion to its cause: the delete->WAL journal
+    // transition needs a brief exclusive lock and does NOT go through the busy handler, so a store
+    // that treated it as fatal would refuse to start a perfectly good server because another one
+    // happened to be opening at the same moment.
+    TempDir dir;
+    NullLogger log;
+    const std::string path = dir.db("shared.db");
+
+    std::vector<std::unique_ptr<IPersistence>> stores;
+    std::vector<std::string> errors(6);
+    for (std::size_t i = 0; i < 6; ++i) {
+        stores.push_back(openSqliteStore(SqliteOptions{path, 5000, 64}, &log, errors[i]));
+        INFO("store " << i << ": " << errors[i]);
+        REQUIRE(stores.back() != nullptr);
+        CHECK(stores.back()->health().schemaVersion == kSchemaHeadVersion);
+    }
+
+    // And they genuinely share one database: what one writes, another reads.
+    stores[0]->blobs().put("shared/key", bytes("written by the first"));
+    REQUIRE(stores[0]->flush().ok);
+    auto seen = stores[5]->blobs().get("shared/key");
+    REQUIRE(seen.has_value());
+    CHECK(text(*seen) == "written by the first");
+}
+
 // ---------------------------------------------------------------------------------------------
 // Async writer
 // ---------------------------------------------------------------------------------------------
