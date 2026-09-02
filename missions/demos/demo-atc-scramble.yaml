@@ -7,13 +7,28 @@ wind: { heading: 90, speed: 4 }
 sides: [blue]
 # The server-authoritative ATC service launches AI departures from the builtin airfield in strict
 # sequence (#673/#706). Three staggered `atc_scramble` triggers each queue one departure — spacing
-# them avoids stacking aircraft on the single hold-short point — the #1334 trainer holds the runway
-# ~36 s per departure (~30 s ground roll to Vr 70 m/s, then the climb to the 40 m AGL occupancy
-# release), which sets the 36/72 s stagger; ATC sequences takeoff, rotation, and
-# climbout down the 090 runway. The mission `do:` string runs the same validated admin command an
+# them avoids stacking aircraft on the single hold-short point — and ATC sequences takeoff and
+# rotation down the 090 runway. The mission `do:` string runs the same validated admin command an
 # operator would type. Scrambled aircraft are NOT mission-roster objects, so every camera look_at is
-# a fixed point along the runway and the climbout corridor. Two apron vehicles and a high CAP give
-# the field foreground/scale. Zero content pack.
+# a fixed point along the runway. Two apron vehicles and a high CAP give the field foreground/scale.
+# Zero content pack.
+#
+# ⚑ THE SHOTS BELOW ARE AUTHORED AGAINST A MEASURED TRACK, NOT AGAINST THE PLAN (#1378). Sampling
+# `worldstate` through the whole mission (fl-server admin console on stdin, positions converted back
+# into this anchor frame) says what the departures actually do, and it is not what the previous shot
+# list assumed:
+#
+#   t=0    first departure holds at E-1274 (west threshold), v=0
+#   t=17   E-1121  v22        t=29   E-746   v41        t=41   E-151   v57
+#   t=53   E+610   v70        <- rotation, ~53 s of ground roll, not the ~30 s assumed here
+#   t=69   E+1724  alt 570    <- still ON THE DECK: this departure never climbs out
+#   t=73   E+1955 N-100       <- turns right and tracks away south at ~550-580 m MSL
+#   t=93   second departure starts rolling from E-1274 (it waits out the runway occupancy)
+#
+# So there is no climbout corridor to point a camera at, and the old shots framed a 300 m AGL handoff
+# that never happens. Every camera here sits 60-300 m from where the aircraft measurably IS at that
+# second, instead of 1.7-2.5 km away from where it was supposed to be. Re-measure before re-timing:
+# the ground roll is a flight-model property (#1341) and will move again when the model does.
 #
 # `anchor: home` (#1211): coordinates are metres EAST and NORTH of the field, y is MSL altitude, and
 # the field elevation is ~570 m. Runway 090 therefore runs along +east from the field centre,
@@ -37,17 +52,24 @@ triggers:
     do: mission_success
 cameras:
   shots:
-    # Down the runway from behind the west threshold — the field, apron traffic, and the first
-    # departure rolling out toward +east.
-    - { type: static, start: 0, duration: 22, pos: [-1700, 620, 220], look_at: [200, 575, 0], fov: 48 }
-    # Beside the runway as the departure accelerates and rotates — the #1334 trainer needs ~1 km of
-    # ground roll, so rotation happens just west of midfield, not out at x≈900.
-    - { type: static, start: 22, duration: 12, pos: [300, 590, 320], look_at: [-200, 580, 0], fov: 44 }
-    # The climbout corridor: the first departure lifts off (~x -100) and climbs through the frame to
-    # its 300 m AGL handoff (~x +1300) — abeam, not chasing; the trainer cannot outrun the old rail.
-    - { type: move, start: 34, duration: 18, look_at: [700, 700, 0], ease: smooth,
-        keyframes: [ { time: 0, pos: [500, 800, -900] }, { time: 18, pos: [900, 950, -700] } ] }
-    # Wide over the field as the next departures roll and climb out.
-    - { type: static, start: 52, duration: 40, pos: [0, 1650, 2550], look_at: [200, 950, 0], fov: 56 }
-    # Closing frame down the flight line.
-    - { type: static, start: 92, duration: 36, pos: [-1600, 840, 500], look_at: [200, 650, 0], fov: 50 }
+    # ⚑ EVERY CAMERA SITS 55-70 m OFF THE MEASURED TRACK. At 350 m the departure is a handful of
+    # pixels, and a handful of pixels moving across 1280x720 changes less than freezedetect's 0.1%
+    # noise floor -- so the acceptance check reads "FROZEN" about footage that is technically moving
+    # and, honestly, unwatchable. Framing the subject large is the fix for both at once.
+    #
+    # First departure, roll phase: three static cameras beside the runway at the eastings it passes,
+    # each catching the aircraft approaching, passing close abeam, and receding.
+    - { type: static, start: 0, duration: 20, pos: [-1080, 578, 55], look_at: [-1220, 576, 0], fov: 34 }
+    - { type: static, start: 20, duration: 16, pos: [-620, 578, 55], look_at: [-780, 576, 0], fov: 34 }
+    - { type: static, start: 36, duration: 16, pos: [60, 578, 55], look_at: [-120, 576, 0], fov: 34 }
+    # Rotation (~t=53, E+610) and the low run east. The camera paces the aircraft down the field --
+    # keyframes are its measured eastings offset 120 m back and 70 m north -- while holding a point
+    # out on its ground track, so the framing keeps changing as it goes by.
+    - { type: move, start: 52, duration: 24, look_at: [2100, 590, -300], ease: smooth,
+        keyframes: [ { time: 0, pos: [450, 580, 70] }, { time: 8, pos: [990, 583, 70] },
+                     { time: 16, pos: [1530, 586, 70] }, { time: 24, pos: [1780, 592, 40] } ] }
+    # The turn away: it comes past at ~250 m (E+1955, N-100), banks right and tracks off south.
+    - { type: static, start: 76, duration: 20, pos: [2150, 620, -300], look_at: [1750, 585, -650], fov: 34 }
+    # The SECOND departure, which only starts rolling at t~93 once the runway clears, closing from
+    # 565 m to abeam the camera by the end of the shot.
+    - { type: static, start: 96, duration: 32, pos: [-700, 578, 55], look_at: [-900, 576, 0], fov: 34 }

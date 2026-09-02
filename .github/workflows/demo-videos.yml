@@ -94,6 +94,9 @@ jobs:
           else
             echo "no lvp_icd*.json found — relying on Vulkan loader auto-discovery"
           fi
+          # PyYAML backs the #1378 pre-flight check that demos.json agrees with each mission's
+          # shot list. Without it the recorder warns and records anyway rather than failing.
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
           GAME=$(find build/release -type f -name fighters-legacy | head -1)
           SERVER=$(find build/release -type f -name fl-server | head -1)
           echo "game=$GAME server=$SERVER"

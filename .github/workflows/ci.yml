@@ -486,9 +486,13 @@ jobs:
 
       # Pure helpers (manifest parse, duration bounds) + the committed demos.json integrity check. The
       # actual headless recording is the opt-in demo-videos job (#918), never a required PR gate.
+      # PyYAML backs the #1378 drift check (demos.json vs each mission's shot list); the test FAILS
+      # rather than skips without it, so the install is load-bearing, not a convenience.
       - name: Unit test record_demo/record_demo.py (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
-        run: python3 -m pytest tests/test_record_demo.py -v
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          python3 -m pytest tests/test_record_demo.py -v
 
       # Fixture-driven extractor coverage. The drift check itself runs in docs-drift.yml against
       # the real tree; this guards the checker, which is the piece that fails silently — a broken
