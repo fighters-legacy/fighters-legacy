@@ -650,3 +650,63 @@ TEST_CASE("WeatherController: applyGeographicSun sets a lit day sun and a dim ni
     WeatherController::applyGeographicSun(night, julianDay(2025, 6, 21, 0.0), greenwich); // local midnight
     CHECK(night.sunColor.r < 0.1f);                                                       // dim night sun
 }
+
+TEST_CASE("WeatherController: the sky's elevation is LOCAL, not the sun's world-Y (#1391)", "[weather][solar]") {
+    // The world origin is the north pole, so `sunDirection.y` is sin(elevation) only THERE. At an
+    // anchored mission it is the sun's DECLINATION -- a date property that does not change over a
+    // day -- and the sky pass was reading it as an elevation. Measured at the sandbox anchor it is
+    // +0.378 at EVERY hour, which pinned the sky's warmth mix at "day" and its night factor at 0, so
+    // the #484 Moon and star field never appeared on an anchored mission at any hour.
+    WeatherController wc;
+    wc.setDate(2025, 6, 21);
+    wc.setAnchorLongitude(kSandboxHomeLonDeg * kDegToRad<double>);
+
+    double x = 0.0, y = 0.0, z = 0.0;
+    localOffsetToWorld(sandboxHome(), 0.0, 0.0, 600.0, x, y, z);
+
+    const auto atHour = [&](float hour) {
+        wc.setTimeOfDay(hour);
+        EnvironmentState env = wc.computeEnvironment();
+        WeatherController::applyGeographicSun(env, wc.utcJulianDay(), {x, y, z}, kEarthRadiusM);
+        return env;
+    };
+    const EnvironmentState noon = atHour(12.0f);
+    const EnvironmentState night = atHour(22.5f);
+
+    INFO("noon: elev sin " << noon.sunElevationSin << ", world-Y " << noon.sunDirection.y);
+    INFO("22:30: elev sin " << night.sunElevationSin << ", world-Y " << night.sunDirection.y);
+
+    // The published elevation tracks the local sun: high at noon, below the horizon at 22:30.
+    CHECK(noon.sunElevationSin > 0.9f);
+    CHECK(night.sunElevationSin < 0.0f);
+
+    // The world-Y does NOT. Pinned so the sky cannot quietly go back to reading it: the same value at
+    // both hours, and positive at 22:30 while the sun is well below the local horizon.
+    CHECK_THAT(night.sunDirection.y, WithinAbs(noon.sunDirection.y, 0.01f));
+    CHECK(night.sunDirection.y > 0.0f);
+
+    // VkRenderer's own night-factor expression, evaluated on each, for the record: 1 (night sky, Moon
+    // and stars) from the local elevation, 0 (day sky, no celestial) from the world-Y.
+    const auto nightFactor = [](float elev) { return std::clamp((-elev + 0.10f) / 0.18f, 0.0f, 1.0f); };
+    CHECK_THAT(nightFactor(night.sunElevationSin), WithinAbs(1.0f, 1e-5f));
+    CHECK_THAT(nightFactor(night.sunDirection.y), WithinAbs(0.0f, 1e-5f));
+}
+
+TEST_CASE("WeatherController: at the world origin the two agree exactly (#1391)", "[weather][solar]") {
+    // Which is why the substitution was right for as long as everything shipped sat on the origin,
+    // and why an unanchored mission is unchanged by the fix.
+    WeatherController wc;
+    wc.setDate(2025, 6, 21);
+    wc.setTimeOfDay(12.0f);
+    EnvironmentState env = wc.computeEnvironment();
+    WeatherController::applyGeographicSun(env, wc.utcJulianDay(), {0.0, 0.0, 0.0}, kEarthRadiusM);
+    CHECK_THAT(env.sunElevationSin, WithinAbs(env.sunDirection.y, 1e-5f));
+}
+
+TEST_CASE("WeatherController: the planar preset path publishes its elevation too (#1391)", "[weather][solar]") {
+    // A client that has not yet received a UTC clock still gets a coherent sky: the planar path's
+    // elevation IS its sunDirection.y, and applySunLighting publishes exactly what it was handed.
+    EnvironmentState env{};
+    WeatherController::applyPresetToEnv(WeatherPreset::Clear, 22.5f, env);
+    CHECK_THAT(env.sunElevationSin, WithinAbs(env.sunDirection.y, 1e-6f));
+}
