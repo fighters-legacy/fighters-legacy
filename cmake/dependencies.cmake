@@ -674,6 +674,72 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
+# SQLite — the core backend of the server persistence store (#533, D24).
+#
+# Vendored UNCONDITIONALLY as upstream's amalgamation. That is a deliberate departure
+# from the system-preferred pattern every block above uses, and the reason is the one
+# thing this dependency is for: the store is the system of record for bans, accounts
+# and stats. SQLite's OBSERVABLE behaviour moves between releases — WAL checkpointing,
+# busy handling, STRICT tables, RETURNING, the default page size. A server whose SQL
+# engine is whatever the build box happened to have installed is a server whose
+# persistence semantics differ between this box, four CI runners and an operator's
+# build, and that difference surfaces as a data bug months later rather than as a
+# compile error on the day. One pinned engine everywhere costs one C file compiled
+# once per build tree, which is the cheaper side of that trade by a wide margin.
+#
+# The amalgamation ships loose sources with no CMakeLists (the imgui/stb idiom), so the
+# static target is ours and both tiers normalize onto `fl::sqlite3` (the zstd naming).
+# URL_HASH is upstream's own published SHA3-256 for this exact zip, verified against
+# sqlite.org/download.html at pin time.
+#
+# Confined to server/persistence/ by cmake/layering.cmake: no engine-* target may link a
+# SQL engine. Public domain — no LICENSES/ entry to add; recorded with the other vendored
+# dependencies in docs/developer/development.md.
+# ---------------------------------------------------------------------------
+message(STATUS "SQLite: FetchContent (amalgamation 3.53.4, vendored unconditionally)")
+FetchContent_Declare(sqlite3
+    URL      https://sqlite.org/2026/sqlite-amalgamation-3530400.zip
+    URL_HASH SHA3_256=628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e
+)
+FetchContent_MakeAvailable(sqlite3)
+
+add_library(fl-sqlite3 STATIC "${sqlite3_SOURCE_DIR}/sqlite3.c")
+target_include_directories(fl-sqlite3 SYSTEM PUBLIC "${sqlite3_SOURCE_DIR}")
+target_compile_definitions(fl-sqlite3 PUBLIC
+    # Refuse double-quoted string literals as identifiers. SQLite's default is to fall back
+    # to treating a misspelled column name as a string constant, which turns a typo in a
+    # query into a silently wrong RESULT instead of an error. Off is what upstream
+    # recommends for new code and what every query in server/persistence/ is written for.
+    SQLITE_DQS=0
+    # Two connections exist at once by construction: the writer thread owns one, readers
+    # use another. The library has to tolerate that.
+    SQLITE_THREADSAFE=1
+    # Foreign keys are declared in the schema; without this they are declared and not
+    # enforced, which is the worst of both.
+    SQLITE_DEFAULT_FOREIGN_KEYS=1
+    SQLITE_OMIT_DEPRECATED
+    SQLITE_DEFAULT_MEMSTATUS=0
+)
+fl_quiet_target(fl-sqlite3)
+add_library(fl::sqlite3 ALIAS fl-sqlite3)
+
+# ---------------------------------------------------------------------------
+# libpq — the optional PostgreSQL backend for the same store (#533, D24, FL_WITH_POSTGRES).
+#
+# System-only and REQUIRED when the option is on: unlike SQLite there is nothing to vendor
+# (libpq is a client for a server the operator already runs), and a silent auto-disable
+# would hand someone who asked for Postgres a binary that quietly cannot speak it. OFF is
+# the default precisely so Windows/macOS never reach this line.
+# ---------------------------------------------------------------------------
+if(FL_WITH_POSTGRES)
+    find_package(PostgreSQL REQUIRED)
+    add_library(fl-libpq INTERFACE)
+    target_link_libraries(fl-libpq INTERFACE PostgreSQL::PostgreSQL)
+    add_library(fl::libpq ALIAS fl-libpq)
+    message(STATUS "libpq: system (${PostgreSQL_VERSION_STRING}) — PostgreSQL backend enabled")
+endif()
+
+# ---------------------------------------------------------------------------
 # Opus — the voice codec for the in-game radio nets (Epic J, #531/#532).
 # System-preferred with a FetchContent fallback, normalized onto `fl::opus`
 # (the zstd pattern), because distros disagree about what an opus dev package

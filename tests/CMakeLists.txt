@@ -428,6 +428,11 @@ if(TARGET platform-gns)
     catch_discover_tests(test_gns_network)
 endif()
 
+# The persistence store (#533). Outside the platform-enet guard on purpose: fl-server-persistence
+# links no transport and configures in every build, so its tests must run in every build too --
+# including the lean ones where fl-server itself is not built.
+fl_add_test(test_persistence LIBS fl-server-persistence INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
+
 if(TARGET platform-enet)
 
     add_executable(test_server_config test_server_config.cpp)

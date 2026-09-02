@@ -3,6 +3,8 @@
 
 #include "ServerCommands.h"
 
+#include <PostgresStore.h> // redactDsn — the reload report must not echo a connection string
+
 #include <console/CommandShell.h>
 #include <entity/EntityManager.h>
 #include <loop/GameLoop.h>
@@ -384,6 +386,28 @@ const std::array kTable = std::to_array<ConfigKeyInfo>({
      [](const ServerConfig& c) { return valueText(c.metrics.tickJsonPath); }, nullptr},
     {"metrics.tick_json_interval_ms", ReloadClass::Restart,
      [](const ServerConfig& c) { return valueText(c.metrics.tickJsonIntervalMs); }, nullptr},
+    // [persistence] (#533) — every key is Restart. The store's connections, schema and writer
+    // thread are all established at startup, and re-pointing a live server at a different database
+    // mid-match would leave half a match's writes in one store and half in another. `reload_config`
+    // NAMES a changed key here rather than applying it, which is the whole point of the class.
+    {"persistence.enabled", ReloadClass::Restart,
+     [](const ServerConfig& c) { return valueText(c.persistence.enabled); }, nullptr},
+    {"persistence.backend", ReloadClass::Restart,
+     [](const ServerConfig& c) { return valueText(c.persistence.backend); }, nullptr},
+    {"persistence.sqlite_path", ReloadClass::Restart,
+     [](const ServerConfig& c) { return valueText(c.persistence.sqlitePath); }, nullptr},
+    // Reported as a redaction, not as the DSN. `reload_config` prints `key (old -> new)` to every
+    // admin frontend, and a connection string carries a password -- so the one place this value is
+    // routinely displayed is the one place it must not be displayed verbatim.
+    {"persistence.postgres_dsn", ReloadClass::Restart,
+     [](const ServerConfig& c) { return c.persistence.postgresDsn.empty()
+                                            ? valueText(c.persistence.postgresDsn)
+                                            : std::string(fl::persist::redactDsn(c.persistence.postgresDsn)); },
+     nullptr},
+    {"persistence.busy_timeout_ms", ReloadClass::Restart,
+     [](const ServerConfig& c) { return valueText(c.persistence.busyTimeoutMs); }, nullptr},
+    {"persistence.write_queue_max", ReloadClass::Restart,
+     [](const ServerConfig& c) { return valueText(c.persistence.writeQueueMax); }, nullptr},
     {"wind.profile_path", ReloadClass::Restart, [](const ServerConfig& c) { return valueText(c.wind.profilePath); },
      nullptr},
     {"trace.input_trace_dir", ReloadClass::Restart,

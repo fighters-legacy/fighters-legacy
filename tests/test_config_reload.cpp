@@ -234,3 +234,40 @@ TEST_CASE("config reload: a changed secret is reported by name without its value
     CHECK(ignored[0].running == "<unset>");
     CHECK(ignored[0].incoming == "<set>");
 }
+
+TEST_CASE("config reload: a changed postgres DSN is reported with its password redacted", "[config_reload]") {
+    // `reload_config` prints `key (old -> new)` to every admin frontend, and a libpq connection
+    // string carries a password -- so the one place this value is routinely displayed is the one
+    // place it must not be displayed whole. The redaction lives in the table's read function, and
+    // restartOnlyDiffs/changedHotKeys are the ONLY things that print a config value, so pinning it
+    // here pins it everywhere (#533).
+    ServerConfig running;
+    ServerConfig incoming = running;
+    running.persistence.postgresDsn = "host=db user=fl password=old-secret dbname=fl";
+    incoming.persistence.postgresDsn = "postgresql://fl:new-secret@db:5432/fl";
+
+    const auto ignored = restartOnlyDiffs(running, incoming);
+    REQUIRE(ignored.size() == 1u);
+    CHECK(ignored[0].key == "persistence.postgres_dsn");
+    CHECK(ignored[0].running.find("old-secret") == std::string::npos);
+    CHECK(ignored[0].incoming.find("new-secret") == std::string::npos);
+    // Still useful: the non-secret half survives, so an operator can see WHICH database moved.
+    CHECK(ignored[0].running.find("host=db") != std::string::npos);
+    CHECK(ignored[0].incoming.find("db:5432") != std::string::npos);
+}
+
+TEST_CASE("config reload: every [persistence] key is classified Restart", "[config_reload]") {
+    // The store's connections, schema and writer thread are all established at startup. A row here
+    // that claimed Hot would tell an operator a change applied live when it did not -- and per the
+    // ConfigKeyInfo invariant it could not be advertised as hot without an applier anyway, so this
+    // guards the other direction: that a key added later does not quietly acquire one.
+    int seen = 0;
+    for (const auto& info : configKeyTable()) {
+        if (info.key.rfind("persistence.", 0) != 0)
+            continue;
+        ++seen;
+        CHECK(info.reload == ReloadClass::Restart);
+        CHECK(info.apply == nullptr);
+    }
+    CHECK(seen == 6);
+}

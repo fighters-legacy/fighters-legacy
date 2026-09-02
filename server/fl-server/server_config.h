@@ -313,6 +313,26 @@ struct ServerConfig {
     };
     MetricsConfig metrics;
 
+    // [persistence] — the durable store for bans, accounts and stats (#533, D24).
+    //
+    // ENABLED BY DEFAULT, unlike every other optional surface in this file, and the difference is
+    // deliberate: the Phase 5 acceptance clause is that accounts, stats and bans survive a restart,
+    // and an opt-in an operator never notices makes that true only of servers that read the release
+    // notes. The cost is that a server whose store cannot be opened REFUSES TO START, naming the
+    // path and this section — see ServerRuntime. Silently degrading to no persistence would mean an
+    // operator learns their bans were never durable weeks after the ban.
+    struct PersistenceConfig {
+        bool enabled = true;
+        std::string backend = "sqlite";                // "sqlite" | "postgres"
+        std::string sqlitePath = "cache/fl-server.db"; // created with its parent directory
+        // libpq connection string, for backend = "postgres" on an FL_WITH_POSTGRES build. It carries
+        // a password, so it is redacted everywhere it is reported (see redactDsn).
+        std::string postgresDsn;
+        int busyTimeoutMs = 5000; // [100, 60000]
+        int writeQueueMax = 4096; // [16, 1048576]; a full queue blocks the caller, never drops
+    };
+    PersistenceConfig persistence;
+
     // Altitude wind profile (#489)
     struct WindConfig {
         std::string profilePath; // empty = disabled; path (relative to the config dir) to a wind

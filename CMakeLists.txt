@@ -38,6 +38,14 @@ option(FL_ALLOW_SHARED_PROTOBUF "Permit linking the shared libprotobuf when no s
 # cannot use out of the box. OFF gets NullSpeechToText and the radio menu, which is the #769 path.
 option(FL_ENABLE_WHISPER "Build the whisper.cpp speech-to-text backend (voice wingman commands)" OFF)
 
+# #533 (D24): the PostgreSQL backend for the server persistence store. OFF by default and
+# configure-optional on purpose — SQLite is vendored and is the backend the Phase 5 acceptance needs,
+# so a Windows or macOS build never has to find libpq to build a complete fl-server. ON is the
+# multi-server operator's path (one store behind several fl-servers) and is exercised by a
+# Linux-only CI lane with a postgres service container. The store's SQLite half is unconditional:
+# this flag adds a second backend, it never removes the first.
+option(FL_WITH_POSTGRES "Build the PostgreSQL backend for the server persistence store (requires libpq)" OFF)
+
 # libFuzzer harnesses (#708). OFF by default; ON only via the clang-only `fuzz` preset. Gates the
 # top-level fuzz/ subdir, which needs a libFuzzer main (-fsanitize=fuzzer) and clang coverage
 # instrumentation, so it must never enter the MSVC/GCC build matrix.
