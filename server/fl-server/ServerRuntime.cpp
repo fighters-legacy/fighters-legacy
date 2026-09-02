@@ -25,12 +25,10 @@
 #include "MatchTeams.h"
 #include "MissionSource.h"
 #include "NetworkFactory.h"
-#include "NullStore.h"
-#include "PostgresStore.h"
+#include "PersistenceSetup.h"
 #include "RconServer.h"
 #include "ReplayRecorder.h"
 #include "ServerCommands.h"
-#include "SqliteStore.h"
 #include "StdinCommandReader.h"
 #include "StdoutLogger.h"
 #include "TestSpawn.h"
@@ -461,42 +459,15 @@ bool ServerRuntime::Impl::initConfig() {
 // survive a restart. The message names the path and the escape hatch, because the operator's next
 // action is to fix a permission or to set enabled = false deliberately.
 bool ServerRuntime::Impl::openPersistenceStore() {
-    auto& cfg = m_cfg;
-    auto* log = m_log;
-
-    if (!cfg.persistence.enabled) {
-        m_store = fl::persist::makeNullStore();
-        log->log(LogLevel::Info, __FILE__, __LINE__,
-                 "persistence: disabled ([persistence] enabled = false) -- bans, accounts and stats "
-                 "will NOT survive a restart");
-        return true;
-    }
-
-    std::string error;
-    if (cfg.persistence.backend == "postgres") {
-        fl::persist::PostgresOptions opts;
-        opts.dsn = cfg.persistence.postgresDsn;
-        opts.writeQueueMax = static_cast<std::size_t>(cfg.persistence.writeQueueMax);
-        m_store = fl::persist::openPostgresStore(opts, log, error);
-    } else {
-        fl::persist::SqliteOptions opts;
-        opts.path = cfg.persistence.sqlitePath;
-        opts.busyTimeoutMs = cfg.persistence.busyTimeoutMs;
-        opts.writeQueueMax = static_cast<std::size_t>(cfg.persistence.writeQueueMax);
-        m_store = fl::persist::openSqliteStore(opts, log, error);
-    }
-
-    if (!m_store) {
-        char buf[768];
-        std::snprintf(buf, sizeof(buf),
-                      "persistence: cannot open the %s store: %s. Fix it, or set [persistence] "
-                      "enabled = false to run without one -- this server will not start believing "
-                      "it persists when it does not.",
-                      cfg.persistence.backend.c_str(), error.c_str());
-        log->log(LogLevel::Error, __FILE__, __LINE__, buf);
+    // The decision itself lives in PersistenceSetup so it can be tested without running a server —
+    // it decides whether this server starts at all.
+    auto opened = openConfiguredStore(m_cfg, m_log);
+    if (!opened.ok()) {
+        m_log->log(LogLevel::Error, __FILE__, __LINE__, opened.error.c_str());
         m_exitCode = 1;
         return false;
     }
+    m_store = std::move(opened.store);
     return true;
 }
 

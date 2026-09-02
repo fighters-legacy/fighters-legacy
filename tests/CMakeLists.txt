@@ -447,6 +447,14 @@ if(TARGET platform-enet)
     target_include_directories(test_server_config PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     catch_discover_tests(test_server_config)
 
+    # [persistence] -> a store or a refusal (#533). Links the server library: the decision maps a
+    # ServerConfig onto the persistence library's option structs, which is exactly the seam
+    # cmake/layering.cmake rule 8 keeps the store itself on the far side of.
+    add_executable(test_persistence_setup test_persistence_setup.cpp)
+    target_link_libraries(test_persistence_setup PRIVATE Catch2::Catch2WithMain fl-server-lib)
+    target_include_directories(test_persistence_setup PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    catch_discover_tests(test_persistence_setup)
+
     # The per-key reload-class table (#1081). Links the server library because the table's hot rows
     # carry the code that applies them.
     add_executable(test_config_reload test_config_reload.cpp)

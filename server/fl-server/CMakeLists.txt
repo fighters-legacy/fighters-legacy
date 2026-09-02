@@ -18,6 +18,7 @@ add_library(fl-server-lib STATIC
     ServerRuntime.cpp
     ServerCommands.cpp
     ConfigReload.cpp
+    PersistenceSetup.cpp
     IpListFile.cpp
     RconServer.cpp
     HttpAdminServer.cpp
