@@ -29,6 +29,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -74,6 +75,13 @@ std::string text(const std::vector<std::byte>& v) {
     for (std::byte b : v)
         s.push_back(static_cast<char>(b));
     return s;
+}
+
+// True when the environment insists this build must actually reach a PostgreSQL server -- set by
+// the CI lane whose entire purpose is to do so.
+bool requirePostgres() {
+    const char* v = std::getenv("FL_TEST_POSTGRES_REQUIRED");
+    return v && *v && std::string_view(v) != "0";
 }
 
 std::unique_ptr<IPersistence> openAt(const std::string& path, ILogger* log, std::string& error) {
@@ -605,8 +613,17 @@ TEST_CASE("the postgres backend round-trips against a real server", "[persistenc
     // present and the store will not open. That asymmetry is the point: a test that quietly passed
     // whenever it could not connect would make the whole lane decorative -- CI would be green for
     // a backend nobody had run since the day it was written.
+    // FL_TEST_POSTGRES_REQUIRED is the lane's assertion that postgres MUST work here. Without it a
+    // missing DSN skips, which is right on a developer's box. With it, skipping is a failure --
+    // otherwise the CI lane degrades to green-and-empty the moment its service container, its build
+    // flag or its environment stops being wired up, and nobody finds out.
+    const bool required = requirePostgres();
     const char* dsn = std::getenv("FL_TEST_POSTGRES_DSN");
     if (!dsn || !*dsn) {
+        if (required)
+            FAIL("FL_TEST_POSTGRES_REQUIRED is set but FL_TEST_POSTGRES_DSN is not -- this lane is "
+                 "supposed to be testing against a real server and would otherwise pass having "
+                 "tested nothing");
         SKIP("FL_TEST_POSTGRES_DSN is not set (the postgres CI lane sets it)");
     }
     REQUIRE(postgresBackendAvailable());
@@ -656,8 +673,12 @@ TEST_CASE("the postgres backend round-trips against a real server", "[persistenc
 }
 
 TEST_CASE("a bad postgres DSN fails to open with a reason", "[persistence][postgres]") {
-    if (!postgresBackendAvailable())
+    if (!postgresBackendAvailable()) {
+        if (requirePostgres())
+            FAIL("FL_TEST_POSTGRES_REQUIRED is set but this binary was built without "
+                 "FL_WITH_POSTGRES -- the lane is configured wrong");
         SKIP("built without FL_WITH_POSTGRES");
+    }
 
     NullLogger log;
     std::string error;

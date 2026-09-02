@@ -713,14 +713,32 @@ jobs:
             -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON
 
       - name: Build
-        run: cmake --build build/pg --target test_persistence --parallel
+        run: cmake --build build/pg --target test_persistence test_persistence_setup --parallel
 
+      # The binaries are run DIRECTLY, not through `ctest -R persistence`, and that is a scar.
+      #
+      # ctest -R matches TEST NAMES, and Catch2 test names are the TEST_CASE strings -- none of
+      # which contain the word "persistence". So the selector matched nothing, ctest printed
+      # "No tests were found!!!", exited 0, and this lane reported PASS having run zero tests. It
+      # compiled the PostgreSQL backend and exercised none of it.
+      #
+      # Naming the executables removes the selector entirely: there is nothing left to silently
+      # match nothing. Catch2 itself exits non-zero if its own filter selects no test, and
+      # FL_TEST_POSTGRES_REQUIRED below turns a skip into a failure, so all three ways this lane
+      # could go quietly green are closed.
       - name: Test
         env:
-          # Consumed by the postgres legs of test_persistence; absent, they skip rather than fail,
-          # which is what lets the same suite run on a developer's box.
           FL_TEST_POSTGRES_DSN: postgresql://fl:fl@localhost:5432/fl_test
-        run: ctest --test-dir build/pg -R persistence --output-on-failure
+          # This lane exists to reach a real server. If it cannot -- no DSN, no service container,
+          # a build without the backend -- that is a FAILURE here, not a skip. On a developer's box
+          # the variable is unset and the same cases skip, which is what keeps the suite runnable.
+          FL_TEST_POSTGRES_REQUIRED: '1'
+        run: |
+          ./build/pg/tests/test_persistence
+          ./build/pg/tests/test_persistence_setup
+          # And prove the postgres cases actually ran, rather than trusting the exit code of a
+          # binary that would also be 0 if the tag matched nothing.
+          ./build/pg/tests/test_persistence '[postgres]' --success | tail -5
 
   # libFuzzer per-PR smoke (#708). fuzz-changes gates on touched paths and emits
   # a JSON matrix of harnesses; fuzz-run builds+smokes each; fuzz-smoke is the
