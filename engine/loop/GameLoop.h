@@ -100,6 +100,29 @@ class GameLoop {
     // (detonate / atc_scramble / spawn) actually run instead of piling up unexecuted.
     void drainSimCallbacks();
 
+    // -----------------------------------------------------------------------
+    // The mirror of the pair above: enqueue work FROM the sim thread TO the main thread (#534).
+    //
+    // It exists because the sim thread acquired a resource it must not touch: the fl-server
+    // persistence store, whose contract is that reads, flushes and opens all happen off the sim
+    // thread (see server/persistence/IPersistence.h). The campaign save fires from
+    // MissionRuntime::setOnEnd — sim-side — and used to do a blocking file write right there.
+    // Rather than weaken the store's contract, sim-side code posts the finished blob here and the
+    // main thread performs the store call.
+    //
+    // Thread-safe; may be called from any thread. Ordering is FIFO within the queue.
+    void enqueueMainCallback(std::function<void()> fn);
+
+    // Run and clear all queued main callbacks now, on the calling thread.
+    //
+    // ⚠ A harness that drives ticks ITSELF must call this too, for exactly the reason
+    // drainSimCallbacks() carries: the deterministic --mission-report loop runs on one thread and
+    // never reaches fl-server's service loop, so without a drain beside its stepOnce() the campaign
+    // save posted at MissionOutcome never runs — in precisely the harness that exists to verify
+    // campaign persistence end to end. The shutdown path must also drain once, after the loop stops
+    // and before the store closes, or the last mission's save dies queued.
+    void drainMainCallbacks();
+
     // Advance every registered system, in order, on the CALLING thread. This is the body of one sim
     // tick with the timing removed, for a harness that owns its own tick loop — the deterministic
     // --mission-report run and the replay/determinism gate.
@@ -146,6 +169,12 @@ class GameLoop {
 
     std::mutex m_callbackMutex;
     std::vector<std::function<void()>> m_pendingCallbacks;
+
+    // Its own mutex, not m_callbackMutex: the two queues are drained by different threads, and
+    // sharing one lock would have the sim thread's per-tick drain contend with a main-thread drain
+    // for no reason at all.
+    std::mutex m_mainCallbackMutex;
+    std::vector<std::function<void()>> m_pendingMainCallbacks;
 
     std::thread m_simThread;
 };

@@ -24,6 +24,62 @@ constexpr Migration kSqliteMigrations[] = {
      "  value      BLOB    NOT NULL,"
      "  updated_at INTEGER NOT NULL"
      ") STRICT;"},
+    {2, "accounts_rules_stats",
+     // Accounts: opaque UUIDv7 ids, realm from day one (D25).
+     "CREATE TABLE IF NOT EXISTS accounts ("
+     "  id           TEXT    NOT NULL PRIMARY KEY,"
+     "  realm        TEXT    NOT NULL DEFAULT 'local',"
+     "  display_name TEXT    NOT NULL,"
+     "  created_at   INTEGER NOT NULL,"
+     "  last_seen_at INTEGER NOT NULL"
+     ") STRICT;"
+     // Not unique: whether a name may repeat is identity policy (#537/#539), not a table decision.
+     // Indexed because findByName is how a name becomes an id.
+     "CREATE INDEX IF NOT EXISTS accounts_realm_name ON accounts(realm, display_name);"
+     // Access rules: bans and allowlist entries, both key kinds, from day one.
+     "CREATE TABLE IF NOT EXISTS access_rules ("
+     "  effect       TEXT    NOT NULL," // 'deny' | 'allow'
+     "  subject_kind TEXT    NOT NULL," // 'ip'   | 'account'
+     "  subject      TEXT    NOT NULL,"
+     "  realm        TEXT    NOT NULL DEFAULT '',"
+     "  reason       TEXT    NOT NULL DEFAULT '',"
+     "  created_by   TEXT    NOT NULL DEFAULT '',"
+     "  created_at   INTEGER NOT NULL,"
+     "  expires_at   INTEGER NOT NULL DEFAULT 0," // 0 = never; see Repositories.h on the NULL policy
+     "  PRIMARY KEY (effect, subject_kind, subject)"
+     ") STRICT;"
+     // The lookup #535 makes on every connection: all in-force rules of one effect.
+     "CREATE INDEX IF NOT EXISTS access_rules_effect_expiry ON access_rules(effect, expires_at);"
+     // Career aggregates, one row per account, columns mirroring fl::PilotLogbook (#674).
+     "CREATE TABLE IF NOT EXISTS account_stats ("
+     "  account_id            TEXT    NOT NULL PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,"
+     "  kills_class_0         INTEGER NOT NULL DEFAULT 0,"
+     "  kills_class_1         INTEGER NOT NULL DEFAULT 0,"
+     "  kills_class_2         INTEGER NOT NULL DEFAULT 0,"
+     "  kills_class_3         INTEGER NOT NULL DEFAULT 0,"
+     "  kills_class_4         INTEGER NOT NULL DEFAULT 0,"
+     "  kills_class_5         INTEGER NOT NULL DEFAULT 0,"
+     "  kills_class_6         INTEGER NOT NULL DEFAULT 0,"
+     "  kills_class_7         INTEGER NOT NULL DEFAULT 0,"
+     "  air_gun_shots         INTEGER NOT NULL DEFAULT 0,"
+     "  air_gun_hits          INTEGER NOT NULL DEFAULT 0,"
+     "  air_gun_kills         INTEGER NOT NULL DEFAULT 0,"
+     "  air_missile_shots     INTEGER NOT NULL DEFAULT 0,"
+     "  air_missile_hits      INTEGER NOT NULL DEFAULT 0,"
+     "  air_missile_kills     INTEGER NOT NULL DEFAULT 0,"
+     "  ground_attack_shots   INTEGER NOT NULL DEFAULT 0,"
+     "  ground_attack_hits    INTEGER NOT NULL DEFAULT 0,"
+     "  ground_attack_kills   INTEGER NOT NULL DEFAULT 0,"
+     "  naval_shots           INTEGER NOT NULL DEFAULT 0,"
+     "  naval_hits            INTEGER NOT NULL DEFAULT 0,"
+     "  naval_kills           INTEGER NOT NULL DEFAULT 0,"
+     "  missions_flown        INTEGER NOT NULL DEFAULT 0,"
+     "  missions_failed       INTEGER NOT NULL DEFAULT 0,"
+     "  ejections             INTEGER NOT NULL DEFAULT 0,"
+     "  best_landing_score    REAL    NOT NULL DEFAULT 0.0,"
+     "  last_landing_score    REAL    NOT NULL DEFAULT 0.0,"
+     "  updated_at            INTEGER NOT NULL"
+     ") STRICT;"},
 };
 
 // -------------------------------------------------------------------------------------------
@@ -35,6 +91,59 @@ constexpr Migration kPostgresMigrations[] = {
      "  key        TEXT   NOT NULL PRIMARY KEY,"
      "  value      BYTEA  NOT NULL,"
      "  updated_at BIGINT NOT NULL"
+     ");"},
+    {2, "accounts_rules_stats",
+     "CREATE TABLE IF NOT EXISTS accounts ("
+     "  id           TEXT   NOT NULL PRIMARY KEY,"
+     "  realm        TEXT   NOT NULL DEFAULT 'local',"
+     "  display_name TEXT   NOT NULL,"
+     "  created_at   BIGINT NOT NULL,"
+     "  last_seen_at BIGINT NOT NULL"
+     ");"
+     "CREATE INDEX IF NOT EXISTS accounts_realm_name ON accounts(realm, display_name);"
+     "CREATE TABLE IF NOT EXISTS access_rules ("
+     "  effect       TEXT   NOT NULL,"
+     "  subject_kind TEXT   NOT NULL,"
+     "  subject      TEXT   NOT NULL,"
+     "  realm        TEXT   NOT NULL DEFAULT '',"
+     "  reason       TEXT   NOT NULL DEFAULT '',"
+     "  created_by   TEXT   NOT NULL DEFAULT '',"
+     "  created_at   BIGINT NOT NULL,"
+     "  expires_at   BIGINT NOT NULL DEFAULT 0,"
+     "  PRIMARY KEY (effect, subject_kind, subject)"
+     ");"
+     "CREATE INDEX IF NOT EXISTS access_rules_effect_expiry ON access_rules(effect, expires_at);"
+     // DOUBLE PRECISION, not REAL: Postgres REAL is 4-byte and would silently round a landing score
+     // that SQLite's REAL (8-byte, always) keeps. The two dialects spell the same intent
+     // differently, which is exactly why D24 has per-backend migration scripts.
+     "CREATE TABLE IF NOT EXISTS account_stats ("
+     "  account_id            TEXT   NOT NULL PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,"
+     "  kills_class_0         BIGINT NOT NULL DEFAULT 0,"
+     "  kills_class_1         BIGINT NOT NULL DEFAULT 0,"
+     "  kills_class_2         BIGINT NOT NULL DEFAULT 0,"
+     "  kills_class_3         BIGINT NOT NULL DEFAULT 0,"
+     "  kills_class_4         BIGINT NOT NULL DEFAULT 0,"
+     "  kills_class_5         BIGINT NOT NULL DEFAULT 0,"
+     "  kills_class_6         BIGINT NOT NULL DEFAULT 0,"
+     "  kills_class_7         BIGINT NOT NULL DEFAULT 0,"
+     "  air_gun_shots         BIGINT NOT NULL DEFAULT 0,"
+     "  air_gun_hits          BIGINT NOT NULL DEFAULT 0,"
+     "  air_gun_kills         BIGINT NOT NULL DEFAULT 0,"
+     "  air_missile_shots     BIGINT NOT NULL DEFAULT 0,"
+     "  air_missile_hits      BIGINT NOT NULL DEFAULT 0,"
+     "  air_missile_kills     BIGINT NOT NULL DEFAULT 0,"
+     "  ground_attack_shots   BIGINT NOT NULL DEFAULT 0,"
+     "  ground_attack_hits    BIGINT NOT NULL DEFAULT 0,"
+     "  ground_attack_kills   BIGINT NOT NULL DEFAULT 0,"
+     "  naval_shots           BIGINT NOT NULL DEFAULT 0,"
+     "  naval_hits            BIGINT NOT NULL DEFAULT 0,"
+     "  naval_kills           BIGINT NOT NULL DEFAULT 0,"
+     "  missions_flown        BIGINT NOT NULL DEFAULT 0,"
+     "  missions_failed       BIGINT NOT NULL DEFAULT 0,"
+     "  ejections             BIGINT NOT NULL DEFAULT 0,"
+     "  best_landing_score    DOUBLE PRECISION NOT NULL DEFAULT 0.0,"
+     "  last_landing_score    DOUBLE PRECISION NOT NULL DEFAULT 0.0,"
+     "  updated_at            BIGINT NOT NULL"
      ");"},
 };
 

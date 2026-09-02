@@ -12,6 +12,7 @@
 #include <atomic>
 #include <chrono>
 #include <thread>
+#include <vector>
 
 using namespace fl;
 using namespace std::chrono_literals;
@@ -506,4 +507,96 @@ TEST_CASE("GameLoop: totalDroppedTicks starts at zero", "[gl][overrun]") {
     MockLogger logger;
     GameLoop gl(sim, logger, 60.0, 8);
     CHECK(gl.totalDroppedTicks() == 0u);
+}
+
+// ---------------------------------------------------------------------------
+// The sim -> main deferred queue (#534)
+// ---------------------------------------------------------------------------
+//
+// The mirror of enqueueSimCallback, added so sim-side code can reach a resource it must not touch:
+// the fl-server persistence store, whose contract puts reads, flushes and opens off the sim thread.
+// The campaign save posts through it.
+
+TEST_CASE("GameLoop: main callbacks run on the draining thread, in order", "[gl][maincb]") {
+    MockSim sim;
+    MockLogger logger;
+    GameLoop loop(sim, logger, 60.0, 8);
+    std::vector<int> ran;
+    for (int i = 0; i < 5; ++i)
+        loop.enqueueMainCallback([&ran, i] { ran.push_back(i); });
+
+    // Nothing runs until someone drains: the queue is a handoff, not a thread.
+    CHECK(ran.empty());
+
+    loop.drainMainCallbacks();
+    REQUIRE(ran.size() == 5u);
+    for (int i = 0; i < 5; ++i)
+        CHECK(ran[static_cast<std::size_t>(i)] == i);
+}
+
+TEST_CASE("GameLoop: draining twice does not run anything twice", "[gl][maincb]") {
+    // The shutdown path drains after the loop has already drained per-iteration, and a campaign save
+    // applied twice would write the same blob twice -- harmless here, but the same double-run on a
+    // future counter-shaped callback would not be.
+    MockSim sim;
+    MockLogger logger;
+    GameLoop loop(sim, logger, 60.0, 8);
+    int runs = 0;
+    loop.enqueueMainCallback([&runs] { ++runs; });
+    loop.drainMainCallbacks();
+    loop.drainMainCallbacks();
+    CHECK(runs == 1);
+}
+
+TEST_CASE("GameLoop: a callback enqueued from another thread reaches the drainer", "[gl][maincb]") {
+    // The actual shape: the sim thread posts, the main thread drains.
+    MockSim sim;
+    MockLogger logger;
+    GameLoop loop(sim, logger, 60.0, 8);
+    std::atomic<int> posted{0};
+    std::thread producer([&] {
+        for (int i = 0; i < 100; ++i) {
+            loop.enqueueMainCallback([&posted] { ++posted; });
+        }
+    });
+    producer.join();
+
+    loop.drainMainCallbacks();
+    CHECK(posted.load() == 100);
+}
+
+TEST_CASE("GameLoop: the two callback queues are independent", "[gl][maincb]") {
+    // They have separate mutexes and separate lifetimes; draining one must not consume the other,
+    // or a sim callback would vanish into the main drain and never run on the sim thread.
+    MockSim sim;
+    MockLogger logger;
+    GameLoop loop(sim, logger, 60.0, 8);
+    int simRuns = 0;
+    int mainRuns = 0;
+    loop.enqueueSimCallback([&simRuns] { ++simRuns; });
+    loop.enqueueMainCallback([&mainRuns] { ++mainRuns; });
+
+    loop.drainMainCallbacks();
+    CHECK(mainRuns == 1);
+    CHECK(simRuns == 0); // still waiting for its own drain
+
+    loop.drainSimCallbacks();
+    CHECK(simRuns == 1);
+}
+
+TEST_CASE("GameLoop: a main callback may enqueue another without deadlocking", "[gl][maincb]") {
+    // The drain holds no lock while it runs callbacks, so a callback that posts more work is safe.
+    // The re-posted work waits for the NEXT drain, which is the behaviour a caller can reason about.
+    MockSim sim;
+    MockLogger logger;
+    GameLoop loop(sim, logger, 60.0, 8);
+    int runs = 0;
+    loop.enqueueMainCallback([&] {
+        ++runs;
+        loop.enqueueMainCallback([&runs] { ++runs; });
+    });
+    loop.drainMainCallbacks();
+    CHECK(runs == 1);
+    loop.drainMainCallbacks();
+    CHECK(runs == 2);
 }

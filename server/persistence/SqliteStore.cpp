@@ -3,6 +3,9 @@
 
 #include "AsyncWriter.h"
 #include "Migrations.h"
+#include "SqlVocabulary.h"
+
+#include <crypto/Uuid.h>
 
 #include <ILogger.h>
 
@@ -60,6 +63,21 @@ std::int64_t nowSeconds() {
     return duration_cast<seconds>(system_clock::now().time_since_epoch()).count();
 }
 
+// Bind a std::string that OUTLIVES the step (a write task's captured member, a local). SQLITE_STATIC
+// tells SQLite not to copy; every call site here holds the string alive across the sqlite3_step, and
+// that is the invariant this helper exists to make checkable in one place rather than at 30.
+void bindText(const Stmt& st, int index, const std::string& value) {
+    sqlite3_bind_text(st.get(), index, value.c_str(), static_cast<int>(value.size()), SQLITE_STATIC);
+}
+
+// A TEXT column as a std::string. A NULL column would come back as a null pointer; this schema has
+// no nullable columns (see Repositories.h), so a null here means a row written by something that
+// bypassed these repositories, and "" is the honest reading of it.
+std::string columnText(const Stmt& st, int index) {
+    const auto* text = sqlite3_column_text(st.get(), index);
+    return text ? std::string(reinterpret_cast<const char*>(text)) : std::string();
+}
+
 // The bookkeeping half of the migration contract, in SQLite's dialect.
 class SqliteMigrationTarget final : public IMigrationTarget {
   public:
@@ -111,7 +129,7 @@ class SqliteMigrationTarget final : public IMigrationTarget {
     sqlite3* mDb;
 };
 
-class SqliteStore final : public IPersistence, private IBlobRepository {
+class SqliteStore final : public IPersistence {
   public:
     SqliteStore(std::size_t queueMax, ILogger* log) : mWriter(queueMax, log), mLog(log) {}
 
@@ -195,7 +213,16 @@ class SqliteStore final : public IPersistence, private IBlobRepository {
     // ---- IPersistence -------------------------------------------------------------------
 
     IBlobRepository& blobs() override {
-        return *this;
+        return mBlobs;
+    }
+    IAccountRepository& accounts() override {
+        return mAccounts;
+    }
+    IBanRepository& bans() override {
+        return mBans;
+    }
+    IStatsRepository& stats() override {
+        return mStats;
     }
 
     Result flush() override {
@@ -234,114 +261,404 @@ class SqliteStore final : public IPersistence, private IBlobRepository {
     }
 
   private:
-    // ---- IBlobRepository ----------------------------------------------------------------
+    // Each repository is a MEMBER, not a private base. Four interfaces that each declare
+    // `get(std::string_view)` cannot all be inherited by one class: the signatures collide and they
+    // differ only in return type, which is not an overload. A member per repository also keeps each
+    // one's SQL in a block you can read end to end.
+    //
+    // Every nested class holds a back-pointer to the store and reaches its connections and writer
+    // through it. That is legal and intended: a nested class is a member, so it may touch the
+    // enclosing class's private state.
 
-    std::optional<std::vector<std::byte>> get(std::string_view key) override {
-        std::lock_guard<std::mutex> lock(mReadMutex);
-        if (!mReadDb)
-            return std::nullopt;
-        Stmt s;
-        if (auto r = s.prepare(mReadDb, "SELECT value FROM blobs WHERE key = ?;"); !r) {
-            logError("blobs.get", r.error);
-            return std::nullopt;
-        }
-        sqlite3_bind_text(s.get(), 1, key.data(), static_cast<int>(key.size()), SQLITE_STATIC);
-        const int rc = sqlite3_step(s.get());
-        if (rc == SQLITE_DONE)
-            return std::nullopt; // no such key -- not an error
-        if (rc != SQLITE_ROW) {
-            logError("blobs.get", sqlite3_errmsg(mReadDb));
-            return std::nullopt;
-        }
-        const auto* data = static_cast<const std::byte*>(sqlite3_column_blob(s.get(), 0));
-        const int size = sqlite3_column_bytes(s.get(), 0);
-        if (!data || size <= 0)
-            return std::vector<std::byte>{};
-        return std::vector<std::byte>(data, data + size);
-    }
+    // ---- Blobs -------------------------------------------------------------------------------
 
-    bool exists(std::string_view key) override {
-        std::lock_guard<std::mutex> lock(mReadMutex);
-        if (!mReadDb)
-            return false;
-        Stmt s;
-        if (auto r = s.prepare(mReadDb, "SELECT 1 FROM blobs WHERE key = ?;"); !r) {
-            logError("blobs.exists", r.error);
-            return false;
-        }
-        sqlite3_bind_text(s.get(), 1, key.data(), static_cast<int>(key.size()), SQLITE_STATIC);
-        return sqlite3_step(s.get()) == SQLITE_ROW;
-    }
+    class Blobs final : public IBlobRepository {
+      public:
+        explicit Blobs(SqliteStore* store) : s(store) {}
 
-    std::vector<std::string> keys(std::string_view prefix) override {
-        std::vector<std::string> out;
-        std::lock_guard<std::mutex> lock(mReadMutex);
-        if (!mReadDb)
-            return out;
-        Stmt s;
-        // GLOB rather than LIKE: LIKE is case-insensitive for ASCII by default, and these keys are
-        // namespaces ("campaign/<name>") where case is meaningful. The pattern is built from the
-        // caller's prefix, so its wildcards are escaped -- a key containing '*' or '[' must not
-        // silently widen someone else's query.
-        if (auto r = s.prepare(mReadDb, "SELECT key FROM blobs WHERE key GLOB ? ORDER BY key;"); !r) {
-            logError("blobs.keys", r.error);
-            return out;
-        }
-        std::string pattern;
-        pattern.reserve(prefix.size() + 8);
-        for (char c : prefix) {
-            if (c == '*' || c == '?' || c == '[' || c == ']') {
-                pattern += '[';
-                pattern += c;
-                pattern += ']';
-            } else {
-                pattern += c;
+        std::optional<std::vector<std::byte>> get(std::string_view key) override {
+            std::lock_guard<std::mutex> lock(s->mReadMutex);
+            if (!s->mReadDb)
+                return std::nullopt;
+            Stmt st;
+            if (auto r = st.prepare(s->mReadDb, "SELECT value FROM blobs WHERE key = ?;"); !r) {
+                s->logError("blobs.get", r.error);
+                return std::nullopt;
             }
+            sqlite3_bind_text(st.get(), 1, key.data(), static_cast<int>(key.size()), SQLITE_STATIC);
+            const int rc = sqlite3_step(st.get());
+            if (rc == SQLITE_DONE)
+                return std::nullopt; // no such key -- not an error
+            if (rc != SQLITE_ROW) {
+                s->logError("blobs.get", sqlite3_errmsg(s->mReadDb));
+                return std::nullopt;
+            }
+            const auto* data = static_cast<const std::byte*>(sqlite3_column_blob(st.get(), 0));
+            const int size = sqlite3_column_bytes(st.get(), 0);
+            if (!data || size <= 0)
+                return std::vector<std::byte>{};
+            return std::vector<std::byte>(data, data + size);
         }
-        pattern += '*';
-        sqlite3_bind_text(s.get(), 1, pattern.c_str(), static_cast<int>(pattern.size()), SQLITE_TRANSIENT);
-        while (sqlite3_step(s.get()) == SQLITE_ROW) {
-            const auto* text = sqlite3_column_text(s.get(), 0);
-            if (text)
-                out.emplace_back(reinterpret_cast<const char*>(text));
+
+        bool exists(std::string_view key) override {
+            std::lock_guard<std::mutex> lock(s->mReadMutex);
+            if (!s->mReadDb)
+                return false;
+            Stmt st;
+            if (auto r = st.prepare(s->mReadDb, "SELECT 1 FROM blobs WHERE key = ?;"); !r) {
+                s->logError("blobs.exists", r.error);
+                return false;
+            }
+            sqlite3_bind_text(st.get(), 1, key.data(), static_cast<int>(key.size()), SQLITE_STATIC);
+            return sqlite3_step(st.get()) == SQLITE_ROW;
         }
-        return out;
-    }
 
-    void put(std::string_view key, std::vector<std::byte> value) override {
-        // Everything the task touches is copied here, on the caller's thread: it runs later, on
-        // another thread, long after this frame is gone.
-        mWriter.enqueue([this, k = std::string(key), v = std::move(value)]() -> Result {
-            Stmt s;
-            if (auto r = s.prepare(mWriteDb, "INSERT INTO blobs (key, value, updated_at) VALUES (?, ?, ?) "
-                                             "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
-                                             "updated_at=excluded.updated_at;");
-                !r)
-                return r;
-            sqlite3_bind_text(s.get(), 1, k.c_str(), static_cast<int>(k.size()), SQLITE_STATIC);
-            // A zero-length blob must still bind as a blob, not as NULL: sqlite3_bind_blob with a
-            // null pointer binds NULL, and the column is NOT NULL, so an empty save would fail the
-            // constraint instead of round-tripping as empty.
-            sqlite3_bind_blob(s.get(), 2, v.empty() ? "" : static_cast<const void*>(v.data()),
-                              static_cast<int>(v.size()), SQLITE_STATIC);
-            sqlite3_bind_int64(s.get(), 3, nowSeconds());
-            if (sqlite3_step(s.get()) != SQLITE_DONE)
-                return Result::failure("blobs.put '" + k + "': " + sqlite3_errmsg(mWriteDb));
-            return Result::success();
-        });
-    }
+        std::vector<std::string> keys(std::string_view prefix) override {
+            std::vector<std::string> out;
+            std::lock_guard<std::mutex> lock(s->mReadMutex);
+            if (!s->mReadDb)
+                return out;
+            Stmt st;
+            // GLOB rather than LIKE: LIKE is case-insensitive for ASCII by default, and these keys
+            // are namespaces ("campaign/<name>") where case is meaningful. The pattern is built from
+            // the caller's prefix, so its wildcards are escaped -- a key containing '*' or '[' must
+            // not silently widen someone else's query.
+            if (auto r = st.prepare(s->mReadDb, "SELECT key FROM blobs WHERE key GLOB ? ORDER BY key;"); !r) {
+                s->logError("blobs.keys", r.error);
+                return out;
+            }
+            std::string pattern;
+            pattern.reserve(prefix.size() + 8);
+            for (char c : prefix) {
+                if (c == '*' || c == '?' || c == '[' || c == ']') {
+                    pattern += '[';
+                    pattern += c;
+                    pattern += ']';
+                } else {
+                    pattern += c;
+                }
+            }
+            pattern += '*';
+            sqlite3_bind_text(st.get(), 1, pattern.c_str(), static_cast<int>(pattern.size()), SQLITE_TRANSIENT);
+            while (sqlite3_step(st.get()) == SQLITE_ROW) {
+                const auto* text = sqlite3_column_text(st.get(), 0);
+                if (text)
+                    out.emplace_back(reinterpret_cast<const char*>(text));
+            }
+            return out;
+        }
 
-    void remove(std::string_view key) override {
-        mWriter.enqueue([this, k = std::string(key)]() -> Result {
-            Stmt s;
-            if (auto r = s.prepare(mWriteDb, "DELETE FROM blobs WHERE key = ?;"); !r)
-                return r;
-            sqlite3_bind_text(s.get(), 1, k.c_str(), static_cast<int>(k.size()), SQLITE_STATIC);
-            if (sqlite3_step(s.get()) != SQLITE_DONE)
-                return Result::failure("blobs.remove '" + k + "': " + sqlite3_errmsg(mWriteDb));
-            return Result::success();
-        });
-    }
+        void put(std::string_view key, std::vector<std::byte> value) override {
+            // Everything the task touches is copied here, on the caller's thread: it runs later, on
+            // another thread, long after this frame is gone.
+            s->mWriter.enqueue([this, k = std::string(key), v = std::move(value)]() -> Result {
+                Stmt st;
+                if (auto r = st.prepare(s->mWriteDb, "INSERT INTO blobs (key, value, updated_at) VALUES (?, ?, ?) "
+                                                     "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
+                                                     "updated_at=excluded.updated_at;");
+                    !r)
+                    return r;
+                sqlite3_bind_text(st.get(), 1, k.c_str(), static_cast<int>(k.size()), SQLITE_STATIC);
+                // A zero-length blob must still bind as a blob, not as NULL: sqlite3_bind_blob with
+                // a null pointer binds NULL, and the column is NOT NULL, so an empty save would fail
+                // the constraint instead of round-tripping as empty.
+                sqlite3_bind_blob(st.get(), 2, v.empty() ? "" : static_cast<const void*>(v.data()),
+                                  static_cast<int>(v.size()), SQLITE_STATIC);
+                sqlite3_bind_int64(st.get(), 3, nowSeconds());
+                if (sqlite3_step(st.get()) != SQLITE_DONE)
+                    return Result::failure("blobs.put '" + k + "': " + sqlite3_errmsg(s->mWriteDb));
+                return Result::success();
+            });
+        }
+
+        void remove(std::string_view key) override {
+            s->mWriter.enqueue([this, k = std::string(key)]() -> Result {
+                Stmt st;
+                if (auto r = st.prepare(s->mWriteDb, "DELETE FROM blobs WHERE key = ?;"); !r)
+                    return r;
+                sqlite3_bind_text(st.get(), 1, k.c_str(), static_cast<int>(k.size()), SQLITE_STATIC);
+                if (sqlite3_step(st.get()) != SQLITE_DONE)
+                    return Result::failure("blobs.remove '" + k + "': " + sqlite3_errmsg(s->mWriteDb));
+                return Result::success();
+            });
+        }
+
+      private:
+        SqliteStore* s;
+    };
+
+    // ---- Accounts ----------------------------------------------------------------------------
+
+    class Accounts final : public IAccountRepository {
+      public:
+        explicit Accounts(SqliteStore* store) : s(store) {}
+
+        AccountRecord create(std::string_view realm, std::string_view displayName) override {
+            AccountRecord rec;
+            rec.id = fl::uuidv7(); // minted here, not by the database -- see Repositories.h
+            rec.realm = std::string(realm);
+            rec.displayName = std::string(displayName);
+            rec.createdAt = nowSeconds();
+            rec.lastSeenAt = rec.createdAt;
+
+            s->mWriter.enqueue([this, rec]() -> Result {
+                Stmt st;
+                if (auto r = st.prepare(s->mWriteDb,
+                                        "INSERT INTO accounts (id, realm, display_name, created_at, last_seen_at) "
+                                        "VALUES (?, ?, ?, ?, ?);");
+                    !r)
+                    return r;
+                bindText(st, 1, rec.id);
+                bindText(st, 2, rec.realm);
+                bindText(st, 3, rec.displayName);
+                sqlite3_bind_int64(st.get(), 4, rec.createdAt);
+                sqlite3_bind_int64(st.get(), 5, rec.lastSeenAt);
+                if (sqlite3_step(st.get()) != SQLITE_DONE)
+                    return Result::failure("accounts.create '" + rec.id + "': " + sqlite3_errmsg(s->mWriteDb));
+                return Result::success();
+            });
+            return rec;
+        }
+
+        std::optional<AccountRecord> get(std::string_view id) override {
+            std::lock_guard<std::mutex> lock(s->mReadMutex);
+            if (!s->mReadDb)
+                return std::nullopt;
+            Stmt st;
+            if (auto r = st.prepare(s->mReadDb, "SELECT id, realm, display_name, created_at, last_seen_at "
+                                                "FROM accounts WHERE id = ?;");
+                !r) {
+                s->logError("accounts.get", r.error);
+                return std::nullopt;
+            }
+            sqlite3_bind_text(st.get(), 1, id.data(), static_cast<int>(id.size()), SQLITE_STATIC);
+            if (sqlite3_step(st.get()) != SQLITE_ROW)
+                return std::nullopt;
+            return readRow(st);
+        }
+
+        std::optional<AccountRecord> findByName(std::string_view realm, std::string_view displayName) override {
+            std::lock_guard<std::mutex> lock(s->mReadMutex);
+            if (!s->mReadDb)
+                return std::nullopt;
+            Stmt st;
+            // Newest first: names are not unique, and the most recently seen holder is the only
+            // answer that is defensible without an identity policy to appeal to.
+            if (auto r = st.prepare(s->mReadDb, "SELECT id, realm, display_name, created_at, last_seen_at "
+                                                "FROM accounts WHERE realm = ? AND display_name = ? "
+                                                "ORDER BY last_seen_at DESC, id DESC LIMIT 1;");
+                !r) {
+                s->logError("accounts.findByName", r.error);
+                return std::nullopt;
+            }
+            sqlite3_bind_text(st.get(), 1, realm.data(), static_cast<int>(realm.size()), SQLITE_STATIC);
+            sqlite3_bind_text(st.get(), 2, displayName.data(), static_cast<int>(displayName.size()), SQLITE_STATIC);
+            if (sqlite3_step(st.get()) != SQLITE_ROW)
+                return std::nullopt;
+            return readRow(st);
+        }
+
+        void touchLastSeen(std::string_view id, std::int64_t unixSeconds) override {
+            s->mWriter.enqueue([this, k = std::string(id), unixSeconds]() -> Result {
+                Stmt st;
+                if (auto r = st.prepare(s->mWriteDb, "UPDATE accounts SET last_seen_at = ? WHERE id = ?;"); !r)
+                    return r;
+                sqlite3_bind_int64(st.get(), 1, unixSeconds);
+                bindText(st, 2, k);
+                if (sqlite3_step(st.get()) != SQLITE_DONE)
+                    return Result::failure("accounts.touchLastSeen '" + k + "': " + sqlite3_errmsg(s->mWriteDb));
+                return Result::success();
+            });
+        }
+
+        void remove(std::string_view id) override {
+            s->mWriter.enqueue([this, k = std::string(id)]() -> Result {
+                Stmt st;
+                if (auto r = st.prepare(s->mWriteDb, "DELETE FROM accounts WHERE id = ?;"); !r)
+                    return r;
+                bindText(st, 1, k);
+                if (sqlite3_step(st.get()) != SQLITE_DONE)
+                    return Result::failure("accounts.remove '" + k + "': " + sqlite3_errmsg(s->mWriteDb));
+                return Result::success();
+            });
+        }
+
+      private:
+        static AccountRecord readRow(const Stmt& st) {
+            AccountRecord rec;
+            rec.id = columnText(st, 0);
+            rec.realm = columnText(st, 1);
+            rec.displayName = columnText(st, 2);
+            rec.createdAt = sqlite3_column_int64(st.get(), 3);
+            rec.lastSeenAt = sqlite3_column_int64(st.get(), 4);
+            return rec;
+        }
+        SqliteStore* s;
+    };
+
+    // ---- Access rules ------------------------------------------------------------------------
+
+    class Bans final : public IBanRepository {
+      public:
+        explicit Bans(SqliteStore* store) : s(store) {}
+
+        void add(const AccessRule& rule) override {
+            s->mWriter.enqueue([this, rule]() -> Result {
+                Stmt st;
+                if (auto r = st.prepare(s->mWriteDb,
+                                        "INSERT INTO access_rules (effect, subject_kind, subject, realm, reason, "
+                                        "created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                                        "ON CONFLICT(effect, subject_kind, subject) DO UPDATE SET "
+                                        "realm=excluded.realm, reason=excluded.reason, "
+                                        "created_by=excluded.created_by, created_at=excluded.created_at, "
+                                        "expires_at=excluded.expires_at;");
+                    !r)
+                    return r;
+                bindText(st, 1, effectText(rule.effect));
+                bindText(st, 2, kindText(rule.subjectKind));
+                bindText(st, 3, rule.subject);
+                bindText(st, 4, rule.realm);
+                bindText(st, 5, rule.reason);
+                bindText(st, 6, rule.createdBy);
+                sqlite3_bind_int64(st.get(), 7, rule.createdAt);
+                sqlite3_bind_int64(st.get(), 8, rule.expiresAt);
+                if (sqlite3_step(st.get()) != SQLITE_DONE)
+                    return Result::failure("bans.add '" + rule.subject + "': " + sqlite3_errmsg(s->mWriteDb));
+                return Result::success();
+            });
+        }
+
+        void remove(RuleEffect effect, SubjectKind kind, std::string_view subject) override {
+            s->mWriter.enqueue([this, effect, kind, subj = std::string(subject)]() -> Result {
+                Stmt st;
+                if (auto r = st.prepare(s->mWriteDb, "DELETE FROM access_rules WHERE effect = ? AND "
+                                                     "subject_kind = ? AND subject = ?;");
+                    !r)
+                    return r;
+                bindText(st, 1, effectText(effect));
+                bindText(st, 2, kindText(kind));
+                bindText(st, 3, subj);
+                if (sqlite3_step(st.get()) != SQLITE_DONE)
+                    return Result::failure("bans.remove '" + subj + "': " + sqlite3_errmsg(s->mWriteDb));
+                return Result::success();
+            });
+        }
+
+        std::vector<AccessRule> active(RuleEffect effect, std::int64_t nowUnixSeconds) override {
+            // expires_at = 0 means permanent; anything still in the future is in force. This is the
+            // whole of temporary-ban support, and it lives here so #535 inherits it by asking the
+            // repository the obvious question rather than by implementing expiry itself.
+            return query(effect, "AND (expires_at = 0 OR expires_at > ?)", nowUnixSeconds);
+        }
+
+        std::vector<AccessRule> all(RuleEffect effect) override {
+            return query(effect, "", std::nullopt);
+        }
+
+      private:
+        std::vector<AccessRule> query(RuleEffect effect, const char* extraWhere,
+                                      std::optional<std::int64_t> nowUnixSeconds) {
+            std::vector<AccessRule> out;
+            std::lock_guard<std::mutex> lock(s->mReadMutex);
+            if (!s->mReadDb)
+                return out;
+            std::string sql = "SELECT effect, subject_kind, subject, realm, reason, created_by, created_at, "
+                              "expires_at FROM access_rules WHERE effect = ? ";
+            sql += extraWhere;
+            sql += " ORDER BY created_at, subject;";
+            Stmt st;
+            if (auto r = st.prepare(s->mReadDb, sql.c_str()); !r) {
+                s->logError("bans.query", r.error);
+                return out;
+            }
+            bindText(st, 1, effectText(effect));
+            if (nowUnixSeconds)
+                sqlite3_bind_int64(st.get(), 2, *nowUnixSeconds);
+            while (sqlite3_step(st.get()) == SQLITE_ROW) {
+                AccessRule rule;
+                rule.effect = effectFromText(columnText(st, 0));
+                rule.subjectKind = kindFromText(columnText(st, 1));
+                rule.subject = columnText(st, 2);
+                rule.realm = columnText(st, 3);
+                rule.reason = columnText(st, 4);
+                rule.createdBy = columnText(st, 5);
+                rule.createdAt = sqlite3_column_int64(st.get(), 6);
+                rule.expiresAt = sqlite3_column_int64(st.get(), 7);
+                out.push_back(std::move(rule));
+            }
+            return out;
+        }
+        SqliteStore* s;
+    };
+
+    // ---- Stats -------------------------------------------------------------------------------
+
+    class Stats final : public IStatsRepository {
+      public:
+        explicit Stats(SqliteStore* store) : s(store) {}
+
+        std::optional<PilotLogbook> get(std::string_view accountId) override {
+            std::lock_guard<std::mutex> lock(s->mReadMutex);
+            if (!s->mReadDb)
+                return std::nullopt;
+            Stmt st;
+            if (auto r = st.prepare(
+                    s->mReadDb,
+                    ("SELECT " + statsSelectColumns() + " FROM account_stats WHERE account_id = ?;").c_str());
+                !r) {
+                s->logError("stats.get", r.error);
+                return std::nullopt;
+            }
+            sqlite3_bind_text(st.get(), 1, accountId.data(), static_cast<int>(accountId.size()), SQLITE_STATIC);
+            if (sqlite3_step(st.get()) != SQLITE_ROW)
+                return std::nullopt;
+
+            PilotLogbook lb;
+            int c = 0;
+            for (int i = 0; i < PilotLogbook::kKillClassCount; ++i)
+                lb.killsByClass[i] = static_cast<std::uint32_t>(sqlite3_column_int64(st.get(), c++));
+            for (int w = 0; w < static_cast<int>(WeaponLogClass::Count); ++w) {
+                lb.weapons[w].shots = static_cast<std::uint32_t>(sqlite3_column_int64(st.get(), c++));
+                lb.weapons[w].hits = static_cast<std::uint32_t>(sqlite3_column_int64(st.get(), c++));
+                lb.weapons[w].kills = static_cast<std::uint32_t>(sqlite3_column_int64(st.get(), c++));
+            }
+            lb.missionsFlown = static_cast<std::uint32_t>(sqlite3_column_int64(st.get(), c++));
+            lb.missionsFailed = static_cast<std::uint32_t>(sqlite3_column_int64(st.get(), c++));
+            lb.ejections = static_cast<std::uint32_t>(sqlite3_column_int64(st.get(), c++));
+            lb.bestLandingScore = static_cast<float>(sqlite3_column_double(st.get(), c++));
+            lb.lastLandingScore = static_cast<float>(sqlite3_column_double(st.get(), c++));
+            return lb;
+        }
+
+        void put(std::string_view accountId, const PilotLogbook& logbook) override {
+            s->mWriter.enqueue([this, id = std::string(accountId), lb = logbook]() -> Result {
+                Stmt st;
+                if (auto r = st.prepare(s->mWriteDb, statsUpsertSql(/*numberedPlaceholders=*/false).c_str()); !r)
+                    return r;
+                int c = 1;
+                bindText(st, c++, id);
+                for (int i = 0; i < PilotLogbook::kKillClassCount; ++i)
+                    sqlite3_bind_int64(st.get(), c++, static_cast<std::int64_t>(lb.killsByClass[i]));
+                for (int w = 0; w < static_cast<int>(WeaponLogClass::Count); ++w) {
+                    sqlite3_bind_int64(st.get(), c++, static_cast<std::int64_t>(lb.weapons[w].shots));
+                    sqlite3_bind_int64(st.get(), c++, static_cast<std::int64_t>(lb.weapons[w].hits));
+                    sqlite3_bind_int64(st.get(), c++, static_cast<std::int64_t>(lb.weapons[w].kills));
+                }
+                sqlite3_bind_int64(st.get(), c++, static_cast<std::int64_t>(lb.missionsFlown));
+                sqlite3_bind_int64(st.get(), c++, static_cast<std::int64_t>(lb.missionsFailed));
+                sqlite3_bind_int64(st.get(), c++, static_cast<std::int64_t>(lb.ejections));
+                sqlite3_bind_double(st.get(), c++, static_cast<double>(lb.bestLandingScore));
+                sqlite3_bind_double(st.get(), c++, static_cast<double>(lb.lastLandingScore));
+                sqlite3_bind_int64(st.get(), c++, nowSeconds());
+                if (sqlite3_step(st.get()) != SQLITE_DONE)
+                    return Result::failure("stats.put '" + id + "': " + sqlite3_errmsg(s->mWriteDb));
+                return Result::success();
+            });
+        }
+
+      private:
+        SqliteStore* s;
+    };
 
     void logError(const char* what, const std::string& detail) const {
         if (!mLog)
@@ -358,6 +675,12 @@ class SqliteStore final : public IPersistence, private IBlobRepository {
     AsyncWriter mWriter;
     ILogger* mLog{nullptr};
     int mSchemaVersion{0};
+
+    // Declared after the state they reach, so `this` is fully formed by the time they bind it.
+    Blobs mBlobs{this};
+    Accounts mAccounts{this};
+    Bans mBans{this};
+    Stats mStats{this};
 };
 
 } // namespace

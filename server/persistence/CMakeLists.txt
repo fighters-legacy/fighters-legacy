@@ -14,10 +14,17 @@ add_library(fl-server-persistence STATIC
     PostgresStore.cpp
     NullStore.cpp)
 
-target_include_directories(fl-server-persistence PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_include_directories(fl-server-persistence PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    # engine/, for two header-only reaches that layering rule 8 explicitly permits (#534):
+    # config/PilotLogbook.h is the stats row type (D25 reuses that taxonomy rather than inventing a
+    # parallel one), and crypto/Uuid.h mints account ids. PilotLogbook is header-only so it adds no
+    # link edge at all; engine-crypto below is the only new one.
+    "${CMAKE_SOURCE_DIR}/engine")
 target_link_libraries(fl-server-persistence
     PUBLIC platform-hal   # ILogger, and nothing else from the HAL
-    PRIVATE fl::sqlite3)
+    PRIVATE fl::sqlite3
+            engine-crypto)  # uuidv7 for account ids (#534) — the same mint identity will use
 
 # Always defined, with a value, so PostgresStore.cpp's `#if FL_WITH_POSTGRES` reads a real macro in
 # both configurations rather than relying on an undefined identifier evaluating to 0. PUBLIC so a

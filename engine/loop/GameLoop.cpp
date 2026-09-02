@@ -117,6 +117,23 @@ void GameLoop::drainSimCallbacks() {
         fn();
 }
 
+void GameLoop::enqueueMainCallback(std::function<void()> fn) {
+    std::lock_guard<std::mutex> lk(m_mainCallbackMutex);
+    m_pendingMainCallbacks.push_back(std::move(fn));
+}
+
+void GameLoop::drainMainCallbacks() {
+    // Swap-then-run, holding no lock while the callbacks execute: a main callback performs a store
+    // write, and a store write must never be done under a lock the sim thread wants to take.
+    std::vector<std::function<void()>> callbacks;
+    {
+        std::lock_guard<std::mutex> lk(m_mainCallbackMutex);
+        callbacks.swap(m_pendingMainCallbacks);
+    }
+    for (auto& fn : callbacks)
+        fn();
+}
+
 void GameLoop::stepSystems(double simDt, uint64_t tickIndex) {
     for (ISimUpdate* system : m_systems)
         system->onTick(simDt, tickIndex);

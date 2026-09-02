@@ -447,6 +447,13 @@ if(TARGET platform-enet)
     target_include_directories(test_server_config PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     catch_discover_tests(test_server_config)
 
+    # Campaign save precedence: store first, file second, one-time import (#534). Links the server
+    # library because the resolution lives beside ServerRuntime, not in the store.
+    add_executable(test_campaign_save test_campaign_save.cpp)
+    target_link_libraries(test_campaign_save PRIVATE Catch2::Catch2WithMain fl-server-lib)
+    target_include_directories(test_campaign_save PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    catch_discover_tests(test_campaign_save)
+
     # [persistence] -> a store or a refusal (#533). Links the server library: the decision maps a
     # ServerConfig onto the persistence library's option structs, which is exactly the seam
     # cmake/layering.cmake rule 8 keeps the store itself on the far side of.
@@ -1400,6 +1407,9 @@ fl_add_test(test_sha256 LIBS engine-crypto)
 
 # The full-entropy token generator behind the admin token, MCP session ids and the pilot GUID (#1233).
 fl_add_test(test_random_token LIBS engine-crypto)
+
+# The UUIDv7 account-id mint (#534, D25), shared with identity (#537/#538).
+fl_add_test(test_uuid LIBS engine-crypto)
 
 add_executable(test_content_downloader test_content_downloader.cpp)
 # engine-net for LobbyListClient: the #1083 regression drives TWO IHttpClient consumers at once,

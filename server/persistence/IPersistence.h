@@ -67,11 +67,18 @@ class IPersistence {
   public:
     virtual ~IPersistence() = default;
 
-    // The typed repositories. #533 ships blobs — the schema-trivial one, which proves the whole
-    // vertical (dependency, migration runner, repository, async writer, two backends) without
-    // pre-empting the account/stats/ban schema #534 owns. accounts(), stats() and bans() join this
-    // list there, with the row types they define.
+    // The typed repositories. #533 shipped blobs — the schema-trivial one, which proved the whole
+    // vertical (dependency, migration runner, repository, async writer, two backends) before the
+    // schema existed. #534 adds the other three on that proven machinery.
+    //
+    // Their live producers arrive later and separately: #535 swaps the ban seam onto bans(), and
+    // #929 feeds stats() once identity gives it a verified account to key on. Both repositories are
+    // implemented and tested here regardless — the alternative was declaring interfaces nothing
+    // implements, which is what #533 refused to do.
     [[nodiscard]] virtual IBlobRepository& blobs() = 0;
+    [[nodiscard]] virtual IAccountRepository& accounts() = 0;
+    [[nodiscard]] virtual IBanRepository& bans() = 0;
+    [[nodiscard]] virtual IStatsRepository& stats() = 0;
 
     // Block until every write enqueued before this call has been applied. Returns the first error
     // seen since the previous flush, so a caller that wants durability (shutdown, a test, a

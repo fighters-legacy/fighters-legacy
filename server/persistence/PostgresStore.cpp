@@ -9,6 +9,9 @@
 #if FL_WITH_POSTGRES
 #include "AsyncWriter.h"
 #include "Migrations.h"
+#include "SqlVocabulary.h"
+
+#include <crypto/Uuid.h>
 
 #include <ILogger.h>
 
@@ -200,7 +203,7 @@ class PostgresMigrationTarget final : public IMigrationTarget {
     PGconn* mConn;
 };
 
-class PostgresStore final : public IPersistence, private IBlobRepository {
+class PostgresStore final : public IPersistence {
   public:
     PostgresStore(std::size_t queueMax, ILogger* log) : mWriter(queueMax, log), mLog(log) {}
 
@@ -253,7 +256,16 @@ class PostgresStore final : public IPersistence, private IBlobRepository {
     }
 
     IBlobRepository& blobs() override {
-        return *this;
+        return mBlobs;
+    }
+    IAccountRepository& accounts() override {
+        return mAccounts;
+    }
+    IBanRepository& bans() override {
+        return mBans;
+    }
+    IStatsRepository& stats() override {
+        return mStats;
     }
 
     Result flush() override {
@@ -292,95 +304,385 @@ class PostgresStore final : public IPersistence, private IBlobRepository {
     }
 
   private:
-    std::optional<std::vector<std::byte>> get(std::string_view key) override {
-        const std::string k(key);
-        std::lock_guard<std::mutex> lock(mReadMutex);
-        if (!mReadConn)
-            return std::nullopt;
-        const char* values[] = {k.c_str()};
-        const int formats[] = {0};
-        // Result format 1 = binary, so the BYTEA arrives as bytes rather than as a hex-escaped
-        // string that would then have to be decoded (and mis-decoded) here.
-        PgResult res(PQexecParams(mReadConn, "SELECT value FROM blobs WHERE key = $1;", 1, nullptr, values, nullptr,
-                                  formats, 1));
-        if (!res.ok(PGRES_TUPLES_OK)) {
-            logError("blobs.get", PQerrorMessage(mReadConn));
-            return std::nullopt;
-        }
-        if (PQntuples(res.get()) == 0)
-            return std::nullopt;
-        const auto* data = reinterpret_cast<const std::byte*>(PQgetvalue(res.get(), 0, 0));
-        const int size = PQgetlength(res.get(), 0, 0);
-        if (!data || size <= 0)
-            return std::vector<std::byte>{};
-        return std::vector<std::byte>(data, data + size);
-    }
+    // Repositories are MEMBERS, not private bases: four interfaces each declaring
+    // get(std::string_view) cannot all be inherited by one class (same signature, different return
+    // type is not an overload). Mirrors SqliteStore.
 
-    bool exists(std::string_view key) override {
-        const std::string k(key);
-        std::lock_guard<std::mutex> lock(mReadMutex);
-        if (!mReadConn)
-            return false;
-        const char* values[] = {k.c_str()};
-        PgResult res(
-            PQexecParams(mReadConn, "SELECT 1 FROM blobs WHERE key = $1;", 1, nullptr, values, nullptr, nullptr, 0));
-        if (!res.ok(PGRES_TUPLES_OK)) {
-            logError("blobs.exists", PQerrorMessage(mReadConn));
-            return false;
-        }
-        return PQntuples(res.get()) > 0;
-    }
+    class Blobs final : public IBlobRepository {
+      public:
+        explicit Blobs(PostgresStore* store) : s(store) {}
 
-    std::vector<std::string> keys(std::string_view prefix) override {
-        std::vector<std::string> out;
-        const std::string p(prefix);
-        std::lock_guard<std::mutex> lock(mReadMutex);
-        if (!mReadConn)
-            return out;
-        // starts_with() rather than LIKE with a built pattern: no escaping question, so a key
-        // containing '%' or '_' cannot widen the query. Postgres 11+.
-        const char* values[] = {p.c_str()};
-        PgResult res(PQexecParams(mReadConn, "SELECT key FROM blobs WHERE starts_with(key, $1) ORDER BY key;", 1,
-                                  nullptr, values, nullptr, nullptr, 0));
-        if (!res.ok(PGRES_TUPLES_OK)) {
-            logError("blobs.keys", PQerrorMessage(mReadConn));
-            return out;
-        }
-        const int rows = PQntuples(res.get());
-        out.reserve(static_cast<std::size_t>(rows));
-        for (int i = 0; i < rows; ++i)
-            out.emplace_back(PQgetvalue(res.get(), i, 0));
-        return out;
-    }
-
-    void put(std::string_view key, std::vector<std::byte> value) override {
-        mWriter.enqueue([this, k = std::string(key), v = std::move(value)]() -> Result {
-            const std::string appliedText = std::to_string(nowSeconds());
-            const char* values[] = {k.c_str(), v.empty() ? "" : reinterpret_cast<const char*>(v.data()),
-                                    appliedText.c_str()};
-            const int lengths[] = {0, static_cast<int>(v.size()), 0};
-            const int formats[] = {0, 1, 0}; // the blob is binary; the other two are text
-            PgResult res(PQexecParams(mWriteConn,
-                                      "INSERT INTO blobs (key, value, updated_at) VALUES ($1, $2, $3) "
-                                      "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, "
-                                      "updated_at = EXCLUDED.updated_at;",
-                                      3, nullptr, values, lengths, formats, 0));
-            if (!res.ok(PGRES_COMMAND_OK))
-                return Result::failure("blobs.put '" + k + "': " + PQerrorMessage(mWriteConn));
-            return Result::success();
-        });
-    }
-
-    void remove(std::string_view key) override {
-        mWriter.enqueue([this, k = std::string(key)]() -> Result {
+        std::optional<std::vector<std::byte>> get(std::string_view key) override {
+            const std::string k(key);
+            std::lock_guard<std::mutex> lock(s->mReadMutex);
+            if (!s->mReadConn)
+                return std::nullopt;
             const char* values[] = {k.c_str()};
+            const int formats[] = {0};
+            // Result format 1 = binary, so the BYTEA arrives as bytes rather than as a hex-escaped
+            // string that would then have to be decoded (and mis-decoded) here.
+            PgResult res(PQexecParams(s->mReadConn, "SELECT value FROM blobs WHERE key = $1;", 1, nullptr, values,
+                                      nullptr, formats, 1));
+            if (!res.ok(PGRES_TUPLES_OK)) {
+                s->logError("blobs.get", PQerrorMessage(s->mReadConn));
+                return std::nullopt;
+            }
+            if (PQntuples(res.get()) == 0)
+                return std::nullopt;
+            const auto* data = reinterpret_cast<const std::byte*>(PQgetvalue(res.get(), 0, 0));
+            const int size = PQgetlength(res.get(), 0, 0);
+            if (!data || size <= 0)
+                return std::vector<std::byte>{};
+            return std::vector<std::byte>(data, data + size);
+        }
+
+        bool exists(std::string_view key) override {
+            const std::string k(key);
+            std::lock_guard<std::mutex> lock(s->mReadMutex);
+            if (!s->mReadConn)
+                return false;
+            const char* values[] = {k.c_str()};
+            PgResult res(PQexecParams(s->mReadConn, "SELECT 1 FROM blobs WHERE key = $1;", 1, nullptr, values, nullptr,
+                                      nullptr, 0));
+            if (!res.ok(PGRES_TUPLES_OK)) {
+                s->logError("blobs.exists", PQerrorMessage(s->mReadConn));
+                return false;
+            }
+            return PQntuples(res.get()) > 0;
+        }
+
+        std::vector<std::string> keys(std::string_view prefix) override {
+            std::vector<std::string> out;
+            const std::string p(prefix);
+            std::lock_guard<std::mutex> lock(s->mReadMutex);
+            if (!s->mReadConn)
+                return out;
+            // starts_with() rather than LIKE with a built pattern: no escaping question, so a key
+            // containing '%' or '_' cannot widen the query. Postgres 11+.
+            const char* values[] = {p.c_str()};
+            PgResult res(PQexecParams(s->mReadConn, "SELECT key FROM blobs WHERE starts_with(key, $1) ORDER BY key;", 1,
+                                      nullptr, values, nullptr, nullptr, 0));
+            if (!res.ok(PGRES_TUPLES_OK)) {
+                s->logError("blobs.keys", PQerrorMessage(s->mReadConn));
+                return out;
+            }
+            const int rows = PQntuples(res.get());
+            out.reserve(static_cast<std::size_t>(rows));
+            for (int i = 0; i < rows; ++i)
+                out.emplace_back(PQgetvalue(res.get(), i, 0));
+            return out;
+        }
+
+        void put(std::string_view key, std::vector<std::byte> value) override {
+            s->mWriter.enqueue([this, k = std::string(key), v = std::move(value)]() -> Result {
+                const std::string appliedText = std::to_string(nowSeconds());
+                const char* values[] = {k.c_str(), v.empty() ? "" : reinterpret_cast<const char*>(v.data()),
+                                        appliedText.c_str()};
+                const int lengths[] = {0, static_cast<int>(v.size()), 0};
+                const int formats[] = {0, 1, 0}; // the blob is binary; the other two are text
+                PgResult res(PQexecParams(s->mWriteConn,
+                                          "INSERT INTO blobs (key, value, updated_at) VALUES ($1, $2, $3) "
+                                          "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, "
+                                          "updated_at = EXCLUDED.updated_at;",
+                                          3, nullptr, values, lengths, formats, 0));
+                if (!res.ok(PGRES_COMMAND_OK))
+                    return Result::failure("blobs.put '" + k + "': " + PQerrorMessage(s->mWriteConn));
+                return Result::success();
+            });
+        }
+
+        void remove(std::string_view key) override {
+            s->mWriter.enqueue([this, k = std::string(key)]() -> Result {
+                const char* values[] = {k.c_str()};
+                PgResult res(PQexecParams(s->mWriteConn, "DELETE FROM blobs WHERE key = $1;", 1, nullptr, values,
+                                          nullptr, nullptr, 0));
+                if (!res.ok(PGRES_COMMAND_OK))
+                    return Result::failure("blobs.remove '" + k + "': " + PQerrorMessage(s->mWriteConn));
+                return Result::success();
+            });
+        }
+
+      private:
+        PostgresStore* s;
+    };
+
+    // ---- Accounts ----------------------------------------------------------------------------
+
+    class Accounts final : public IAccountRepository {
+      public:
+        explicit Accounts(PostgresStore* store) : s(store) {}
+
+        AccountRecord create(std::string_view realm, std::string_view displayName) override {
+            AccountRecord rec;
+            rec.id = fl::uuidv7();
+            rec.realm = std::string(realm);
+            rec.displayName = std::string(displayName);
+            rec.createdAt = nowSeconds();
+            rec.lastSeenAt = rec.createdAt;
+
+            s->mWriter.enqueue([this, rec]() -> Result {
+                const std::string created = std::to_string(rec.createdAt);
+                const std::string seen = std::to_string(rec.lastSeenAt);
+                const char* v[] = {rec.id.c_str(), rec.realm.c_str(), rec.displayName.c_str(), created.c_str(),
+                                   seen.c_str()};
+                PgResult res(PQexecParams(s->mWriteConn,
+                                          "INSERT INTO accounts (id, realm, display_name, created_at, last_seen_at) "
+                                          "VALUES ($1, $2, $3, $4, $5);",
+                                          5, nullptr, v, nullptr, nullptr, 0));
+                if (!res.ok(PGRES_COMMAND_OK))
+                    return Result::failure("accounts.create '" + rec.id + "': " + PQerrorMessage(s->mWriteConn));
+                return Result::success();
+            });
+            return rec;
+        }
+
+        std::optional<AccountRecord> get(std::string_view id) override {
+            const std::string k(id);
+            std::lock_guard<std::mutex> lock(s->mReadMutex);
+            if (!s->mReadConn)
+                return std::nullopt;
+            const char* v[] = {k.c_str()};
+            PgResult res(PQexecParams(s->mReadConn,
+                                      "SELECT id, realm, display_name, created_at, last_seen_at "
+                                      "FROM accounts WHERE id = $1;",
+                                      1, nullptr, v, nullptr, nullptr, 0));
+            if (!res.ok(PGRES_TUPLES_OK)) {
+                s->logError("accounts.get", PQerrorMessage(s->mReadConn));
+                return std::nullopt;
+            }
+            if (PQntuples(res.get()) == 0)
+                return std::nullopt;
+            return readRow(res, 0);
+        }
+
+        std::optional<AccountRecord> findByName(std::string_view realm, std::string_view displayName) override {
+            const std::string r(realm);
+            const std::string n(displayName);
+            std::lock_guard<std::mutex> lock(s->mReadMutex);
+            if (!s->mReadConn)
+                return std::nullopt;
+            const char* v[] = {r.c_str(), n.c_str()};
+            PgResult res(PQexecParams(s->mReadConn,
+                                      "SELECT id, realm, display_name, created_at, last_seen_at FROM accounts "
+                                      "WHERE realm = $1 AND display_name = $2 "
+                                      "ORDER BY last_seen_at DESC, id DESC LIMIT 1;",
+                                      2, nullptr, v, nullptr, nullptr, 0));
+            if (!res.ok(PGRES_TUPLES_OK)) {
+                s->logError("accounts.findByName", PQerrorMessage(s->mReadConn));
+                return std::nullopt;
+            }
+            if (PQntuples(res.get()) == 0)
+                return std::nullopt;
+            return readRow(res, 0);
+        }
+
+        void touchLastSeen(std::string_view id, std::int64_t unixSeconds) override {
+            s->mWriter.enqueue([this, k = std::string(id), unixSeconds]() -> Result {
+                const std::string when = std::to_string(unixSeconds);
+                const char* v[] = {when.c_str(), k.c_str()};
+                PgResult res(PQexecParams(s->mWriteConn, "UPDATE accounts SET last_seen_at = $1 WHERE id = $2;", 2,
+                                          nullptr, v, nullptr, nullptr, 0));
+                if (!res.ok(PGRES_COMMAND_OK))
+                    return Result::failure("accounts.touchLastSeen '" + k + "': " + PQerrorMessage(s->mWriteConn));
+                return Result::success();
+            });
+        }
+
+        void remove(std::string_view id) override {
+            s->mWriter.enqueue([this, k = std::string(id)]() -> Result {
+                const char* v[] = {k.c_str()};
+                PgResult res(PQexecParams(s->mWriteConn, "DELETE FROM accounts WHERE id = $1;", 1, nullptr, v, nullptr,
+                                          nullptr, 0));
+                if (!res.ok(PGRES_COMMAND_OK))
+                    return Result::failure("accounts.remove '" + k + "': " + PQerrorMessage(s->mWriteConn));
+                return Result::success();
+            });
+        }
+
+      private:
+        static AccountRecord readRow(const PgResult& res, int row) {
+            AccountRecord rec;
+            rec.id = PQgetvalue(res.get(), row, 0);
+            rec.realm = PQgetvalue(res.get(), row, 1);
+            rec.displayName = PQgetvalue(res.get(), row, 2);
+            rec.createdAt = std::strtoll(PQgetvalue(res.get(), row, 3), nullptr, 10);
+            rec.lastSeenAt = std::strtoll(PQgetvalue(res.get(), row, 4), nullptr, 10);
+            return rec;
+        }
+        PostgresStore* s;
+    };
+
+    // ---- Access rules ------------------------------------------------------------------------
+
+    class Bans final : public IBanRepository {
+      public:
+        explicit Bans(PostgresStore* store) : s(store) {}
+
+        void add(const AccessRule& rule) override {
+            s->mWriter.enqueue([this, rule]() -> Result {
+                const std::string effect = effectText(rule.effect);
+                const std::string kind = kindText(rule.subjectKind);
+                const std::string created = std::to_string(rule.createdAt);
+                const std::string expires = std::to_string(rule.expiresAt);
+                const char* v[] = {effect.c_str(),     kind.c_str(),        rule.subject.c_str(),
+                                   rule.realm.c_str(), rule.reason.c_str(), rule.createdBy.c_str(),
+                                   created.c_str(),    expires.c_str()};
+                PgResult res(PQexecParams(s->mWriteConn,
+                                          "INSERT INTO access_rules (effect, subject_kind, subject, realm, reason, "
+                                          "created_by, created_at, expires_at) "
+                                          "VALUES ($1, $2, $3, $4, $5, $6, $7, $8) "
+                                          "ON CONFLICT (effect, subject_kind, subject) DO UPDATE SET "
+                                          "realm = EXCLUDED.realm, reason = EXCLUDED.reason, "
+                                          "created_by = EXCLUDED.created_by, created_at = EXCLUDED.created_at, "
+                                          "expires_at = EXCLUDED.expires_at;",
+                                          8, nullptr, v, nullptr, nullptr, 0));
+                if (!res.ok(PGRES_COMMAND_OK))
+                    return Result::failure("bans.add '" + rule.subject + "': " + PQerrorMessage(s->mWriteConn));
+                return Result::success();
+            });
+        }
+
+        void remove(RuleEffect effect, SubjectKind kind, std::string_view subject) override {
+            s->mWriter.enqueue([this, effect, kind, subj = std::string(subject)]() -> Result {
+                const std::string e = effectText(effect);
+                const std::string k = kindText(kind);
+                const char* v[] = {e.c_str(), k.c_str(), subj.c_str()};
+                PgResult res(PQexecParams(s->mWriteConn,
+                                          "DELETE FROM access_rules WHERE effect = $1 AND subject_kind = $2 "
+                                          "AND subject = $3;",
+                                          3, nullptr, v, nullptr, nullptr, 0));
+                if (!res.ok(PGRES_COMMAND_OK))
+                    return Result::failure("bans.remove '" + subj + "': " + PQerrorMessage(s->mWriteConn));
+                return Result::success();
+            });
+        }
+
+        std::vector<AccessRule> active(RuleEffect effect, std::int64_t nowUnixSeconds) override {
+            return query(effect, "AND (expires_at = 0 OR expires_at > $2)", nowUnixSeconds);
+        }
+
+        std::vector<AccessRule> all(RuleEffect effect) override {
+            return query(effect, "", std::nullopt);
+        }
+
+      private:
+        std::vector<AccessRule> query(RuleEffect effect, const char* extraWhere,
+                                      std::optional<std::int64_t> nowUnixSeconds) {
+            std::vector<AccessRule> out;
+            const std::string e = effectText(effect);
+            const std::string now = nowUnixSeconds ? std::to_string(*nowUnixSeconds) : std::string();
+            std::lock_guard<std::mutex> lock(s->mReadMutex);
+            if (!s->mReadConn)
+                return out;
+            std::string sql = "SELECT effect, subject_kind, subject, realm, reason, created_by, created_at, "
+                              "expires_at FROM access_rules WHERE effect = $1 ";
+            sql += extraWhere;
+            sql += " ORDER BY created_at, subject;";
+            const char* v[] = {e.c_str(), now.c_str()};
             PgResult res(
-                PQexecParams(mWriteConn, "DELETE FROM blobs WHERE key = $1;", 1, nullptr, values, nullptr, nullptr, 0));
-            if (!res.ok(PGRES_COMMAND_OK))
-                return Result::failure("blobs.remove '" + k + "': " + PQerrorMessage(mWriteConn));
-            return Result::success();
-        });
-    }
+                PQexecParams(s->mReadConn, sql.c_str(), nowUnixSeconds ? 2 : 1, nullptr, v, nullptr, nullptr, 0));
+            if (!res.ok(PGRES_TUPLES_OK)) {
+                s->logError("bans.query", PQerrorMessage(s->mReadConn));
+                return out;
+            }
+            const int rows = PQntuples(res.get());
+            out.reserve(static_cast<std::size_t>(rows));
+            for (int i = 0; i < rows; ++i) {
+                AccessRule rule;
+                rule.effect = effectFromText(PQgetvalue(res.get(), i, 0));
+                rule.subjectKind = kindFromText(PQgetvalue(res.get(), i, 1));
+                rule.subject = PQgetvalue(res.get(), i, 2);
+                rule.realm = PQgetvalue(res.get(), i, 3);
+                rule.reason = PQgetvalue(res.get(), i, 4);
+                rule.createdBy = PQgetvalue(res.get(), i, 5);
+                rule.createdAt = std::strtoll(PQgetvalue(res.get(), i, 6), nullptr, 10);
+                rule.expiresAt = std::strtoll(PQgetvalue(res.get(), i, 7), nullptr, 10);
+                out.push_back(std::move(rule));
+            }
+            return out;
+        }
+        PostgresStore* s;
+    };
+
+    // ---- Stats -------------------------------------------------------------------------------
+
+    class Stats final : public IStatsRepository {
+      public:
+        explicit Stats(PostgresStore* store) : s(store) {}
+
+        std::optional<PilotLogbook> get(std::string_view accountId) override {
+            const std::string id(accountId);
+            std::lock_guard<std::mutex> lock(s->mReadMutex);
+            if (!s->mReadConn)
+                return std::nullopt;
+            const std::string sql = "SELECT " + statsSelectColumns() + " FROM account_stats WHERE account_id = $1;";
+            const char* v[] = {id.c_str()};
+            PgResult res(PQexecParams(s->mReadConn, sql.c_str(), 1, nullptr, v, nullptr, nullptr, 0));
+            if (!res.ok(PGRES_TUPLES_OK)) {
+                s->logError("stats.get", PQerrorMessage(s->mReadConn));
+                return std::nullopt;
+            }
+            if (PQntuples(res.get()) == 0)
+                return std::nullopt;
+
+            PilotLogbook lb;
+            int c = 0;
+            const auto u32 = [&](int col) {
+                return static_cast<std::uint32_t>(std::strtoull(PQgetvalue(res.get(), 0, col), nullptr, 10));
+            };
+            for (int i = 0; i < PilotLogbook::kKillClassCount; ++i)
+                lb.killsByClass[i] = u32(c++);
+            for (int w = 0; w < static_cast<int>(WeaponLogClass::Count); ++w) {
+                lb.weapons[w].shots = u32(c++);
+                lb.weapons[w].hits = u32(c++);
+                lb.weapons[w].kills = u32(c++);
+            }
+            lb.missionsFlown = u32(c++);
+            lb.missionsFailed = u32(c++);
+            lb.ejections = u32(c++);
+            lb.bestLandingScore = std::strtof(PQgetvalue(res.get(), 0, c++), nullptr);
+            lb.lastLandingScore = std::strtof(PQgetvalue(res.get(), 0, c++), nullptr);
+            return lb;
+        }
+
+        void put(std::string_view accountId, const PilotLogbook& logbook) override {
+            s->mWriter.enqueue([this, id = std::string(accountId), lb = logbook]() -> Result {
+                // 27 parameters, built as text and kept alive in `owned` until the exec returns --
+                // libpq reads the pointers, it does not copy them.
+                std::vector<std::string> owned;
+                owned.reserve(27);
+                owned.push_back(id);
+                for (int i = 0; i < PilotLogbook::kKillClassCount; ++i)
+                    owned.push_back(std::to_string(lb.killsByClass[i]));
+                for (int w = 0; w < static_cast<int>(WeaponLogClass::Count); ++w) {
+                    owned.push_back(std::to_string(lb.weapons[w].shots));
+                    owned.push_back(std::to_string(lb.weapons[w].hits));
+                    owned.push_back(std::to_string(lb.weapons[w].kills));
+                }
+                owned.push_back(std::to_string(lb.missionsFlown));
+                owned.push_back(std::to_string(lb.missionsFailed));
+                owned.push_back(std::to_string(lb.ejections));
+                owned.push_back(std::to_string(lb.bestLandingScore));
+                owned.push_back(std::to_string(lb.lastLandingScore));
+                owned.push_back(std::to_string(nowSeconds()));
+
+                std::vector<const char*> v;
+                v.reserve(owned.size());
+                for (const auto& o : owned)
+                    v.push_back(o.c_str());
+
+                const std::string sql = statsUpsertSql(/*numberedPlaceholders=*/true);
+                PgResult res(PQexecParams(s->mWriteConn, sql.c_str(), static_cast<int>(v.size()), nullptr, v.data(),
+                                          nullptr, nullptr, 0));
+                if (!res.ok(PGRES_COMMAND_OK))
+                    return Result::failure("stats.put '" + id + "': " + PQerrorMessage(s->mWriteConn));
+                return Result::success();
+            });
+        }
+
+      private:
+        PostgresStore* s;
+    };
 
     void logError(const char* what, const char* detail) const {
         if (!mLog)
@@ -396,6 +698,11 @@ class PostgresStore final : public IPersistence, private IBlobRepository {
     AsyncWriter mWriter;
     ILogger* mLog{nullptr};
     int mSchemaVersion{0};
+
+    Blobs mBlobs{this};
+    Accounts mAccounts{this};
+    Bans mBans{this};
+    Stats mStats{this};
 };
 
 } // namespace
