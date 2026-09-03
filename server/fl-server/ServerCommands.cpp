@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ServerCommands.h"
 
+#include "AccessRules.h"
+
 #include "ConfigReload.h"
 
 #include "AiControllerBuild.h" // the one AI-controller construction ladder (#1236)
@@ -770,52 +772,61 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
         });
 
     // ban <peerId|IP>
-    registry.registerCommand("ban", "ban <peerId|IP>  -- add IP to in-memory ban list and kick matching peers",
-                             capBit(Capability::KickBan), [ctx](std::span<std::string_view> args) -> std::string {
-                                 if (args.empty())
-                                     return "usage: ban <peerId|IP>";
-                                 if (!ctx->sim.broadcaster || !ctx->sim.gameLoop)
-                                     return "ban: not available";
-                                 std::string arg(args[0]);
-                                 if (fl::isAllDigits(arg)) {
-                                     uint32_t peerId = 0;
-                                     auto [ptr, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), peerId);
-                                     if (ec != std::errc{})
-                                         return "ban: invalid peer ID";
-                                     ctx->sim.gameLoop->enqueueSimCallback([ctx, peerId]() {
-                                         std::string foundIp;
-                                         ctx->sim.broadcaster->forEachPeer([&](const fl::PeerInfo& pi) {
-                                             if (pi.peerId == peerId)
-                                                 foundIp = extractIp(pi.addr);
-                                         });
-                                         char m[128];
-                                         if (foundIp.empty()) {
-                                             std::snprintf(m, sizeof(m), "[admin] ban: peer %u not found", peerId);
-                                         } else {
-                                             ctx->sim.broadcaster->banAddress(foundIp);
-                                             if (ctx->bans.saveBanlist)
-                                                 ctx->bans.saveBanlist(ctx->sim.broadcaster->getBannedAddresses());
-                                             std::snprintf(m, sizeof(m), "[admin] banned IP %s (peer %u)",
-                                                           foundIp.c_str(), peerId);
-                                         }
-                                         printAdmin(*ctx, m);
-                                     });
-                                     char banBuf[64];
-                                     std::snprintf(banBuf, sizeof(banBuf), "ban: queued for peer %u", peerId);
-                                     return std::string(banBuf);
-                                 } else {
-                                     std::string ip = normalizeIp(arg);
-                                     ctx->sim.gameLoop->enqueueSimCallback([ctx, ip]() {
-                                         ctx->sim.broadcaster->banAddress(ip);
-                                         if (ctx->bans.saveBanlist)
-                                             ctx->bans.saveBanlist(ctx->sim.broadcaster->getBannedAddresses());
-                                         char m[128];
-                                         std::snprintf(m, sizeof(m), "[admin] banned IP %s", ip.c_str());
-                                         printAdmin(*ctx, m);
-                                     });
-                                     return "ban: banning IP " + ip;
-                                 }
-                             });
+    registry.registerCommand(
+        "ban", "ban <peerId|IP>  -- ban an IP, kick matching peers, and record it", capBit(Capability::KickBan),
+        [ctx](std::span<std::string_view> args, const fl::CommandIssuer& issuer) -> std::string {
+            if (args.empty())
+                return "usage: ban <peerId|IP>";
+            if (!ctx->sim.broadcaster || !ctx->sim.gameLoop)
+                return "ban: not available";
+            // Captured now, on the dispatch thread, because the sim callback
+            // below outlives this frame and the issuer does not.
+            const std::string who = describeBanIssuer(issuer);
+            std::string arg(args[0]);
+            if (fl::isAllDigits(arg)) {
+                uint32_t peerId = 0;
+                auto [ptr, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), peerId);
+                if (ec != std::errc{})
+                    return "ban: invalid peer ID";
+                ctx->sim.gameLoop->enqueueSimCallback([ctx, peerId, who]() {
+                    std::string foundIp;
+                    ctx->sim.broadcaster->forEachPeer([&](const fl::PeerInfo& pi) {
+                        if (pi.peerId == peerId)
+                            foundIp = extractIp(pi.addr);
+                    });
+                    char m[128];
+                    if (foundIp.empty()) {
+                        std::snprintf(m, sizeof(m), "[admin] ban: peer %u not found", peerId);
+                    } else {
+                        ctx->sim.broadcaster->banAddress(foundIp);
+                        // This is the path that forced the seam onto the main
+                        // thread: the address is only known HERE, inside a sim
+                        // callback, and the store may not be touched from it.
+                        if (ctx->bans.addBan)
+                            ctx->bans.addBan(foundIp, who);
+                        std::snprintf(m, sizeof(m), "[admin] banned IP %s (peer %u)", foundIp.c_str(), peerId);
+                    }
+                    printAdmin(*ctx, m);
+                });
+                char banBuf[64];
+                std::snprintf(banBuf, sizeof(banBuf), "ban: queued for peer %u", peerId);
+                return std::string(banBuf);
+            } else {
+                std::string ip = normalizeIp(arg);
+                ctx->sim.gameLoop->enqueueSimCallback([ctx, ip, who]() {
+                    ctx->sim.broadcaster->banAddress(ip);
+                    if (ctx->bans.addBan)
+                        ctx->bans.addBan(ip, who);
+                    char m[128];
+                    std::snprintf(m, sizeof(m), "[admin] banned IP %s", ip.c_str());
+                    printAdmin(*ctx, m);
+                });
+                return ctx->bans.ephemeral ? "ban: banning IP " + ip +
+                                                 " (not persisted -- "
+                                                 "[persistence] enabled = false)"
+                                           : "ban: banning IP " + ip;
+            }
+        });
 
     // unban <IP>
     registry.registerCommand("unban", "unban <IP>  -- remove an IP from the in-memory ban list",
@@ -827,8 +838,8 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                                  std::string ip = normalizeIp(args[0]);
                                  ctx->sim.gameLoop->enqueueSimCallback([ctx, ip]() {
                                      ctx->sim.broadcaster->unbanAddress(ip);
-                                     if (ctx->bans.saveBanlist)
-                                         ctx->bans.saveBanlist(ctx->sim.broadcaster->getBannedAddresses());
+                                     if (ctx->bans.removeBan)
+                                         ctx->bans.removeBan(ip);
                                      char m[128];
                                      std::snprintf(m, sizeof(m), "[admin] unbanned IP %s", ip.c_str());
                                      printAdmin(*ctx, m);
@@ -1345,44 +1356,43 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                                  return "reload_content: queued";
                              });
 
-    registry.registerCommand("reload_banlist",
-                             "reload_banlist  -- reload ban list from security.banlist_path in server.toml",
-                             capBit(Capability::ServerConfig), [ctx](std::span<std::string_view>) -> std::string {
-                                 if (!ctx->bans.banlistPath || ctx->bans.banlistPath->empty())
-                                     return "reload_banlist: not available (security.banlist_path not configured)";
-                                 if (!ctx->sim.broadcaster || !ctx->sim.gameLoop || !ctx->bans.loadBanlist)
-                                     return "reload_banlist: not available";
-                                 auto banned = ctx->bans.loadBanlist();
-                                 auto count = banned.size();
-                                 ctx->sim.gameLoop->enqueueSimCallback([ctx, b = std::move(banned)]() mutable {
-                                     ctx->sim.broadcaster->setBannedAddresses(std::move(b));
-                                     printAdmin(*ctx, "[admin] reload_banlist: applied");
-                                 });
-                                 char buf[128];
-                                 std::snprintf(buf, sizeof(buf), "reload_banlist: loading %zu IPs from %s", count,
-                                               ctx->bans.banlistPath->c_str());
-                                 return buf;
-                             });
+    // reload_banlist / reload_allowlist
+    //
+    // These kept their names and lost their source (#535). "Make the running server match the
+    // record" is still exactly what they do; the record is the persistence store now, not a file.
+    // That matters for more than tidiness: with a shared PostgreSQL store, a ban another server (or
+    // an operator with psql) wrote is applied here without a restart, which the file never offered.
+    registry.registerCommand(
+        "reload_banlist", "reload_banlist  -- re-apply active ban rules from the persistence store",
+        capBit(Capability::ServerConfig), [ctx](std::span<std::string_view>) -> std::string {
+            if (!ctx->sim.broadcaster || !ctx->sim.gameLoop || !ctx->bans.loadBans)
+                return "reload_banlist: not available (no persistence store)";
+            auto banned = ctx->bans.loadBans();
+            auto count = banned.size();
+            ctx->sim.gameLoop->enqueueSimCallback([ctx, b = std::move(banned)]() mutable {
+                ctx->sim.broadcaster->setBannedAddresses(std::move(b));
+                printAdmin(*ctx, "[admin] reload_banlist: applied");
+            });
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "reload_banlist: applying %zu banned IP(s) from the store", count);
+            return buf;
+        });
 
-    // reload_allowlist
-    registry.registerCommand("reload_allowlist",
-                             "reload_allowlist  -- reload allowlist from security.allowlist_path in server.toml",
-                             capBit(Capability::ServerConfig), [ctx](std::span<std::string_view>) -> std::string {
-                                 if (!ctx->bans.allowlistPath || ctx->bans.allowlistPath->empty())
-                                     return "reload_allowlist: not available (security.allowlist_path not configured)";
-                                 if (!ctx->sim.broadcaster || !ctx->sim.gameLoop || !ctx->bans.loadAllowlist)
-                                     return "reload_allowlist: not available";
-                                 auto allowed = ctx->bans.loadAllowlist();
-                                 auto count = allowed.size();
-                                 ctx->sim.gameLoop->enqueueSimCallback([ctx, a = std::move(allowed)]() mutable {
-                                     ctx->sim.broadcaster->setAllowedAddresses(std::move(a));
-                                     printAdmin(*ctx, "[admin] reload_allowlist: applied");
-                                 });
-                                 char buf[128];
-                                 std::snprintf(buf, sizeof(buf), "reload_allowlist: loading %zu IPs from %s", count,
-                                               ctx->bans.allowlistPath->c_str());
-                                 return buf;
-                             });
+    registry.registerCommand(
+        "reload_allowlist", "reload_allowlist  -- re-apply active allowlist rules from the persistence store",
+        capBit(Capability::ServerConfig), [ctx](std::span<std::string_view>) -> std::string {
+            if (!ctx->sim.broadcaster || !ctx->sim.gameLoop || !ctx->bans.loadAllowlist)
+                return "reload_allowlist: not available (no persistence store)";
+            auto allowed = ctx->bans.loadAllowlist();
+            auto count = allowed.size();
+            ctx->sim.gameLoop->enqueueSimCallback([ctx, a = std::move(allowed)]() mutable {
+                ctx->sim.broadcaster->setAllowedAddresses(std::move(a));
+                printAdmin(*ctx, "[admin] reload_allowlist: applied");
+            });
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "reload_allowlist: applying %zu allowed IP(s) from the store", count);
+            return buf;
+        });
 
     // trace_start / trace_stop -- server-side input tracing (#560). Toggles recording of every
     // peer's accepted MsgClientInput to per-peer FLIT traces for bot_swarm `--pattern trace:` replay.

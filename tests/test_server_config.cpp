@@ -863,7 +863,26 @@ outgoing_bandwidth_bps      = 2000000
     CHECK(cfg.security.allowlistPath == "/etc/fl/allow.txt");
     CHECK(cfg.security.incomingBandwidthBps == 1000000u);
     CHECK(cfg.security.outgoingBandwidthBps == 2000000u);
-    CHECK(log.entries.empty());
+    // The two path keys are DEPRECATED to import-only (#535) and say so at parse time -- an operator
+    // who edits banlist.txt expecting it to take effect should be told when they start the server,
+    // not discover it when a ban does not stick. Everything else here still parses silently.
+    CHECK(log.count(LogLevel::Warn, "security.banlist_path is DEPRECATED") == 1);
+    CHECK(log.count(LogLevel::Warn, "security.allowlist_path is DEPRECATED") == 1);
+    CHECK(log.count(LogLevel::Error) == 0);
+}
+
+TEST_CASE("parseServerConfig: the deprecated ban paths warn only when actually set", "[server_config][security]") {
+    // An empty value is not a deprecation to complain about -- the default config ships both keys
+    // empty, so warning on them would put two warnings in front of every operator who never used
+    // the files at all.
+    MockLogger log;
+    auto cfg = parseServerConfig("[security]\nbanlist_path = \"\"\nallowlist_path = \"\"\n", &log);
+    CHECK(cfg.security.banlistPath.empty());
+    CHECK(log.count(LogLevel::Warn, "DEPRECATED") == 0);
+
+    MockLogger shipped;
+    parseServerConfig(defaultServerConfigToml(), &shipped);
+    CHECK(shipped.count(LogLevel::Warn, "DEPRECATED") == 0);
 }
 
 TEST_CASE("parseServerConfig: security defaults when [security] absent", "[server_config][security]") {

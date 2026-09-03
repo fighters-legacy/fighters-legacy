@@ -15,6 +15,16 @@ namespace fl {
 // Returns a string displayed in the console output (empty = no output).
 using CommandHandler = std::function<std::string(std::span<std::string_view> args)>;
 
+// A handler that also sees WHO ran it (#535). Additive on purpose: the ~43 existing registrations
+// keep the plain shape, and only the handful of commands whose OUTPUT is a durable record of an
+// operator action -- a ban row's created_by -- take this one. Without it the persisted ban that
+// replaced banlist.txt would carry nobody's name, which is most of the reason the flat file could
+// not stay.
+//
+// D37 (#948) is what generalizes this: the registry will grow an any/faction capability pair and
+// resolve the issuer's scope before the handler. This is the same direction, one command at a time.
+using IssuerCommandHandler = std::function<std::string(std::span<std::string_view> args, const CommandIssuer& issuer)>;
+
 // Registry for console commands. Commands are registered once at init;
 // the registry is read-only (const dispatch) during the game loop.
 class CommandRegistry {
@@ -24,6 +34,9 @@ class CommandRegistry {
     // is a public command any issuer may run. The plain dispatch(line) ignores `required` entirely
     // (implicit Admin — stdin console / RCON / --admin-token).
     void registerCommand(std::string name, std::string helpText, CapabilityMask required, CommandHandler handler);
+
+    // The same, for a handler that needs the issuer (see IssuerCommandHandler).
+    void registerCommand(std::string name, std::string helpText, CapabilityMask required, IssuerCommandHandler handler);
 
     // Convenience overload: unannotated commands default to Admin-only (kAdminCaps), preserving the
     // pre-#946 all-or-nothing semantics for any command not yet given an explicit capability.
@@ -71,7 +84,10 @@ class CommandRegistry {
         std::string name;
         std::string help;
         CapabilityMask required{kAdminCaps};
+        // Exactly one of these is set. Two members rather than a variant because the call site is a
+        // single `if`, and because a handler that ignores the issuer should not have to name it.
         CommandHandler handler;
+        IssuerCommandHandler issuerHandler;
     };
 
     std::vector<Entry> m_entries;

@@ -90,15 +90,31 @@ struct ServerCommandContext {
         bool requireConfirm{true};      // require --force flag to schedule/trigger shutdown
     } shutdown;
 
-    // Ban/allowlist file persistence. Null paths = no file configured.
+    // Ban/allowlist persistence, backed by the store since #535.
+    //
+    // The seam used to be `saveBanlist(theWholeSet)` — a full rewrite of banlist.txt on every ban.
+    // That shape cannot express what a row now carries (who issued it, why, when it lapses), and a
+    // whole-set rewrite against a SQL table would have to diff to recover the individual change. So
+    // it is per-rule now: interfaces are free to change during primary development, and this one was
+    // the reason three columns #534 added would otherwise have stayed empty forever.
     struct BanPersistence {
-        std::string* banlistPath{nullptr};
-        std::string* allowlistPath{nullptr};
-        // saveBanlist is called from the sim thread (via enqueueSimCallback);
-        // loadBanlist/loadAllowlist are called on the main thread.
-        std::function<void(const std::unordered_set<std::string>&)> saveBanlist;
-        std::function<std::unordered_set<std::string>()> loadBanlist;
+        // ⚠ addBan/removeBan may be called from the SIM THREAD — `ban <peerId>` only learns the
+        // address inside a sim callback — and the store forbids sim-thread access, so fl-server's
+        // implementations post through GameLoop::enqueueMainCallback (#534's hop).
+        //
+        // `issuer` is the admin the permission-checked dispatch resolved. It lands in created_by,
+        // which is the point: a ban a year old with nobody's name on it cannot be reviewed.
+        std::function<void(const std::string& ip, const std::string& issuer)> addBan;
+        std::function<void(const std::string& ip)> removeBan;
+
+        // Read the ACTIVE rules back out. Called on a command/main thread, never the sim thread.
+        // Null when there is no store to read.
+        std::function<std::unordered_set<std::string>()> loadBans;
         std::function<std::unordered_set<std::string>()> loadAllowlist;
+
+        // True when persistence is off, so the ban commands can say that a ban will not outlive the
+        // process rather than implying it was recorded.
+        bool ephemeral{true};
     } bans;
 
     // RCON channel hooks. All null when RCON is not configured.

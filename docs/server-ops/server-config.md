@@ -1490,9 +1490,22 @@ cannot. Only the reply is suppressed.
 |---|---|
 | string | `""` (disabled) |
 
-Path to the persistent ban list file. One normalized IP address per line; lines beginning
-with `#` are treated as comments. When configured, the `ban` and `unban` admin commands
-automatically overwrite this file. Empty = in-memory only (bans lost on restart).
+> **Deprecated (#535): import-only.** Bans live in the
+> [persistence store](#persistence--the-durable-store-533). This file is read **once** — the first
+> time the server starts with a store that has not yet imported it — and is **never written again**.
+> The file is left on disk; it is simply no longer consulted. Setting this key logs a deprecation
+> warning at startup.
+
+Path to a legacy ban list file. One normalized IP address per line; lines beginning with `#` are
+comments. Leave it empty unless you are upgrading a server that already has one: on the next start
+its entries become ban rules in the store, attributed to `import`, and management moves to the
+`ban` / `unban` admin commands.
+
+Once imported, the store wins on every subsequent load. That is deliberate — editing the file
+afterwards would otherwise silently undo every ban and unban made since the upgrade.
+
+With `[persistence] enabled = false` there is no store to import into, and the file keeps its old
+behaviour: read at startup, in-memory only, bans lost on restart.
 
 ### `allowlist_path`
 
@@ -1500,8 +1513,10 @@ automatically overwrite this file. Empty = in-memory only (bans lost on restart)
 |---|---|
 | string | `""` (disabled) |
 
-Path to an allowlist file (same format as `banlist_path`). When non-empty, only IP addresses
-listed in this file may connect. The ban list still takes precedence over the allowlist —
+> **Deprecated (#535): import-only**, on exactly the same terms as `banlist_path` above.
+
+Path to an allowlist file (same format as `banlist_path`). When non-empty, only IP addresses in
+the resulting allow rules may connect. The ban list still takes precedence over the allowlist —
 a banned IP is rejected even if it appears in the allowlist. Empty = all IPs permitted.
 
 ### `incoming_bandwidth_bps` / `outgoing_bandwidth_bps`
@@ -2040,7 +2055,7 @@ for any authenticated caller.
 | `events` | `[after_seq] [max]` | The match event stream as JSON — kills (with attribution and weapon class), spawns, damage transitions, joins/leaves, chat, admin commands and alert-level changes (#600). With no `after_seq` it returns the recent tail; with one it returns everything newer, plus `next_seq` to pass next time and `gap: true` if records you had not read were already dropped |
 | `peers` | — | List connected peers (peer ID, address, entity index/generation, one-way delay in ticks/ms, input queue buffer fill/max, adaptive snapshot send rate `rate=NN Hz`, ENet packet loss `loss=N.N%`) |
 | `kick` | `<peerId\|IP>` | Disconnect a peer by numeric ID, or all peers from an IP address |
-| `ban` | `<peerId\|IP>` | Add IP to the ban list and kick matching peers; saves to `banlist_path` if configured |
+| `ban` | `<peerId\|IP>` | Ban an IP, kick matching peers, and record the rule in the persistence store with the issuing admin's name |
 | `unban` | `<IP>` | Remove an IP from the ban list; saves to `banlist_path` if configured |
 | `admin_unlock` | `<IP>` | Clear the auth lockout for an IP on every registered admin channel immediately; reports which channels actually held one, or that none did (idempotent) |
 | `admin_auth_status` | — | Show per-IP lockout state for every registered admin channel — active lockouts and pending failure counts; a trusted local surface (`stdin`, `mission`) reports that it has no per-IP authentication rather than an empty section |
@@ -2056,8 +2071,8 @@ for any authenticated caller.
 | `seats` | `<entityIdx>` | Show a crewed aircraft's seat roster and occupancy (#974): per seat the role, occupancy (`human peer=N` / `bot` / `empty`), and the Fly-seat marker. Reports an error for a single-seat / unknown entity |
 | `set_seat` | `<entityIdx> <seat> <peerId\|bot\|empty>` | Force a **non-fly** seat's occupancy (#974): bind a human peer, resume the authored bot, or silence the seat. The Fly seat is not settable (use `set_role` / respawn). Queued to the sim tick |
 | `reload_config` | — | Re-read `server.toml`, apply every hot-reloadable key, and name the restart-only keys whose values changed (with both values; credentials as `<set>`/`<unset>`). The per-key reload matrix is above — it is generated-equivalent, checked against `ConfigReload.cpp` by `docs_drift.py` |
-| `reload_banlist` | — | Re-read `security.banlist_path` from disk and apply immediately |
-| `reload_allowlist` | — | Re-read `security.allowlist_path` from disk and apply immediately |
+| `reload_banlist` | — | Re-apply active ban rules from the persistence store (useful when another server sharing a PostgreSQL store, or an operator with `psql`, changed them) |
+| `reload_allowlist` | — | Re-apply active allowlist rules from the persistence store |
 | `trace_start` | `[dir]` | Start recording each peer's accepted `MsgClientInput` to per-peer FLIT traces (`[trace] input_trace_dir` if `dir` omitted, else `traces/`); replay with `bot_swarm --pattern trace:<file>` |
 | `trace_stop` | — | Stop input tracing and close all open trace files |
 | `pause` | — | Pause the simulation — ticks stop advancing; network connections remain active. In single-player the game client sends this automatically when the pause menu is opened. |

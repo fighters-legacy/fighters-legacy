@@ -447,6 +447,13 @@ if(TARGET platform-enet)
     target_include_directories(test_server_config PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     catch_discover_tests(test_server_config)
 
+    # Bans and the allowlist backed by the store, and the one-time file import (#535) -- Stage 1's
+    # acceptance clause. Links the server library: the resolution lives beside ServerRuntime.
+    add_executable(test_access_rules test_access_rules.cpp)
+    target_link_libraries(test_access_rules PRIVATE Catch2::Catch2WithMain fl-server-lib)
+    target_include_directories(test_access_rules PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    catch_discover_tests(test_access_rules)
+
     # Campaign save precedence: store first, file second, one-time import (#534). Links the server
     # library because the resolution lives beside ServerRuntime, not in the store.
     add_executable(test_campaign_save test_campaign_save.cpp)

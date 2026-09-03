@@ -317,43 +317,42 @@ TEST_CASE("AdminConsole: quit with null quitFlag returns error", "[admin_console
 // reload_banlist
 // ---------------------------------------------------------------------------
 
-TEST_CASE("AdminConsole: reload_banlist with null banlistPath returns not available", "[admin_console][security]") {
-    auto reg = makeRegistry(); // banlistPath == nullptr
+// Since #535 these read the STORE, not security.banlist_path: the file was deprecated to
+// import-only. "Not available" now means there is no store to read, which is what a server with
+// [persistence] enabled = false has.
+TEST_CASE("AdminConsole: reload_banlist without a store returns not available", "[admin_console][security]") {
+    auto reg = makeRegistry(); // loadBans == nullptr
     std::string out = reg.dispatch("reload_banlist", systemIssuer());
     CHECK(out.find("not available") != std::string::npos);
 }
 
-TEST_CASE("AdminConsole: reload_banlist with empty banlistPath returns not available", "[admin_console][security]") {
+TEST_CASE("AdminConsole: reload_banlist applies what the store returns", "[admin_console][security]") {
     ServerCommandContext ctx;
-    std::string emptyPath;
-    ctx.bans.banlistPath = &emptyPath; // non-null but empty
+    bool asked = false;
+    ctx.bans.loadBans = [&asked]() -> std::unordered_set<std::string> {
+        asked = true;
+        return {"203.0.113.1", "203.0.113.2"};
+    };
     auto reg = makeRegistry(ctx);
     std::string out = reg.dispatch("reload_banlist", systemIssuer());
+    // No broadcaster/gameLoop in this fixture, so it stops before applying -- what is pinned here is
+    // that the command no longer depends on a configured FILE to be available.
     CHECK(out.find("not available") != std::string::npos);
+    CHECK_FALSE(asked);
 }
 
 // ---------------------------------------------------------------------------
 // reload_allowlist
 // ---------------------------------------------------------------------------
 
-TEST_CASE("AdminConsole: reload_allowlist with null allowlistPath returns not available", "[admin_console][security]") {
+TEST_CASE("AdminConsole: reload_allowlist without a store returns not available", "[admin_console][security]") {
     auto reg = makeRegistry();
     std::string out = reg.dispatch("reload_allowlist", systemIssuer());
     CHECK(out.find("not available") != std::string::npos);
 }
 
-TEST_CASE("AdminConsole: reload_allowlist with empty allowlistPath returns not available",
-          "[admin_console][security]") {
-    ServerCommandContext ctx;
-    std::string emptyPath;
-    ctx.bans.allowlistPath = &emptyPath;
-    auto reg = makeRegistry(ctx);
-    std::string out = reg.dispatch("reload_allowlist", systemIssuer());
-    CHECK(out.find("not available") != std::string::npos);
-}
-
 // ---------------------------------------------------------------------------
-// ban / unban — null saveBanlist does not crash
+// ban / unban — a null store seam does not crash
 // ---------------------------------------------------------------------------
 
 TEST_CASE("AdminConsole: ban with null broadcaster returns not available", "[admin_console][security]") {

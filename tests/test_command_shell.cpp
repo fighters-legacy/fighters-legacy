@@ -219,3 +219,76 @@ TEST_CASE("CommandShell drainSince is thread-safe under concurrent print", "[she
     // Just verify no crash and count is non-negative
     CHECK(drainCount.load() >= 0);
 }
+
+// ---------------------------------------------------------------------------
+// The issuer-aware handler overload (#535)
+// ---------------------------------------------------------------------------
+//
+// Added so a command whose OUTPUT is a durable record of an operator action -- a ban row's
+// created_by -- can name who ran it. The plain handler shape stays for the ~43 registrations that
+// do not care. What must hold is that the issuer arrives intact and that the capability gate is
+// still applied first: a handler that sees the issuer must not be a handler that skipped the check.
+
+TEST_CASE("CommandRegistry: an issuer-aware handler receives the dispatching issuer", "[registry][issuer]") {
+    fl::CommandRegistry reg;
+    uint32_t sawPeer = 0;
+    fl::CapabilityMask sawCaps = 0;
+    reg.registerCommand("whoami", "whoami", 0,
+                        [&](std::span<std::string_view>, const fl::CommandIssuer& issuer) -> std::string {
+                            sawPeer = issuer.peerId;
+                            sawCaps = issuer.caps;
+                            return "ok";
+                        });
+
+    fl::CommandIssuer peer;
+    peer.peerId = 42;
+    peer.caps = fl::kAdminCaps;
+    CHECK(reg.dispatch("whoami", peer) == "ok");
+    CHECK(sawPeer == 42u);
+    CHECK(sawCaps == fl::kAdminCaps);
+
+    // The system issuer is distinguishable from a peer, which is the whole distinction the audit
+    // trail records: "console" versus a specific player.
+    CHECK(reg.dispatch("whoami", fl::systemIssuer()) == "ok");
+    CHECK(sawPeer == fl::kIssuerNoPeer);
+}
+
+TEST_CASE("CommandRegistry: an issuer-aware handler is still capability-gated", "[registry][issuer]") {
+    // The failure worth guarding: a new handler shape that reached the body before the permission
+    // check would be a privilege bypass introduced by writing the more convenient overload -- which
+    // is exactly the mistake #1079 removed the issuer-less dispatch() to prevent.
+    fl::CommandRegistry reg;
+    bool ran = false;
+    reg.registerCommand("privileged", "privileged", fl::capBit(fl::Capability::KickBan),
+                        [&](std::span<std::string_view>, const fl::CommandIssuer&) -> std::string {
+                            ran = true;
+                            return "ran";
+                        });
+
+    fl::CommandIssuer unprivileged;
+    unprivileged.peerId = 7;
+    unprivileged.caps = 0;
+    const std::string out = reg.dispatch("privileged", unprivileged);
+    CHECK_FALSE(ran);
+    CHECK(out.find("requires") != std::string::npos);
+
+    // And it does run for an issuer who holds the capability.
+    fl::CommandIssuer allowed;
+    allowed.peerId = 8;
+    allowed.caps = fl::capBit(fl::Capability::KickBan);
+    CHECK(reg.dispatch("privileged", allowed) == "ran");
+    CHECK(ran);
+}
+
+TEST_CASE("CommandRegistry: the two handler shapes coexist in one registry", "[registry][issuer]") {
+    fl::CommandRegistry reg;
+    reg.registerCommand("plain", "plain", 0, [](std::span<std::string_view>) -> std::string { return "plain"; });
+    reg.registerCommand("aware", "aware", 0,
+                        [](std::span<std::string_view>, const fl::CommandIssuer&) -> std::string { return "aware"; });
+
+    CHECK(reg.dispatch("plain", fl::systemIssuer()) == "plain");
+    CHECK(reg.dispatch("aware", fl::systemIssuer()) == "aware");
+    // Both appear in help: an operator should not be able to tell which shape a command uses.
+    CHECK(reg.helpText().find("plain") != std::string::npos);
+    CHECK(reg.helpText().find("aware") != std::string::npos);
+}
