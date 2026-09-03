@@ -162,6 +162,9 @@ static const char* kDefaultToml =
     "connect_rate_limit_count = 5\n"
     "connect_rate_limit_window_s = 10\n"
     "packet_flood_multiplier = 3\n"
+    "# DEPRECATED (#535): bans live in the persistence store. These are IMPORT-ONLY -- read once into\n"
+    "# the store when it holds no rules, then ignored. Leave empty unless you are upgrading a server\n"
+    "# that has an existing banlist.txt. Manage bans with the ban/unban admin commands.\n"
     "banlist_path = \"\"\n"
     "allowlist_path = \"\"\n"
     "incoming_bandwidth_bps = 0\n"
@@ -801,10 +804,25 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log, bool* par
         clampInt(tbl, "security", "connect_rate_limit_count", 1, 100000, cfg.security.connectRateLimitCount, log);
         clampInt(tbl, "security", "connect_rate_limit_window_s", 1, 3600, cfg.security.connectRateLimitWindowS, log);
         clampInt(tbl, "security", "packet_flood_multiplier", 1, 100, cfg.security.packetFloodMultiplier, log);
-        if (auto v = tbl["security"]["banlist_path"].value<std::string>())
+        // DEPRECATED to import-only (#535). The store is the record; these are read exactly once,
+        // when it holds no rules of that kind, and never written again. Warned at parse time rather
+        // than at first ban, because an operator who edits banlist.txt expecting it to take effect
+        // should be told when they start the server, not discover it when a ban does not stick.
+        if (auto v = tbl["security"]["banlist_path"].value<std::string>()) {
             cfg.security.banlistPath = std::move(*v);
-        if (auto v = tbl["security"]["allowlist_path"].value<std::string>())
+            if (log && !cfg.security.banlistPath.empty())
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "security.banlist_path is DEPRECATED and is now import-only: it is read once into the "
+                         "persistence store and never written. Manage bans with ban/unban; the file is ignored "
+                         "after the import");
+        }
+        if (auto v = tbl["security"]["allowlist_path"].value<std::string>()) {
             cfg.security.allowlistPath = std::move(*v);
+            if (log && !cfg.security.allowlistPath.empty())
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "security.allowlist_path is DEPRECATED and is now import-only: it is read once into the "
+                         "persistence store and never written");
+        }
         if (auto v = tomlInt(tbl["security"]["incoming_bandwidth_bps"])) {
             if (*v < 0) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,

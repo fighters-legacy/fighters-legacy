@@ -18,6 +18,7 @@
 //
 // See docs/server-ops/server-config.md for the full operator configuration reference.
 // Lobby registration ships (#143); the reference lobby service is #999.
+#include "AccessRules.h"
 #include "CampaignSave.h"
 #include "GameModeSource.h"
 #include "HttpAdminServer.h"
@@ -202,6 +203,16 @@ static void applyCliAndEnvOverrides(fl::ServerConfig& cfg, int argc, char** argv
 namespace fs = std::filesystem;
 
 namespace fl {
+namespace {
+
+// Unix seconds, for the audit timestamps and expiry evaluation on access rules (#535). One helper so
+// every rule this process writes agrees with every rule it reads about what "now" was.
+std::int64_t nowUnixSeconds() {
+    using namespace std::chrono;
+    return duration_cast<seconds>(system_clock::now().time_since_epoch()).count();
+}
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // ServerRuntime::Impl — every owned object, in TEARDOWN ORDER
@@ -2320,21 +2331,31 @@ bool ServerRuntime::Impl::initMission() {
         std::snprintf(buf, sizeof(buf), "input tracing enabled -> %s", cfg.trace.inputTraceDir.c_str());
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
     }
-    if (!cfg.security.banlistPath.empty()) {
-        auto banned = fl::loadIpListFile(cfg.security.banlistPath, log);
-        char buf[128];
-        std::snprintf(buf, sizeof(buf), "banlist: loaded %zu IPs from %s", banned.size(),
-                      cfg.security.banlistPath.c_str());
-        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
-        broadcaster.setBannedAddresses(std::move(banned));
-    }
-    if (!cfg.security.allowlistPath.empty()) {
-        auto allowed = fl::loadIpListFile(cfg.security.allowlistPath, log);
-        char buf[128];
-        std::snprintf(buf, sizeof(buf), "allowlist: loaded %zu IPs from %s", allowed.size(),
-                      cfg.security.allowlistPath.c_str());
-        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
-        broadcaster.setAllowedAddresses(std::move(allowed));
+    // Bans and the allowlist come from the store, importing the deprecated files once (#535). The
+    // files stay readable input exactly once in a deployment's life; after that the store is the
+    // record and a stale file must not win. See AccessRules.h.
+    {
+        const std::int64_t now = nowUnixSeconds();
+        auto bans = fl::loadBanRules({m_store.get(), cfg.security.banlistPath}, now, log);
+        if (!bans.ips.empty() || bans.fromStore) {
+            char buf[160];
+            std::snprintf(buf, sizeof(buf), "banlist: %zu banned IP(s) in force (from %s)", bans.ips.size(),
+                          bans.importedFile ? "an imported file"
+                          : bans.fromStore  ? "the store"
+                                            : "a file");
+            log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+            broadcaster.setBannedAddresses(std::move(bans.ips));
+        }
+        auto allow = fl::loadAllowRules({m_store.get(), cfg.security.allowlistPath}, now, log);
+        if (!allow.ips.empty()) {
+            char buf[160];
+            std::snprintf(buf, sizeof(buf), "allowlist: %zu allowed IP(s) in force (from %s)", allow.ips.size(),
+                          allow.importedFile ? "an imported file"
+                          : allow.fromStore  ? "the store"
+                                             : "a file");
+            log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+            broadcaster.setAllowedAddresses(std::move(allow.ips));
+        }
     }
     net->setEventHandler(&broadcaster);
     return true;
@@ -2801,13 +2822,28 @@ bool ServerRuntime::Impl::initSystems() {
             fmCache->clear();
             broadcaster.reloadFlightModels();
         };
-        c.bans.banlistPath = cfg.security.banlistPath.empty() ? nullptr : &cfg.security.banlistPath;
-        c.bans.allowlistPath = cfg.security.allowlistPath.empty() ? nullptr : &cfg.security.allowlistPath;
-        c.bans.saveBanlist = [&](const std::unordered_set<std::string>& b) {
-            fl::saveIpListFile(cfg.security.banlistPath, b, log);
+        // Bans live in the store now (#535). Two of these four run on the SIM thread, so they post
+        // through the #534 hop rather than touching the store from there.
+        c.bans.ephemeral = !(m_store && m_store->health().open);
+        c.bans.addBan = [this](const std::string& ip, const std::string& issuer) {
+            if (!m_gameLoop)
+                return;
+            m_gameLoop->enqueueMainCallback(
+                [this, ip, issuer]() { fl::recordBan(m_store.get(), ip, issuer, /*reason=*/"", nowUnixSeconds()); });
         };
-        c.bans.loadBanlist = [&]() { return fl::loadIpListFile(cfg.security.banlistPath, log); };
-        c.bans.loadAllowlist = [&]() { return fl::loadIpListFile(cfg.security.allowlistPath, log); };
+        c.bans.removeBan = [this](const std::string& ip) {
+            if (!m_gameLoop)
+                return;
+            m_gameLoop->enqueueMainCallback([this, ip]() { fl::removeBan(m_store.get(), ip); });
+        };
+        // Reads, on the command thread. Both re-evaluate expiry against the clock, so a rule that
+        // lapsed since startup is not re-applied by a reload.
+        c.bans.loadBans = [this]() {
+            return fl::loadBanRules({m_store.get(), /*importPath=*/""}, nowUnixSeconds(), m_log).ips;
+        };
+        c.bans.loadAllowlist = [this]() {
+            return fl::loadAllowRules({m_store.get(), /*importPath=*/""}, nowUnixSeconds(), m_log).ips;
+        };
         c.shutdown.warningIntervalS = static_cast<uint32_t>(cfg.shutdown.warningIntervalS);
         c.shutdown.minDelayS = static_cast<uint32_t>(cfg.shutdown.minDelayS);
         c.shutdown.requireConfirm = cfg.shutdown.requireConfirm;

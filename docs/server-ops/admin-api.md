@@ -132,7 +132,9 @@ curl -X POST http://127.0.0.1:8080/ban \
 
 `/kick` takes `{"peer": <id>}`; `/ban` and `/unban` take `{"ip": "<address>"}`. Addresses are
 normalised server-side (IPv6 brackets and `::ffff:` prefixes are stripped), so pass whatever
-`/peers` reported. When `security.banlist_path` is configured, bans persist to it.
+`/peers` reported. Bans are recorded in the [persistence store](server-config.md#persistence--the-durable-store-533)
+with the issuing admin's name, and survive a restart; with `[persistence] enabled = false` a ban lasts only
+for the life of the process and the command says so.
 
 A malformed body gets **400** with the expected shape in the error message.
 

@@ -9,7 +9,12 @@ namespace fl {
 
 void CommandRegistry::registerCommand(std::string name, std::string helpText, CapabilityMask required,
                                       CommandHandler handler) {
-    m_entries.push_back({std::move(name), std::move(helpText), required, std::move(handler)});
+    m_entries.push_back({std::move(name), std::move(helpText), required, std::move(handler), nullptr});
+}
+
+void CommandRegistry::registerCommand(std::string name, std::string helpText, CapabilityMask required,
+                                      IssuerCommandHandler handler) {
+    m_entries.push_back({std::move(name), std::move(helpText), required, nullptr, std::move(handler)});
 }
 
 void CommandRegistry::registerCommand(std::string name, std::string helpText, CommandHandler handler) {
@@ -32,6 +37,8 @@ std::string CommandRegistry::dispatch(std::string_view line, const CommandIssuer
             const std::string_view missing = firstMissingCapabilityName(issuer.caps, e.required);
             return std::string(kPermissionDeniedPrefix) + ": " + std::string(cmd) + " requires " + std::string(missing);
         }
+        if (e.issuerHandler)
+            return e.issuerHandler(args, issuer);
         return e.handler(args);
     }
 
