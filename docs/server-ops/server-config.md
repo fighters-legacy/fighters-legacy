@@ -1752,6 +1752,9 @@ documented in [docs/developer/load-testing.md](../developer/load-testing.md#auth
 
 ## [persistence] — The durable store (#533)
 
+> Keys and ranges are below. For the operator narrative — upgrading an existing server, choosing a
+> backend, durability, migrations, backups and troubleshooting — see **[Persistence](persistence.md)**.
+
 Bans, accounts and match statistics that survive a restart, in a SQL database the server owns.
 Before this existed the server's only durable state was a flat `banlist.txt` rewritten in full on
 every ban, and a campaign save file.

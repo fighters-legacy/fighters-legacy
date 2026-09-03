@@ -72,6 +72,7 @@ nav:
   - Server Ops:
       - server-ops/index.md
       - Server configuration: server-ops/server-config.md
+      - Persistence: server-ops/persistence.md
       - Admin API: server-ops/admin-api.md
       - Agent surface (MCP): server-ops/mcp-agent-surface.md
       - Metrics: server-ops/metrics.md
