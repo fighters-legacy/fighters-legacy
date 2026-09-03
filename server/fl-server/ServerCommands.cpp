@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ServerCommands.h"
 
+#include "AccessRules.h"
+
 #include "ConfigReload.h"
 
 #include "AiControllerBuild.h" // the one AI-controller construction ladder (#1236)
@@ -46,22 +48,6 @@ namespace fl {
 // thread, long after dispatch() returned its ack, so their real result has to reach the operator
 // through stdout and (when RCON is configured) the shell ring that RconServer drains. Every existing
 // mutating command open-codes exactly this; new ones should not add another copy.
-// Who to write into a durable record of an operator action (#535). The audit vocabulary is
-// fl-server's, not the engine's, so it lives here rather than beside CommandIssuer.
-//
-// What is knowable today is the FRONTEND and the peer: an authenticated RCON client, the operator at
-// stdin and the single-player admin token all arrive as the system issuer with no peer, while an
-// in-game admin arrives as their peer id. That is coarse, and it is still the difference between a
-// ban row that can be reviewed and the flat banlist.txt's nothing. When identity lands (#537/#538) a
-// verified account id becomes the better answer and this is where it goes.
-static std::string describeIssuer(const CommandIssuer& issuer) {
-    if (issuer.peerId == kIssuerNoPeer)
-        return "console";
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "peer %u", issuer.peerId);
-    return buf;
-}
-
 static void printAdmin(const ServerCommandContext& ctx, std::string_view line) {
     std::printf("%.*s\n", static_cast<int>(line.size()), line.data());
     if (ctx.rcon.shell)
@@ -795,7 +781,7 @@ void registerServerCommands(CommandRegistry& registry, std::shared_ptr<const Ser
                 return "ban: not available";
             // Captured now, on the dispatch thread, because the sim callback
             // below outlives this frame and the issuer does not.
-            const std::string who = describeIssuer(issuer);
+            const std::string who = describeBanIssuer(issuer);
             std::string arg(args[0]);
             if (fl::isAllDigits(arg)) {
                 uint32_t peerId = 0;

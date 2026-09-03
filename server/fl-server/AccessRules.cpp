@@ -125,6 +125,14 @@ void recordBan(persist::IPersistence* store, const std::string& ip, const std::s
     store->bans().add(rule);
 }
 
+std::string describeBanIssuer(const CommandIssuer& issuer) {
+    if (issuer.peerId == kIssuerNoPeer)
+        return "console";
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "peer %u", issuer.peerId);
+    return buf;
+}
+
 void removeBan(persist::IPersistence* store, const std::string& ip) {
     if (!storeUsable(store))
         return;

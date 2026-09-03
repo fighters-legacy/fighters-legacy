@@ -297,3 +297,49 @@ TEST_CASE("bans: no store at all behaves like persistence disabled", "[access_ru
     CHECK(loaded.ips.count("203.0.113.60") == 1u);
     CHECK_FALSE(loaded.fromStore);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Attribution
+// ---------------------------------------------------------------------------------------------
+
+TEST_CASE("describeBanIssuer: the system issuer and a peer are distinguishable", "[access_rules]") {
+    // This string IS a ban's attribution. If it collapsed every issuer to one value the audit trail
+    // would be no better than the flat banlist.txt it replaced, and nothing else would notice.
+    CHECK(describeBanIssuer(systemIssuer()) == "console");
+
+    CommandIssuer peer;
+    peer.peerId = 42;
+    CHECK(describeBanIssuer(peer) == "peer 42");
+
+    CommandIssuer other;
+    other.peerId = 7;
+    CHECK(describeBanIssuer(other) == "peer 7");
+    CHECK(describeBanIssuer(other) != describeBanIssuer(peer));
+}
+
+TEST_CASE("bans: the issuer reaches the stored rule", "[access_rules]") {
+    // End to end for the attribution: what describeBanIssuer produced is what a reviewer reads out
+    // of the store a year later.
+    TempDir dir;
+    NullLogger log;
+    auto store = openStore(dir, &log);
+
+    CommandIssuer peer;
+    peer.peerId = 9;
+    recordBan(store.get(), "203.0.113.70", describeBanIssuer(peer), "teamkilling", kNow);
+    recordBan(store.get(), "203.0.113.71", describeBanIssuer(systemIssuer()), "", kNow);
+    REQUIRE(store->flush().ok);
+
+    const auto rules = store->bans().all(persist::RuleEffect::Deny);
+    REQUIRE(rules.size() == 2u);
+    std::string byPeer;
+    std::string byConsole;
+    for (const auto& r : rules) {
+        if (r.subject == "203.0.113.70")
+            byPeer = r.createdBy;
+        if (r.subject == "203.0.113.71")
+            byConsole = r.createdBy;
+    }
+    CHECK(byPeer == "peer 9");
+    CHECK(byConsole == "console");
+}

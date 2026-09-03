@@ -17,6 +17,8 @@
 // list, deleting it buys nothing, and a downgrade should still find it — which is exactly why the
 // store must win on every subsequent load. See loadAccessRules.
 
+#include <net/Capability.h>
+
 #include <cstdint>
 #include <string>
 #include <unordered_set>
@@ -62,5 +64,18 @@ void recordBan(persist::IPersistence* store, const std::string& ip, const std::s
 
 // Remove a ban. Removing one that was never there is not an error.
 void removeBan(persist::IPersistence* store, const std::string& ip);
+
+// Who to write into a rule's created_by, from the issuer the permission-checked dispatch resolved.
+//
+// It lives here, beside the thing that writes the audit trail, rather than as a private helper in
+// ServerCommands.cpp — the string it produces is the whole of a ban's attribution, so if it produced
+// garbage the audit trail would be garbage, and that deserves a test.
+//
+// What is knowable today is coarse: an authenticated RCON client, the operator at stdin and the
+// single-player admin token all arrive as the system issuer with no peer, while an in-game admin
+// arrives as their peer id. It is still the difference between a ban that can be reviewed and the
+// flat banlist.txt's nothing. When identity lands (#537/#538) a verified account id is the better
+// answer and this is where it goes.
+[[nodiscard]] std::string describeBanIssuer(const CommandIssuer& issuer);
 
 } // namespace fl
