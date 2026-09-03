@@ -10,6 +10,7 @@ first run and listens on port 4778. Everything below is about changing that defa
 | [Server configuration](server-config.md) | Every `server.toml` key with its type, default and range; every CLI flag; the full admin command reference; and which keys hot-reload |
 | [Admin API](admin-api.md) | The REST endpoints, bearer-token auth, the unauthenticated health probe, and what each route returns |
 | [Agent surface (MCP)](mcp-agent-surface.md) | Exposing the server to AI agents over MCP, the autonomy tiers, and the security model that bounds them |
+| [Persistence](persistence.md) | The durable store behind bans, accounts, statistics and campaign saves: upgrading an existing server, the two backends, durability, migrations and backups |
 | [Metrics](metrics.md) | The `--metrics-json` report: every field, what a bad value looks like, and what to do about it |
 | [Lobby API](lobby-api.md) | Registering with a lobby so players can find the server |
 
