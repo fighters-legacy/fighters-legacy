@@ -17,6 +17,8 @@
 #include "PostgresStore.h"
 #include "SqliteStore.h"
 
+#include <crypto/Uuid.h>
+
 #include "mock_log.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -189,6 +191,51 @@ TEST_CASE("a store migrated by a newer build is refused, not opened", "[persiste
     CHECK(target.executed.size() == 1);
 }
 
+TEST_CASE("a store already at v1 applies only migration 2, and never re-runs 1", "[persistence]") {
+    // The upgrade every server that ran #1394 performs. Re-running migration 1 would be harmless
+    // today (CREATE TABLE IF NOT EXISTS) but the bookkeeping INSERT would collide, and a migration
+    // set that only works because its steps happen to be idempotent is one edit away from not.
+    RecordingLogger log;
+    struct AtV1Target final : IMigrationTarget {
+        std::vector<std::string> executed;
+        int version{1};
+
+        Result exec(const char* sql) override {
+            executed.emplace_back(sql);
+            return Result::success();
+        }
+        Result currentVersion(int& out) override {
+            out = version;
+            return Result::success();
+        }
+        Result recordVersion(int v, const char*) override {
+            version = v;
+            return Result::success();
+        }
+        [[nodiscard]] const char* versionTableDdl() const override {
+            return "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER);";
+        }
+        [[nodiscard]] const char* beginExclusiveSql() const override {
+            return "BEGIN IMMEDIATE;";
+        }
+    } target;
+
+    REQUIRE(runMigrations(target, sqliteMigrations(), &log).ok);
+    CHECK(target.version == kSchemaHeadVersion);
+
+    bool ranBlobs = false;
+    bool ranV2 = false;
+    for (const auto& sql : target.executed) {
+        if (sql.find("CREATE TABLE IF NOT EXISTS blobs") != std::string::npos)
+            ranBlobs = true;
+        if (sql.find("CREATE TABLE IF NOT EXISTS accounts") != std::string::npos)
+            ranV2 = true;
+    }
+    CHECK_FALSE(ranBlobs); // migration 1 is already applied; it must not run again
+    CHECK(ranV2);
+    CHECK(log.count(LogLevel::Info, "applied migration 2") == 1);
+}
+
 TEST_CASE("a failing migration rolls back and reports which step failed", "[persistence]") {
     RecordingLogger log;
     struct FailingTarget final : IMigrationTarget {
@@ -343,6 +390,367 @@ TEST_CASE("remove() deletes, and removing an absent key is not an error", "[pers
 
     CHECK_FALSE(store->blobs().exists("k"));
     CHECK(store->health().writesFailed == 0);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Accounts (#534, D25)
+// ---------------------------------------------------------------------------------------------
+
+TEST_CASE("accounts: create mints a UUIDv7 and the row survives a flush", "[persistence]") {
+    TempDir dir;
+    NullLogger log;
+    std::string error;
+    auto store = openAt(dir.db(), &log, error);
+    REQUIRE(store);
+
+    const AccountRecord rec = store->accounts().create("local", "Maverick");
+    // The id is known WITHOUT a round trip -- that is what an opaque generated key buys, and it is
+    // why create() can return a record while the row is still queued.
+    CHECK(isCanonicalUuid(rec.id));
+    CHECK(rec.id[14] == '7');
+    CHECK(rec.realm == "local");
+    CHECK(rec.displayName == "Maverick");
+    CHECK(rec.createdAt > 0);
+    CHECK(rec.lastSeenAt == rec.createdAt);
+
+    REQUIRE(store->flush().ok);
+    auto found = store->accounts().get(rec.id);
+    REQUIRE(found.has_value());
+    CHECK(found->id == rec.id);
+    CHECK(found->realm == "local");
+    CHECK(found->displayName == "Maverick");
+    CHECK(found->createdAt == rec.createdAt);
+}
+
+TEST_CASE("accounts: an absent id is nullopt, not an error", "[persistence]") {
+    TempDir dir;
+    NullLogger log;
+    std::string error;
+    auto store = openAt(dir.db(), &log, error);
+    REQUIRE(store);
+    CHECK_FALSE(store->accounts().get("no-such-account").has_value());
+    CHECK(store->health().writesFailed == 0);
+}
+
+TEST_CASE("accounts: findByName answers the most recently seen holder", "[persistence]") {
+    // Display names are deliberately NOT unique -- that is identity policy (#537/#539), not a table
+    // decision. Until it is decided, the repository has to answer something defensible and say so.
+    TempDir dir;
+    NullLogger log;
+    std::string error;
+    auto store = openAt(dir.db(), &log, error);
+    REQUIRE(store);
+
+    const AccountRecord older = store->accounts().create("local", "Viper");
+    const AccountRecord newer = store->accounts().create("local", "Viper");
+    REQUIRE(store->flush().ok);
+    store->accounts().touchLastSeen(newer.id, older.createdAt + 5000);
+    REQUIRE(store->flush().ok);
+
+    auto found = store->accounts().findByName("local", "Viper");
+    REQUIRE(found.has_value());
+    CHECK(found->id == newer.id);
+
+    // The realm is part of the question, not decoration: the same name in another realm is another
+    // account, which is the whole point of carrying the column from day one.
+    CHECK_FALSE(store->accounts().findByName("official", "Viper").has_value());
+}
+
+TEST_CASE("accounts: removing an account removes its stats too", "[persistence]") {
+    // ON DELETE CASCADE, which is only enforced because PRAGMA foreign_keys is ON -- a schema that
+    // declares a foreign key and does not enforce it is the worst of both.
+    TempDir dir;
+    NullLogger log;
+    std::string error;
+    auto store = openAt(dir.db(), &log, error);
+    REQUIRE(store);
+
+    const AccountRecord rec = store->accounts().create("local", "Ghost");
+    PilotLogbook lb;
+    lb.missionsFlown = 7;
+    store->stats().put(rec.id, lb);
+    REQUIRE(store->flush().ok);
+    REQUIRE(store->stats().get(rec.id).has_value());
+
+    store->accounts().remove(rec.id);
+    REQUIRE(store->flush().ok);
+    CHECK_FALSE(store->accounts().get(rec.id).has_value());
+    CHECK_FALSE(store->stats().get(rec.id).has_value());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Access rules -- bans and allowlist (#534, D25 / #535)
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+AccessRule ipDeny(std::string subject, std::int64_t createdAt, std::int64_t expiresAt = 0) {
+    AccessRule r;
+    r.effect = RuleEffect::Deny;
+    r.subjectKind = SubjectKind::Ip;
+    r.subject = std::move(subject);
+    r.reason = "testing";
+    r.createdBy = "admin";
+    r.createdAt = createdAt;
+    r.expiresAt = expiresAt;
+    return r;
+}
+
+} // namespace
+
+TEST_CASE("access rules: an IP ban round-trips with its whole audit trail", "[persistence]") {
+    TempDir dir;
+    NullLogger log;
+    std::string error;
+    auto store = openAt(dir.db(), &log, error);
+    REQUIRE(store);
+
+    store->bans().add(ipDeny("203.0.113.7", 1000));
+    REQUIRE(store->flush().ok);
+
+    const auto rules = store->bans().active(RuleEffect::Deny, 2000);
+    REQUIRE(rules.size() == 1u);
+    CHECK(rules[0].effect == RuleEffect::Deny);
+    CHECK(rules[0].subjectKind == SubjectKind::Ip);
+    CHECK(rules[0].subject == "203.0.113.7");
+    // The columns that make a ban explicable a year later, which the flat banlist.txt never had.
+    CHECK(rules[0].reason == "testing");
+    CHECK(rules[0].createdBy == "admin");
+    CHECK(rules[0].createdAt == 1000);
+    CHECK(rules[0].expiresAt == 0);
+}
+
+TEST_CASE("access rules: expiry is filtered by the repository, not by its callers", "[persistence]") {
+    // This is what makes temporary bans real for #535 at no cost to it: the seam it swaps onto asks
+    // for "the bans" and gets the ones still in force. `now` is a parameter so the behaviour is
+    // testable without waiting.
+    TempDir dir;
+    NullLogger log;
+    std::string error;
+    auto store = openAt(dir.db(), &log, error);
+    REQUIRE(store);
+
+    store->bans().add(ipDeny("198.51.100.1", 1000));                   // permanent
+    store->bans().add(ipDeny("198.51.100.2", 1000, /*expires*/ 1500)); // lapses
+    store->bans().add(ipDeny("198.51.100.3", 1000, /*expires*/ 9000)); // still running
+    REQUIRE(store->flush().ok);
+
+    const auto atNoon = store->bans().active(RuleEffect::Deny, 2000);
+    REQUIRE(atNoon.size() == 2u);
+    CHECK(atNoon[0].subject == "198.51.100.1");
+    CHECK(atNoon[1].subject == "198.51.100.3");
+
+    // Before anything lapsed, all three are in force.
+    CHECK(store->bans().active(RuleEffect::Deny, 1200).size() == 3u);
+    // After the last one lapses, only the permanent row remains.
+    CHECK(store->bans().active(RuleEffect::Deny, 100000).size() == 1u);
+
+    // all() is the admin view: a lapsed ban is information, not noise.
+    CHECK(store->bans().all(RuleEffect::Deny).size() == 3u);
+}
+
+TEST_CASE("access rules: deny and allow are separate lists in one table", "[persistence]") {
+    // The deviation from D25's literal "ban table" wording (John, 2026-09-02): an allowlist row is
+    // the same shape as a ban row, and #535 has to migrate both files. What must NOT happen is the
+    // two leaking into each other.
+    TempDir dir;
+    NullLogger log;
+    std::string error;
+    auto store = openAt(dir.db(), &log, error);
+    REQUIRE(store);
+
+    store->bans().add(ipDeny("203.0.113.9", 1000));
+    AccessRule allow = ipDeny("203.0.113.9", 1000);
+    allow.effect = RuleEffect::Allow;
+    store->bans().add(allow);
+    REQUIRE(store->flush().ok);
+
+    // Same subject, both effects, both stored: the primary key is (effect, kind, subject).
+    CHECK(store->bans().active(RuleEffect::Deny, 2000).size() == 1u);
+    CHECK(store->bans().active(RuleEffect::Allow, 2000).size() == 1u);
+
+    store->bans().remove(RuleEffect::Deny, SubjectKind::Ip, "203.0.113.9");
+    REQUIRE(store->flush().ok);
+    CHECK(store->bans().active(RuleEffect::Deny, 2000).empty());
+    CHECK(store->bans().active(RuleEffect::Allow, 2000).size() == 1u); // untouched
+}
+
+TEST_CASE("access rules: account-keyed rules coexist with IP ones", "[persistence]") {
+    // D25's "dual-keyed from day one", so #535 is written once and identity (Stage 2) adds rows
+    // rather than a column.
+    TempDir dir;
+    NullLogger log;
+    std::string error;
+    auto store = openAt(dir.db(), &log, error);
+    REQUIRE(store);
+
+    AccessRule byAccount;
+    byAccount.effect = RuleEffect::Deny;
+    byAccount.subjectKind = SubjectKind::Account;
+    byAccount.subject = "0189d6e4-7c1a-7000-8000-0123456789ab";
+    byAccount.realm = "local";
+    byAccount.createdAt = 1000;
+    store->bans().add(byAccount);
+    store->bans().add(ipDeny("203.0.113.4", 1000));
+    REQUIRE(store->flush().ok);
+
+    const auto rules = store->bans().active(RuleEffect::Deny, 2000);
+    REQUIRE(rules.size() == 2u);
+    int accountRules = 0;
+    int ipRules = 0;
+    for (const auto& r : rules) {
+        if (r.subjectKind == SubjectKind::Account) {
+            ++accountRules;
+            CHECK(r.realm == "local");
+        } else {
+            ++ipRules;
+            CHECK(r.realm.empty()); // "" for IP rows -- no NULLs in this schema
+        }
+    }
+    CHECK(accountRules == 1);
+    CHECK(ipRules == 1);
+}
+
+TEST_CASE("access rules: re-adding a subject replaces the rule rather than duplicating it", "[persistence]") {
+    TempDir dir;
+    NullLogger log;
+    std::string error;
+    auto store = openAt(dir.db(), &log, error);
+    REQUIRE(store);
+
+    store->bans().add(ipDeny("203.0.113.5", 1000, 1500));
+    AccessRule extended = ipDeny("203.0.113.5", 2000, 9000);
+    extended.reason = "extended";
+    store->bans().add(extended);
+    REQUIRE(store->flush().ok);
+
+    const auto rules = store->bans().all(RuleEffect::Deny);
+    REQUIRE(rules.size() == 1u);
+    CHECK(rules[0].reason == "extended");
+    CHECK(rules[0].expiresAt == 9000);
+    // Removing something that was never there is not an error.
+    store->bans().remove(RuleEffect::Deny, SubjectKind::Ip, "203.0.113.99");
+    REQUIRE(store->flush().ok);
+    CHECK(store->health().writesFailed == 0);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Stats (#534, D25; the live producer is #929)
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+// A logbook with EVERY field set to a distinct, recognisable value. Distinct matters: a column
+// mapping that crosses two fields of equal value would round-trip perfectly and still be wrong.
+PilotLogbook distinctLogbook() {
+    PilotLogbook lb;
+    for (int i = 0; i < PilotLogbook::kKillClassCount; ++i)
+        lb.killsByClass[i] = static_cast<std::uint32_t>(100 + i);
+    for (int w = 0; w < static_cast<int>(WeaponLogClass::Count); ++w) {
+        lb.weapons[w].shots = static_cast<std::uint32_t>(200 + w * 3);
+        lb.weapons[w].hits = static_cast<std::uint32_t>(201 + w * 3);
+        lb.weapons[w].kills = static_cast<std::uint32_t>(202 + w * 3);
+    }
+    lb.missionsFlown = 41;
+    lb.missionsFailed = 42;
+    lb.ejections = 43;
+    lb.bestLandingScore = 44.5f;
+    lb.lastLandingScore = 45.25f;
+    return lb;
+}
+
+void checkLogbooksMatch(const PilotLogbook& got, const PilotLogbook& want) {
+    for (int i = 0; i < PilotLogbook::kKillClassCount; ++i) {
+        INFO("kill class " << i);
+        CHECK(got.killsByClass[i] == want.killsByClass[i]);
+    }
+    for (int w = 0; w < static_cast<int>(WeaponLogClass::Count); ++w) {
+        INFO("weapon class " << w);
+        CHECK(got.weapons[w].shots == want.weapons[w].shots);
+        CHECK(got.weapons[w].hits == want.weapons[w].hits);
+        CHECK(got.weapons[w].kills == want.weapons[w].kills);
+    }
+    CHECK(got.missionsFlown == want.missionsFlown);
+    CHECK(got.missionsFailed == want.missionsFailed);
+    CHECK(got.ejections == want.ejections);
+    CHECK(got.bestLandingScore == want.bestLandingScore);
+    CHECK(got.lastLandingScore == want.lastLandingScore);
+}
+
+} // namespace
+
+TEST_CASE("stats: every field of the logbook survives a round trip", "[persistence]") {
+    // ⚑ THE DRIFT GUARD. account_stats is 25 hand-written value columns that must line up with the
+    // PilotLogbook field walk in two dialects. Nothing about a forgotten or transposed column fails
+    // to compile -- it silently writes a pilot's naval kills into their ground-attack total. This is
+    // the test that makes the taxonomy reuse D25 asks for actually safe to extend.
+    TempDir dir;
+    NullLogger log;
+    std::string error;
+    auto store = openAt(dir.db(), &log, error);
+    REQUIRE(store);
+
+    const AccountRecord rec = store->accounts().create("local", "Iceman");
+    const PilotLogbook want = distinctLogbook();
+    store->stats().put(rec.id, want);
+    REQUIRE(store->flush().ok);
+    CHECK(store->health().writesFailed == 0);
+
+    auto got = store->stats().get(rec.id);
+    REQUIRE(got.has_value());
+    checkLogbooksMatch(*got, want);
+
+    // And across a close/reopen, which is the acceptance clause in miniature.
+    store->close();
+    auto reopened = openAt(dir.db(), &log, error);
+    REQUIRE(reopened);
+    auto persisted = reopened->stats().get(rec.id);
+    REQUIRE(persisted.has_value());
+    checkLogbooksMatch(*persisted, want);
+}
+
+TEST_CASE("stats: no row is different from a row of zeroes", "[persistence]") {
+    // nullopt means "has not finished a match", not "finished one and did nothing". A leaderboard
+    // that cannot tell those apart shows every account that ever connected on zero kills.
+    TempDir dir;
+    NullLogger log;
+    std::string error;
+    auto store = openAt(dir.db(), &log, error);
+    REQUIRE(store);
+
+    const AccountRecord rec = store->accounts().create("local", "Rookie");
+    REQUIRE(store->flush().ok);
+    CHECK_FALSE(store->stats().get(rec.id).has_value());
+
+    store->stats().put(rec.id, PilotLogbook{});
+    REQUIRE(store->flush().ok);
+    auto zeroed = store->stats().get(rec.id);
+    REQUIRE(zeroed.has_value());
+    CHECK(zeroed->totalKills() == 0u);
+    CHECK(zeroed->missionsFlown == 0u);
+}
+
+TEST_CASE("stats: put replaces, it never accumulates", "[persistence]") {
+    // The caller owns aggregation. A repository that added to what was there would turn a retried
+    // or duplicated flush into a career no match produced.
+    TempDir dir;
+    NullLogger log;
+    std::string error;
+    auto store = openAt(dir.db(), &log, error);
+    REQUIRE(store);
+
+    const AccountRecord rec = store->accounts().create("local", "Hollywood");
+    PilotLogbook first;
+    first.missionsFlown = 10;
+    first.killsByClass[0] = 5;
+    store->stats().put(rec.id, first);
+    store->stats().put(rec.id, first); // the same flush arriving twice
+    REQUIRE(store->flush().ok);
+
+    auto got = store->stats().get(rec.id);
+    REQUIRE(got.has_value());
+    CHECK(got->missionsFlown == 10u); // not 20
+    CHECK(got->killsByClass[0] == 5u);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -718,6 +1126,43 @@ TEST_CASE("the postgres backend round-trips against a real server", "[persistenc
     store->blobs().remove(key + "/empty");
     REQUIRE(store->flush().ok);
     CHECK_FALSE(store->blobs().exists(key));
+
+    // The #534 repositories on the OTHER dialect. The stats round trip matters most here: the 25
+    // value columns are declared in two separate migration scripts and walked by two separate
+    // implementations, so a transposition that SQLite happens not to have is exactly the bug this
+    // leg exists to find.
+    const AccountRecord acct = store->accounts().create("local", "PgPilot-" + key);
+    CHECK(isCanonicalUuid(acct.id));
+    const PilotLogbook wantStats = distinctLogbook();
+    store->stats().put(acct.id, wantStats);
+    store->bans().add(ipDeny("203.0.113.77", 1000));
+    store->bans().add(ipDeny("203.0.113.78", 1000, /*expires*/ 1500));
+    REQUIRE(store->flush().ok);
+    CHECK(store->health().writesFailed == 0);
+
+    auto fetched = store->accounts().get(acct.id);
+    REQUIRE(fetched.has_value());
+    CHECK(fetched->displayName == acct.displayName);
+    CHECK(fetched->realm == "local");
+
+    auto pgStats = store->stats().get(acct.id);
+    REQUIRE(pgStats.has_value());
+    checkLogbooksMatch(*pgStats, wantStats);
+
+    // Expiry filtering is repository behaviour, so it has to hold on both backends.
+    CHECK(store->bans().active(RuleEffect::Deny, 2000).size() >= 1u);
+    bool sawExpired = false;
+    for (const auto& r : store->bans().active(RuleEffect::Deny, 2000))
+        if (r.subject == "203.0.113.78")
+            sawExpired = true;
+    CHECK_FALSE(sawExpired);
+
+    // Cascade, which needs the foreign key to be enforced and not merely declared.
+    store->accounts().remove(acct.id);
+    store->bans().remove(RuleEffect::Deny, SubjectKind::Ip, "203.0.113.77");
+    store->bans().remove(RuleEffect::Deny, SubjectKind::Ip, "203.0.113.78");
+    REQUIRE(store->flush().ok);
+    CHECK_FALSE(store->stats().get(acct.id).has_value());
 
     // Re-opening finds the schema already at head and applies nothing (the migration runner is
     // shared, but its per-backend bookkeeping SQL is not).

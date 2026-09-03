@@ -356,10 +356,12 @@ target_include_directories(engine-nav PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # No external deps — pure ISO C++20 stdlib (coefficients are compiled in).
 
 # Clean-room SHA-256 (FIPS 180-4) for content/pack hashing (#490) — NOT OpenSSL (GNS-gated) —
-# plus the one full-entropy random-token generator (#1233).
+# plus the one full-entropy random-token generator (#1233) and the one UUIDv7 mint (#534), which
+# persistence and identity (#537/#538) both draw account ids from.
 add_library(engine-crypto STATIC
     crypto/Sha256.cpp
     crypto/RandomToken.cpp
+    crypto/Uuid.cpp
 )
 target_include_directories(engine-crypto PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # No external deps — pure ISO C++20 stdlib.

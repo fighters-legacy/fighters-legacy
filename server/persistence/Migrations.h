@@ -84,6 +84,6 @@ class IMigrationTarget {
 
 // The version both sets must reach. A test asserts each set ends here, so a migration added to one
 // backend and forgotten on the other fails the build rather than the operator.
-inline constexpr int kSchemaHeadVersion = 1;
+inline constexpr int kSchemaHeadVersion = 2;
 
 } // namespace fl::persist

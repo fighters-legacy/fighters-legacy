@@ -1168,7 +1168,10 @@ sortie** the campaign engine selects — a story mission when one is armed at it
 generated dynamic sortie (a template with its `${...}` fills resolved into a concrete mission) — and,
 on the objective outcome, records it and advances the campaign (frontline/`ground_units` state,
 theater unlocks, next-story arming). The mutable campaign state is persisted to
-`cache/campaign_<name>.flsave`, so a restart with the same `--campaign` continues the persistent war
+the persistence store (#534), so a restart with the same `--campaign` continues the persistent war.
+A campaign saved before that store existed lives in `cache/campaign_<name>.flsave`; it is imported
+on the next start and the file is left in place. With `[persistence] enabled = false` the file
+remains the record
 from where it left off. Because the outcome flows through the ordinary objective evaluator, a campaign
 sortie is also drivable headlessly with `--mission-report` for automated testing. (The campaign
 engine is deterministic — a seeded weighted draw + pure state transitions — so a replay is identical;

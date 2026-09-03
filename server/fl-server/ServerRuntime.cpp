@@ -18,6 +18,7 @@
 //
 // See docs/server-ops/server-config.md for the full operator configuration reference.
 // Lobby registration ships (#143); the reference lobby service is #999.
+#include "CampaignSave.h"
 #include "GameModeSource.h"
 #include "HttpAdminServer.h"
 #include "IPersistence.h"
@@ -299,6 +300,9 @@ struct ServerRuntime::Impl {
     std::unique_ptr<fl::CampaignRunner> m_campaignRunner;
     std::string m_campaignMissionId;
     std::string m_campaignSavePath;
+    // The store key that supersedes it (#534). The path stays: it is the import source on upgrade,
+    // and the destination when persistence is disabled.
+    std::string m_campaignBlobKey;
     std::optional<std::string> m_campaignYaml;
     std::unique_ptr<fl::WorldStateBridge> m_worldStateBridge;
     std::unique_ptr<CommandShell> m_adminShell;
@@ -1459,6 +1463,7 @@ bool ServerRuntime::Impl::initMission() {
     [[maybe_unused]] auto& campaignMissionId = m_campaignMissionId;
     [[maybe_unused]] auto& campaignRunner = m_campaignRunner;
     [[maybe_unused]] auto& campaignSavePath = m_campaignSavePath;
+    [[maybe_unused]] auto& campaignBlobKey = m_campaignBlobKey;
     [[maybe_unused]] auto& campaignYaml = m_campaignYaml;
     [[maybe_unused]] auto& cfg = m_cfg;
     [[maybe_unused]] auto& entityManager = *m_entityManager;
@@ -1704,10 +1709,17 @@ bool ServerRuntime::Impl::initMission() {
                 campaignSavePath = "cache/campaign_" + sanitized + ".flsave";
                 campaignRunner =
                     std::make_unique<fl::CampaignRunner>(std::move(cp.campaign), seed, content, frontlineLoader);
-                if (std::ifstream in{campaignSavePath, std::ios::binary}) {
-                    std::string blob((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-                    if (campaignRunner->restore(blob))
-                        log->log(LogLevel::Info, __FILE__, __LINE__, "campaign: restored saved state");
+                // Store first, file second, with a one-time import of a war that predates the
+                // store. The precedence and the import live in CampaignSave so they are testable
+                // without running a campaign -- see that header.
+                campaignBlobKey = "campaign/" + sanitized;
+                const fl::CampaignSaveLoad loaded =
+                    fl::loadCampaignSave({m_store.get(), campaignBlobKey, campaignSavePath}, log);
+                if (!loaded.blob.empty() && campaignRunner->restore(loaded.blob)) {
+                    char rbuf[160];
+                    std::snprintf(rbuf, sizeof(rbuf), "campaign: restored saved state from %s",
+                                  loaded.fromStore ? "the store" : campaignSavePath.c_str());
+                    log->log(LogLevel::Info, __FILE__, __LINE__, rbuf);
                 }
                 campaignYaml = campaignRunner->nextMissionYaml(campaignMissionId);
                 if (campaignYaml) {
@@ -2036,8 +2048,8 @@ bool ServerRuntime::Impl::initMission() {
                             log->log(LogLevel::Info, __FILE__, __LINE__, m);
                         }
                     });
-                missionRuntime->setOnEnd([log, &broadcaster, &matchController, &campaignRunner, campaignMissionId,
-                                          campaignSavePath](const fl::MissionOutcome& o) {
+                missionRuntime->setOnEnd([this, log, &broadcaster, &matchController, &campaignRunner, campaignMissionId,
+                                          campaignSavePath, campaignBlobKey](const fl::MissionOutcome& o) {
                     const bool success = o.state == fl::MissionState::Complete;
                     // A mission-scripted victory also ends the match, so the server rotates instead of
                     // sitting idle after the objective completes (#523/#584).
@@ -2055,7 +2067,25 @@ bool ServerRuntime::Impl::initMission() {
                     // arming the next story mission) and persist state so a restart flies the next sortie.
                     if (campaignRunner) {
                         campaignRunner->recordOutcome(campaignMissionId, success);
-                        fl::writeConfigFile(campaignSavePath, campaignRunner->save(), *log);
+                        // ⚠ THIS RUNS ON THE SIM THREAD (MissionRuntime is an ISimUpdate), which is
+                        // why the store is not touched here. The blob is produced now, while the
+                        // runner is coherent, and the store call is posted to the main thread
+                        // (#534) — the persistence contract in IPersistence.h forbids the sim
+                        // thread from doing it, and this used to be a blocking file write.
+                        //
+                        // With persistence disabled the file remains the record, unchanged: turning
+                        // the store off must not cost an operator their campaign.
+                        std::string blob = campaignRunner->save();
+                        if (m_gameLoop) {
+                            m_gameLoop->enqueueMainCallback([this, log, key = campaignBlobKey, path = campaignSavePath,
+                                                             data = std::move(blob)]() mutable {
+                                fl::saveCampaignSave({m_store.get(), key, path}, data, log);
+                            });
+                        } else {
+                            // No loop to post through (a harness that never built one): the store is
+                            // off-limits from here, so the file is the honest destination.
+                            fl::writeConfigFile(campaignSavePath, blob, *log);
+                        }
                         std::string nextId;
                         const bool more = campaignRunner->nextMissionYaml(nextId).has_value();
                         char cm[176];
@@ -2842,6 +2872,10 @@ bool ServerRuntime::Impl::initSystems() {
             // `do:` actions enqueued last tick — the sim thread would drain these at the top of each
             // tick, but this loop drives ticks itself, so drain them here to keep the report faithful.
             gameLoop.drainSimCallbacks();
+            // And the other direction (#534). This loop IS the main thread as well as the sim one,
+            // so without this the campaign save the mission's end hook posts would sit queued
+            // forever -- in the very harness that verifies campaign persistence across two runs.
+            gameLoop.drainMainCallbacks();
             // Every registered system, in the loop's own order (#1078). Stepping the broadcaster alone
             // was enough while the mission runtime hung off setMissionTickHook inside it; it is not now,
             // and a report whose tick order differs from production's would not be worth generating.
@@ -2850,6 +2884,23 @@ bool ServerRuntime::Impl::initSystems() {
             if (missionRuntime->done())
                 break;
         }
+        // The LAST tick's posted work, which the in-loop drain above cannot reach: the mission's end
+        // hook fires inside stepOnce() and the loop breaks immediately after it (#534). A campaign
+        // run whose final sortie outcome was dropped here would report success and persist nothing,
+        // which is the one thing the two-run campaign harness exists to catch.
+        gameLoop.drainMainCallbacks();
+        // And make it durable before the report claims the run happened. This path returns early,
+        // so it never reaches mainLoop()'s teardown flush; a write still sitting in the writer queue
+        // would survive only by grace of the store's destructor.
+        if (m_store) {
+            if (const auto flushed = m_store->flush(); !flushed) {
+                char fbuf[512];
+                std::snprintf(fbuf, sizeof(fbuf), "persistence: a write failed during the mission report: %s",
+                              flushed.error.c_str());
+                log->log(LogLevel::Error, __FILE__, __LINE__, fbuf);
+            }
+        }
+
         const fl::MissionOutcome& oc = missionRuntime->outcome();
         fl::MissionReport rep;
         rep.missionName = loadedMissionName;
@@ -3372,6 +3423,10 @@ int ServerRuntime::Impl::mainLoop() {
         // nothing.
         aiProvider->service();
 
+        // Work the sim thread posted for us (#534) — today the campaign save, which must not touch
+        // the persistence store from the sim thread. Same unconditional reasoning as above.
+        gameLoop.drainMainCallbacks();
+
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
@@ -3406,6 +3461,11 @@ int ServerRuntime::Impl::mainLoop() {
     log->log(LogLevel::Info, __FILE__, __LINE__, "shutting down");
     net->disconnect();
     net->shutdown();
+
+    // Whatever the sim thread posted and the loop never got to (#534). After gameLoop.stop(), so no
+    // more can arrive, and before the store closes, so the last mission's campaign save is not
+    // discarded on the way out.
+    gameLoop.drainMainCallbacks();
 
     // The store last: everything above may still have been writing to it, and a write that is only
     // queued when the process exits is a write that did not happen. flush() reports the first error
