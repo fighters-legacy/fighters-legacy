@@ -242,7 +242,7 @@ Two presets stay **serial**, deliberately:
 
 Because each `TEST_CASE` is registered as its own ctest test, parallel runs execute them as **concurrent processes**. A test may therefore not assume it is the only process on the machine (#787):
 
-- **Never hardcode a port.** Bind an ephemeral port (`bind(addr, 0, n)`) and read it back with `ENetNetwork::boundPort()`, or ask the OS for a free one. Two tests once shared port 19009 and only "worked" because they never ran at once.
+- **Never hardcode a port.** Bind an ephemeral port (`bind(addr, 0, n)`) and read it back with `ENetNetwork::boundPort()`, or ask the OS for a free one (the `freeUdpPort()` idiom) — GNS refuses a zero port, so its tests do the latter and confirm with `GnsNetwork::boundPort()`. Two tests once shared port 19009 and only "worked" because they never ran at once.
 - **Never name a fixed temp path**, and note that a *per-process counter is not unique* — it restarts at 1 in every process. Use `fl::test::uniqueTempPath()` / `TempDirGuard` from `tests/temp_path.h`, which salt the name with a per-process token.
 - **Do not sleep a fixed interval and hope** a packet/file arrived. Poll to a deadline; a sleep that is too short on a loaded machine passes for the wrong reason.
 

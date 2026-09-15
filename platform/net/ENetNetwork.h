@@ -53,7 +53,8 @@ class ENetNetwork : public INetwork {
     // its own process (#787). Hardcoded test ports are a race waiting for a many-core box.
     //
     // Not on INetwork: this is a test/diagnostic affordance, and putting it on the interface would
-    // oblige every mock and the GNS backend to implement it for no gain.
+    // oblige every mock to implement it for no gain. GnsNetwork carries the same accessor (#1329),
+    // though GNS itself refuses a zero port — its tests ask the OS for a free one first.
     [[nodiscard]] uint16_t boundPort() const;
 
     // Set aggregate host bandwidth caps (bytes/s). Call once after bind().
