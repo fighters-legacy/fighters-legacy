@@ -3,6 +3,11 @@
 > **Frozen decision record.** This page records a decision as it was made and is not
 > maintained against current behaviour. For how the engine works today, see the
 > [Developer Guide](../index.md).
+>
+> **Follow-up decided 2026-08-28 (D39, #652):** the "`enet6` retained" clause below is permanent
+> — enet6 is **kept-with-scope** as the LAN / low-count backend, the `FL_ENABLE_GNS=OFF` lean build
+> and the PR-gate regression transport. See the
+> [decision record](../architecture.md#decision-records).
 
 Decision record for **[#506]** — the transport-selection spike of **Epic L** (network transport
 replacement, [#493]) in the 128+ multiplayer re-target. It evaluates candidate transports against

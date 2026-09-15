@@ -219,6 +219,19 @@ quantization is lossy, so a record that goes through the codec can never equal i
 space, but it must be exactly equal after quantization — and that comparison is also free of the
 float-ordering ambiguity that would make the gate flaky across workers and platforms.
 
+**Cross-platform bit-identity is NOT promised (#1298).** The quantized-domain hash removes
+float-ordering ambiguity *within* a platform; it does not make two platforms agree. x86-64 builds
+target the SSE2 baseline, which has no FMA, so `-ffp-contract` is moot there; ARM64 (Apple Silicon)
+has FMA unconditionally and contracts by default, and the sim path also calls ~65 libm
+transcendentals that IEEE 754 does not bit-specify — glibc, Apple's libm and the MSVC CRT differ in
+the last ulp. Measured on `fl::quatRotate`: 72.5 % of velocity components differ between an FMA and
+a non-FMA build, quantization absorbs almost all of it, and **0.141 % still land in a different wire
+bucket** — enough that a 64-entity match would see roughly one tick in four hash differently across
+platforms. The #644 gate never sees this because it records and replays in one process. A consumer
+that re-verifies a recording on other hardware — `fl-review` (#543, Stage 3 of #1366) — must therefore
+compare in the quantized domain with a tolerance, or require the same platform class as the
+recorder; a bit-exact cross-platform comparison would read a correct implementation as tampering.
+
 ---
 
 ## 7. Items left open by the spec, and how they were settled

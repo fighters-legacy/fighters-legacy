@@ -2,7 +2,8 @@
 
 Implementation notes for the **GameNetworkingSockets (GNS)** transport behind the `INetwork` HAL
 ([#507], Epic L). GNS is the encrypted, congestion-controlled UDP transport selected for the 128+
-multiplayer target; `enet6` is retained as the LAN / single-player / low-count backend. The
+multiplayer target; `enet6` is retained as the LAN / single-player / low-count backend — a
+**settled** retention as of 2026-08-28 (D39, [#652]: kept-with-scope, not a pending retirement). The
 selection rationale is in [transport-selection.md](decisions/transport-selection.md); this document covers the
 *implementation*.
 

@@ -108,7 +108,7 @@ by dependency, not by phase boundary:
 | A | Server simulation scalability (data-parallel job system, tick budget) | 3→4 |
 | B | Network bandwidth & snapshot scaling (quantization ✓ #515, 3D interest ✓ #402, priority/budget ✓ #516, acked baselines ✓ #517, selective-ack precision ✓ #566, congestion ✓ #518) | 3→4 |
 | I | Load-testing / bot-swarm harness + 128-client scale gate | 3→4 |
-| L | Network transport replacement — **GameNetworkingSockets landed behind `INetwork`** ([#507](https://github.com/fighters-legacy/fighters-legacy/issues/507)/#508/#509; selected [#506](https://github.com/fighters-legacy/fighters-legacy/issues/506)), enet6 retained as the LAN/low-count backend via `createNetwork()`. GNS-native 128-client scale validation ([#649](https://github.com/fighters-legacy/fighters-legacy/issues/649)) ✓ and Windows/macOS GNS CI legs ([#653](https://github.com/fighters-legacy/fighters-legacy/issues/653)) ✓ landed. Remaining: the enet6-retirement decision ([#652](https://github.com/fighters-legacy/fighters-legacy/issues/652), now Phase 5 — see Deferred Levers). | 3→4 (transport optimization) |
+| L | Network transport replacement — **GameNetworkingSockets landed behind `INetwork`** ([#507](https://github.com/fighters-legacy/fighters-legacy/issues/507)/#508/#509; selected [#506](https://github.com/fighters-legacy/fighters-legacy/issues/506)), enet6 retained as the LAN/low-count backend via `createNetwork()`. GNS-native 128-client scale validation ([#649](https://github.com/fighters-legacy/fighters-legacy/issues/649)) ✓ and Windows/macOS GNS CI legs ([#653](https://github.com/fighters-legacy/fighters-legacy/issues/653)) ✓ landed. The enet6-retirement question ([#652](https://github.com/fighters-legacy/fighters-legacy/issues/652)) was decided 2026-08-28: **kept-with-scope** (D39 — see Deferred Levers and the decision record). | 3→4 (transport optimization) |
 | E | Multiplayer gameplay framework (game modes, teams, scoring, reconnect, spectator) | 4 |
 | F | Combat sensors, datalink & EW (radar modes, IFF, shared track picture). Built on one shared sensor core ([#677](https://github.com/fighters-legacy/fighters-legacy/issues/677)) whose vocabulary is locked by the 2026-07-12 decision record — a single `SensorDef` schema and `Contact` track model serving avionics, AI detection ([#670](https://github.com/fighters-legacy/fighters-legacy/issues/670)) and missile seekers alike. | 4 |
 | J | Voice comms (positional + team; moved earlier from Phase 7) | 4/6 |
@@ -261,7 +261,7 @@ here, in a single registry, rather than as perpetually-open issues that would ro
 |---|---|---|---|
 | Reduced-rate ("LOD") physics for distant AI | [#575](https://github.com/fighters-legacy/fighters-legacy/issues/575) | Integrate-bound: `load_factor` at floor + rising `dropped_ticks` + `integrate_ms.mean > 0.5 × tick_ms.mean` on the reference env under product workload | [physics-lod-design.md](developer/decisions/physics-lod-design.md) |
 | Spatial sharding + pre-sharding ladder (shared snapshot encode, governor interest-radius lever #726) | [#572](https://github.com/fighters-legacy/fighters-legacy/issues/572) | Sustained `load_factor` at floor + rising `dropped_ticks` + serialize-dominant tick at max workers on the 8-core reference env (multi-machine is a Phase 5+ product decision) | [spatial-sharding-design.md](developer/decisions/spatial-sharding-design.md) + the 2026-07-10 [decision record](developer/architecture.md#decision-records) |
-| enet6 retirement (drop the LAN/low-count backend) | [#652](https://github.com/fighters-legacy/fighters-legacy/issues/652) | GNS parity across LAN/single-player/low-count + Windows/macOS GNS CI legs stable (Phase 5) | [transport-selection.md](developer/decisions/transport-selection.md) |
+| enet6 retirement (drop the LAN/low-count backend) — **DECIDED 2026-08-28: kept-with-scope (D39)**; lever disarmed | [#652](https://github.com/fighters-legacy/fighters-legacy/issues/652) | *(was: GNS parity across LAN/single-player/low-count + Windows/macOS GNS CI legs stable)* — the spike found the code had already decided: GNS is the internet default, enet6 stays as the `FL_ENABLE_GNS=OFF` lean path, the LAN default and the PR-gate transport. Re-arm only if maintaining two `INetwork` backends measurably slows a stage | [transport-selection.md](developer/decisions/transport-selection.md) + the 2026-08-28 [decision record](developer/architecture.md#decision-records) |
 
 Design-complete deferred levers are registered here, not as open issues; when a trigger fires,
 the lever's spike is re-opened into an implementation epic.
@@ -420,8 +420,11 @@ Phase 5 acceptance is the **live-services tier** that makes 128-player public/co
 operable, identifiable, and cheat-resistant. Engine-layer scaling seams (transport, job system,
 wire quantization, load harness) are validated earlier as Phase 3–4 gates.
 
-Phase 5 opens by authoring its **execution plan** — the #1036 pattern, filed as the milestone's
-first Task — so its ~70 open issues are staged there rather than here.
+Phase 5 opened by authoring its **execution plan** — the #1036 pattern, **filed 2026-08-28 as
+#1366** (decisions D24–D39; stages #1367 persistence → #1368 identity → #1369 anti-cheat → #1370
+observability → #1371 deployment, each shipping a `v0.4.x`; lanes #1372 AI and #1373 content
+alongside) — so its ~70 open issues are staged there rather than here. Execution began the day
+after the v0.4.0 gate closed.
 
 - Transport replacement (Epic L) holds the Epic I scale gate: 128 clients @ 60 Hz, sim tick
   ≤ 16.6 ms p99 on the reference instance, soak-stable for 2 h.
@@ -437,10 +440,17 @@ first Task — so its ~70 open issues are staged there rather than here.
   admin web interface performs kick/ban/config-reload against a running server.
 - Admin surfaces: the HTTP admin and MCP listener serves TLS natively, or refuses a non-loopback
   bind without it (#1097); RCON is dual-stack (#316).
-- Deployment artifacts: the official `fl-server` container image publishes to GHCR (#160),
-  `fl-server` ships in the release archives (#228), and a systemd unit is provided (#1096) —
-  moved forward from Phase 7 by the 2026-07-30 review so the hosting artifacts precede the
-  operator that consumes them.
+- Deployment artifacts: the official `fl-server` container image publishes to GHCR (#160) and a
+  systemd unit is provided (#1096) — moved forward from Phase 7 by the 2026-07-30 review so the
+  hosting artifacts precede the operator that consumes them. `fl-server` **already ships in every
+  release archive** (#814 made `cmake --install --component runtime` the packaging authority and
+  `release.yml` consumes it); #228's remainder was the co-location note in the distribution docs,
+  and its image-vs-archive cross-check rides #160's acceptance.
+- Roles are **non-gating**: the moderator tier (#947) is delivered by the capability vocabulary
+  and grant ladder that already shipped, and the registry cap-pair change (#948, D37) lands in
+  Stage 2 regardless because later stages build on it — neither holds `v0.5.0`. (The #944 epic
+  had promised a gate bullet here that was never written; #1366 declares them non-gating
+  instead.)
 - Operator: the k8s/OpenShift operator deploys a fleet, autoscales on population, and drains a
   live match gracefully on scale-down (reusing the shutdown countdown). Installs on OCP via OLM.
 - All three CI platforms green; new Go repos green on their own CI lanes.

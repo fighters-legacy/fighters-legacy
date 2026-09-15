@@ -29,8 +29,11 @@ Download the archive for your platform from
 have write access. There is nothing to install and nothing that touches the system outside that
 directory.
 
-The archive contains both the game client and `fl-server`. **Do not delete the server** — the game
-starts it in the background for single-player, so removing it breaks offline play.
+The archive contains both the game client and `fl-server`. **Do not delete or move the server** —
+the game starts it in the background for single-player, and it looks for it **next to its own
+executable**, never on `PATH`. The two binaries must stay in the same directory; removing or
+relocating `fl-server` breaks offline play. (A dedicated server can of course run anywhere on its
+own — see [Server Operations](../server-ops/index.md).)
 
 To build from source instead, see the [Development guide](../developer/development.md).
 
