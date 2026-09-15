@@ -1288,14 +1288,37 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
     m_admission.onConnect(peerId);
 }
 
+EntityId WorldBroadcaster::spawnParticipantEntity(uint32_t participantId, const char* typeId, const EntityTransform& t,
+                                                  uint16_t faction, SpawnClass cls) {
+    // The Spawned handler reads this while spawn() is on the stack; nothing else may see it armed.
+    m_spawnAttribution = SpawnAttribution{participantId, faction};
+    // ownerId is the peer id for a human (EntityState's "0 = server/AI" convention, which is why
+    // attribution never reads it back — see peerIdForEntity); a bot's participant id is not a peer.
+    const EntityId id = m_entityManager.spawn(typeId, t, isBotParticipant(participantId) ? 0u : participantId, cls);
+    m_spawnAttribution = SpawnAttribution{};
+    if (!id.valid())
+        return id;
+
+    if (isBotParticipant(participantId))
+        m_botEntities[id.index] = participantId;
+    else
+        m_peerEntities[participantId] = id;
+
+    // Stamp the faction. Without a non-zero faction the entity is NEUTRAL, and fl::areFactionsHostile
+    // gives a neutral entity no enemies at all — so nothing would be hostile to it, a wingman's
+    // engage/cover conditions could never fire, and boresight designation could never designate.
+    // Faction 0 leaves the entity neutral.
+    if (EntityState* s = m_entityManager.get(id); s && faction != 0)
+        s->factionIndex = faction;
+    return id;
+}
+
 EntityId WorldBroadcaster::spawnPilotEntity(uint32_t peerId, const std::string& entityType, const EntityTransform& t,
                                             uint16_t faction, float initialAirspeed) {
     // SpawnClass::Player (#1049): a pilot's airframe draws on the reserve the entity soft cap holds
     // back, so a world filled by projectiles or a runaway script cannot lock humans out of it.
-    EntityId id = m_entityManager.spawn(entityType.c_str(), t, peerId, SpawnClass::Player);
+    EntityId id = spawnParticipantEntity(peerId, entityType.c_str(), t, faction, SpawnClass::Player);
     if (id.valid()) {
-        m_peerEntities[peerId] = id;
-
         // Becoming a live pilot ends any spectate (#403): clear the admin spectate target and drop any
         // buffered delayed snapshots (stale wreck-view frames from the dead window). Covers respawn,
         // observer→pilot role change, and the first spawn (a no-op there).
@@ -1304,14 +1327,6 @@ EntityId WorldBroadcaster::spawnPilotEntity(uint32_t peerId, const std::string& 
             pit->second.snapshotDelayQueue.clear();
             pit->second.snapshotDelayBytes = 0;
             pit->second.snapshotDelayEvicted = false;
-        }
-
-        // Stamp the player's faction. Without a non-zero faction the player is NEUTRAL, and
-        // fl::areFactionsHostile gives a neutral entity no enemies at all — so nothing would be
-        // hostile to them, their wingman's engage/cover conditions could never fire, and boresight
-        // designation could never designate. Faction 0 leaves the entity neutral.
-        if (EntityState* s = m_entityManager.get(id); s && faction != 0) {
-            s->factionIndex = faction;
         }
 
         // Resolve the entity type's flight model (server-authoritative; never sent on the wire).
@@ -2651,11 +2666,20 @@ void WorldBroadcaster::onEntityEvent(const EntityEvent& event) {
     case EntityEventType::Spawned: {
         // The event that did not exist before #600: without it the log could say what died but never
         // where anything came from.
+        //
+        // This fires INSIDE EntityManager::spawn(), so participantForEntity() cannot resolve the
+        // subject yet (the binding needs the id spawn() has not returned) and the entity's faction is
+        // still the def's default. A participant spawn declares both through m_spawnAttribution
+        // (spawnParticipantEntity) — the only way the record, and every subscriber that sees it on
+        // append, ever carries them. Anything else is honestly unattributed.
         MatchEvent me;
         me.type = MatchEventType::Spawn;
         me.subjectIdx = event.subject.index;
         me.subjectGen = static_cast<uint16_t>(event.subject.generation);
-        if (const EntityState* s = m_entityManager.get(event.subject))
+        me.actor = m_spawnAttribution.participant;
+        if (m_spawnAttribution.participant != MatchEvent::kNoParticipant)
+            me.factionIndex = m_spawnAttribution.faction;
+        else if (const EntityState* s = m_entityManager.get(event.subject))
             me.factionIndex = s->factionIndex;
         m_matchEventLog.append(std::move(me));
         break;
@@ -4373,6 +4397,8 @@ void WorldBroadcaster::readmitPilots() {
 // ── AI bot participants (#87) ─────────────────────────────────────────────────
 void WorldBroadcaster::registerBotParticipant(uint32_t participantId, EntityId entity, const std::string& callsign,
                                               uint16_t faction) {
+    // Idempotent with spawnParticipantEntity, which already bound the entity it spawned; a bot entity
+    // spawned some other way (a test fixture) is bound here.
     if (entity.valid())
         m_botEntities[entity.index] = participantId;
     RosterRec rec;
