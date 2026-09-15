@@ -1430,6 +1430,16 @@ fl_add_test(test_lobby_list_parser LIBS engine-net platform-hal)
 
 fl_add_test(test_lobby_registration LIBS engine-net platform-hal INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
 
+# The libcurl IHttpClient backend against a loopback httplib server (#1399). Only where platform-http
+# found libcurl (the same find_package platform/http/CMakeLists.txt runs; the Linux CI leg installs
+# libcurl4-openssl-dev). Everything else HTTP in this tree is driven through mock_http.h, which is
+# exactly why this one is real: the defect it pins was invisible on a mock. Not SERIAL — its timing
+# assertions are bounded generously and it binds an OS-picked port.
+find_package(CURL QUIET)
+if(CURL_FOUND)
+    fl_add_test(test_curl_http_client LIBS platform-http httplib::httplib INCLUDES ${CMAKE_CURRENT_SOURCE_DIR})
+endif()
+
 fl_add_test(test_server_browser_model LIBS engine-net platform-hal)
 catch_discover_tests(test_content_downloader)
 
