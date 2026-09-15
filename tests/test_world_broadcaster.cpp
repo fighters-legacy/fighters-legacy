@@ -42,6 +42,67 @@ TEST_CASE("WorldBroadcaster: onTick advances the match event log's tick (#1076)"
     CHECK(it->tick == 41u);
 }
 
+// The Spawn record (#600) fires from INSIDE EntityManager::spawn(), before the caller can bind the
+// entity to a participant or stamp its faction -- so until spawnParticipantEntity every spawn in every
+// .flrep was anonymous and neutral, and #923's ACMI export had no pilot to name. These pin that a human
+// pilot's spawn and a bot's spawn both carry actor + faction on the record itself (a subscriber sees
+// it on append; there is no later amend), and that a spawn nobody claims stays honestly unattributed.
+TEST_CASE("WorldBroadcaster: a participant's Spawn record names the participant and faction (#923)",
+          "[world_broadcaster]") {
+    NullLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    em.addEventHandler(&broadcaster); // as ServerRuntime wires it: the broadcaster IS the Spawned handler
+
+    const auto spawnsOf = [&] {
+        std::vector<fl::MatchEvent> out;
+        for (const fl::MatchEvent& e : broadcaster.matchEventLog().since(0))
+            if (e.type == fl::MatchEventType::Spawn)
+                out.push_back(e);
+        return out;
+    };
+
+    // A human pilot admitted through the handshake: the record carries the peer id.
+    connectPilotPeer(broadcaster, net, 7u);
+    {
+        const auto spawns = spawnsOf();
+        REQUIRE(spawns.size() == 1u);
+        CHECK(spawns[0].actor == 7u);
+        CHECK(broadcaster.participantForEntity(fl::EntityId{spawns[0].subjectIdx, spawns[0].subjectGen}) == 7u);
+    }
+
+    // A bot through the roster's path: the bot id and its faction, and the entity is bound for scoring
+    // in the same call -- registerBotParticipant afterwards is idempotent.
+    const uint32_t botPid = fl::kBotParticipantBase + 3u;
+    const fl::EntityId botEnt = broadcaster.spawnParticipantEntity(botPid, "builtin:debug-entity",
+                                                                   fl::EntityTransform{}, 2u, fl::SpawnClass::World);
+    REQUIRE(botEnt.valid());
+    CHECK(broadcaster.participantForEntity(botEnt) == botPid);
+    REQUIRE(em.get(botEnt) != nullptr);
+    CHECK(em.get(botEnt)->factionIndex == 2u);
+    broadcaster.registerBotParticipant(botPid, botEnt, "Viper-1", 2u);
+    CHECK(broadcaster.participantForEntity(botEnt) == botPid);
+    {
+        const auto spawns = spawnsOf();
+        REQUIRE(spawns.size() == 2u);
+        CHECK(spawns[1].actor == botPid);
+        CHECK(spawns[1].factionIndex == 2u);
+        CHECK(spawns[1].subjectIdx == botEnt.index);
+    }
+
+    // A spawn nobody claims (a projectile, a mission entity) records no actor -- and the attribution
+    // armed for the bot did not leak onto it.
+    REQUIRE(em.spawn("builtin:debug-entity", fl::EntityTransform{}).valid());
+    {
+        const auto spawns = spawnsOf();
+        REQUIRE(spawns.size() == 3u);
+        CHECK(spawns[2].actor == fl::MatchEvent::kNoParticipant);
+    }
+}
+
 TEST_CASE("WorldBroadcaster: snapshot fuel percent is a percent of THIS airframe's capacity (#1345)",
           "[world_broadcaster]") {
     // The old telemetry divided by a hardcoded 4000 kg (FlightState's ancient default), so the

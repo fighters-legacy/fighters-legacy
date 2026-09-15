@@ -30,7 +30,9 @@ class BotRoster final : public ISimUpdate {
     // spawn(faction) -> spawns a bot aircraft on `faction` (entity + AI controller + faction stamp) and
     // returns its EntityId (invalid on failure). kill(eid) tears the entity down. alive(eid) is true
     // while the entity is live.
-    using SpawnFn = std::function<EntityId(uint16_t faction)>;
+    // Spawns a bot airframe for `participantId` on `faction` — via WorldBroadcaster::spawnParticipantEntity,
+    // so the Spawn record names the bot (#923). The id is minted BEFORE the spawn for that reason.
+    using SpawnFn = std::function<EntityId(uint32_t participantId, uint16_t faction)>;
     using KillFn = std::function<void(EntityId)>;
     using AliveFn = std::function<bool(EntityId)>;
 
@@ -119,10 +121,10 @@ class BotRoster final : public ISimUpdate {
 
     void spawnOne(int /*humans*/) {
         const uint16_t faction = m_cfg.balanceTeams ? pickBotTeam() : m_teams.front();
-        const EntityId eid = m_spawn(faction);
+        const uint32_t pid = kBotParticipantBase + m_nextN++;
+        const EntityId eid = m_spawn(pid, faction);
         if (!eid.valid())
             return;
-        const uint32_t pid = kBotParticipantBase + m_nextN++;
         m_b.registerBotParticipant(pid, eid, generateCallsign(), faction);
         m_bots.push_back(Bot{pid, eid, faction});
     }

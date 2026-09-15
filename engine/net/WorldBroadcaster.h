@@ -62,9 +62,10 @@ class FlightIntegrator; // full definition in WorldBroadcaster.cpp
 class JobSystem;        // engine/job/JobSystem.h — full definition in WorldBroadcaster.cpp
 struct EntityDef;       // engine/entity/EntityDef.h — the PayloadResolver's argument
 struct EntityState;
-struct EntityTransform;   // engine/entity/EntityState.h — spawnPilotEntity's transform
-struct FlightModelData;   // engine/flight/FlightModelData.h
-struct IEntityController; // engine/entity/IEntityController.h
+struct EntityTransform;          // engine/entity/EntityState.h — spawnPilotEntity's transform
+enum class SpawnClass : uint8_t; // engine/entity/EntityPool.h — which cap headroom a spawn draws on
+struct FlightModelData;          // engine/flight/FlightModelData.h
+struct IEntityController;        // engine/entity/IEntityController.h
 class EntityTypeRegistry;
 class WeatherController;
 class FactionRegistry;            // engine/world/FactionRegistry.h — coalition-aware hostility (#632)
@@ -1192,6 +1193,20 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Force an immediate respawn of a participant (the admin `respawn` command). Sim-thread.
     void respawnParticipant(uint32_t participantId);
 
+    // ── Participant spawns (#600 / #923) — sim-thread only ───────────────────
+    // Spawn an entity ON BEHALF OF a participant, so the Spawn record it raises names that participant
+    // and `faction` (0 = leave neutral; otherwise stamped on the entity). A bare EntityManager::spawn
+    // cannot: the Spawned event fires synchronously inside spawn(), before the caller has the id to
+    // bind to m_peerEntities / m_botEntities or a state to stamp the faction on — so the record, and
+    // every subscriber that saw it (the .flrep recorder included), would carry no actor and faction 0
+    // forever. Every recording made before this had exactly that: anonymous spawns, and an ACMI export
+    // with no pilot names. Both spawnPilotEntity and the bot roster's spawn path come through here.
+    EntityId spawnParticipantEntity(uint32_t participantId, const char* typeId, const EntityTransform& t,
+                                    uint16_t faction, SpawnClass cls);
+    // The scoreboard participant id owning an entity: a human's peerId, or a bot's participant id
+    // (kBotParticipantBase + n) via m_botEntities (#87). kNoOwningPeer for AI/mission/environment.
+    [[nodiscard]] uint32_t participantForEntity(EntityId id) const noexcept;
+
     // ── AI bot participants (#87) — sim-thread only ──────────────────────────
     // Register a spawned AI bot as a scoreboard participant: it gets a roster row (badged bot), a score
     // row, and its kills/deaths credit through the combat path (participantForEntity resolves its
@@ -1471,9 +1486,20 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     SessionComms m_comms;
     friend class SessionComms;
 
-    // Shared spawn core for a pilot peer: spawn `entityType` at `t`, record m_peerEntities, stamp
-    // `faction` (0 = leave neutral), resolve the flight model, and register the PeerController. Used by
-    // both admitPilot (round-robin path) and the mission-slot path. Sim-thread.
+    // What the Spawned handler stamps on the Spawn record for the ONE EntityManager::spawn() call
+    // spawnParticipantEntity has in flight (see its comment). Armed immediately before that call and
+    // disarmed immediately after, so a spawn raised from anywhere else — a projectile, a parachute, a
+    // MIRV child, a mission entity — records as unattributed, which is the truth for those.
+    struct SpawnAttribution {
+        uint32_t participant{MatchEvent::kNoParticipant};
+        uint16_t faction{0};
+    };
+    SpawnAttribution m_spawnAttribution;
+
+    // Shared spawn core for a pilot peer: spawn `entityType` at `t` via spawnParticipantEntity (which
+    // records m_peerEntities and stamps `faction`, 0 = leave neutral), resolve the flight model, and
+    // register the PeerController. Used by both admitPilot (round-robin path) and the mission-slot path.
+    // Sim-thread.
     EntityId spawnPilotEntity(uint32_t peerId, const std::string& entityType, const EntityTransform& t,
                               uint16_t faction, float initialAirspeed = kAutoSpawnAirspeed);
     // Tear down a peer's entity: its owned formation + AI members, its controller, sensor observer, and
@@ -1771,9 +1797,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // against EntityState::ownerId — whose "0 = server/AI" convention collides with real peer 0
     // (the #610 kNoPeer lesson).
     [[nodiscard]] uint32_t peerIdForEntity(EntityId id) const noexcept;
-    // The scoreboard participant id owning an entity: a human's peerId, or a bot's participant id
-    // (kBotParticipantBase + n) via m_botEntities (#87). kNoOwningPeer for AI/mission/environment.
-    [[nodiscard]] uint32_t participantForEntity(EntityId id) const noexcept;
     std::unordered_map<uint32_t /*entityIdx*/, uint32_t /*participantId*/> m_botEntities; // #87 bot scoring
 
     // Datalink / shared team track picture (#528). Fuses each pilot peer's own contacts with every

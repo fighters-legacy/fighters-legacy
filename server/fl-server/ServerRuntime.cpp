@@ -2270,7 +2270,8 @@ bool ServerRuntime::Impl::initMission() {
             const std::string botType = cfg.bots.entityType.empty() ? cfg.world.playerEntityType : cfg.bots.entityType;
 
             auto botSpawn = [&entityManager, &broadcaster, &worldApi, botGroundElevM, botType, fighterSrc,
-                             planetR = planetR, spawnN = uint32_t{0}](uint16_t faction) mutable -> fl::EntityId {
+                             planetR = planetR,
+                             spawnN = uint32_t{0}](uint32_t participantId, uint16_t faction) mutable -> fl::EntityId {
                 // Spread around the HOME on the local east/north frame (#1211), 2 km above its ground.
                 const double ang = static_cast<double>(spawnN) * 2.399963;
                 const double rad = 800.0 + static_cast<double>(spawnN) * 40.0;
@@ -2279,11 +2280,12 @@ bool ServerRuntime::Impl::initMission() {
                 fl::localOffsetToWorld(fl::sandboxHome(), rad * std::cos(ang), rad * std::sin(ang),
                                        botGroundElevM + 2000.0, t.pos[0], t.pos[1], t.pos[2], planetR);
                 ++spawnN;
-                const fl::EntityId id = entityManager.spawn(botType.c_str(), t);
+                // Through the broadcaster, not entityManager.spawn(): the Spawn record then names the
+                // bot and its faction (#923), and the participant binding is made in the same breath.
+                const fl::EntityId id = broadcaster.spawnParticipantEntity(participantId, botType.c_str(), t, faction,
+                                                                           fl::SpawnClass::World);
                 if (!id.valid())
                     return {};
-                if (fl::EntityState* s = entityManager.get(id); s && faction != 0)
-                    s->factionIndex = faction;
                 auto ctrl = std::make_unique<fl::LuaController>(fighterSrc, fl::ScriptPackSource{}, &entityManager,
                                                                 &worldApi, nullptr);
                 if (!ctrl->isValid()) {
