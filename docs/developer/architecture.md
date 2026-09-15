@@ -325,6 +325,30 @@ revised by a dated decision record instead of a full RFC, provided the change is
 with its rationale. This keeps the velocity of pre-1.0 architecture work without leaving the
 locked table silently stale.
 
+**2026-08-28 — D39: enet6 is kept-with-scope — LAN/low-count backend, regression instrument, lean
+build (#652; M5.0 plan #1366).** The #652 spike asked whether enet6 should be retired once GNS was
+validated at scale. By the time it was answered the code had already decided: GNS ships as the
+internet default; enet6 remains the `FL_ENABLE_GNS=OFF` lean path (no GNS, no protobuf), the LAN /
+single-player default, and the PR-gate transport — the enet6 CI legs and the enet6 scale-gate
+profiles stay as the regression instrument that shows a GNS-side change is not a transport
+artefact. The identity design (D26) does not disturb this: tokens are verified at the application
+layer in `PeerAdmission`, so authentication works over BOTH transports — enet6 is not exempt from
+auth, it is exempt from transport encryption, and the D27 warning names it. One consequence stated
+plainly: under D26 the `FL_ENABLE_GNS=OFF` fl-server build requires OpenSSL too — "lean" means no
+GNS/protobuf, not no OpenSSL; client builds are unaffected. The Deferred Levers row is disarmed
+rather than deleted, so the question keeps its history; re-arm it only if maintaining two
+`INetwork` backends measurably slows a stage.
+
+**2026-08-28 — D38: `MsgClientInput`'s next input bit is the reserved byte, by declaration (#1101;
+M5.0 plan #1366).** `buttons` ran out at bit 7 (respawn), and #1101 was filed so the next bit would
+be added deliberately rather than by silently widening the most frequently sent message after
+v0.4.0 went public. The two options were an `ExtTag 0x0300` TLV on every input packet, or a
+coordinated size bump inside the pre-public window. Neither is taken: `reservedC[3]` already pads
+the struct to its 8-byte alignment at `@53`, so **the first new bit claims `reservedC[0]` as
+`buttons2`** — no TLV on the hot path, no size change, no protocol bump, and the declared
+edge-vs-level convention is written beside the field when it is claimed. Recorded now, in
+`GameProtocol.h` next to the field, so nobody re-litigates it under pressure.
+
 **2026-08-18 — the bundled coarse base terrain is built once by hand and fetched from a pinned
 release asset (#1199, #1202).** `release.yml` had staged `base-terrain/` "if present" since #474,
 under a comment reading "produced out-of-band"; nothing in the repo produced it, so the conditional

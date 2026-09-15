@@ -570,7 +570,10 @@ struct MsgClientInput {
     uint8_t flaps{0};       // @50 commanded flap position, 0..255 => 0..1
     uint8_t speedbrake{0};  // @51 commanded speed-brake, 0..255 => 0..1 (the player's was not on the wire at all)
     uint8_t artButtons{0};  // @52 bit 0 = gear down, bit 1 = hook down, bit 2 = canopy open
-    uint8_t reservedC[3]{}; // pads to the struct's 8-byte alignment; future fire fields land here
+    uint8_t reservedC[3]{}; // pads to the struct's 8-byte alignment; future fire fields land here.
+                            // D38 (#1101, 2026-08-28): `buttons` is full, and the NEXT input bit
+                            // claims reservedC[0] as `buttons2` — no ExtTag TLV on the hot path, no
+                            // size change, no protocol bump. Declare edge vs level beside it then.
 
     // Camera eye world-position (#858). The client sends where it is LOOKING FROM each frame so the
     // server can center interest management on an entity-less peer (an observer ghost camera, or a

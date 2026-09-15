@@ -132,7 +132,7 @@ infrastructure**. Communities run their own servers and identity.
 
 | Artifact | Channel | Notes |
 |---|---|---|
-| `fl-server` binary | GitHub Releases (with the engine) | Same build used for single-player and dedicated hosting |
+| `fl-server` binary | GitHub Releases (with the engine) | Same build used for single-player and dedicated hosting. Packaged from the `runtime` install component (#814/#228) and **co-located with the client binary** — `LocalServer` resolves it via `SDL_GetBasePath()`, never `PATH` |
 | `fl-server` container image | GHCR (`ghcr.io/fighters-legacy/...`) | Official OCI image for containerized hosting |
 | Helm chart | `fl-operator` repo / chart repo | Deploys a server fleet + optional observability stack |
 | `fl-operator` | GHCR image + OLM bundle | Kubernetes operator; OpenShift via the certified-operator OLM bundle |
