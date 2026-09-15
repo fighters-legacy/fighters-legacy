@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -111,6 +112,15 @@ class IHttpClient {
 
     // Drain completed callbacks. Call once per frame from the main loop.
     virtual void service() = 0;
+
+    // Let every queued and in-flight request finish, delivering their completions as it goes, for at
+    // most `timeout`. Returns true once nothing is pending; false on timeout, with whatever is still
+    // pending left for shutdown() to cancel. Main-loop only, like service().
+    //
+    // This is the shutdown-path counterpart of shutdown() (#1399): shutdown() CANCELS what is queued,
+    // so a best-effort request enqueued just before it -- the lobby's DELETE -- never left the process.
+    // A bounded flush lets it go while keeping a hung remote from holding shutdown hostage.
+    virtual bool flush(std::chrono::milliseconds timeout) = 0;
 
     // Human-readable last init/shutdown error, or nullptr.
     virtual const char* getLastError() const = 0;

@@ -27,6 +27,9 @@ struct NullHttpClient : public IHttpClient {
     void cancel(HttpRequestId) override {}
     void cancelRequestsFor(IHttpClientHandler*) override {}
     void service() override {}
+    bool flush(std::chrono::milliseconds) override {
+        return true;
+    }
     const char* getLastError() const override {
         return nullptr;
     }
@@ -122,6 +125,11 @@ struct TrackingHttpClient : public IHttpClient {
                 handler->onHttpComplete(id, c.status, c.httpCode,
                                         c.status == HttpStatus::Error ? "canned error" : nullptr);
         }
+    }
+    // The mock's requests complete on the next service(), so a flush is one service pass.
+    bool flush(std::chrono::milliseconds) override {
+        service();
+        return true;
     }
     const char* getLastError() const override {
         return nullptr;

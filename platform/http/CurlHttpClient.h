@@ -27,6 +27,7 @@ class CurlHttpClient : public IHttpClient {
     void cancel(HttpRequestId id) override;
     void cancelRequestsFor(IHttpClientHandler* handler) override;
     void service() override;
+    bool flush(std::chrono::milliseconds timeout) override;
     const char* getLastError() const override;
 
   private:

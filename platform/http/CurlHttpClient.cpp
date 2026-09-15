@@ -5,6 +5,7 @@
 
 #include <curl/curl.h>
 
+#include <algorithm>
 #include <condition_variable>
 #include <cstring>
 #include <deque>
@@ -61,6 +62,8 @@ struct CurlHttpClient::Impl {
     std::deque<Event> events;
     std::unordered_set<HttpRequestId> cancelled;
     bool running{false};
+    bool inFlight{false};           // the worker has popped a request and not yet finished it (#1399)
+    std::condition_variable cvIdle; // signalled when inFlight clears, so flush() can wait on it
     HttpRequestId nextId{1};
 
     static constexpr std::size_t kMaxQueuedEvents = 64; // backpressure: worker blocks past this
@@ -149,7 +152,10 @@ struct CurlHttpClient::Impl {
             curl_easy_setopt(h, CURLOPT_LOW_SPEED_TIME, static_cast<long>(req.opts.lowSpeedTimeS));
         }
 
-        // HTTP method + body (#143). GET is the default; POST/PUT carry the body, DELETE is method-only.
+        // HTTP method + body (#143). GET is the default; POST/PUT/DELETE carry the body when one is
+        // given. DELETE used to be method-only, which silently dropped the lobby deregistration's
+        // `{"port":N}` -- the request arrived, fl-lobby answered 400 "port is required", and the entry
+        // lingered for the full TTL (#1399). A caller that sets a body means it.
         switch (req.opts.method) {
         case HttpMethod::Get:
             curl_easy_setopt(h, CURLOPT_HTTPGET, 1L);
@@ -166,6 +172,10 @@ struct CurlHttpClient::Impl {
             break;
         case HttpMethod::Delete_:
             curl_easy_setopt(h, CURLOPT_CUSTOMREQUEST, "DELETE");
+            if (!req.opts.body.empty()) {
+                curl_easy_setopt(h, CURLOPT_POSTFIELDS, req.opts.body.c_str());
+                curl_easy_setopt(h, CURLOPT_POSTFIELDSIZE, static_cast<long>(req.opts.body.size()));
+            }
             break;
         }
         struct curl_slist* headers = nullptr;
@@ -210,8 +220,14 @@ struct CurlHttpClient::Impl {
                     return;
                 req = std::move(requests.front());
                 requests.pop_front();
+                inFlight = true;
             }
             runOne(req);
+            {
+                std::lock_guard<std::mutex> lk(mtx);
+                inFlight = false; // after runOne pushed its Complete, so an idle observer can drain it
+            }
+            cvIdle.notify_all();
         }
     }
 };
@@ -302,6 +318,28 @@ void CurlHttpClient::cancelRequestsFor(IHttpClientHandler* handler) {
         }
     }
     // Events already queued for those ids are dropped by service()'s "no handler" branch.
+}
+
+bool CurlHttpClient::flush(std::chrono::milliseconds timeout) {
+    if (!m_impl->running)
+        return true;
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    for (;;) {
+        // Deliver as we go, not only at the end: the worker blocks in pushEvent() past kMaxQueuedEvents
+        // until service() drains, and a flush that only waited would deadlock with it until the timeout.
+        service();
+        std::unique_lock<std::mutex> lk(m_impl->mtx);
+        if (m_impl->requests.empty() && !m_impl->inFlight) {
+            lk.unlock();
+            service(); // the last Complete was pushed before inFlight cleared; hand it over
+            return true;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline)
+            return false;
+        // Short slices rather than one wait-to-deadline, so the drain above keeps running.
+        m_impl->cvIdle.wait_until(lk, std::min(deadline, now + std::chrono::milliseconds(10)));
+    }
 }
 
 void CurlHttpClient::service() {

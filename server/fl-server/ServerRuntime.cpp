@@ -3471,11 +3471,17 @@ int ServerRuntime::Impl::mainLoop() {
     // into a half-torn-down server is a crash in shutdown, which is the hardest kind to reproduce.
     aiProvider->shutdown();
 
-    // #143: drop the lobby entry on shutdown (best-effort DELETE + one service pass to send it).
+    // #143: drop the lobby entry on shutdown (best-effort DELETE). The DELETE is queued to the HTTP
+    // worker thread; service() only drains completions and shutdown() CANCELS whatever is still queued,
+    // so with just those two the request never left the process and the entry lingered for the lobby's
+    // full TTL (#1399). A bounded flush lets the worker send it; the cap keeps a hung lobby from holding
+    // shutdown hostage, and on timeout the entry simply expires on the TTL as it did before.
     if (lobbyReg)
         lobbyReg->deregister();
     if (httpClient) {
-        httpClient->service();
+        if (lobbyReg && lobbyReg->enabled() && !httpClient->flush(std::chrono::seconds(2)))
+            log->log(LogLevel::Warn, __FILE__, __LINE__,
+                     "lobby deregistration did not complete within 2 s; the lobby will expire the entry on its TTL");
         httpClient->shutdown();
     }
 
