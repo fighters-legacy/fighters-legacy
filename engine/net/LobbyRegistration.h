@@ -21,8 +21,10 @@ struct LobbyRegistrationConfig {
     std::string mode;            // game-mode id
     std::string mission;         // current mission/map
     int maxPlayers{0};           // capacity
-    int heartbeatS{30};          // POST interval; [5, 300]
+    int heartbeatS{30};          // POST interval; [5, 300]. Sent as heartbeat_s so the lobby's TTL
+                                 // (2.5x this) follows the SERVER's cadence, not a lobby-side guess (#1400)
     bool visibilityPublic{true}; // false ("private") => never registers
+    bool passworded{false};      // a join password is set; drawn as the padlock in the browser (#1400)
 };
 
 // Registers a dedicated server with a lobby over HTTP (#143): POST <lobbyUrl>/v1/servers on a heartbeat

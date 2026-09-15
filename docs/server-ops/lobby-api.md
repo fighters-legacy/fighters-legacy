@@ -29,8 +29,17 @@ Request body:
       "max_players": 16,            // capacity
       "mode": "builtin:tdm",        // game-mode id
       "mission": "fjord",           // current mission/map (may be empty)
-      "visibility": "public"        // always "public"; a private server never POSTs
+      "visibility": "public",       // always "public"; a private server never POSTs
+      "passworded": false,          // OPTIONAL (#1400): a join password is set; absent => false
+      "heartbeat_s": 30             // OPTIONAL (#1400): this server's POST interval; absent => the
+                                    // lobby's own default. The lobby clamps it to [5, 300]
     }
+
+`passworded` and `heartbeat_s` are optional so that a server and a lobby can upgrade in either order:
+a lobby that ignores them behaves exactly as before, and a server that omits them lists as open on
+the default TTL. Every server since v0.4.1 sends both — `passworded` is the only source the padlock
+in the browser has, and `heartbeat_s` is what lets the TTL rule below follow the server's cadence
+rather than a guess.
 
 Response: `200 OK` (or `201 Created` on first registration). The body is ignored by the client.
 
@@ -68,9 +77,12 @@ The client parser is deliberately tolerant: it ignores unknown keys, accepts `ad
 
 ## TTL and freshness
 
-An entry is considered live for **2.5 × the server's heartbeat interval** after its last `POST`. The
-default heartbeat is 30 s, so a default entry expires ~75 s after the server stops heartbeating (e.g. a
-crash with no `DELETE`). The lobby prunes expired entries lazily and never returns them from `GET`.
+An entry is considered live for **2.5 × the server's heartbeat interval** after its last `POST`,
+where the interval is the `heartbeat_s` the server registered (clamped by the lobby to `[5, 300]`),
+or the lobby's configured default when the field is absent. The default heartbeat is 30 s, so a
+default entry expires ~75 s after the server stops heartbeating (e.g. a crash with no `DELETE`); a
+server on a 5 s heartbeat is gone in 12.5 s, and one on 300 s is kept for 750 s rather than flickering
+out every five minutes. The lobby prunes expired entries lazily and never returns them from `GET`.
 
 ## Limits (denial-of-service posture)
 

@@ -44,6 +44,12 @@ std::string LobbyRegistration::buildBody() const {
     b += ",\"mode\":" + json::str(m_cfg.mode);
     b += ",\"mission\":" + json::str(m_cfg.mission);
     b += ",\"visibility\":\"public\"";
+    // #1400: the two facts a lobby cannot know from the source address and the fields above. Without
+    // `passworded` the only honest value it can list is false (every passworded server showed as open);
+    // without `heartbeat_s` it can only assume the 30 s default, so a 300 s server was dropped after
+    // 75 s and a 5 s server lingered 75 s after it died. A lobby that ignores both behaves as before.
+    b += m_cfg.passworded ? ",\"passworded\":true" : ",\"passworded\":false";
+    b += ",\"heartbeat_s\":" + std::to_string(m_cfg.heartbeatS);
     b += "}";
     return b;
 }
