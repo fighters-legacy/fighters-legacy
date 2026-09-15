@@ -57,6 +57,15 @@ class GnsNetwork : public INetwork {
         m_allowInsecure = allow;
     }
 
+    // The port the listen socket is actually bound to, or 0 if not bound (client-only instances
+    // included). Mirrors ENetNetwork::boundPort() — same signature, same semantics — so both
+    // backends' test suites can read back and assert on the port they hold (#1329). Unlike enet6,
+    // GNS REFUSES `bind(addr, 0, n)` ("Must specify local port."), so a caller wanting a free port
+    // must ask the OS for one first; this then confirms GNS bound where it was told to. GNS never
+    // exposes the socket fd, so this asks GNS rather than getsockname().
+    // Not on INetwork: a test/diagnostic affordance, not a transport contract.
+    [[nodiscard]] uint16_t boundPort() const;
+
     // Routed here by the static connection-status trampoline (GnsNetwork.cpp). Public so the
     // trampoline can dispatch; not part of INetwork.
     void onConnectionStatusChanged(const SteamNetConnectionStatusChangedCallback_t* info);

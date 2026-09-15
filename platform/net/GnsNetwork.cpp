@@ -147,6 +147,20 @@ bool GnsNetwork::bind(const char* address, uint16_t port, int maxClients) {
     return true;
 }
 
+uint16_t GnsNetwork::boundPort() const {
+    if (!m_sockets || !m_listenSocket) {
+        return 0;
+    }
+    // bind() never kept the address it handed CreateListenSocketIP; only GNS knows what the socket
+    // actually holds, and asking it is what makes this an observation rather than an echo.
+    SteamNetworkingIPAddr addr;
+    addr.Clear();
+    if (!m_sockets->GetListenSocketAddress(m_listenSocket, &addr)) {
+        return 0;
+    }
+    return addr.m_port;
+}
+
 bool GnsNetwork::connect(const char* host, uint16_t port) {
     if (m_listenSocket || m_clientConn) {
         m_lastError = "already bound or connected";
