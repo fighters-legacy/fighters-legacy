@@ -606,6 +606,7 @@ bool ServerRuntime::Impl::initNet() {
             lc.maxPlayers = cfg.server.maxPeers;
             lc.mode = cfg.match.mode;
             lc.visibilityPublic = (cfg.lobby.visibility == "public");
+            lc.passworded = !cfg.server.password.empty(); // #1400: the browser's padlock comes from here
             lobbyReg->configure(lc);
             if (lobbyReg->enabled()) {
                 log->log(LogLevel::Info, __FILE__, __LINE__, "lobby registration active");

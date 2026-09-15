@@ -51,6 +51,31 @@ TEST_CASE("LobbyRegistration: first tick POSTs a JSON heartbeat to /v1/servers (
     CHECK(req.body.find("\"players\":3") != std::string::npos);
     CHECK(req.body.find("\"max_players\":16") != std::string::npos);
     CHECK(req.body.find("\"visibility\":\"public\"") != std::string::npos);
+    // #1400: the two fields a lobby cannot infer. makeCfg() has no password and a 30 s heartbeat.
+    CHECK(req.body.find("\"passworded\":false") != std::string::npos);
+    CHECK(req.body.find("\"heartbeat_s\":30") != std::string::npos);
+}
+
+// The padlock in the browser is drawn from `passworded` on GET, and the ONLY thing that can put it there
+// is the registration body -- before #1400 nothing did, so every passworded server listed as open. The
+// TTL rule is 2.5 x the SERVER's heartbeat; `heartbeat_s` is how the lobby learns it is not 30 s.
+TEST_CASE("LobbyRegistration: a passworded server on a non-default heartbeat says so (#1400)", "[lobby_reg]") {
+    NullLogger log;
+    TrackingHttpClient http;
+    http.setResponse("https://lobby.example/v1/servers", "", 200);
+    ManualClock clock;
+    LobbyRegistration reg(http, log);
+    reg.setClock(clock);
+    LobbyRegistrationConfig cfg = makeCfg();
+    cfg.passworded = true;
+    cfg.heartbeatS = 120;
+    reg.configure(cfg);
+
+    reg.tick();
+    REQUIRE(http.requests.size() == 1u);
+    CHECK(http.requests.back().body.find("\"passworded\":true") != std::string::npos);
+    CHECK(http.requests.back().body.find("\"heartbeat_s\":120") != std::string::npos);
+    CHECK(reg.lastBody() == http.requests.back().body);
 }
 
 TEST_CASE("LobbyRegistration: the posted body is escaped by the engine's one escaper (#1262)", "[lobby_reg]") {
