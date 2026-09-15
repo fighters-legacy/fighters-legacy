@@ -87,7 +87,12 @@ uint32_t connectLoopback(GnsNetwork& server, EventSink& serverSink, GnsNetwork& 
     server.setEventHandler(&serverSink);
     REQUIRE(client.connect("127.0.0.1", port));
     client.setEventHandler(&clientSink);
-    for (int i = 0; i < 60 && serverSink.countType(Event::Type::Connect) == 0; ++i)
+    // Pump until BOTH ends have seen the connect. The server's Connect fires when it accepts; the
+    // client's fires when its own state reaches Connected, which can be one service() later -- waiting
+    // on the server alone and then requiring the client's count was a race the Windows leg lost.
+    for (int i = 0;
+         i < 60 && (serverSink.countType(Event::Type::Connect) == 0 || clientSink.countType(Event::Type::Connect) == 0);
+         ++i)
         pump(server, client, 1, 15);
     REQUIRE(serverSink.countType(Event::Type::Connect) == 1);
     REQUIRE(clientSink.countType(Event::Type::Connect) == 1);
