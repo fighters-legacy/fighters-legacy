@@ -1,0 +1,80 @@
+# The #1298 instrument: what does -ffp-contract=off cost the flight integrator on a platform that
+# has fused multiply-add? Only ARM64 can answer -- x86-64 targets the SSE2 baseline, which has no
+# FMA, so the flag is a no-op there and a local measurement on the 24-core Fedora box proves
+# nothing. macos-latest is Apple Silicon.
+#
+# Two release-headless trees (no Vulkan, no GNS -- the bench links engine-flight only), one with
+# the compiler's default contraction and one with it off; tests/test_flight_scale.cpp built in
+# each and run alternately. The fingerprint line is the second half of the evidence: two builds
+# whose fingerprints differ did not compute the same bits, which is the whole #1298 finding.
+#
+# Not part of any gate. Dispatch it from the Actions tab, or push a probe/** branch (a branch push
+# is how it ran the first time: a workflow_dispatch workflow cannot be dispatched until it is on
+# the default branch). The 2026-09-15 result is recorded at the top of tests/test_flight_scale.cpp.
+name: fp-contract-probe
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['probe/**']
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: flight integrator, contraction on vs off (ARM64)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: brew install cmake ninja zstd
+
+      - name: Describe the machine
+        run: |
+          uname -m
+          sysctl -n machdep.cpu.brand_string
+          sysctl -n hw.ncpu
+          clang++ --version | head -1
+
+      - name: Configure (default contraction)
+        run: cmake --preset release-headless -B build/probe-default
+
+      - name: Configure (-ffp-contract=off)
+        run: cmake --preset release-headless -B build/probe-off -DCMAKE_CXX_FLAGS=-ffp-contract=off
+
+      - name: Build both
+        run: |
+          cmake --build build/probe-default --target test_flight_scale --parallel
+          cmake --build build/probe-off --target test_flight_scale --parallel
+
+      - name: Prove the flag reached the compiler
+        # On the integrator's own compile line, not anywhere in the tree: test_quat carries a
+        # target-scoped -ffp-contract=off in EVERY tree (#1248), which is not what is being measured.
+        run: |
+          python3 - <<'EOF'
+          import json, sys
+          def flags_for(tree):
+              for e in json.load(open(f"build/{tree}/compile_commands.json")):
+                  if e["file"].endswith("engine/flight/FlightIntegrator.cpp"):
+                      return e["command"]
+              sys.exit(f"{tree}: FlightIntegrator.cpp not in compile_commands.json")
+          off = flags_for("probe-off"); dflt = flags_for("probe-default")
+          print("probe-off     :", "-ffp-contract=off" in off)
+          print("probe-default :", "-ffp-contract=off" in dflt)
+          if "-ffp-contract=off" not in off or "-ffp-contract=off" in dflt:
+              sys.exit("the two trees do not differ in the way the comparison needs")
+          EOF
+
+      - name: Run, alternating, three passes each
+        run: |
+          for pass in 1 2 3; do
+            echo "== pass $pass: default"
+            ./build/probe-default/tests/test_flight_scale "[flight]" | grep FL_FLIGHT_BENCH
+            echo "== pass $pass: -ffp-contract=off"
+            ./build/probe-off/tests/test_flight_scale "[flight]" | grep FL_FLIGHT_BENCH
+          done

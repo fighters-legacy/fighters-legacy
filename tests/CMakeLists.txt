@@ -234,6 +234,10 @@ fl_add_test(test_engine_fail_flags INCLUDES "${CMAKE_SOURCE_DIR}/engine")
 
 fl_add_test(test_flight_integrator LIBS engine-flight)
 
+# Flight-integrator characterisation benchmark (#1298): [.]-hidden like the #573 scale cases, run by
+# name; fp-contract-probe.yml builds it with and without -ffp-contract=off on the ARM64 runner.
+fl_add_test(test_flight_scale LIBS engine-flight)
+
 # The one angle-of-attack formula the HUD and both haptic paths share (#1251). Header-only, but it
 # takes glm types, so it links engine-flight for the include surface.
 fl_add_test(test_air_angles LIBS engine-flight)
